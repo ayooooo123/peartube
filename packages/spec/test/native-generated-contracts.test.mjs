@@ -58,5 +58,40 @@ test('quarantined Swift HRPC command ids match the generated id table', (t) => {
     t.ok(source.includes('@peartube/redeem-personal-device-invite'),
       `${relativePath} carries personal-store device pairing`)
   }
+
+  // The dispatch table and the caller must agree. They drifted once: every
+  // caller south of `index-video-vectors` sat two ids low while the `case`
+  // labels were kept current, so a native client calling
+  // `prepareMediaPlayback` would have invoked `get-claim-provenance`.
+  for (const relativePath of [
+    'packages/desktop-native/Sources/Support/GeneratedHRPC.swift',
+    'packages/spec/spec/swift-hrpc/Sources/HRPC.swift',
+  ]) {
+    const source = read(relativePath)
+    const commandOf = new Map()
+    for (const [, , name, command] of source.matchAll(
+      /public func (on)?(\w+)\([^\n]*\n(?:[^\n]*\n){0,3}?\s*_handlers\["(@peartube\/[a-z0-9-]+)"\]/g,
+    )) {
+      commandOf.set(name[0].toLowerCase() + name.slice(1), command)
+    }
+
+    const callers = [
+      ...source.matchAll(
+        /public func (\w+)\(_ args:[^\n]*\n(?:[^\n]*\n){0,6}?[^\n]*_rpc\.(?:request|event)\((\d+)/g,
+      ),
+    ]
+    t.ok(callers.length > 100, `${relativePath} issues the command surface`)
+
+    const stale = callers
+      .filter(([, fn, id]) => ids.get(commandOf.get(fn)) !== Number(id))
+      .map(([, fn, id]) => `${fn}=${id} (expected ${ids.get(commandOf.get(fn))})`)
+    t.alike(stale, [], `${relativePath} caller ids match the generated table`)
+  }
+
+  t.is(
+    read('packages/desktop-native/Sources/Support/GeneratedHRPC.swift'),
+    read('packages/spec/spec/swift-hrpc/Sources/HRPC.swift'),
+    'desktop and package Swift HRPC mirrors stay identical',
+  )
 })
 

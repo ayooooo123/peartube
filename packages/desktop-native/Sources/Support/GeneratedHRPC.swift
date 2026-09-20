@@ -1370,7 +1370,7 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
   // Request/response — client
   public func setDeviceConditions(_ args: SetDeviceConditionsRequest) async throws -> SetDeviceConditionsResponse {
     let encoded = try _encode(setDeviceConditionsRequest, args)
-    guard let raw = try await _rpc.request(149, data: encoded) else {
+    guard let raw = try await _rpc.request(151, data: encoded) else {
       throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
     }
     return try _decode(setDeviceConditionsResponse, raw)
@@ -1383,7 +1383,7 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
   // Request/response — client
   public func getParticipationStatus(_ args: GetParticipationStatusRequest) async throws -> GetParticipationStatusResponse {
     let encoded = try _encode(getParticipationStatusRequest, args)
-    guard let raw = try await _rpc.request(148, data: encoded) else {
+    guard let raw = try await _rpc.request(150, data: encoded) else {
       throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
     }
     return try _decode(getParticipationStatusResponse, raw)
@@ -1643,7 +1643,7 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
   // Send-only — client (fire and forget)
   public func eventReady(_ args: EventReady) throws {
     let encoded = try _encode(eventReady, args)
-    _rpc.event(95, data: encoded)
+    _rpc.event(99, data: encoded)
   }
 
   public func onEventReady(_ handler: @escaping (EventReady) async -> Void) {
@@ -1653,7 +1653,7 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
   // Send-only — client (fire and forget)
   public func eventError(_ args: EventError) throws {
     let encoded = try _encode(eventError, args)
-    _rpc.event(96, data: encoded)
+    _rpc.event(100, data: encoded)
   }
 
   public func onEventError(_ handler: @escaping (EventError) async -> Void) {
@@ -1663,7 +1663,7 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
   // Send-only — client (fire and forget)
   public func eventUploadProgress(_ args: EventUploadProgress) throws {
     let encoded = try _encode(eventUploadProgress, args)
-    _rpc.event(97, data: encoded)
+    _rpc.event(101, data: encoded)
   }
 
   public func onEventUploadProgress(_ handler: @escaping (EventUploadProgress) async -> Void) {
@@ -1673,7 +1673,7 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
   // Send-only — client (fire and forget)
   public func eventDownloadProgress(_ args: EventDownloadProgress) throws {
     let encoded = try _encode(eventDownloadProgress, args)
-    _rpc.event(98, data: encoded)
+    _rpc.event(102, data: encoded)
   }
 
   public func onEventDownloadProgress(_ handler: @escaping (EventDownloadProgress) async -> Void) {
@@ -1683,7 +1683,7 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
   // Send-only — client (fire and forget)
   public func eventMediaGraphUpdate(_ args: EventMediaGraphUpdate) throws {
     let encoded = try _encode(eventMediaGraphUpdate, args)
-    _rpc.event(99, data: encoded)
+    _rpc.event(103, data: encoded)
   }
 
   public func onEventMediaGraphUpdate(_ handler: @escaping (EventMediaGraphUpdate) async -> Void) {
@@ -1693,7 +1693,7 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
   // Send-only — client (fire and forget)
   public func eventLog(_ args: EventLog) throws {
     let encoded = try _encode(eventLog, args)
-    _rpc.event(100, data: encoded)
+    _rpc.event(104, data: encoded)
   }
 
   public func onEventLog(_ handler: @escaping (EventLog) async -> Void) {
@@ -1703,7 +1703,7 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
   // Send-only — client (fire and forget)
   public func eventVideoStats(_ args: EventVideoStats) throws {
     let encoded = try _encode(eventVideoStats, args)
-    _rpc.event(101, data: encoded)
+    _rpc.event(105, data: encoded)
   }
 
   public func onEventVideoStats(_ handler: @escaping (EventVideoStats) async -> Void) {
@@ -1908,7 +1908,7 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
   // Send-only — client (fire and forget)
   public func eventCastDeviceFound(_ args: EventCastDeviceFound) throws {
     let encoded = try _encode(eventCastDeviceFound, args)
-    _rpc.event(117, data: encoded)
+    _rpc.event(121, data: encoded)
   }
 
   public func onEventCastDeviceFound(_ handler: @escaping (EventCastDeviceFound) async -> Void) {
@@ -1918,7 +1918,7 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
   // Send-only — client (fire and forget)
   public func eventCastDeviceLost(_ args: EventCastDeviceLost) throws {
     let encoded = try _encode(eventCastDeviceLost, args)
-    _rpc.event(118, data: encoded)
+    _rpc.event(122, data: encoded)
   }
 
   public func onEventCastDeviceLost(_ handler: @escaping (EventCastDeviceLost) async -> Void) {
@@ -1928,7 +1928,7 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
   // Send-only — client (fire and forget)
   public func eventCastPlaybackState(_ args: EventCastPlaybackState) throws {
     let encoded = try _encode(eventCastPlaybackState, args)
-    _rpc.event(119, data: encoded)
+    _rpc.event(123, data: encoded)
   }
 
   public func onEventCastPlaybackState(_ handler: @escaping (EventCastPlaybackState) async -> Void) {
@@ -1938,7 +1938,7 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
   // Send-only — client (fire and forget)
   public func eventCastTimeUpdate(_ args: EventCastTimeUpdate) throws {
     let encoded = try _encode(eventCastTimeUpdate, args)
-    _rpc.event(120, data: encoded)
+    _rpc.event(124, data: encoded)
   }
 
   public func onEventCastTimeUpdate(_ handler: @escaping (EventCastTimeUpdate) async -> Void) {
@@ -1961,7 +1961,7 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
   // Request/response — client
   public func indexVideoVectors(_ args: IndexVideoVectorsRequest) async throws -> IndexVideoVectorsResponse {
     let encoded = try _encode(indexVideoVectorsRequest, args)
-    guard let raw = try await _rpc.request(126, data: encoded) else {
+    guard let raw = try await _rpc.request(128, data: encoded) else {
       throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
     }
     return try _decode(indexVideoVectorsResponse, raw)
@@ -1974,7 +1974,7 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
   // Request/response — client
   public func updateVideoMetadata(_ args: UpdateVideoMetadataRequest) async throws -> UpdateVideoMetadataResponse {
     let encoded = try _encode(updateVideoMetadataRequest, args)
-    guard let raw = try await _rpc.request(127, data: encoded) else {
+    guard let raw = try await _rpc.request(129, data: encoded) else {
       throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
     }
     return try _decode(updateVideoMetadataResponse, raw)
@@ -1987,7 +1987,7 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
   // Request/response — client
   public func getMediaCatalog(_ args: MediaPageRequest) async throws -> GetMediaCatalogResponse {
     let encoded = try _encode(mediaPageRequest, args)
-    guard let raw = try await _rpc.request(128, data: encoded) else {
+    guard let raw = try await _rpc.request(130, data: encoded) else {
       throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
     }
     return try _decode(getMediaCatalogResponse, raw)
@@ -2000,7 +2000,7 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
   // Request/response — client
   public func getMediaEntity(_ args: GetMediaEntityRequest) async throws -> GetMediaEntityResponse {
     let encoded = try _encode(getMediaEntityRequest, args)
-    guard let raw = try await _rpc.request(129, data: encoded) else {
+    guard let raw = try await _rpc.request(131, data: encoded) else {
       throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
     }
     return try _decode(getMediaEntityResponse, raw)
@@ -2013,7 +2013,7 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
   // Request/response — client
   public func getMediaCollection(_ args: GetMediaCollectionRequest) async throws -> GetMediaCollectionResponse {
     let encoded = try _encode(getMediaCollectionRequest, args)
-    guard let raw = try await _rpc.request(130, data: encoded) else {
+    guard let raw = try await _rpc.request(132, data: encoded) else {
       throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
     }
     return try _decode(getMediaCollectionResponse, raw)
@@ -2026,7 +2026,7 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
   // Request/response — client
   public func getMediaCollectionItems(_ args: GetMediaCollectionItemsRequest) async throws -> GetMediaCollectionItemsResponse {
     let encoded = try _encode(getMediaCollectionItemsRequest, args)
-    guard let raw = try await _rpc.request(131, data: encoded) else {
+    guard let raw = try await _rpc.request(133, data: encoded) else {
       throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
     }
     return try _decode(getMediaCollectionItemsResponse, raw)
@@ -2039,7 +2039,7 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
   // Request/response — client
   public func getMediaAgent(_ args: GetMediaAgentRequest) async throws -> GetMediaAgentResponse {
     let encoded = try _encode(getMediaAgentRequest, args)
-    guard let raw = try await _rpc.request(132, data: encoded) else {
+    guard let raw = try await _rpc.request(134, data: encoded) else {
       throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
     }
     return try _decode(getMediaAgentResponse, raw)
@@ -2052,7 +2052,7 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
   // Request/response — client
   public func getAgentContributions(_ args: GetAgentContributionsRequest) async throws -> GetAgentContributionsResponse {
     let encoded = try _encode(getAgentContributionsRequest, args)
-    guard let raw = try await _rpc.request(133, data: encoded) else {
+    guard let raw = try await _rpc.request(135, data: encoded) else {
       throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
     }
     return try _decode(getAgentContributionsResponse, raw)
@@ -2065,7 +2065,7 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
   // Request/response — client
   public func getPublicationSources(_ args: GetPublicationSourcesRequest) async throws -> GetPublicationSourcesResponse {
     let encoded = try _encode(getPublicationSourcesRequest, args)
-    guard let raw = try await _rpc.request(134, data: encoded) else {
+    guard let raw = try await _rpc.request(136, data: encoded) else {
       throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
     }
     return try _decode(getPublicationSourcesResponse, raw)
@@ -2078,7 +2078,7 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
   // Request/response — client
   public func getClaimProvenance(_ args: GetClaimProvenanceRequest) async throws -> GetClaimProvenanceResponse {
     let encoded = try _encode(getClaimProvenanceRequest, args)
-    guard let raw = try await _rpc.request(136, data: encoded) else {
+    guard let raw = try await _rpc.request(138, data: encoded) else {
       throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
     }
     return try _decode(getClaimProvenanceResponse, raw)
@@ -2091,7 +2091,7 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
   // Request/response — client
   public func setSourcePreference(_ args: SetSourcePreferenceRequest) async throws -> SetSourcePreferenceResponse {
     let encoded = try _encode(setSourcePreferenceRequest, args)
-    guard let raw = try await _rpc.request(137, data: encoded) else {
+    guard let raw = try await _rpc.request(139, data: encoded) else {
       throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
     }
     return try _decode(setSourcePreferenceResponse, raw)
@@ -2104,7 +2104,7 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
   // Request/response — client
   public func prepareMediaPlayback(_ args: PrepareMediaPlaybackRequest) async throws -> PrepareMediaPlaybackResponse {
     let encoded = try _encode(prepareMediaPlaybackRequest, args)
-    guard let raw = try await _rpc.request(138, data: encoded) else {
+    guard let raw = try await _rpc.request(140, data: encoded) else {
       throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
     }
     return try _decode(prepareMediaPlaybackResponse, raw)
@@ -2117,7 +2117,7 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
   // Request/response — client
   public func desktopBootstrap(_ args: DesktopBootstrapRequest) async throws -> DesktopBootstrapResponse {
     let encoded = try _encode(desktopBootstrapRequest, args)
-    guard let raw = try await _rpc.request(139, data: encoded) else {
+    guard let raw = try await _rpc.request(141, data: encoded) else {
       throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
     }
     return try _decode(desktopBootstrapResponse, raw)
@@ -2130,7 +2130,7 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
   // Request/response — client
   public func desktopShutdown(_ args: DesktopShutdownRequest) async throws -> DesktopShutdownResponse {
     let encoded = try _encode(desktopShutdownRequest, args)
-    guard let raw = try await _rpc.request(140, data: encoded) else {
+    guard let raw = try await _rpc.request(142, data: encoded) else {
       throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
     }
     return try _decode(desktopShutdownResponse, raw)
@@ -2143,7 +2143,7 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
   // Request/response — client
   public func desktopRefreshBrowse(_ args: DesktopRefreshBrowseRequest) async throws -> DesktopRefreshBrowseResponse {
     let encoded = try _encode(desktopRefreshBrowseRequest, args)
-    guard let raw = try await _rpc.request(141, data: encoded) else {
+    guard let raw = try await _rpc.request(143, data: encoded) else {
       throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
     }
     return try _decode(desktopRefreshBrowseResponse, raw)
@@ -2156,7 +2156,7 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
   // Request/response — client
   public func ffmpegDecodeAvailable(_ args: FfmpegDecodeAvailableRequest) async throws -> FfmpegDecodeAvailableResponse {
     let encoded = try _encode(ffmpegDecodeAvailableRequest, args)
-    guard let raw = try await _rpc.request(142, data: encoded) else {
+    guard let raw = try await _rpc.request(144, data: encoded) else {
       throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
     }
     return try _decode(ffmpegDecodeAvailableResponse, raw)
@@ -2169,7 +2169,7 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
   // Request/response — client
   public func updateChannelAvatar(_ args: UpdateChannelAvatarRequest) async throws -> UpdateChannelAvatarResponse {
     let encoded = try _encode(updateChannelAvatarRequest, args)
-    guard let raw = try await _rpc.request(143, data: encoded) else {
+    guard let raw = try await _rpc.request(145, data: encoded) else {
       throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
     }
     return try _decode(updateChannelAvatarResponse, raw)
@@ -2182,7 +2182,7 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
   // Request/response — client
   public func transcodeStart(_ args: TranscodeStartRequest) async throws -> TranscodeStartResponse {
     let encoded = try _encode(transcodeStartRequest, args)
-    guard let raw = try await _rpc.request(144, data: encoded) else {
+    guard let raw = try await _rpc.request(146, data: encoded) else {
       throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
     }
     return try _decode(transcodeStartResponse, raw)
@@ -2195,7 +2195,7 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
   // Request/response — client
   public func transcodeStop(_ args: TranscodeStopRequest) async throws -> TranscodeStopResponse {
     let encoded = try _encode(transcodeStopRequest, args)
-    guard let raw = try await _rpc.request(145, data: encoded) else {
+    guard let raw = try await _rpc.request(147, data: encoded) else {
       throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
     }
     return try _decode(transcodeStopResponse, raw)
@@ -2208,7 +2208,7 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
   // Request/response — client
   public func transcodeStatus(_ args: TranscodeStatusRequest) async throws -> TranscodeStatusResponse {
     let encoded = try _encode(transcodeStatusRequest, args)
-    guard let raw = try await _rpc.request(146, data: encoded) else {
+    guard let raw = try await _rpc.request(148, data: encoded) else {
       throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
     }
     return try _decode(transcodeStatusResponse, raw)
@@ -2221,7 +2221,7 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
   // Send-only — client (fire and forget)
   public func eventTranscodeProgress(_ args: EventTranscodeProgress) throws {
     let encoded = try _encode(eventTranscodeProgress, args)
-    _rpc.event(145, data: encoded)
+    _rpc.event(149, data: encoded)
   }
 
   public func onEventTranscodeProgress(_ handler: @escaping (EventTranscodeProgress) async -> Void) {

@@ -62,6 +62,50 @@ function loopbackAddress (address) {
   return normalized === '127.0.0.1' || normalized === '::1' || normalized === '::ffff:127.0.0.1'
 }
 
+// The companion API is a machine surface: the CLI, another relay, an in-process
+// dispatch. No browser is a client of it. A browser, however, is exactly what
+// can borrow the loopback authority this server grants by socket address - a
+// page open on the relay host reaches 127.0.0.1 as a loopback principal. So a
+// request that announces itself as a browser fetch is refused before any
+// authorization decision is made, rather than being trusted for its address.
+//
+// `Origin` is sent by every cross-origin fetch and by every same-origin fetch
+// that mutates, so its mere presence marks a browser; `Sec-Fetch-Site` catches
+// browsers that omit `Origin` (navigations, media elements, no-cors GETs) and
+// only `same-origin`/`none` - the console's own port, or a direct address bar
+// entry - survive it.
+function assertNotBrowserOrigin (headers) {
+  const origin = headers?.origin
+  if (typeof origin === 'string' && origin.length > 0) {
+    throw new CompanionRequestError(403, 'FORBIDDEN_ORIGIN', 'Companion API does not serve browser origins', true)
+  }
+  const fetchSite = headers?.['sec-fetch-site']
+  if (typeof fetchSite === 'string' && fetchSite.length > 0) {
+    const site = fetchSite.trim().toLowerCase()
+    if (site !== 'same-origin' && site !== 'none') {
+      throw new CompanionRequestError(403, 'FORBIDDEN_ORIGIN', 'Companion API does not serve browser origins', true)
+    }
+  }
+}
+
+// Requiring `application/json` on every body removes the CORS simple-request
+// path outright: a form or a `text/plain` fetch cannot reach a companion route
+// without a preflight this server never answers. A body-less request may omit
+// the header entirely, but a request that carries bytes must declare them.
+function assertJsonRequestBody (headers) {
+  const declared = headers?.['content-type']
+  if (declared === undefined) {
+    const length = Number(headers?.['content-length'] ?? 0)
+    const chunked = typeof headers?.['transfer-encoding'] === 'string' && headers['transfer-encoding'].length > 0
+    if (!chunked && !(Number.isFinite(length) && length > 0)) return
+    throw new CompanionRequestError(415, 'UNSUPPORTED_MEDIA_TYPE', 'Companion request body must be application/json', true)
+  }
+  const essence = String(declared).split(';', 1)[0].trim().toLowerCase()
+  if (essence !== 'application/json') {
+    throw new CompanionRequestError(415, 'UNSUPPORTED_MEDIA_TYPE', 'Companion request body must be application/json', true)
+  }
+}
+
 function readBody (request, maxBodyBytes) {
   const declaredLength = request.headers?.['content-length']
   if (declaredLength !== undefined) {
@@ -256,6 +300,7 @@ export function createCompanionServer ({
     firstRequestDeadlines.delete(request.socket)
     response.setHeader('connection', 'close')
     const streamRequest = streamRoute.matches(request.url)
+    const capabilityRead = streamRequest && streamRoute.matchesCapabilityRead(request.method, request.url)
     const controller = new AbortController()
     let deadline = null
     const cancelRequest = () => {
@@ -273,6 +318,15 @@ export function createCompanionServer ({
     if (!streamRequest) armDeadline()
     try {
       if (closing || closed) throw new CompanionRequestError(503, 'SERVER_CLOSING', 'Companion server is closing')
+      // Ahead of the stream branch and ahead of authentication: the transport
+      // decides whether a caller may be heard at all, and only then does the
+      // request earn an identity. The one surface that opts out is a
+      // capability-authorized media read, which carries its grant in the URL
+      // and is fetched by the browser on purpose.
+      if (!capabilityRead) {
+        assertNotBrowserOrigin(request.headers)
+        assertJsonRequestBody(request.headers)
+      }
       if (streamRequest) {
         await streamRoute.handle(request, response, { signal: controller.signal })
         return

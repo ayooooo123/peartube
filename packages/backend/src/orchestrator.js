@@ -12,7 +12,6 @@
 import crypto from 'hypercore-crypto'
 import b4a from 'b4a'
 import {
-  DEFAULT_STORED_PROTOCOL_MIGRATIONS,
   initializeStorage,
   createBackendLifecycle,
   isPlaybackActive,
@@ -55,13 +54,6 @@ import {
   createConsumerWorkRevalidator,
   createModerationManager,
 } from './moderation/index.js'
-import {
-  createLegacyCatalogResolver,
-  createPublicationV1CheckpointRepository,
-  createPublicationV1LegacyRepository,
-  createPublicationV1StartupLifecycle,
-  runPublicationV1StartupMigration,
-} from './migrations/publication-v1.js'
 import { derivePublisherId } from './publisher/index.js'
 import {
   authorizeArchiveRequestFromManifestStore,
@@ -117,7 +109,6 @@ export function buildStorageConfig(config, primaryKey) {
     network: config.network ?? {},
     swarmOptions: config.swarmOptions ?? {},
     expectedStorageFormatVersion: config.expectedStorageFormatVersion ?? STORAGE_FORMAT_VERSION,
-    storedProtocolMigrations: config.storedProtocolMigrations ?? DEFAULT_STORED_PROTOCOL_MIGRATIONS,
     // Optional relay block offload. Reaches initializeStorage, which wraps the
     // CorestoreStorage with it and publishes it on the storage context.
     blockOffload: config.blockOffload ?? null,
@@ -606,7 +597,6 @@ async function setupPermissionlessArchiveNetwork({
   const desiredArchiveParticipationEnabled =
     archive.enabled !== false &&
     initialNetworkPolicy.policyVersion === 2 &&
-    initialNetworkPolicy.migrationRequired !== true &&
     initialNetworkPolicy.archiveEnabled === true
 
   const permissionlessArchiveNetwork = deviceKeyPair?.publicKey && deviceKeyPair?.secretKey
@@ -1108,10 +1098,10 @@ async function setupScopedNetworkStack ({
   ctx.consumerIndexFeedManager = consumerIndexFeedManager
   ctx.consumerModerationManager = consumerModerationManager
   try {
-    const backfill = await verifiedQueryView.refresh()
-    console.log('[Orchestrator] verified query view backfill:', backfill)
+    const refreshed = await verifiedQueryView.refresh()
+    console.log('[Orchestrator] verified query view refresh:', refreshed)
   } catch (error) {
-    console.log('[Orchestrator] verified query view backfill failed at startup:', error?.message || error)
+    console.log('[Orchestrator] verified query view refresh failed at startup:', error?.message || error)
   }
 
   return {
@@ -1253,9 +1243,7 @@ async function wireNetworkPolicyAndProfile ({
   permissionlessArchiveNetwork,
   initialNetworkPolicy,
   initialNetworkEnvironment,
-  publicationV1Startup,
   revalidateConsumerWork,
-  setPendingNetworkPolicy,
   getNetworkPolicyRuntime,
   setNetworkPolicyRuntime,
 }) {
@@ -1270,16 +1258,11 @@ async function wireNetworkPolicyAndProfile ({
     resumeTransport: resumeNetworking,
   })
   setNetworkPolicyRuntime(networkPolicyRuntime)
-  if (publicationV1Startup.ready) await networkPolicyRuntime.start()
+  await networkPolicyRuntime.start()
   ctx.networkPolicyRuntime = networkPolicyRuntime
   ctx.networkPolicyStore = networkPolicyStore
   ctx.onNetworkPolicyChange = async policy => {
-    if (!publicationV1Startup.ready) {
-      setPendingNetworkPolicy(policy)
-      return resolveNetworkPolicyForEnvironment(policy, initialNetworkEnvironment)
-    }
     const effective = await getNetworkPolicyRuntime().apply(policy)
-    setPendingNetworkPolicy(policy)
     await revalidateConsumerWork()
     return effective
   }
@@ -1313,83 +1296,6 @@ async function wireNetworkPolicyAndProfile ({
   return policyApi
 }
 
-async function startPublicationMigrationLifecycle ({
-  ctx,
-  lifecycle,
-  identityManager,
-  catalogRegistry,
-  deviceKeyPair,
-  verifiedQueryView,
-  scopedNetwork,
-  permissionlessArchiveNetwork,
-  desiredArchiveParticipationEnabled,
-  initialNetworkPolicy,
-  archive,
-  getNetworkPolicyRuntime,
-  getPendingNetworkPolicy,
-}) {
-  const publicationV1SourceRepository = createPublicationV1LegacyRepository({
-    identityManager,
-    loadChannel: (driveKey, identity) => loadChannel(ctx, driveKey, {
-      preferWritable: true,
-      deferPublicProjection: true,
-      writerKeyName: identity?.channelWriterKeyName || null,
-    }),
-  })
-  const publicationV1CheckpointRepository = createPublicationV1CheckpointRepository(ctx.metaDb)
-  const publicationV1Startup = createPublicationV1StartupLifecycle({
-    migrate: () => runPublicationV1StartupMigration({
-      sourceRepository: publicationV1SourceRepository,
-      checkpointRepository: publicationV1CheckpointRepository,
-      resolveCatalog: createLegacyCatalogResolver({ catalogRegistry, derivePublisherId }),
-      deviceKeyPair,
-      verifiedQueryView,
-    }),
-    startDiscovery: async () => {
-      await scopedNetwork.start()
-      const networkPolicyRuntime = getNetworkPolicyRuntime()
-      if (networkPolicyRuntime) {
-        await networkPolicyRuntime.start(getPendingNetworkPolicy())
-        return
-      }
-      if (!permissionlessArchiveNetwork) return
-      await permissionlessArchiveNetwork.setParticipation({
-        enabled: desiredArchiveParticipationEnabled,
-        capacityBytes: initialNetworkPolicy.archiveBudgetBytes,
-        maxRequestBytes: archive.maxRequestBytes,
-        acceptanceProbability: archive.acceptanceProbability,
-      })
-    },
-  })
-
-  let startupMayCommitStoredProtocol = false
-  const completePublicationV1Migration = async () => {
-    const migration = await publicationV1Startup.complete()
-    ctx.publicationV1Migration = migration
-    if (migration?.status === 'complete' && startupMayCommitStoredProtocol) {
-      ctx.storedProtocol?.commit()
-    }
-    return migration
-  }
-  ctx.completePublicationV1Migration = completePublicationV1Migration
-  lifecycle.own('publication v1 migration hook', () => {
-    if (ctx.completePublicationV1Migration === completePublicationV1Migration) {
-      ctx.completePublicationV1Migration = null
-    }
-  })
-
-  const bootMigration = await completePublicationV1Migration()
-  console.log('[Orchestrator] publication v1 migration status:', bootMigration?.status ?? 'unknown',
-    'scopedDiscoveryStarted:', publicationV1Startup.ready)
-
-  return {
-    publicationV1Startup,
-    markStartupMayCommitStoredProtocol () {
-      startupMayCommitStoredProtocol = true
-    },
-  }
-}
-
 async function assembleBackendApiSurface ({
   ctx,
   config,
@@ -1413,8 +1319,6 @@ async function assembleBackendApiSurface ({
   primaryKey,
   storagePath,
   startupGate,
-  publicationV1Startup,
-  markStartupMayCommitStoredProtocol,
 }) {
   const baseApi = createApi({
     ctx,
@@ -1452,22 +1356,21 @@ async function assembleBackendApiSurface ({
   lifecycle.ownResource('provider subsystem', providerSubsystem, 'close', 5000)
   const api = Object.freeze({ ...baseApi, ...providerSubsystem.api })
 
-  // Sender auth requires the stored descriptor proof, so backfill completes
-  // before seed-pin registration and discovery.
+  // Sender auth requires the stored descriptor proof, so the channel root
+  // descriptor pass completes before seed-pin registration and discovery.
   try {
     const descriptorSummary = await identityManager.ensureSignedChannelDescriptors?.()
-    if (descriptorSummary) ipcLog('[orchestrator] descriptor backfill: ' + JSON.stringify(descriptorSummary))
+    if (descriptorSummary) ipcLog('[orchestrator] channel root descriptors: ' + JSON.stringify(descriptorSummary))
   } catch (err) {
-    ipcLog('[orchestrator] descriptor backfill failed: ' + (err?.message || err))
+    ipcLog('[orchestrator] channel root descriptor pass failed: ' + (err?.message || err))
   }
 
   const seedPinRegistration = await startAndRegisterSeedPin({ ctx, identityManager, seedPin })
 
   // The marker is the durable readiness commit. Keep it last: identities,
-  // managers, migrations, seed-pin, and discovery must all initialize before a
-  // later host is allowed to treat this state as fully written by this version.
-  markStartupMayCommitStoredProtocol()
-  if (publicationV1Startup.ready) ctx.storedProtocol?.commit()
+  // managers, seed-pin, and discovery must all initialize before a later host
+  // is allowed to treat this state as fully written by this version.
+  ctx.storedProtocol?.commit()
 
   const result = buildBackendResult({
     ctx,
@@ -1631,22 +1534,18 @@ export async function createBackendContext(config) {
     ipcLog('[orchestrator] loadIdentities done')
 
     let networkPolicyRuntime = null
-    let pendingNetworkPolicy = initialNetworkPolicy
-    const { publicationV1Startup, markStartupMayCommitStoredProtocol } = await startPublicationMigrationLifecycle({
-      ctx,
-      lifecycle,
-      identityManager,
-      catalogRegistry,
-      deviceKeyPair,
-      verifiedQueryView,
-      scopedNetwork,
-      permissionlessArchiveNetwork,
-      desiredArchiveParticipationEnabled,
-      initialNetworkPolicy,
-      archive,
-      getNetworkPolicyRuntime: () => networkPolicyRuntime,
-      getPendingNetworkPolicy: () => pendingNetworkPolicy,
-    })
+
+    // Bounded scoped discovery comes up before the policy runtime so the
+    // runtime applies its first decision to a live transport.
+    await scopedNetwork.start()
+    if (permissionlessArchiveNetwork) {
+      await permissionlessArchiveNetwork.setParticipation({
+        enabled: desiredArchiveParticipationEnabled,
+        capacityBytes: initialNetworkPolicy.archiveBudgetBytes,
+        maxRequestBytes: archive.maxRequestBytes,
+        acceptanceProbability: archive.acceptanceProbability,
+      })
+    }
 
     await personalManager.init().catch((err) => ipcLog('[orchestrator] personal store init failed: ' + (err?.message || err)))
     if (ctx.personal) await consumerModerationProfile.reload()
@@ -1654,7 +1553,6 @@ export async function createBackendContext(config) {
       ...initialNetworkPolicy,
       trustedModerationFeeds: consumerModerationProfile.getEffectiveCuratorSubscriptions(),
     }
-
 
     const policyApi = await wireNetworkPolicyAndProfile({
       ctx,
@@ -1666,9 +1564,7 @@ export async function createBackendContext(config) {
       permissionlessArchiveNetwork,
       initialNetworkPolicy,
       initialNetworkEnvironment,
-      publicationV1Startup,
       revalidateConsumerWork,
-      setPendingNetworkPolicy: policy => { pendingNetworkPolicy = policy },
       getNetworkPolicyRuntime: () => networkPolicyRuntime,
       setNetworkPolicyRuntime: runtime => { networkPolicyRuntime = runtime },
     })
@@ -1697,8 +1593,6 @@ export async function createBackendContext(config) {
       primaryKey,
       storagePath,
       startupGate,
-      publicationV1Startup,
-      markStartupMayCommitStoredProtocol,
     })
   } catch (error) {
     await lifecycle.shutdown()

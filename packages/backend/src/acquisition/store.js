@@ -1,5 +1,4 @@
 import b4a from 'b4a'
-import crypto from 'hypercore-crypto'
 
 import {
   ACQUISITION_SCHEMA_VERSION,
@@ -11,7 +10,6 @@ import {
   normalizeAcquisitionRequest,
   normalizePrincipalId,
   normalizePublicationMetadata,
-  PUBLICATION_METADATA_FIELDS,
   projectAcquisitionJob,
   normalizeCoordinationRecord
 } from './contract.js'
@@ -20,7 +18,6 @@ const JOB_PREFIX = 'acquisition/v1/job/'
 const IDEMPOTENCY_PREFIX = 'acquisition/v1/idempotency/'
 const ACTIVE_PREFIX = 'acquisition/v1/active/'
 const EVENT_PREFIX = 'acquisition/v1/event/'
-const LEGACY_MARKER_PREFIX = 'acquisition/v1/migration/companion-ingest-v1/'
 const COORDINATION_PREFIX = 'acquisition/v1/coordination/job/'
 const COORDINATION_ASSIGNMENT_PREFIX = 'acquisition/v1/coordination/by-assignment/'
 const COORDINATION_REQUEST_PREFIX = 'acquisition/v1/coordination/by-request/'
@@ -38,7 +35,6 @@ const NEXT = new Map([
 ])
 const ERROR_CODE = /^[A-Z][A-Z0-9_]{0,63}$/
 const ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/
-const MIGRATION_MARKER = /^[A-Za-z0-9_-]{32}$/
 const HEX64 = /^[0-9a-f]{64}$/
 function hex64 (value, name = 'id') {
   if (typeof value !== 'string' || !HEX64.test(value)) fail('ACQUISITION_PERSISTENCE_INVALID', `${name} must be 64-hex`, 500)
@@ -98,12 +94,6 @@ function normalizePublication (input) {
   assertNoPrivateSourceMaterial(result, 'publication result')
   return result
 }
-function plainObject (value) { return Boolean(value) && typeof value === 'object' && !Array.isArray(value) }
-function boundedMetadataValue (value) {
-  if (typeof value === 'string') return Boolean(value) && b4a.byteLength(value) <= 512
-  return Number.isSafeInteger(value) && value >= 0
-}
-
 
 function normalizeRequesterPublisherIds (input) {
   if (!Array.isArray(input) || input.length > 64) fail('ACQUISITION_PERSISTENCE_INVALID', 'requester publisher scope is invalid', 500)
@@ -114,21 +104,6 @@ function normalizeRequesterPublisherIds (input) {
   return values
 }
 
-// A backfill fills gaps and overwrites nothing: a job that already names its
-// work keeps that name, and only the fields it is missing are added. Returns
-// null when there is nothing to add, so the caller writes no operation.
-function mergedPublicationMetadata (existing, incoming) {
-  if (incoming == null) return null
-  if (existing == null) return incoming
-  const merged = { ...existing }
-  let changed = false
-  for (const field of PUBLICATION_METADATA_FIELDS) {
-    if (merged[field] != null || incoming[field] == null) continue
-    merged[field] = incoming[field]
-    changed = true
-  }
-  return changed ? merged : null
-}
 function validatePatchIdentity (patch, current) {
   if (patch.expectedIdentity === undefined) return undefined
   const identity = normalizeIdentity(patch.expectedIdentity)
@@ -535,45 +510,6 @@ export function createAcquisitionStore ({ bee, now = () => Date.now() } = {}) {
       })
     },
     async listEvents (acquisitionId) { await writes; const prefix = `${EVENT_PREFIX}${id(acquisitionId, 'acquisitionId')}/`; const events = []; for await (const entry of bee.createReadStream({ gte: prefix, lt: `${prefix}\uffff` })) events.push(decode(entry.value)); return events },
-    importLegacyPublicJobs (jobs, markerId) {
-      return serialized(async () => {
-        await ensureStateCounts()
-        if (typeof markerId !== 'string' || !MIGRATION_MARKER.test(markerId)) fail('ACQUISITION_PERSISTENCE_INVALID', 'migration marker is invalid', 500)
-        const markerKey = `${LEGACY_MARKER_PREFIX}${markerId}`
-        // A relay that already migrated still gets the work identity written
-        // onto its imported jobs. The alternative is an inventory that can only
-        // ever name the machine ids of everything it holds.
-        const alreadyMigrated = Boolean(await readUnserialized(markerKey))
-        const operations = []; const insertedStates = []; let migrated = 0; let skipped = 0
-        for (const input of jobs) {
-          const existing = await readUnserialized(jobKey(input.acquisitionId))
-          if (existing) {
-            skipped++
-            const merged = mergedPublicationMetadata(existing.publicationMetadata, input.publicationMetadata)
-            if (merged) {
-              const named = { ...existing, publicationMetadata: merged }
-              validateDurableJob(named)
-              operations.push(['put', jobKey(input.acquisitionId), named])
-            }
-            continue
-          }
-          if (alreadyMigrated) {
-            skipped++
-            continue
-          }
-          validateDurableJob(input)
-          operations.push(['put', jobKey(input.acquisitionId), input])
-          if (!TERMINAL.has(input.state)) operations.push(['put', activeKey(input.acquisitionId), { acquisitionId: input.acquisitionId }])
-          withEventOperations(input, stateEventType(input.state), operations)
-          insertedStates.push(input.state)
-          migrated++
-        }
-        if (!alreadyMigrated) operations.push(['put', markerKey, { schemaVersion: 1, migrated, skipped, migratedAt: timestamp() }])
-        if (operations.length > 0) await atomic(operations)
-        for (const state of insertedStates) moveStateCount(null, state)
-        return { migrated, skipped }
-      })
-    },
     saveCoordination (acquisitionId, input) {
       return serialized(async () => {
         const idVal = id(acquisitionId, 'acquisitionId')
@@ -756,181 +692,4 @@ export function createAcquisitionStore ({ bee, now = () => Date.now() } = {}) {
     async close () { await writes }
   }
   return Object.freeze(store)
-}
-
-function base64url (bytes) { return b4a.toString(bytes, 'base64').replaceAll('+', '-').replaceAll('/', '_').replace(/=+$/, '') }
-function legacyResolutionRef (jobId) { return base64url(crypto.hash(b4a.from(`peartube.legacy-resolution.v1\u0000${jobId}`))).slice(0, 43) }
-async function legacyPublicJobs (legacyStore) {
-  if (!legacyStore) throw new TypeError('legacyStore is required')
-  if (typeof legacyStore.listJobIds === 'function' && typeof legacyStore.getJob === 'function') {
-    const result = []
-    for (const entry of await legacyStore.listJobIds()) {
-      const job = await legacyStore.getJob(entry.jobId)
-      if (job) result.push(job)
-    }
-    return result
-  }
-  if (typeof legacyStore.listJobs === 'function') return legacyStore.listJobs()
-  if (typeof legacyStore.listRecent === 'function') return legacyStore.listRecent(64)
-  throw new TypeError('legacyStore must expose listJobIds/getJob, listJobs, or listRecent')
-}
-function legacyPublication (job) {
-  const source = job.publication || job
-  if (![source.publicationId, source.manifestId, source.renditionId, source.assetId].every(value => typeof value === 'string' && ID.test(value))) return null
-  return { publicationId: source.publicationId, manifestId: source.manifestId, renditionId: source.renditionId, assetId: source.assetId }
-}
-// A migrated job keeps the name of the work it was fetching and the name the
-// source gave its file. Dropping them made every imported row read
-// `Acquisition <id>`, which is the one thing an inventory surface must never
-// do. The retired ingest wrote these under two shapes — the request's selector
-// and the archive manager's coordinates — so both are mapped onto the one
-// whitelist rather than guessed at read time.
-const LEGACY_MEDIA_ALIASES = new Map([
-  ['kind', 'kind'],
-  ['contentKind', 'kind'],
-  ['namespace', 'namespace'],
-  ['mediaProvider', 'namespace'],
-  ['identifier', 'identifier'],
-  ['seriesIdentifier', 'identifier'],
-  ['mediaId', 'identifier'],
-  ['title', 'title'],
-  ['season', 'season'],
-  ['seasonNumber', 'season'],
-  ['episode', 'episode'],
-  ['episodeNumber', 'episode'],
-  ['releaseYear', 'releaseYear'],
-  ['workEntityId', 'workEntityId']
-])
-
-function legacyFileName (value) {
-  if (typeof value !== 'string') return null
-  const name = value.split(/[/\\]/).pop().trim()
-  return name && name.length <= 255 ? name : null
-}
-
-function legacyMediaContext (job, request) {
-  const context = {}
-  for (const candidate of [request.mediaContext, job?.mediaContext, job?.mediaCoordinates]) {
-    if (!plainObject(candidate)) continue
-    for (const [key, value] of Object.entries(candidate)) {
-      const field = LEGACY_MEDIA_ALIASES.get(key)
-      if (!field || context[field] !== undefined || !boundedMetadataValue(value)) continue
-      context[field] = value
-    }
-  }
-  return Object.keys(context).length > 0 ? context : null
-}
-
-function legacyPublicationMetadata (job) {
-  const request = plainObject(job?.request) ? job.request : {}
-  const title = [job?.title, request.title].find(value => boundedMetadataValue(value) && typeof value === 'string') ?? null
-  const sourceFileName = [job?.sourceFileName, job?.fileName, job?.filename, request.sourceFileName, request.fileName]
-    .map(legacyFileName)
-    .find(Boolean) ?? null
-  const mediaContext = legacyMediaContext(job, request)
-  return title === null && sourceFileName === null && mediaContext === null
-    ? null
-    : { title, sourceFileName, mediaContext }
-}
-function safePositiveInt (value, fallback) {
-  return Number.isSafeInteger(value) && value >= 0 ? value : fallback
-}
-
-function resolveLegacyState (legacyState, publication) {
-  if (legacyState === 'completed' && publication !== null) return 'completed'
-  if (legacyState === 'cancelled') return 'cancelled'
-  if (legacyState === 'queued') return 'queued'
-  return 'failed'
-}
-
-function resolveLegacyErrorCode (state, legacy, interrupted) {
-  if (state === 'failed') {
-    if (interrupted) return 'LEGACY_SOURCE_GRANT_REQUIRED'
-    if (ERROR_CODE.test(legacy.errorCode || '')) return legacy.errorCode
-    return 'LEGACY_INGEST_FAILED'
-  }
-  if (state === 'cancelled') return 'CANCELLED'
-  return null
-}
-
-function convertLegacyJob (legacy, { principalId, publisherId, now }) {
-  const acquisitionId = id(legacy.jobId ?? legacy.acquisitionId, 'legacy job id')
-  const expectedBytes = uint(legacy.expectedBytes ?? legacy.request?.expected?.byteLength, 'legacy expectedBytes')
-  if (expectedBytes < 1) fail('ACQUISITION_PERSISTENCE_INVALID', 'legacy expectedBytes is invalid', 500)
-
-  const legacyState = STATES.has(legacy.state) ? legacy.state : 'failed'
-  const interrupted = !TERMINAL.has(legacyState) && legacyState !== 'queued'
-  const publication = legacyPublication(legacy)
-  const state = resolveLegacyState(legacyState, publication)
-  const completed = state === 'completed'
-
-  const at = safePositiveInt(legacy.updatedAt, now())
-  const bytesAcquired = Math.min(expectedBytes, safePositiveInt(legacy.bytesReceived, 0))
-
-  const retentionClass = legacy.retentionClass === 'archive-pin' ? 'archive-pin' : 'contribution-cache'
-  const request = normalizeAcquisitionRequest({
-    schemaVersion: 1,
-    resolutionRef: legacyResolutionRef(acquisitionId),
-    publisherId,
-    retentionClass
-  })
-
-  const verifiedAsset = completed ? {
-    assetId: publication.assetId,
-    key: publication.assetId,
-    treeHash: publication.assetId,
-    length: 1,
-    byteLength: expectedBytes,
-    blockSize: expectedBytes
-  } : null
-
-  const errorCode = resolveLegacyErrorCode(state, legacy, interrupted)
-  const recoverable = state === 'failed' && (interrupted || legacy.recoverable === true)
-  const createdAt = safePositiveInt(legacy.createdAt, at)
-
-  return {
-    schemaVersion: 1,
-    acquisitionId,
-    state,
-    version: 0,
-    principalId,
-    publisherId,
-    requesterPublisherIds: [publisherId],
-    isRemote: false,
-    idempotencyDigest: null,
-    requestFingerprint: null,
-    request,
-    retentionClass: request.retentionClass,
-    publicationMetadata: legacyPublicationMetadata(legacy),
-    expectedBytes,
-    sourceBytesRead: bytesAcquired,
-    sourceBytesAccepted: bytesAcquired,
-    bytesAcquired,
-    verifiedBytes: completed ? expectedBytes : 0,
-    committedBytes: completed ? expectedBytes : 0,
-    retainedBytes: completed ? expectedBytes : 0,
-    stagingBytes: 0,
-    stagingPeakBytes: 0,
-    attempts: 0,
-    startedAt: null,
-    finishedAt: TERMINAL.has(state) ? at : null,
-    verifiedPrefix: null,
-    verifiedAsset,
-    publication: completed ? publication : null,
-    errorCode,
-    recoverable,
-    createdAt,
-    updatedAt: at
-  }
-}
-
-export async function migrateLegacyIngest ({ legacyStore, acquisitionStore, legacyPrincipalId = 'local', legacyPublisherId = 'local', now = () => Date.now() } = {}) {
-  if (!acquisitionStore || typeof acquisitionStore.importLegacyPublicJobs !== 'function') throw new TypeError('acquisitionStore is required')
-  if (typeof now !== 'function') throw new TypeError('now must be a function')
-  const principalId = normalizePrincipalId(legacyPrincipalId)
-  const publisherId = id(legacyPublisherId, 'legacyPublisherId')
-  const legacyJobs = await legacyPublicJobs(legacyStore)
-  const imported = legacyJobs.map(legacy => convertLegacyJob(legacy, { principalId, publisherId, now }))
-  const marker = base64url(crypto.hash(b4a.from(`${principalId}\u0000${publisherId}`))).slice(0, 32)
-  return acquisitionStore.importLegacyPublicJobs(imported, marker)
 }

@@ -108,7 +108,6 @@ test('cross-entrypoint idempotency: console, add, and mirror yield identical acq
       async getAcquisitionPolicy () {
         return {
           policyVersion: 1,
-          migrationRequired: false,
           enabled: true,
           requesterMode: 'local-only',
           allowedPublisherIds: [PUBLISHER_ID],

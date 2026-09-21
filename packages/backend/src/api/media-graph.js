@@ -293,8 +293,9 @@ function normalizePreferenceStore(store) {
 }
 
 // `availabilityState`/`stale` remain the selection-diagnostics vocabulary and
-// are derived from local expiring evidence, never from publisher claims.
-const LEGACY_AVAILABILITY_STATE = Object.freeze({
+// are derived from local expiring evidence, never from publisher claims. The
+// diagnostics vocabulary is coarser than AVAILABILITY_STATES, so project it.
+const DIAGNOSTIC_AVAILABILITY_STATE = Object.freeze({
   [AVAILABILITY_STATES.healthy]: 'available',
   [AVAILABILITY_STATES.limited]: 'available',
   [AVAILABILITY_STATES.unavailable]: 'unavailable',
@@ -340,7 +341,7 @@ function resolveSourceAvailability(availability) {
     availability,
     expectedStartupLatencyMs: availability?.measuredLatencyMs || 0,
     availabilityScore: sourceAvailabilityScore({ availability }),
-    availabilityState: LEGACY_AVAILABILITY_STATE[availability?.state] || 'unknown',
+    availabilityState: DIAGNOSTIC_AVAILABILITY_STATE[availability?.state] || 'unknown',
     availabilityExpiresAt: availability?.expiresAt ?? 0,
     stale: isStale,
   }

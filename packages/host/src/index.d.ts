@@ -154,59 +154,12 @@ export type SubmitPublisherRootOperationResponse = {
   signature: Uint8Array
 }
 
-export type MigrationState = 'pending' | 'running' | 'complete' | 'failed' | 'retrying'
-
-export type MigrationStatusRequest = {
-  /** UTF-8 identifier, at most 64 bytes. */
-  migrationId: string
-}
-
-export type MigrationStatusResponse = {
-  success: boolean
-  migrationId: string
-  state: MigrationState
-  version: number
-  processedCount: number
-  importedCount: number
-  skippedCount: number
-  quarantinedCount: number
-  unsupportedCount: number
-  remainingCount: number
-  retryable: boolean
-  updatedAt: number
-  errorCode?: string | null
-  /** Sanitized fixed diagnostic text, at most 256 UTF-8 bytes. */
-  errorMessage?: string | null
-  reportDigest?: string | null
-}
-
-export type RetryMigrationResponse = MigrationStatusResponse & {
-  joined: boolean
-}
-
-export type ExportMigrationReportResponse = {
-  success: boolean
-  migrationId: string
-  /** Canonical public-only report, at most 65,536 bytes. */
-  reportBytes?: Uint8Array | null
-  reportDigest?: string | null
-  errorCode?: string | null
-}
-
 export type PublisherDeviceStatus =
   | 'authorized'
   | 'stale'
   | 'revoked'
   | 'unable-to-publish'
   | 'authority-lost'
-
-export type PublisherLegacyImportState =
-  | 'not-required'
-  | 'pending'
-  | 'running'
-  | 'complete'
-  | 'failed'
-  | 'retrying'
 
 export type GetPublisherDeviceStatusRequest = {
   /** Public publisher identifier only; exactly 32 bytes when present. */
@@ -230,7 +183,6 @@ export type GetPublisherDeviceStatusResponse = {
   policyEpoch?: number | null
   admissionExpiresAt?: number | null
   revocationCutoff?: number | null
-  legacyImportState?: PublisherLegacyImportState | null
 }
 
 export type ExportPortableStateResponse = {
@@ -824,7 +776,6 @@ export type AcquisitionPolicy = {
   policyVersion: 1
   revision: number
   consentVersion: number
-  migrationRequired: boolean
   enabled: boolean
   acceptPublicRequests: boolean
   requesterMode: 'local-only' | 'allowlisted' | 'public'
@@ -868,9 +819,6 @@ export type SystemProtocolNamespace = ProtocolNamespace & {
   getStatus(request?: Record<string, never>): Promise<any>
   getSwarmStatus(request?: Record<string, never>): Promise<ProtocolNetworkStatus>
   getBlobServerPort(request?: Record<string, never>): Promise<any>
-  getMigrationStatus(request: MigrationStatusRequest): Promise<MigrationStatusResponse>
-  retryMigration(request: MigrationStatusRequest): Promise<RetryMigrationResponse>
-  exportMigrationReport(request: MigrationStatusRequest): Promise<ExportMigrationReportResponse>
   suspendNetwork(request?: Record<string, never>): Promise<{ success: boolean; error?: string }>
   resumeNetwork(request?: Record<string, never>): Promise<{ success: boolean; error?: string }>
   setPlaybackActive(request: { active: boolean; ttlMs?: number }): Promise<{

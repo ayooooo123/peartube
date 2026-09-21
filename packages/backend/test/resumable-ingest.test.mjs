@@ -6,7 +6,6 @@ import b4a from 'b4a'
 import test from 'brittle'
 import Corestore from 'corestore'
 import Hypercore from 'hypercore'
-import crypto from 'hypercore-crypto'
 
 import { createBlockOffloader } from '../src/archive/block-offloader.js'
 import { createOffloadStorage } from '../src/archive/offload-storage.js'
@@ -42,25 +41,6 @@ const RESUME_ID = 'ing_resume_0000000000000000000001'
 // Source chunks are deliberately not block-aligned, so a resumed read has to
 // re-chunk into canonical blocks from an offset exactly as the first read did.
 const CHUNK_BYTES = 100000
-
-async function rewriteStagingIdentityAsV1 (store, id) {
-  const digest = crypto.hash(b4a.from(`peartube.asset.staging.id.v1\u0000${id}`))
-  const keyPair = await store.createKeyPair(`asset-staging-${b4a.toString(digest, 'hex')}`)
-  const core = store.get({ keyPair })
-  await core.ready()
-  try {
-    const raw = await core.getUserData('peartube.asset.staging.v1')
-    const current = JSON.parse(b4a.toString(raw, 'utf8'))
-    await core.setUserData('peartube.asset.staging.v1', b4a.from(JSON.stringify({
-      version: 1,
-      etag: current.identity.value,
-      createdAt: current.createdAt,
-      touchedAt: current.touchedAt,
-    })))
-  } finally {
-    await core.close()
-  }
-}
 
 function assetBytes () {
   const bytes = b4a.alloc(BYTE_LENGTH)
@@ -334,37 +314,6 @@ test('an ingest interrupted mid-stream resumes to exactly the core an uninterrup
   const finishedKeyHex = b4a.toString(resumed.core.key, 'hex')
   t.is(stagingKeys(objects, finishedKeyHex).length, 0, 'no staging object outlived the finished archive')
 
-  await resumed.core.close()
-})
-
-test('a version 1 staging identity migrates without discarding its confirmed prefix', async (t) => {
-  const bytes = assetBytes()
-  const { store, objects, offloadFor } = await fixture(t)
-  const broken = rangedSource(bytes, { breakAfterBytes: BREAK_AT_BLOCK * ASSET_BLOCK_SIZE })
-  await writeStaticAsset({
-    store,
-    offload: offloadFor(),
-    reader: broken.reader,
-    resume: { id: RESUME_ID },
-  }).then(() => null, (error) => error)
-  t.is(objects.size, BREAK_AT_BLOCK, 'the legacy fixture starts with a confirmed staged prefix')
-  await rewriteStagingIdentityAsV1(store, RESUME_ID)
-
-  const source = rangedSource(bytes)
-  const resumed = await writeStaticAsset({
-    store,
-    offload: offloadFor(),
-    reader: source.reader,
-    resume: { id: RESUME_ID },
-  })
-
-  t.alike(
-    source.ranges,
-    [{ byteOffset: BREAK_AT_BLOCK * ASSET_BLOCK_SIZE, blockIndex: BREAK_AT_BLOCK, end: BYTE_LENGTH - 1 }],
-    'migration resumes after the confirmed prefix instead of downloading from zero'
-  )
-  t.is(resumed.core.byteLength, BYTE_LENGTH, 'the migrated staging state completes the title')
-  t.ok(await verifyStaticAssetDescriptor(resumed.core, resumed.descriptor), 'the migrated result verifies')
   await resumed.core.close()
 })
 

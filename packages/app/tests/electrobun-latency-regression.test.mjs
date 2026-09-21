@@ -56,19 +56,12 @@ test('Electrobun desktop start refreshes staged workspace packages before launch
   )
 })
 
-test('Electrobun IPC relay removes the per-socket worker data listener on close', () => {
-  const source = readAppFile('src/bun/index.ts')
-
-  assert.match(source, /function removeWorkerDataListener/)
-  assert.match(source, /const forwardWorkerData = \(d: Buffer\) =>/)
-  assert.match(source, /worker\.on\('data', forwardWorkerData\)/)
-  assert.match(source, /removeWorkerDataListener\(worker, forwardWorkerData\)/)
-})
-
+// Absence guards only. The IPC port endpoint moved into src/bun/static-files.ts
+// and is now proven behaviourally by desktop-static-path-traversal.test.mjs;
+// asserting its presence here was pinning a location, not a contract.
 test('Electrobun main process does not proxy blob media bytes', () => {
   const source = readAppFile('src/bun/index.ts')
 
-  assert.match(source, /__peartube_ipc_port/, 'main process should still expose IPC port discovery')
   assert.doesNotMatch(source, /__blob/, 'media should go directly to the backend blob server')
   assert.doesNotMatch(source, /Blob proxy/i, 'main process should not contain a blob proxy path')
   assert.doesNotMatch(source, /fetch\(blobUrl/, 'main process should not refetch backend blob bytes')

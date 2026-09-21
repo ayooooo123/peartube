@@ -2,54 +2,9 @@ import b4a from 'b4a'
 
 export const STORED_PROTOCOL_ERROR_CODE = 'STORED_PROTOCOL_VERSION_UNSUPPORTED'
 export const STORED_PROTOCOL_MARKER_FILENAME = 'stored-protocol.json'
-export const STORAGE_FORMAT_VERSION = 10
-
-// Protocols 5 and 6 add transport methods only; persisted storage remains
-// byte-for-byte compatible. Explicit validators preserve the fail-closed
-// migration chain without rewriting user data.
-function validateProtocol4To5Transition(_context, step = {}) {
-  if (step.fromVersion !== 4 || step.toVersion !== 5 || step.expectedVersion < 5) {
-    throw new Error('invalid stored protocol 4 to 5 transition')
-  }
-}
-
-function validateProtocol5To6Transition(_context, step = {}) {
-  if (step.fromVersion !== 5 || step.toVersion !== 6 || step.expectedVersion < 6) {
-    throw new Error('invalid stored protocol 5 to 6 transition')
-  }
-}
-
-// Protocol 8 adds cover art to the content record and the catalog response.
-// Both are appended, version-gated fields: records written before the bump
-// decode unchanged and simply carry no artwork, so no user data is rewritten.
-function validateProtocol7To8Transition(_context, step = {}) {
-  if (step.fromVersion !== 7 || step.toVersion !== 8 || step.expectedVersion < 8) {
-    throw new Error('invalid stored protocol 7 to 8 transition')
-  }
-}
-
-// Protocol 9 appends provider coordinates to catalog source transport only.
-// Persisted records and indexes are unchanged.
-function validateProtocol8To9Transition(_context, step = {}) {
-  if (step.fromVersion !== 8 || step.toVersion !== 9 || step.expectedVersion < 9) {
-    throw new Error('invalid stored protocol 8 to 9 transition')
-  }
-}
-
-// Protocol 10 adds causal catalog sync v2 over the existing journal.
-function validateProtocol9To10Transition(_context, step = {}) {
-  if (step.fromVersion !== 9 || step.toVersion !== 10 || step.expectedVersion < 10) {
-    throw new Error('invalid stored protocol 9 to 10 transition')
-  }
-}
-
-export const DEFAULT_STORED_PROTOCOL_MIGRATIONS = Object.freeze({
-  4: validateProtocol4To5Transition,
-  5: validateProtocol5To6Transition,
-  7: validateProtocol7To8Transition,
-  8: validateProtocol8To9Transition,
-  9: validateProtocol9To10Transition,
-})
+// 11: public projection format tokens became 'summary'/'detailed'. There is no
+// migration, so a store written at 10 is refused rather than read as unset.
+export const STORAGE_FORMAT_VERSION = 11
 
 const MAX_MARKER_BYTES = 128
 const MAX_PROTOCOL_VERSION = 0x7fffffff
@@ -69,20 +24,6 @@ function unsupported(storedVersion, expectedVersion, reason) {
   })
   if (reason) error.reason = reason
   return error
-}
-
-function resolveMigration(migrations, fromVersion) {
-  if (migrations instanceof Map) return migrations.get(fromVersion)
-  if (migrations && typeof migrations === 'object') return migrations[fromVersion]
-  return undefined
-}
-
-function assertMigrationChain(storedVersion, expectedVersion, migrations) {
-  for (let version = storedVersion; version < expectedVersion; version += 1) {
-    if (typeof resolveMigration(migrations, version) !== 'function') {
-      throw unsupported(storedVersion, expectedVersion, `missing-migration-${version}-${version + 1}`)
-    }
-  }
 }
 
 function readMarker(markerPath, expectedVersion, fs) {
@@ -151,15 +92,14 @@ function writeMarkerAtomically(markerPath, expectedVersion, fs) {
 }
 
 /**
- * Validate persisted backend state before opening or exposing it. Older state is
- * accepted only when every one-version transition has an explicitly registered,
- * deterministic migration. The returned commit is deliberately separate from
- * migration so callers can persist readiness only after complete backend startup.
+ * Validate persisted backend state before opening or exposing it. State written
+ * by any other protocol version is refused outright. The returned commit is
+ * deliberately separate from validation so callers persist readiness only after
+ * complete backend startup.
  */
 export function prepareStoredProtocolState({
   storagePath,
   expectedVersion = STORAGE_FORMAT_VERSION,
-  migrations = null,
   fs,
   path,
 } = {}) {
@@ -177,57 +117,23 @@ export function prepareStoredProtocolState({
   const marker = readMarker(markerPath, expectedVersion, fs)
   const storedVersion = marker.storedVersion
 
-  if (storedVersion !== null && storedVersion > expectedVersion) {
-    throw unsupported(storedVersion, expectedVersion, 'newer-state')
-  }
-  if (storedVersion !== null && storedVersion < expectedVersion) {
-    assertMigrationChain(storedVersion, expectedVersion, migrations)
-  }
-
-  const status = storedVersion === null
-    ? 'uninitialized'
-    : storedVersion === expectedVersion
-      ? 'compatible'
-      : 'migration-required'
-  let migrationComplete = status !== 'migration-required'
-  let migrationPromise = null
-
-  async function migrate(context) {
-    if (migrationComplete) return
-    if (migrationPromise) return migrationPromise
-
-    migrationPromise = (async () => {
-      for (let fromVersion = storedVersion; fromVersion < expectedVersion; fromVersion += 1) {
-        const migration = resolveMigration(migrations, fromVersion)
-        await migration(context, Object.freeze({
-          fromVersion,
-          toVersion: fromVersion + 1,
-          expectedVersion,
-        }))
-      }
-      migrationComplete = true
-    })()
-
-    try {
-      await migrationPromise
-    } finally {
-      migrationPromise = null
-    }
-  }
-
-  function commit() {
-    if (!migrationComplete) throw new Error('Stored protocol migration has not completed')
-    if (storedVersion === expectedVersion) return false
-    writeMarkerAtomically(markerPath, expectedVersion, fs)
-    return true
+  if (storedVersion !== null && storedVersion !== expectedVersion) {
+    throw unsupported(
+      storedVersion,
+      expectedVersion,
+      storedVersion > expectedVersion ? 'newer-state' : 'retired-state',
+    )
   }
 
   return Object.freeze({
-    status,
+    status: storedVersion === null ? 'uninitialized' : 'compatible',
     storedVersion,
     expectedVersion,
     markerPath,
-    migrate,
-    commit,
+    commit() {
+      if (storedVersion === expectedVersion) return false
+      writeMarkerAtomically(markerPath, expectedVersion, fs)
+      return true
+    },
   })
 }

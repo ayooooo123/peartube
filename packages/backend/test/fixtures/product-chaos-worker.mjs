@@ -16,7 +16,6 @@ import { createPublisherCatalogPage } from '../../src/discovery/publisher-protoc
 import { createIndexFeedPage } from '../../src/indexing/feed-contract.js'
 import { createIndexFeedManager } from '../../src/indexing/feed-manager.js'
 import { createLiveEpochDescriptor, verifyLiveEpochChain, verifyLiveEpochDescriptor } from '../../src/live/live-descriptor.js'
-import { createMigrationLifecycle } from '../../src/migrations/observability.js'
 import { createModerationFeedPage, verifyModerationFeedPage } from '../../src/moderation/feed-contract.js'
 import { createModerationManager } from '../../src/moderation/manager.js'
 import { decodeApplicationEnvelope, encodeApplicationEnvelope } from '../../src/records/application-envelope.js'
@@ -52,18 +51,6 @@ function result(value) {
   process.stdout.write(`${JSON.stringify({ type: 'result', scenario, result: value })}\n`)
 }
 
-class JsonMigrationStore {
-  constructor(file) { this.file = file }
-  async get(key) {
-    const state = await readJson(this.file, {})
-    return Object.hasOwn(state, key) ? { value: state[key] } : null
-  }
-  async put(key, value) {
-    const state = await readJson(this.file, {})
-    state[key] = value
-    await writeJson(this.file, state)
-  }
-}
 function fileStateRepository(file) {
   return {
     async load() {
@@ -172,29 +159,6 @@ async function uploadBeforeSeal() {
   await writeJson(controlPath, { ...control, publicationSealed: true, catalogCommit })
   await store.close()
   result({ status: 'recovered', bytes: b4a.toString(bytes), catalogCommitted: Boolean(catalogCommit?.batchDigest) })
-}
-
-async function migrationBeforeCheckpoint() {
-  const store = new JsonMigrationStore(path.join(storagePath, 'migration-state.json'))
-  let resumedCheckpoint = 'unset'
-  const lifecycle = createMigrationLifecycle({
-    store,
-    migrations: {
-      'media-v2': async ({ checkpoint, persistCheckpoint }) => {
-        resumedCheckpoint = checkpoint
-        if (phase === 'prepare') return barrier('migration-running')
-        await persistCheckpoint({ checkpoint: 'item-1', processedCount: 1 })
-        return { state: 'complete', checkpoint: 'item-1', processedCount: 1 }
-      },
-    },
-    now: () => phase === 'prepare' ? 100 : 200,
-  })
-  const status = await lifecycle.retryMigration({ migrationId: 'media-v2' })
-  if (phase === 'recover') {
-    const stored = await readJson(store.file, {})
-    const durableState = Object.values(stored)[0]
-    result({ state: status.state, attempts: durableState?.attempts, resumedCheckpoint, processedCount: status.processedCount })
-  }
 }
 
 async function offloadBeforeConfirmation() {
@@ -512,7 +476,6 @@ async function mobileBackendRestart() {
 
 const scenarios = {
   'upload-before-publication-seal': uploadBeforeSeal,
-  'migration-running-before-checkpoint': migrationBeforeCheckpoint,
   'offload-assessment-before-confirmation': offloadBeforeConfirmation,
   'live-epoch-before-vod-seal': liveBeforeSeal,
   'missing-half-blob': missingHalfBlob,

@@ -16,7 +16,6 @@ import { assertLoopbackPlaybackUrl } from './playback/transport-guard.js'
 import { PublicChannelBee } from './channel/public-channel-bee.js'
 import { loadPublicBeeFromCache } from './public-bee-loader.js'
 import { logger } from './logger.js'
-import { relocateLegacyBlindPeerDir, relocateLegacyCorestoreDir, relocateLegacyLogsDir } from './storage-layout.js'
 import { cleanupFailedCorestoreOpen } from './corestore-cleanup.js'
 import {
   loadBareOrNodeFsModule,
@@ -30,14 +29,14 @@ import { normalizeBlobRefInput } from './blob-ref.js'
 import { redactCapabilityUrl } from './capability-url.js'
 import { createKnownPeerCache, loadKnownPeers } from './known-peers.js'
 import { readStoredIdentityRecords } from './identity-state.js'
-import { createMetaSubspaces, migrateMetaSubspaces } from './meta-subspaces.js'
+import { createMetaSubspaces } from './meta-subspaces.js'
 import { prioritizeBlobServerRangeRequest, releaseAllPrioritizedBlobRanges } from './blob-range-priority.js'
 import { serveThumbnailHttpRequest } from './thumbnail-http.js'
 import { serveVideoRangeHttpRequest } from './video-range-http.js'
 import { createBlobRequestHandler } from './blob-request-stream.js'
 import { appendDebugLine } from './debug-log.js'
-import { DEFAULT_STORED_PROTOCOL_MIGRATIONS, STORAGE_FORMAT_VERSION, prepareStoredProtocolState } from './stored-protocol.js'
-export { DEFAULT_STORED_PROTOCOL_MIGRATIONS, STORAGE_FORMAT_VERSION, prepareStoredProtocolState }
+import { STORAGE_FORMAT_VERSION, prepareStoredProtocolState } from './stored-protocol.js'
+export { STORAGE_FORMAT_VERSION, prepareStoredProtocolState }
 
 const DEFAULT_SHUTDOWN_TIMEOUT_MS = 5000
 
@@ -656,11 +655,34 @@ let path = null;
 let Hyperswarm = null;
 let http = null;
 
-function createNoopDiscoveryHandle() {
+export const SWARM_OFFLINE_ERROR_CODE = 'SWARM_OFFLINE'
+
+// An offline swarm has no networking at all, so its discovery can never settle.
+// `flushed()`/`refresh()` therefore reject instead of resolving: a caller that
+// awaits them must not be able to read "discovery settled" off a node that never
+// announced anything. Teardown (`destroy`/`close`) still resolves so shutdown
+// paths never hang on a swarm that was never online.
+function createOfflineDiscoveryHandle(reason, topic = null) {
+  let warned = false
+  const failure = (operation) => {
+    const error = new Error(`Swarm is offline (${reason}); discovery ${operation} cannot complete`)
+    error.code = SWARM_OFFLINE_ERROR_CODE
+    error.reason = reason
+    error.operation = operation
+    if (!warned) {
+      warned = true
+      console.warn('[Storage] Offline swarm discovery cannot settle:', operation, JSON.stringify({ reason, topic: shortKeyHex(topic) }))
+    }
+    return Promise.reject(error)
+  }
   return {
-    flushed: async () => {},
-    destroy() {},
-    close() {}
+    _peartubeOffline: true,
+    _peartubeOfflineReason: reason,
+    topic,
+    flushed: () => failure('flush'),
+    refresh: () => failure('refresh'),
+    destroy: async () => {},
+    close: async () => {}
   }
 }
 
@@ -982,9 +1004,10 @@ function createOfflineSwarm(keyPair, reason = 'unavailable') {
       }
       return true
     },
-    join() {
-      return createNoopDiscoveryHandle()
+    join(topic) {
+      return createOfflineDiscoveryHandle(reason, topic)
     },
+    leave: async () => {},
     listen: async () => {},
     suspend: async () => {},
     resume: async () => {},
@@ -1108,64 +1131,6 @@ async function waitForHyperswarmModule() {
   const LoadedHyperswarm = await Promise.race([ready, timeout])
 
   return typeof LoadedHyperswarm === 'function' ? LoadedHyperswarm : null
-}
-
-async function migrateLegacyCorestoreLayout(storagePath) {
-  if (!fs || !path) return
-
-  const corestoreFile = path.join(storagePath, 'CORESTORE')
-
-  try {
-    if (typeof fs.existsSync === 'function' && fs.existsSync(corestoreFile)) {
-      await appendDebugLine('[storage] embedded migration skipped (CORESTORE exists)')
-      return
-    }
-  } catch { /* best effort */ }
-
-  if (!fs.promises?.readdir || !fs.promises?.rename || !fs.promises?.mkdir) {
-    await appendDebugLine('[storage] embedded migration skipped (fs.promises unavailable)')
-    return
-  }
-
-  let files = []
-  try {
-    files = await fs.promises.readdir(storagePath)
-  } catch {
-    await appendDebugLine('[storage] embedded migration skipped (readdir failed)')
-    return
-  }
-
-  const notRocks = new Set([
-    'CORESTORE',
-    'primary-key',
-    'cores',
-    'app-preferences',
-    'cache',
-    'preferences.json',
-    'db',
-    'clone',
-    'core',
-    'notifications'
-  ])
-
-  let moved = 0
-  for (const entry of files) {
-    if (notRocks.has(entry)) continue
-
-    try {
-      await fs.promises.mkdir(path.join(storagePath, 'db'), { recursive: true })
-    } catch { /* best effort */ }
-
-    try {
-      await fs.promises.rename(
-        path.join(storagePath, entry),
-        path.join(storagePath, 'db', entry)
-      )
-      moved++
-    } catch { /* best effort */ }
-  }
-
-  await appendDebugLine(`[storage] embedded migration moved=${moved}`)
 }
 
 export async function createCorestoreInstance(storagePath, options = {}) {
@@ -1344,8 +1309,15 @@ function scheduleDeferredDiscoveryJoin(ctx, discoveryKey, handle, options = {}) 
   const discoveryKeyHex = b4a.toString(discoveryKey, 'hex')
 
   const start = () => {
-    if (handle._peartubeStarted || handle._peartubeDestroyed || swarm._peartubeOffline) return null
+    if (handle._peartubeStarted || handle._peartubeDestroyed) return null
     handle._peartubeStarted = true
+    if (swarm._peartubeOffline) {
+      // Never leave the deferred handle pending on an offline swarm: an
+      // unsettled `flushed()` that later resolves at teardown would read as a
+      // successful discovery.
+      handle._setRealHandle(createOfflineDiscoveryHandle(swarm._peartubeOfflineReason || 'unavailable', discoveryKey))
+      return null
+    }
     try {
       const realHandle = swarm.join(discoveryKey, { server: true, client: true })
       handle._setRealHandle(realHandle)
@@ -1609,48 +1581,6 @@ async function createInitialHyperswarm({ keyPair, platform, network, swarmOption
   return { swarm, swarmOwnership }
 }
 
-async function relocateLegacyStorageDirectories(storagePath) {
-  if (isEmbeddedBareKitStoragePath()) {
-    await appendDebugLine('[storage] relocateLegacyLogsDir skipped for embedded BareKit storage')
-    return
-  }
-  try {
-    await appendDebugLine('[storage] relocateLegacyCorestoreDir start')
-    const relocatedCorestoreDir = relocateLegacyCorestoreDir(storagePath, fs, path)
-    await appendDebugLine(`[storage] relocateLegacyCorestoreDir done moved=${relocatedCorestoreDir || 'none'}`)
-    if (relocatedCorestoreDir) {
-      console.log('[Storage] Relocated legacy corestore dir to avoid Corestore migration conflict:', relocatedCorestoreDir)
-    }
-  } catch (error) {
-    await appendDebugLine(`[storage] relocateLegacyCorestoreDir failed ${describeDebugError(error)}`)
-    console.warn('[Storage] Failed to relocate legacy corestore dir before Corestore init:', error?.message)
-  }
-
-  try {
-    await appendDebugLine('[storage] relocateLegacyBlindPeerDir start')
-    const relocatedBlindPeerDir = relocateLegacyBlindPeerDir(storagePath, fs, path)
-    await appendDebugLine(`[storage] relocateLegacyBlindPeerDir done moved=${relocatedBlindPeerDir || 'none'}`)
-    if (relocatedBlindPeerDir) {
-      console.log('[Storage] Relocated legacy blind-peer dir to avoid Corestore migration conflict:', relocatedBlindPeerDir)
-    }
-  } catch (error) {
-    await appendDebugLine(`[storage] relocateLegacyBlindPeerDir failed ${describeDebugError(error)}`)
-    console.warn('[Storage] Failed to relocate legacy blind-peer dir before Corestore init:', error?.message)
-  }
-
-  try {
-    await appendDebugLine('[storage] relocateLegacyLogsDir start')
-    const relocatedLogsDir = relocateLegacyLogsDir(storagePath, fs, path)
-    await appendDebugLine(`[storage] relocateLegacyLogsDir done moved=${relocatedLogsDir || 'none'}`)
-    if (relocatedLogsDir) {
-      console.log('[Storage] Relocated legacy logs dir to avoid Corestore migration conflict:', relocatedLogsDir)
-    }
-  } catch (error) {
-    await appendDebugLine(`[storage] relocateLegacyLogsDir failed ${describeDebugError(error)}`)
-    console.warn('[Storage] Failed to relocate legacy logs dir before Corestore init:', error?.message)
-  }
-}
-
 async function setupStorageCorestore({
   storagePath,
   primaryKey,
@@ -1715,7 +1645,6 @@ async function setupStorageMetadata({
   store,
   storagePath,
   platform,
-  storedProtocol,
   blockOffload,
   lifecycle,
   cleanupFailedMetadataStartup
@@ -1776,23 +1705,7 @@ async function setupStorageMetadata({
     await cleanupFailedMetadataStartup('metaDb.ready', error)
   }
 
-  if (storedProtocol) {
-    try {
-      await storedProtocol.migrate({ store, metaCore, metaDb, storagePath, platform })
-    } catch (error) {
-      await cleanupFailedMetadataStartup('stored protocol migration', error)
-    }
-  }
-
   const metaSubspaces = createMetaSubspaces(metaDb)
-  try {
-    const migration = await migrateMetaSubspaces(metaDb, metaSubspaces)
-    if (migration.migrated > 0 || migration.incomplete) {
-      console.log('[Storage] meta-subspaces migration:', JSON.stringify(migration))
-    }
-  } catch (error) {
-    console.warn('[Storage] meta-subspaces migration skipped (non-fatal):', error?.message)
-  }
 
   return { metaCore, metaDb, metaSubspaces, metaCoreOwnership, metaDbOwnership }
 }
@@ -2125,20 +2038,18 @@ export async function initializeStorage(config) {
     network = {},
     swarmOptions = {},
     expectedStorageFormatVersion = STORAGE_FORMAT_VERSION,
-    storedProtocolMigrations = DEFAULT_STORED_PROTOCOL_MIGRATIONS,
     // Optional block offload. `wrapStorage` restores a block from S3 on a local
     // miss; the same capability reaches the write path for bounded ingest.
     // Absent means plain Corestore storage.
     blockOffload = null,
   } = config;
 
-  // This sidecar is deliberately validated before Corestore, migrations,
-  // networking, or any backend data surface is opened. Unsupported state must
-  // fail closed without giving startup code a chance to mutate or expose it.
+  // This sidecar is deliberately validated before Corestore, networking, or any
+  // backend data surface is opened. Unsupported state must fail closed without
+  // giving startup code a chance to mutate or expose it.
   const storedProtocol = prepareStoredProtocolState({
     storagePath,
     expectedVersion: expectedStorageFormatVersion,
-    migrations: storedProtocolMigrations,
     fs,
     path,
   })
@@ -2170,8 +2081,6 @@ export async function initializeStorage(config) {
       await appendDebugLine(`[storage] swarm destroy after init failure failed ${label} ${describeDebugError(error)}`)
     }
   }
-
-  await relocateLegacyStorageDirectories(storagePath)
 
   const { store, storeOwnership, blobStore } = await setupStorageCorestore({
     storagePath,
@@ -2208,7 +2117,6 @@ export async function initializeStorage(config) {
     store,
     storagePath,
     platform,
-    storedProtocol,
     blockOffload,
     lifecycle,
     cleanupFailedMetadataStartup
@@ -2570,9 +2478,9 @@ function getPublicBeeInflight(ctx) {
 }
 
 /**
- * Load an already-local legacy public projection.
+ * Load an already-local public projection.
  *
- * This compatibility reader does not join discovery or replicate. Network
+ * This reader does not join discovery or replicate. Network
  * catalog and asset access is exclusively authorized by the scoped runtime.
  *
  * @param {import('./types.js').StorageContext} ctx

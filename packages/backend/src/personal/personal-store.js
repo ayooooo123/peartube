@@ -39,7 +39,6 @@ const COLLECTIONS = {
   PLAYLIST: 'playlist',
   PLAYLIST_ITEM: 'playlist-item',
   HISTORY: 'history',
-  RESUME: 'resume',
   PROGRESS: 'progress',
   SETTING: 'setting',
   WRITER: 'writer',
@@ -62,7 +61,6 @@ export const PERSONAL_STATE_EXPORT_VERSION = 1
 const META_PROGRESS_COUNT = `${COLLECTIONS.META}/progress-count`
 const META_HISTORY_COUNT = `${COLLECTIONS.META}/history-count`
 const META_LAMPORT = `${COLLECTIONS.META}/lamport`
-const LEGACY_INVITE_SETTING_PREFIX = '__invite__/'
 
 const DEFAULT_LIMITS = Object.freeze({
   progress: PERSONAL_PROGRESS_RECORD_LIMIT,
@@ -113,12 +111,9 @@ export function personalSettingDigest(value) {
   return b4a.toString(crypto.hash(b4a.from(JSON.stringify(value))), 'hex')
 }
 
-function personalSettingRevision(entry, digest) {
-  if (typeof entry?.value?.revision === 'string' && /^[0-9a-f]{32}$/.test(entry.value.revision)) {
-    return entry.value.revision
-  }
-  if (Number.isSafeInteger(entry?.seq) && entry.seq >= 0) return `legacy-seq:${entry.seq}`
-  return `legacy-time:${Number(entry?.value?.updatedAt || 0)}:${digest}`
+function personalSettingRevision(entry) {
+  const revision = entry?.value?.revision
+  return typeof revision === 'string' && /^[0-9a-f]{32}$/.test(revision) ? revision : null
 }
 
 // --- viewer progress identity / ordering ------------------------------------
@@ -133,8 +128,8 @@ function normalizeProgressIdentity(identity) {
 
 /**
  * Canonical progress key. Media identity (entity/edition/member) is the primary
- * coordinate; the legacy `channelKey:videoId` pair is only a fallback so
- * pre-existing device state can be migrated.
+ * coordinate; the `channelKey:videoId` pair is the fallback for state that
+ * carries no media identity.
  */
 export function personalProgressStateKey({ identity, videoKey } = {}) {
   const id = normalizeProgressIdentity(identity)
@@ -271,22 +266,6 @@ function progressToResumeEntry(record) {
   return entry
 }
 
-function legacyResumeToEntry(row) {
-  return progressToResumeEntry({
-    stateKey: toText(row?.stateKey) || toText(row?.videoKey),
-    videoKey: row?.videoKey,
-    channelKey: row?.channelKey,
-    videoId: row?.videoId,
-    title: row?.title,
-    positionSec: row?.position,
-    durationSec: row?.duration,
-    completed: row?.completed,
-    saved: false,
-    updatedAt: row?.updatedAt,
-    order: null
-  })
-}
-
 // --- pairing user data ------------------------------------------------------
 
 /**
@@ -405,7 +384,6 @@ function buildHistoryEntry (event, op, eventId, ts) {
 }
 
 async function applyHistoryEntry (view, op, limits, node) {
-  const legacy = !op.event
   const event = op.event || op
   const ts = toUint(event.timestamp) || toUint(op.record?.updatedAt) || 0
   const eventId = deriveHistoryEventId(event, node)
@@ -413,16 +391,6 @@ async function applyHistoryEntry (view, op, limits, node) {
   await PersonalStore._putHistoryEvent(view, `${COLLECTIONS.HISTORY}/${descendingTimeKey(ts)}/${eventId}`, entry, limits)
   if (op.record) {
     await PersonalStore._mergeProgress(view, op.record, limits)
-  } else if (legacy && event.videoKey) {
-    await view.put(`${COLLECTIONS.RESUME}/${event.videoKey}`, stripUndefined({
-      videoKey: event.videoKey,
-      channelKey: event.channelKey || '',
-      videoId: event.videoId || '',
-      position: toUint(event.position),
-      duration: toUint(event.duration),
-      completed: !!event.completed,
-      updatedAt: ts
-    }))
   }
 }
 
@@ -433,9 +401,6 @@ async function applyHistoryOp (view, op, limits, node) {
       return true
     case 'put-progress':
       await PersonalStore._mergeProgress(view, op.record, limits)
-      return true
-    case 'delete-resume':
-      if (op.videoKey) await view.del(`${COLLECTIONS.RESUME}/${op.videoKey}`)
       return true
     default:
       return false
@@ -504,7 +469,7 @@ async function applySettingOp (view, op) {
       if (!op.key) return true
       const entry = await view.get(`${COLLECTIONS.SETTING}/${op.key}`)
       const digest = entry?.value ? personalSettingDigest(entry.value.value) : null
-      const revision = entry?.value ? personalSettingRevision(entry, digest) : null
+      const revision = entry?.value ? personalSettingRevision(entry) : null
       if (digest === op.expectedDigest && revision === op.expectedRevision) {
         await view.del(`${COLLECTIONS.SETTING}/${op.key}`)
       }
@@ -1111,67 +1076,17 @@ export class PersonalStore extends ReadyResource {
 
   /**
    * Resume state for a video key or canonical state key, shaped for the
-   * `resume-entry` wire type. Falls back to a not-yet-migrated legacy row.
+   * `resume-entry` wire type.
    */
   async getResume(videoKey) {
     const key = toText(videoKey)
     if (!key) return null
     const record = await this.getProgress(key)
-    if (record) return progressToResumeEntry(record)
-    const legacy = (await this.view.get(`${COLLECTIONS.RESUME}/${key}`))?.value
-    return legacy ? legacyResumeToEntry(legacy) : null
+    return record ? progressToResumeEntry(record) : null
   }
 
   async listResume() {
-    const entries = []
-    const seen = new Set()
-    for (const record of await this.listProgress()) {
-      entries.push(progressToResumeEntry(record))
-      seen.add(record.stateKey)
-    }
-    for (const legacy of await this._collect(COLLECTIONS.RESUME)) {
-      const stateKey = toText(legacy?.stateKey) || toText(legacy?.videoKey)
-      if (!stateKey || seen.has(stateKey)) continue
-      entries.push(legacyResumeToEntry(legacy))
-    }
-    return entries
-  }
-
-  /**
-   * Convert legacy `resume/<videoKey>` rows into canonical progress records.
-   * The legacy row is only dropped once the progress record reads back, so an
-   * interrupted migration never loses watch state.
-   *
-   * @returns {Promise<{migrated: number, retained: number}>}
-   */
-  async migrateLegacyResume() {
-    await this.update()
-    const rows = await this._collect(COLLECTIONS.RESUME)
-    let migrated = 0
-    for (const row of rows) {
-      const videoKey = toText(row?.videoKey)
-      const stateKey = toText(row?.stateKey) || videoKey
-      if (!stateKey || !videoKey) continue
-      if (!(await this._readProgressRecord(stateKey))) {
-        await this.putProgress({
-          stateKey,
-          videoKey,
-          channelKey: row.channelKey,
-          videoId: row.videoId,
-          title: row.title,
-          positionSec: row.position,
-          durationSec: row.duration,
-          completed: row.completed,
-          saved: false,
-          updatedAt: row.updatedAt
-        })
-      }
-      // Durability gate: only drop the source once the replacement reads back.
-      if (!(await this._readProgressRecord(stateKey))) continue
-      await this._append({ type: 'delete-resume', videoKey })
-      migrated++
-    }
-    return { migrated, retained: (await this._collect(COLLECTIONS.RESUME)).length }
+    return (await this.listProgress()).map(progressToResumeEntry)
   }
 
   async _readProgressRecord(stateKey) {
@@ -1292,7 +1207,7 @@ export class PersonalStore extends ReadyResource {
     return {
       value: entry.value.value,
       updatedAt: Number(entry.value.updatedAt || 0),
-      revision: personalSettingRevision(entry, digest),
+      revision: personalSettingRevision(entry),
       digest,
     }
   }
@@ -1301,10 +1216,7 @@ export class PersonalStore extends ReadyResource {
     await this.update()
     const rows = await this._collect(COLLECTIONS.SETTING)
     const out = {}
-    for (const row of rows) {
-      if (toText(row.key).startsWith(LEGACY_INVITE_SETTING_PREFIX)) continue
-      out[row.key] = row.value
-    }
+    for (const row of rows) out[row.key] = row.value
     return out
   }
 
@@ -1372,11 +1284,6 @@ export class PersonalStore extends ReadyResource {
     live.sort((a, b) => toUint(a.createdAt) - toUint(b.createdAt))
     const overflow = live.length + incoming - PERSONAL_OUTSTANDING_INVITE_LIMIT
     for (let i = 0; i < overflow; i++) ops.push({ type: 'delete-invite', idHex: live[i].idHex })
-    // Sweep invites left in the settings collection by older versions.
-    const prefix = `${COLLECTIONS.SETTING}/${LEGACY_INVITE_SETTING_PREFIX}`
-    for await (const entry of this.view.createReadStream({ gte: prefix, lt: prefix + '\xff' })) {
-      ops.push({ type: 'delete-setting', key: entry.value?.key || entry.key.slice(`${COLLECTIONS.SETTING}/`.length) })
-    }
     return ops
   }
 
@@ -1486,7 +1393,6 @@ export class PersonalStore extends ReadyResource {
     await this.update()
     const settings = []
     for (const row of await this._collect(COLLECTIONS.SETTING)) {
-      if (toText(row.key).startsWith(LEGACY_INVITE_SETTING_PREFIX)) continue
       settings.push({ key: row.key, value: row.value, updatedAt: toUint(row.updatedAt), revision: row.revision })
     }
     return {

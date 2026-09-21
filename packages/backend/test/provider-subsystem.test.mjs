@@ -53,7 +53,6 @@ function queryView() {
 function openPolicy() {
   return {
     ...CLOSED_ACQUISITION_POLICY,
-    migrationRequired: false,
     enabled: true,
     allowedPublisherIds: [PUBLISHER_ID],
     allowedAdapterIds: ['local-file'],

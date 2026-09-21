@@ -131,8 +131,19 @@ export const DEFAULT_ARCHIVE_CONFIG = {
   s3: DEFAULT_ARCHIVE_S3_CONFIG,
   uiEnabled: false,
   uiHost: '127.0.0.1',
-  uiPort: 8174
+  uiPort: 8174,
+  uiTrustedHosts: []
 }
+
+// A single `host[:port]` authority, the shape of both a Host header and an
+// archive.uiTrustedHosts entry: a DNS name, an IPv4 literal, or a bracketed
+// IPv6 literal, optionally with a port. Shared so the console guard and the
+// config validator cannot drift into accepting different things.
+export const ARCHIVE_UI_AUTHORITY_PATTERN =
+  /^(?:\[[0-9a-f:.]{2,45}\]|[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)*)(?::\d{1,5})?$/
+
+export const ARCHIVE_UI_MAX_TRUSTED_HOSTS = 32
+export const ARCHIVE_UI_MAX_AUTHORITY_LENGTH = 255
 
 export const DEFAULT_RELAY_CONFIG = {
   mode: RELAY_MODE_PUBLIC,

@@ -2,12 +2,6 @@ import { createPublisherKeyVault } from './publisher-key-vault'
 import { createPublisherSignerBridge } from './publisher-signer-bridge'
 
 export type NativePublisherKeyVault = {
-  importLegacyRootMigration(request: unknown): Promise<{
-    version: number
-    durable: boolean
-    publicKey: unknown
-    challengeSignature: unknown
-  }>
   getPublicKey(input?: { publisherId?: string }): Promise<Uint8Array | null>
   signProtocolRecord(input?: {
     publisherId?: string
@@ -17,20 +11,15 @@ export type NativePublisherKeyVault = {
   }): Promise<{ signerPublicKey: Uint8Array; signature: Uint8Array }>
 }
 
-let vaultPromise: Promise<NativePublisherKeyVault> | null = null
 let signerPromise: Promise<unknown> | null = null
-
-export function getNativePublisherKeyVault(): Promise<NativePublisherKeyVault> {
-  if (!vaultPromise) vaultPromise = Promise.resolve(createPublisherKeyVault())
-  return vaultPromise
-}
 
 export function getNativePublisherSigner(): Promise<unknown> {
   if (!signerPromise) {
-    signerPromise = getNativePublisherKeyVault().then((vault) => createPublisherSignerBridge({
-      runtime: 'mobile-shell',
-      vault,
-    }))
+    signerPromise = Promise.resolve(createPublisherKeyVault() as NativePublisherKeyVault)
+      .then((vault) => createPublisherSignerBridge({
+        runtime: 'mobile-shell',
+        vault,
+      }))
   }
   return signerPromise
 }

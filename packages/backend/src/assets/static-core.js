@@ -911,23 +911,13 @@ function isValidStagingTimes(value) {
   return Number.isSafeInteger(value?.createdAt) && Number.isSafeInteger(value?.touchedAt)
 }
 
-function isValidLegacyStagingRecord(value) {
-  return value?.version === 1 &&
-    (value.etag === null || typeof value.etag === 'string') &&
-    isValidStagingTimes(value)
-}
-
-function isValidCurrentStagingRecord(value) {
+function isValidStagingRecord(value) {
   return value?.version === STAGING_IDENTITY_VERSION &&
     value.identity && typeof value.identity === 'object' &&
     ['sha256', 'etag'].includes(value.identity.kind) &&
     typeof value.identity.value === 'string' &&
     Number.isSafeInteger(value.byteLength) && value.byteLength >= 0 &&
     isValidStagingTimes(value)
-}
-
-function isValidStagingRecord(value) {
-  return isValidLegacyStagingRecord(value) || isValidCurrentStagingRecord(value)
 }
 
 async function readStagingIdentity(staging) {
@@ -1047,26 +1037,6 @@ async function initNewStagingIdentity(staging, resume, timestamp) {
   return { byteOffset: 0, blockIndex: 0, complete: resume.byteLength === 0, resumed: false }
 }
 
-async function migrateLegacyStagingRecord(staging, record, resume) {
-  if (record.version !== 1) return record
-  const stagedIdentity = typeof record.etag === 'string' && record.etag.length > 0
-    ? { kind: 'etag', value: record.etag }
-    : null
-  if (stagedIdentity === null ||
-      resume.identity.kind !== stagedIdentity.kind ||
-      resume.identity.value !== stagedIdentity.value) {
-    throw sourceIdentityChangedError(stagedIdentity, resume.identity)
-  }
-  const migrated = {
-    version: STAGING_IDENTITY_VERSION,
-    identity: stagedIdentity,
-    byteLength: resume.byteLength,
-    createdAt: record.createdAt,
-    touchedAt: record.touchedAt,
-  }
-  await writeStagingIdentity(staging, migrated)
-  return migrated
-}
 
 function validateResumeIdentity(record, resume, staging) {
   const isStagedComplete = staging.byteLength === resume.byteLength && staging.length > 0
@@ -1106,7 +1076,7 @@ async function prepareResume({ staging, stagingStore, staged, resume, signal }) 
   if (record === null) {
     return initNewStagingIdentity(staging, resume, timestamp)
   }
-  record = await migrateLegacyStagingRecord(staging, record, resume)
+
   validateResumeIdentity(record, resume, staging)
   validateStagingBoundaries(staging, record, resume, timestamp)
 

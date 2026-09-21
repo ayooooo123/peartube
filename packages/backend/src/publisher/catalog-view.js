@@ -17,7 +17,6 @@ import {
 } from './canonical.js'
 import {
   decodePublisherNamespaceDescriptor,
-  PUBLISHER_CATALOG_LEGACY_COMPATIBILITY,
   encodePublisherNamespaceDescriptor
 } from './namespace.js'
 import {
@@ -44,7 +43,6 @@ const PREFIX = Object.freeze({
 const JOURNAL_COUNT_KEY = 'meta/journal-count'
 const STATE_DESCRIPTOR_KEY = 'state/descriptor'
 const STATE_AUTHORIZATION_KEY = 'state/authorization'
-const LEGACY_GENESIS_ID_KEY = 'meta/legacy-genesis-id'
 const LATEST_HEAD_KEY = 'projection/view-head/latest'
 const CONTEXT_INDEPENDENT_REJECTION_CODES = new Set([
   'ISSUER_MISMATCH',
@@ -162,79 +160,16 @@ async function collectPrefix (view, prefix, maximum = PUBLISHER_LIMITS.maxJourna
   return entries
 }
 
-// Best-effort decodes for the legacy genesis scan: a stored entry may be
-// either accepted-entry or frame shaped, and either attempt may reject.
-function tryDecodeAcceptedEntryValue(raw) {
-  try {
-    const accepted = decodeAcceptedEntry(raw)
-    return accepted ? accepted.value : null
-  } catch {
-    return null
-  }
-}
-
-function tryDecodeCatalogFrameValue(raw) {
-  try {
-    return decodePublisherCatalogFrame(raw)
-  } catch {
-    return null
-  }
-}
-
-async function getPersistedLegacyGenesisId (view, bootstrapKey, publisherId) {
-  const marker = await view.get(LEGACY_GENESIS_ID_KEY)
-  if (marker) {
-    const operationId = b4a.toString(marker.value)
-    if (/^[0-9a-f]{64}$/.test(operationId)) return operationId
-    invalid('persisted legacy genesis marker is corrupt')
-  }
-
-  const descriptorEntry = await view.get(STATE_DESCRIPTOR_KEY)
-  if (!descriptorEntry) return null
-  try {
-    decodePublisherNamespaceDescriptor(descriptorEntry.value)
-    return null
-  } catch {
-    // Only an exact previously accepted descriptor may enter the bounded legacy window.
-  }
-
-  let descriptor
-  try {
-    descriptor = decodePublisherNamespaceDescriptor(descriptorEntry.value, {
-      legacyCompatibility: PUBLISHER_CATALOG_LEGACY_COMPATIBILITY
-    })
-  } catch {
-    return null
-  }
-  if (!equalBytes(descriptor.publisherId, publisherId) ||
-      !equalBytes(descriptor.catalogBootstrapKey, bootstrapKey)) return null
-
-  for (const entry of await collectPrefix(view, PREFIX.ACCEPTED)) {
-    let value = tryDecodeAcceptedEntryValue(entry.value)
-    if (!value) value = tryDecodeCatalogFrameValue(entry.value)
-    if (!value) continue
-    const operationId = idHex(value)
-    if (value.recordType !== PUBLISHER_RECORD_TYPES.NAMESPACE ||
-        entry.key !== `${PREFIX.ACCEPTED}${operationId}` ||
-        !equalBytes(value.canonicalBody, descriptorEntry.value)) continue
-    await view.put(LEGACY_GENESIS_ID_KEY, b4a.from(operationId))
-    return operationId
-  }
-  return null
-}
-
 async function clearDerived (view) {
   for (const prefix of [PREFIX.ACCEPTED, PREFIX.REJECTED, PREFIX.PROJECTION, PREFIX.ROSTER, PREFIX.STATE, PREFIX.SYNC]) {
     for await (const entry of view.createReadStream({ gte: prefix, lt: prefix + '\xff' })) await view.del(entry.key)
   }
 }
 
-function verifyGenesis (value, bootstrapKey, publisherId, keyProvider, legacyGenesisId = null) {
+function verifyGenesis (value, bootstrapKey, publisherId, keyProvider) {
   if (value.recordType !== PUBLISHER_RECORD_TYPES.NAMESPACE || value.transitionId) invalid('catalog genesis must be a single-signed namespace descriptor')
   if (value.schemaMajor !== 1 || value.schemaMinor !== 0 || value.policyEpoch !== 0 || value.issuerSequence !== 0) invalid('catalog genesis schema, epoch, and sequence are fixed')
-  const descriptor = decodePublisherNamespaceDescriptor(value.canonicalBody, legacyGenesisId === idHex(value)
-    ? { legacyCompatibility: PUBLISHER_CATALOG_LEGACY_COMPATIBILITY }
-    : undefined)
+  const descriptor = decodePublisherNamespaceDescriptor(value.canonicalBody)
   if (!equalBytes(descriptor.publisherId, publisherId)) invalid('namespace descriptor does not match the expected publisherId')
   if (descriptor.catalogEpoch !== 0 || descriptor.policySequence !== 0) invalid('catalog genesis descriptor must begin at epoch and policy sequence zero')
   if (!equalBytes(descriptor.catalogBootstrapKey, bootstrapKey)) invalid('namespace descriptor catalogBootstrapKey does not match Autobase')
@@ -342,7 +277,6 @@ async function applyProjection (projections, rejected, result, entry) {
 }
 
 async function loadParsedJournalAndGenesis (view, host, publisherId, keyProvider) {
-  const legacyGenesisId = await getPersistedLegacyGenesisId(view, host.key, publisherId)
   const journal = await collectPrefix(view, PREFIX.JOURNAL)
   const parsed = []
   for (const item of journal) {
@@ -358,7 +292,7 @@ async function loadParsedJournalAndGenesis (view, host, publisherId, keyProvider
   for (const entry of parsed) {
     if (entry.value.recordType !== PUBLISHER_RECORD_TYPES.NAMESPACE) continue
     try {
-      entry.descriptor = verifyGenesis(entry.value, host.key, publisherId, keyProvider, legacyGenesisId)
+      entry.descriptor = verifyGenesis(entry.value, host.key, publisherId, keyProvider)
       genesisCandidates.push(entry)
     } catch {
       // Recorded below after the canonical genesis is selected.
@@ -1077,7 +1011,7 @@ export async function getPublisherRootOperationAuthorization (view, { recordType
     view.get(STATE_AUTHORIZATION_KEY)
   ])
   if (!descriptorEntry || !authorizationEntry) invalid('publisher namespace genesis is not initialized')
-  const descriptor = decodePublisherNamespaceDescriptor(descriptorEntry.value, { legacyCompatibility: PUBLISHER_CATALOG_LEGACY_COMPATIBILITY })
+  const descriptor = decodePublisherNamespaceDescriptor(descriptorEntry.value)
   const authorization = decodeAuthorizationMetadata(authorizationEntry.value)
   if (recordType === PUBLISHER_RECORD_TYPES.WRITER_REVOCATION &&
       body?.newPolicyEpoch !== authorization.policyEpoch + 1) {
@@ -1105,7 +1039,7 @@ export async function getPublisherRootTransitionAuthorization (view, { mode, new
     view.get(STATE_AUTHORIZATION_KEY)
   ])
   if (!descriptorEntry || !authorizationEntry) invalid('publisher namespace genesis is not initialized')
-  const descriptor = decodePublisherNamespaceDescriptor(descriptorEntry.value, { legacyCompatibility: PUBLISHER_CATALOG_LEGACY_COMPATIBILITY })
+  const descriptor = decodePublisherNamespaceDescriptor(descriptorEntry.value)
   const authorization = decodeAuthorizationMetadata(authorizationEntry.value)
   if (mode === 'recovery' && (descriptor.recoveryThreshold === 0 || descriptor.recoveryKeys.length === 0)) {
     invalid('publisher recovery is disabled by the committed policy')

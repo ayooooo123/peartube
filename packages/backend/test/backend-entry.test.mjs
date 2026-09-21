@@ -237,7 +237,6 @@ test('backend accepts current storage independently of a newer live host protoco
           path,
         })
         assert.equal(storedState.status, 'compatible')
-        await storedState.migrate({})
         storedState.commit()
         assert.deepEqual(
           JSON.parse(fs.readFileSync(path.join(storagePath, 'stored-protocol.json'), 'utf8')),

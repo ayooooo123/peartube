@@ -166,10 +166,7 @@ export const SHARED_HANDLER_NAMES = [
   'VerifyAttestation',
   'VerifyIndexCandidate',
   'WebPreparePlayback',
-  // Operability, migration, portability, and local capacity diagnostics
-  'GetMigrationStatus',
-  'RetryMigration',
-  'ExportMigrationReport',
+  // Operability, portability, and local capacity diagnostics
   'GetPublisherDeviceStatus',
   'ExportPortableState',
   'RestorePortableState',

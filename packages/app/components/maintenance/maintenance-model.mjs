@@ -1,26 +1,8 @@
 import { base64ToBytes, bytesToBase64 } from '../../lib/maintenance-file-transfer.mjs'
 
-export const MIGRATION_ID = 'publication-v1'
-export const MAX_MIGRATION_REPORT_BYTES = 65_536
 export const MAX_PORTABLE_MANIFEST_BYTES = 1_048_576
 export const MAX_PORTABLE_FILE_BYTES = 1_500_000
 
-const STATE_PRESENTATION = Object.freeze({
-  pending: Object.freeze({ label: 'Waiting to start', tone: 'neutral' }),
-  running: Object.freeze({ label: 'Import in progress', tone: 'active' }),
-  retrying: Object.freeze({ label: 'Retry in progress', tone: 'active' }),
-  complete: Object.freeze({ label: 'Migration complete', tone: 'success' }),
-  failed: Object.freeze({ label: 'Migration failed', tone: 'danger' }),
-})
-
-const COUNTERS = Object.freeze([
-  ['Processed', 'processedCount'],
-  ['Imported', 'importedCount'],
-  ['Skipped', 'skippedCount'],
-  ['Quarantined', 'quarantinedCount'],
-  ['Unsupported', 'unsupportedCount'],
-  ['Remaining', 'remainingCount'],
-])
 
 function boundedCount(value) {
   if (!Number.isFinite(value) || value <= 0) return 0
@@ -37,25 +19,16 @@ export function boundedError(error, fallback = 'Maintenance action failed') {
   return message || fallback
 }
 
-export function boundedDiagnosticCode(value, fallback = 'MIGRATION_FAILED') {
-  return cleanErrorText(value).slice(0, 64) || fallback
-}
 
 function capability(available, reason) {
   return Object.freeze({ available, reason: available ? '' : reason })
 }
 
 export function maintenanceCapabilities({ rpc, files } = {}) {
-  const hasStatus = typeof rpc?.getMigrationStatus === 'function'
-  const hasRetry = typeof rpc?.retryMigration === 'function'
-  const hasReport = typeof rpc?.exportMigrationReport === 'function' && typeof files?.save === 'function'
   const hasExport = typeof rpc?.exportPortableState === 'function' && typeof files?.save === 'function'
   const hasSelect = typeof files?.select === 'function' && typeof rpc?.restorePortableState === 'function'
   const hasRestore = typeof rpc?.restorePortableState === 'function'
   return Object.freeze({
-    status: capability(hasStatus, 'Unavailable in this build: migration status service is not connected.'),
-    retry: capability(hasRetry, 'Unavailable in this build: migration retry service is not connected.'),
-    report: capability(hasReport, 'Unavailable in this build: report service or file export is not connected.'),
     export: capability(hasExport, 'Unavailable in this build: portable-state service or file export is not connected.'),
     select: capability(hasSelect, 'Unavailable in this build: file selection or portable-state restore service is not connected.'),
     restore: capability(hasRestore, 'Unavailable in this build: portable-state restore service is not connected.'),
@@ -95,17 +68,6 @@ function safeDigest(value) {
   return value
 }
 
-export function migrationPresentation(state) {
-  return STATE_PRESENTATION[state] || Object.freeze({ label: 'Migration state unavailable', tone: 'neutral' })
-}
-
-export function migrationCounterRows(status) {
-  return COUNTERS.map(([label, field]) => [label, boundedCount(status?.[field])])
-}
-
-export function canRetryMigration(status) {
-  return status?.state === 'failed' && status?.retryable === true
-}
 
 export function createPortableEnvelope({ schemaVersion, manifestBytes: input, manifestDigest }) {
   const manifestBytes = requireBytes(input, MAX_PORTABLE_MANIFEST_BYTES, 'Portable state')
@@ -144,31 +106,6 @@ export function parsePortableEnvelope(input) {
 
 export function createMaintenanceActions({ rpc, files }) {
   return Object.freeze({
-    async getMigrationStatus() {
-      const result = await requireMethod(rpc, 'getMigrationStatus')({ migrationId: MIGRATION_ID })
-      if (!result || result.success === false) throw responseFailure(result, 'Migration status could not be loaded')
-      return result
-    },
-
-    async retryMigration(status) {
-      if (!canRetryMigration(status)) throw new Error('This migration is not retryable')
-      const result = await requireMethod(rpc, 'retryMigration')({ migrationId: MIGRATION_ID })
-      if (!result || result.success === false) throw responseFailure(result, 'Migration retry failed')
-      return result
-    },
-
-    async saveMigrationReport() {
-      const result = await requireMethod(rpc, 'exportMigrationReport')({ migrationId: MIGRATION_ID })
-      if (!result || result.success === false) throw responseFailure(result, 'Migration report export failed')
-      const bytes = requireBytes(result.reportBytes, MAX_MIGRATION_REPORT_BYTES, 'Migration report')
-      if (!files || typeof files.save !== 'function') throw new Error('File export is unavailable')
-      return files.save({
-        bytes,
-        fileName: 'peartube-publication-v1-migration-report.json',
-        mimeType: 'application/json',
-      })
-    },
-
     async savePortableState() {
       const result = await requireMethod(rpc, 'exportPortableState')()
       if (!result || result.success === false) throw responseFailure(result, 'Portable state export failed')

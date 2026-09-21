@@ -7,6 +7,7 @@ import Corestore from 'corestore'
 import crypto from 'hypercore-crypto'
 
 import { createIdentityManager } from '../src/identity.js'
+import { IDENTITY_STATE_KEY } from '../src/identity-state.js'
 import {
   CONSUMER_MODERATION_PROFILE_SETTING_KEY,
   createConsumerModerationProfileController,
@@ -35,11 +36,14 @@ const secretB = '62'.repeat(32)
 const feedA = 'a1'.repeat(32)
 const feedB = 'b2'.repeat(32)
 
-function createMetaDb() {
-  const values = new Map([
-    ['identities', [identityA, identityB]],
-    ['activeIdentity', identityA.publicKey],
+function seededIdentityState(identities = [identityA, identityB], activeIdentity = identityA.publicKey) {
+  return new Map([
+    [IDENTITY_STATE_KEY, { version: 1, activeIdentity, identities }],
   ])
+}
+
+function createMetaDb() {
+  const values = seededIdentityState()
   return {
     async get(key) {
       return values.has(key) ? { value: values.get(key) } : null
@@ -221,8 +225,7 @@ test('failed paired identity activation restores the exact durable identity list
 
 test('failed first paired identity activation restores durable anonymous identity state', async t => {
   const metaDb = createMetaDb()
-  await metaDb.put('identities', [])
-  await metaDb.put('activeIdentity', null)
+  await metaDb.put(IDENTITY_STATE_KEY, { version: 1, activeIdentity: null, identities: [] })
   const identityManager = createIdentityManager({ ctx: { metaDb, store: null } })
   await identityManager.loadIdentities()
   const removeHooks = installSeedPinIdentityMutationHooks({
@@ -249,8 +252,7 @@ test('failed first paired identity activation restores durable anonymous identit
 test('failed first identity creation restores durable anonymous identity state', async t => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'peartube-created-identity-rollback-'))
   const metaDb = createMetaDb()
-  await metaDb.put('identities', [])
-  await metaDb.put('activeIdentity', null)
+  await metaDb.put(IDENTITY_STATE_KEY, { version: 1, activeIdentity: null, identities: [] })
   let runtime
   let removeHooks
   try {
@@ -305,10 +307,7 @@ test('failed first identity creation restores durable anonymous identity state',
 })
 
 test('personal-key persistence cannot overwrite a concurrent identity activation', async t => {
-  const values = new Map([
-    ['identities', [identityA, identityB]],
-    ['activeIdentity', identityA.publicKey],
-  ])
+  const values = seededIdentityState()
   let blockStateWrite = false
   let signalStateWrite = null
   let waitForRelease = null
@@ -384,10 +383,7 @@ test('failed activation compensation preserves a concurrent personal-key update'
 })
 
 test('failed activation snapshot includes an earlier in-flight personal-key update', async t => {
-  const values = new Map([
-    ['identities', [identityA, identityB]],
-    ['activeIdentity', identityA.publicKey],
-  ])
+  const values = seededIdentityState()
   let blockStateWrite = false
   let signalStateWrite
   let releaseStateWrite

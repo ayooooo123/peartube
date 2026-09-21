@@ -21,7 +21,6 @@ import { pathToFileURL } from 'node:url'
 
 const appRoot = path.resolve(import.meta.dirname, '..')
 const WATCH_HISTORY = pathToFileURL(path.join(appRoot, 'lib/watch-history.ts')).href
-const LEGACY_WEB_STORAGE_KEY = 'peartube-watch-history'
 
 /** The two device modules the adapter imports statically. */
 const STATIC_STUBS = {
@@ -59,14 +58,6 @@ registerHooks({
     return next(url, context)
   },
 })
-
-/** The web legacy source the migration path reads. */
-const legacyStorage = new Map()
-globalThis.localStorage = {
-  getItem: (key) => (legacyStorage.has(key) ? legacyStorage.get(key) : null),
-  setItem: (key, value) => { legacyStorage.set(key, String(value)) },
-  removeItem: (key) => { legacyStorage.delete(key) },
-}
 
 /**
  * A stand-in personal store. `resume` and `history` are what the two read
@@ -118,7 +109,6 @@ const NEBULA = {
 }
 
 test.beforeEach(() => {
-  legacyStorage.clear()
   delete globalThis.__peartubeWatchHistoryHarness
 })
 
@@ -326,90 +316,4 @@ test('a delete the store already knows about still lets a new watch be recorded'
   const written = store.logged().at(-1)
   assert.ok(written.playbackGeneration > 4, 'the new watch clears the generation the delete was written at')
   assert.equal((await history.getHistory()).length, 1)
-})
-
-test('the plaintext legacy file survives a migration the store cannot confirm', async () => {
-  // Identity-only rows carry no channel/video pair, so the read-back used to
-  // find nothing to check and cleared the file on the strength of a write it
-  // had never seen land.
-  const legacy = [{
-    identity: { entityRef: 'work:nebula-drift' },
-    title: 'Nebula Drift',
-    position: 1_200,
-    duration: 3_600,
-    updatedAt: 1_699_000_000_000,
-  }]
-  legacyStorage.set(LEGACY_WEB_STORAGE_KEY, JSON.stringify(legacy))
-  const store = installStore()
-  const history = await freshWatchHistory()
-
-  await history.getHistory()
-
-  assert.deepEqual(
-    store.logged().map((request) => request.identity?.entityRef),
-    ['work:nebula-drift'],
-    'the row was offered to the store',
-  )
-  assert.equal(
-    legacyStorage.get(LEGACY_WEB_STORAGE_KEY),
-    JSON.stringify(legacy),
-    'but an unconfirmed migration keeps the only other copy the viewer has',
-  )
-})
-
-test('the plaintext legacy file goes once the store reads the row back', async () => {
-  legacyStorage.set(LEGACY_WEB_STORAGE_KEY, JSON.stringify([{
-    identity: { entityRef: 'work:nebula-drift' },
-    title: 'Nebula Drift',
-    position: 1_200,
-    duration: 3_600,
-    updatedAt: 1_699_000_000_000,
-  }]))
-  const store = installStore()
-  // The store answers the read-back under the canonical state key, which is
-  // all an identity-only record ever has.
-  store.resume = [{
-    stateKey: 'work:nebula-drift||',
-    videoKey: 'work:nebula-drift||',
-    identity: { entityRef: 'work:nebula-drift' },
-    title: 'Nebula Drift',
-    position: 1_200,
-    duration: 3_600,
-    updatedAt: 1_699_000_000_000,
-  }]
-  const history = await freshWatchHistory()
-
-  await history.getHistory()
-
-  assert.equal(legacyStorage.has(LEGACY_WEB_STORAGE_KEY), false, 'a confirmed migration takes the plaintext copy off the device')
-  assert.deepEqual((await history.getHistory()).map((entry) => entry.title), ['Nebula Drift'])
-})
-
-test('a legacy row a previous run moved is still confirmed before the file is dropped', async () => {
-  // Nothing is written for the first row — it is already in the store — but
-  // "we did not write it" is not evidence that the source is safe to delete.
-  legacyStorage.set(LEGACY_WEB_STORAGE_KEY, JSON.stringify([
-    { identity: { entityRef: 'work:nebula-drift' }, title: 'Nebula Drift', position: 1_200, duration: 3_600, updatedAt: 1 },
-    { identity: { entityRef: 'work:tidepool' }, title: 'Tidepool', position: 600, duration: 1_200, updatedAt: 2 },
-  ]))
-  const store = installStore({
-    resume: [{
-      stateKey: 'work:nebula-drift||',
-      videoKey: 'work:nebula-drift||',
-      identity: { entityRef: 'work:nebula-drift' },
-      position: 1_200,
-      duration: 3_600,
-      updatedAt: 1,
-    }],
-  })
-  const history = await freshWatchHistory()
-
-  await history.getHistory()
-
-  assert.deepEqual(
-    store.logged().map((request) => request.identity?.entityRef),
-    ['work:tidepool'],
-    'only the row the store did not have was written',
-  )
-  assert.ok(legacyStorage.has(LEGACY_WEB_STORAGE_KEY), 'one unconfirmed row is enough to keep the whole file')
 })

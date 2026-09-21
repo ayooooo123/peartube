@@ -295,7 +295,6 @@ test('relay starts one scoped backend with storage-format acceptance and bounded
             fs: { existsSync, statSync, readFileSync },
             path: { join }
           })
-          await storageState.migrate({})
           storageState.commit()
           return backend
         }

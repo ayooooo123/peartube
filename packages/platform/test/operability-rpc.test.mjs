@@ -50,9 +50,6 @@ test('shared operability facade forwards exact bounded contract requests', async
   const facade = createOperabilityRpc(() => rawRpc)
   const manifestBytes = new Uint8Array([1, 2, 3])
 
-  await facade.getMigrationStatus({ migrationId: 'publication-v1' })
-  await facade.retryMigration({ migrationId: 'publication-v1' })
-  await facade.exportMigrationReport({ migrationId: 'publication-v1' })
   await facade.getPublisherDeviceStatus({ publisherId: 'publisher', devicePublicKey: 'device' })
   await facade.exportPortableState()
   await facade.restorePortableState({ manifestBytes, manifestDigest: 'digest' })
@@ -60,9 +57,6 @@ test('shared operability facade forwards exact bounded contract requests', async
   await facade.getArchiveOperatorStatus()
 
   assert.deepEqual(calls, [
-    ['getMigrationStatus', { migrationId: 'publication-v1' }],
-    ['retryMigration', { migrationId: 'publication-v1' }],
-    ['exportMigrationReport', { migrationId: 'publication-v1' }],
     ['getPublisherDeviceStatus', { publisherId: 'publisher', devicePublicKey: 'device' }],
     ['exportPortableState', {}],
     ['restorePortableState', { manifestBytes, manifestDigest: 'digest' }],

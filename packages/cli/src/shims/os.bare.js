@@ -1,1 +1,1 @@
-export { tmpdir } from 'bare-os'
+export { networkInterfaces, tmpdir } from 'bare-os'

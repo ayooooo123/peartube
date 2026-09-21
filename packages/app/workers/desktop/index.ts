@@ -454,15 +454,6 @@ const peerAddresses = (() => {
 })()
 console.log('[Worker] Storage:', storage)
 
-const workerResourceDir = (() => {
-  try {
-    return path.dirname(decodeURIComponent(new URL(import.meta.url).pathname))
-  } catch {
-    return runtimeStorage || os.cwd()
-  }
-})()
-;(globalThis as any).__PEARTUBE_HYPERCORE_WORKER_PATH__ = path.join(workerResourceDir, '..', 'hypercore-reader-worker.mjs')
-
 // Transport: Bare.IPC (Electrobun sidecar), then injected pipe
 const bareIPC = (typeof Bare !== 'undefined' && (Bare as any).IPC) ? (Bare as any).IPC : null
 const injectedPipe = (globalThis as any).__PEARTUBE_HRPC_PIPE__ as any
@@ -833,31 +824,8 @@ const PEAR_CONTROL_PREFIX = '[pear-update] '
 type PearUpdateState = 'updating' | 'updated' | 'minver-required'
 type PearControlFrame = { t: string } & Record<string, unknown>
 type PearLaunchConfig = { upgrade: string; app: string | null; name: string; version: string }
+// Structural, because only `replicate` is ever called on these.
 type PearReplicableCore = { replicate(mux: unknown): unknown }
-type PearUpdaterLike = {
-  updates: boolean
-  bundled: boolean
-  updated: boolean
-  applied?: boolean
-  version: string
-  nextVersion: string | null
-  drive: {
-    core: PearReplicableCore & { discoveryKey: Uint8Array | null }
-    blobs: { core: PearReplicableCore } | null
-    ready(): Promise<void>
-    update(): Promise<void>
-    get(key: string): Promise<Uint8Array | null>
-    on(event: 'blobs', listener: (blobs: { core: PearReplicableCore }) => void): void
-  }
-  on(event: string, listener: (payload?: unknown) => void): void
-  applyUpdate(): Promise<void>
-}
-type PearRuntimeLike = {
-  updater: PearUpdaterLike
-  ready(): Promise<void>
-  close(): Promise<void>
-  on(event: 'error', listener: (err: Error) => void): void
-}
 
 function sendPearControl(frame: PearControlFrame) {
   // stdout is the launcher-facing control channel. Bare.IPC (fd 3) carries
@@ -888,7 +856,7 @@ function parsePearLaunchConfig(raw: string | undefined): PearLaunchConfig | null
 }
 
 const pearLaunchConfig = parsePearLaunchConfig(bareArgv[4])
-let pearRuntime: PearRuntimeLike | null = null
+let pearRuntime: PearRuntime | null = null
 let pearUpdaterError: string | null = pearLaunchConfig
   ? null
   : 'no usable desktop pear link was supplied by the launcher'
@@ -967,7 +935,7 @@ function openPearCommandChannel(): { destroy(): void } | null {
 async function startPearUpdates(config: PearLaunchConfig) {
 
   // Only `skipUpdate` needs the instance before construction returns.
-  let constructing: PearRuntimeLike | null = null
+  let constructing: PearRuntime | null = null
 
   // pear-runtime-updater has no minver gate of its own (pear-mobile bolts one
   // on through `skipUpdate`), so desktop implements the same rule: `/pear.json`
@@ -988,8 +956,10 @@ async function startPearUpdates(config: PearLaunchConfig) {
         ? (updates as Record<string, unknown>).minver
         : null
       if (typeof minver !== 'string' || minver.length === 0) return false
+      // `Version.prototype.compare` is declared as returning a boolean by
+      // bare-semver; the static `Version.compare` is the typed one.
       const current = semver.Version.parse(updater.version)
-      const skip = current.compare(semver.Version.parse(minver)) < 0
+      const skip = semver.Version.compare(current, semver.Version.parse(minver)) < 0
       if (skip) emitPearEvent('minver-required', updater.version, minver)
       return skip
     } catch (err) {
@@ -1027,7 +997,7 @@ async function startPearUpdates(config: PearLaunchConfig) {
   constructing = runtime
 
   const updater = runtime.updater
-  runtime.on('error', (err: Error) => console.error('[Worker] Pear runtime error:', err?.message || err))
+  runtime.on('error', (err?: unknown) => console.error('[Worker] Pear runtime error:', err instanceof Error ? err.message : err))
   updater.on('error', (err?: unknown) => {
     console.error('[Worker] Pear updater error:', err instanceof Error ? err.message : err)
   })

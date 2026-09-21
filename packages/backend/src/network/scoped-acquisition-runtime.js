@@ -120,12 +120,11 @@ function policyAllowsPublicAcquisition(terms) {
   const control = [
     terms?.policyVersion,
     terms?.consentVersion,
-    terms?.migrationRequired,
     terms?.enabled,
     terms?.acceptPublicRequests,
     terms?.requesterMode,
   ]
-  if (JSON.stringify(control) !== '[1,1,false,true,true,"public"]') return false
+  if (JSON.stringify(control) !== '[1,1,true,true,"public"]') return false
   return [
     'maxConcurrentJobs',
     'maxConcurrentPerRequester',

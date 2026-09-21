@@ -11,13 +11,14 @@ import { UI_FONT_ROUTE } from './ui-theme.js'
 import { SYNE_EXTRABOLD_TTF_BASE64 } from './ui-font-syne.js'
 import { resolveTmdbOptions } from './settings.js'
 import { spawn } from '#subprocess'
-import { tmpdir } from '#os'
+import { networkInterfaces, tmpdir } from '#os'
 import { parseBoundary, receiveMultipartUpload } from './multipart.js'
 // The relay's own HTTP client rather than fetch(): Bare ships no global fetch,
 // so a fetch() here would be a ReferenceError the moment the relay runs.
 import { openResponse, readBody } from './media/http-get.js'
 import { canonicalLocalResolutionRecord, normalizeLocalDurationSeconds } from './local-file-acquisition.js'
 import { tmdbImageUrl } from './add/providers/tmdb.js'
+import { ARCHIVE_UI_AUTHORITY_PATTERN, ARCHIVE_UI_MAX_AUTHORITY_LENGTH } from './constants.js'
 
 // Decoded once; the console serves it with an immutable cache header.
 const SYNE_EXTRABOLD_TTF = b4a.from(SYNE_EXTRABOLD_TTF_BASE64, 'base64')
@@ -318,11 +319,11 @@ async function sha256File(filePath) {
 //
 // Everything the console reads — the job store, the catalog, the media graph —
 // lives behind the universal backend, and bringing that up walks the whole
-// store: the media-graph rebuild, the publication-v1 migration and seed-pin
-// registration all run before it hands back a context. On a large store that
-// takes minutes and can stall indefinitely on a core waiting for a peer. A
-// socket opened only afterwards leaves an operator with a refused connection and
-// no way to tell a warming relay from a wedged one — observed on a 46 GB relay
+// store: the media-graph rebuild and seed-pin registration all run before it
+// hands back a context. On a large store that takes minutes and can stall
+// indefinitely on a core waiting for a peer. A socket opened only afterwards
+// leaves an operator with a refused connection and no way to tell a warming
+// relay from a wedged one — observed on a 46 GB relay
 // whose P2P side was up with three peers while its console port never opened.
 //
 
@@ -340,6 +341,102 @@ function requestAllowsPlayback(req) {
   if (!remote) return false
   if (remote.startsWith('::ffff:')) return isLoopbackHost(remote.slice('::ffff:'.length))
   return remote === '::1' || isLoopbackHost(remote)
+}
+
+// The authorities this console answers a mutating request on.
+//
+// Both `Host` and `Origin` are written by the client, so comparing them to
+// each other proves nothing: a DNS-rebinding page that points
+// attacker.example at 127.0.0.1 sends `Host: attacker.example:8174` and
+// `Origin: http://attacker.example:8174`, they agree, and the POST lands. The
+// one authority nobody but the operator chose is the socket this relay
+// actually bound, so the trusted set is derived from that bind once at
+// startup - loopback always, the bound address when it is concrete, this
+// machine's own addresses when the bind is a wildcard - plus whatever
+// hostnames the operator declared for a reverse proxy in front of it.
+function normalizeAuthority(value) {
+  const text = String(value || '').trim().toLowerCase()
+  if (!text || text.length > ARCHIVE_UI_MAX_AUTHORITY_LENGTH) return ''
+  if (!ARCHIVE_UI_AUTHORITY_PATTERN.test(text)) return ''
+  try {
+    // Collapses the default-port spellings a browser may send, so `:80` on an
+    // http console and a bare host are the same authority on both sides.
+    return new URL(`http://${text}`).host
+  } catch {
+    return ''
+  }
+}
+
+function isWildcardBind(value) {
+  const host = String(value || '').trim().toLowerCase().replace(/^\[|\]$/g, '')
+  return !host || host === '0.0.0.0' || host === '::' || host === '*'
+}
+
+export function resolveConsoleAuthorities({
+  host = '127.0.0.1',
+  port = 8174,
+  trustedHosts = [],
+  interfaces = networkInterfaces
+} = {}) {
+  const authorities = new Set()
+  const boundPort = Number(port)
+  const add = (value) => {
+    const authority = normalizeAuthority(value)
+    if (authority) authorities.add(authority)
+  }
+  const addAtBoundPort = (value) => {
+    if (!Number.isSafeInteger(boundPort) || boundPort <= 0) return
+    const address = String(value || '')
+    const bracketed = address.includes(':') && !address.startsWith('[') ? `[${address}]` : address
+    add(`${bracketed}:${boundPort}`)
+  }
+  for (const loopback of ['localhost', '127.0.0.1', '::1']) addAtBoundPort(loopback)
+  if (isWildcardBind(host)) {
+    // A wildcard bind answers on every interface, so every non-loopback
+    // address of this machine is an authority the operator can legitimately
+    // have typed - and only those.
+    for (const entries of Object.values(interfaces() || {})) {
+      for (const entry of entries || []) {
+        if (!entry?.address || entry.internal) continue
+        addAtBoundPort(entry.address)
+      }
+    }
+  } else {
+    addAtBoundPort(host)
+  }
+  for (const entry of Array.isArray(trustedHosts) ? trustedHosts : []) add(entry)
+  return authorities
+}
+
+// Unlike the machine API, the console IS a browser client, so it cannot refuse
+// browsers - it must refuse a *foreign* page driving it. A cross-site form
+// POST is a CORS simple request: no preflight, no consent, and it reaches
+// /archive or /clients with whatever ambient authority the operator's relay
+// grants. So the `Host` it claims must be one this relay really listens on
+// before anything else is believed, and only then is the unforgeable `Origin`
+// required to name that same authority. A request carrying neither Origin nor
+// Sec-Fetch-Site is not a browser at all (curl, a script) and keeps the access
+// it has always had.
+function sameOriginConsoleRequest(req, authorities) {
+  const host = normalizeAuthority(req?.headers?.host)
+  if (!host || !authorities?.has(host)) return false
+  const declaredOrigin = req?.headers?.origin
+  if (typeof declaredOrigin === 'string' && declaredOrigin.length > 0) {
+    let origin = null
+    try {
+      origin = new URL(declaredOrigin)
+    } catch {
+      return false
+    }
+    if (origin.protocol !== 'http:' && origin.protocol !== 'https:') return false
+    return origin.host.toLowerCase() === host
+  }
+  const fetchSite = req?.headers?.['sec-fetch-site']
+  if (typeof fetchSite === 'string' && fetchSite.length > 0) {
+    const site = fetchSite.trim().toLowerCase()
+    return site === 'same-origin' || site === 'none'
+  }
+  return true
 }
 
 // So the socket is bound first and answers from the start, and the console
@@ -846,6 +943,9 @@ export async function createArchiveConsole({
   serverFactory = createDefaultServer,
   storageReservations = null,
   companionHandler = null,
+  // Operator-declared authorities this console is also reached on: a reverse
+  // proxy's hostname, a DNS alias. The bind itself supplies the rest.
+  trustedHosts = [],
   // Test seam: a console created without one asks the socket. Production code
   // never passes this; tests use it to simulate a LAN peer without needing a
   // second network interface.
@@ -2366,6 +2466,11 @@ function handleFailedRenditionStream({ res, logger, reader, err }) {
         if (await handleGetPlaybackRoutes(req, res, parsed, playbackAllowed)) return
         if (await handleGetJsonRoutes(req, res, parsed, playbackAllowed)) return
       } else if (req.method === 'POST') {
+        if (!sameOriginConsoleRequest(req, trustedAuthorities())) {
+          res.writeHead(403, { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' })
+          res.end('cross-site console request refused')
+          return
+        }
         if (await handlePostRoutes(req, res)) return
       }
 
@@ -2379,7 +2484,18 @@ function handleFailedRenditionStream({ res, logger, reader, err }) {
   // Adopt the pre-bound socket, or open one when this console is the only thing
   // serving (tests, and any caller that builds a console on its own).
   const server = httpSurface ? httpSurface.server : await serverFactory(handleRequest)
-  const boundPort = () => (httpSurface ? httpSurface.port : Number(port))
+  // `port` may be 0 ("any free port"), so the listener itself is the only
+  // honest answer once it is up.
+  const boundPort = () => (httpSurface
+    ? httpSurface.port
+    : Number((typeof server.address === 'function' ? server.address()?.port : null) ?? port))
+
+  // Resolved once, off the bind, and reused by every request after.
+  let consoleAuthorities = null
+  const trustedAuthorities = () => {
+    consoleAuthorities ||= resolveConsoleAuthorities({ host, port: boundPort(), trustedHosts })
+    return consoleAuthorities
+  }
 
   return {
     store,
@@ -2398,6 +2514,7 @@ function handleFailedRenditionStream({ res, logger, reader, err }) {
       } else {
         await new Promise((resolve) => server.listen(Number(port), host, resolve))
       }
+      trustedAuthorities()
       logger?.archive?.info?.('Archive WebUI started', httpSurface
         ? { host, port: boundPort(), storeWarmupMs: httpSurface.warmupMs() }
         : { host, port: boundPort() })

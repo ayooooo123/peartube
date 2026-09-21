@@ -17,7 +17,6 @@ export {
 export {
   derivePublisherId,
   PUBLISHER_CATALOG_CAPABILITY,
-  PUBLISHER_CATALOG_LEGACY_COMPATIBILITY,
   createPublisherNamespaceDescriptor,
   encodePublisherNamespaceDescriptor,
   decodePublisherNamespaceDescriptor,

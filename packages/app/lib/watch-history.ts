@@ -21,7 +21,7 @@
  * under goes on playing, but it does not put the record back.
  */
 import { useEffect, useState } from 'react'
-import { Platform } from 'react-native'
+
 import type * as PlatformRpc from '@peartube/platform/rpc'
 
 type PlatformRpcModule = typeof PlatformRpc
@@ -136,8 +136,6 @@ export type LocalWatchStateRow = {
   updatedAt: number
 }
 
-const LEGACY_HISTORY_FILE = 'peartube-watch-history.json'
-const LEGACY_WEB_STORAGE_KEY = 'peartube-watch-history'
 
 /** Bounded retention: the cache mirrors a bounded slice of the store. */
 const MAX_ENTRIES = 50
@@ -193,8 +191,8 @@ function uint(value: unknown): number {
 
 /**
  * The canonical progress key. Media identity wins when the caller knows it;
- * the legacy channel/video pair remains only so existing device state and the
- * publisher-channel surfaces keep working.
+ * the channel/video pair carries the publisher-channel surfaces, which have no
+ * entity reference of their own.
  */
 function stateKeyOf(row: { identity?: WatchIdentity | null; channelKey?: string | null; videoId?: string | null }): string | null {
   const entityRef = text(row.identity?.entityRef)
@@ -204,7 +202,7 @@ function stateKeyOf(row: { identity?: WatchIdentity | null; channelKey?: string 
   return channelKey && videoId ? `${channelKey}:${videoId}` : null
 }
 
-function legacyVideoKey(row: { channelKey?: string | null; videoId?: string | null }): string | null {
+function channelVideoKey(row: { channelKey?: string | null; videoId?: string | null }): string | null {
   const channelKey = text(row.channelKey)
   const videoId = text(row.videoId)
   return channelKey && videoId ? `${channelKey}:${videoId}` : null
@@ -386,7 +384,7 @@ function requestFor(entry: WatchHistoryEntry, tombstone: boolean): LogWatchHisto
   return {
     channelKey: entry.channelKey || undefined,
     videoId: entry.videoId || undefined,
-    videoKey: legacyVideoKey(entry) ?? undefined,
+    videoKey: channelVideoKey(entry) ?? undefined,
     title: entry.title || undefined,
     duration: uint(entry.durationSec),
     position: uint(entry.positionSec),
@@ -450,196 +448,6 @@ function enqueue(key: string, entry: WatchHistoryEntry, tombstone: boolean): Pro
   return attempted
 }
 
-/** The old plaintext entry shape, read leniently field by field. */
-type LegacyWatchRecord = StoredProgressRecord & {
-  thumbnailUrl?: unknown
-  channelName?: unknown
-  publicBeeKey?: unknown
-}
-
-type LegacySource = { entries: LegacyWatchRecord[]; clear(): Promise<void> }
-
-/**
- * The slice of expo-file-system this file touches. Two module generations are
- * in play, so the shape is described structurally instead of imported.
- */
-type LegacyFileSystem = {
-  documentDirectory?: string | null
-  cacheDirectory?: string | null
-  Paths?: { document?: { uri?: string }; cache?: { uri?: string } }
-  readAsStringAsync?(uri: string, options?: { encoding?: string }): Promise<string>
-  deleteAsync?(uri: string, options?: { idempotent?: boolean }): Promise<void>
-}
-
-/**
- * Dynamic because the module is platform-specific and versioned: web has no
- * filesystem at all, and the legacy entry point exists only in some installs.
- * A static import would fail to resolve on the platforms that lack it.
- */
-async function getFileSystem(): Promise<LegacyFileSystem | null> {
-  if (Platform.OS === 'web') return null
-  for (const load of [() => import('expo-file-system/legacy'), () => import('expo-file-system')]) {
-    try {
-      const mod: unknown = await load()
-      const resolved = (mod as { default?: unknown } | null)?.default ?? mod
-      // Two module generations with incompatible published types; the shape
-      // this file needs is narrowed by the checks at each call site.
-      if (resolved) return resolved as LegacyFileSystem
-    } catch {
-      // Try the next entry point.
-    }
-  }
-  return null
-}
-
-function legacyHistoryUri(fs: LegacyFileSystem): string | null {
-  const base = fs.documentDirectory || fs.Paths?.document?.uri || fs.cacheDirectory || fs.Paths?.cache?.uri
-  if (typeof base !== 'string' || base.length === 0) return null
-  return `${base.replace(/\/?$/, '/')}${LEGACY_HISTORY_FILE}`
-}
-
-async function readLegacySource(): Promise<LegacySource | null> {
-  try {
-    if (Platform.OS === 'web') {
-      if (typeof localStorage === 'undefined') return null
-      const raw = localStorage.getItem(LEGACY_WEB_STORAGE_KEY)
-      if (raw === null) return null
-      // Every field of `LegacyWatchRecord` is `unknown`, so this asserts only
-      // "an array of rows" and each value is still validated on the way in.
-      const parsed: unknown = JSON.parse(raw)
-      return {
-        entries: Array.isArray(parsed) ? (parsed as LegacyWatchRecord[]) : [],
-        async clear() { localStorage.removeItem(LEGACY_WEB_STORAGE_KEY) },
-      }
-    }
-    const fs = await getFileSystem()
-    if (typeof fs?.readAsStringAsync !== 'function') return null
-    const uri = legacyHistoryUri(fs)
-    if (!uri) return null
-    const parsed: unknown = JSON.parse(await fs.readAsStringAsync(uri, { encoding: 'utf8' }))
-    return {
-      entries: Array.isArray(parsed) ? (parsed as LegacyWatchRecord[]) : [],
-      async clear() {
-        if (typeof fs.deleteAsync === 'function') await fs.deleteAsync(uri, { idempotent: true })
-      },
-    }
-  } catch {
-    // No legacy state, or unreadable state. Either way there is nothing to move.
-    return null
-  }
-}
-
-/**
- * Every canonical key a stored record answers to. The resume row carries the
- * state key the store filed it under and, for a legacy row, the video key it
- * was filed under before; an identity-only record has no video key at all.
- * Reading back under any of them is proof the record is durable.
- */
-function storedKeysOf(record: StoredProgressRecord): string[] {
-  const keys: string[] = []
-  const stateKey = text(record?.stateKey)
-  if (stateKey) keys.push(stateKey)
-  const videoKey = text(record?.videoKey)
-  if (videoKey) keys.push(videoKey)
-  const derived = fromRecord(record)
-  if (derived && !derived.tombstone) keys.push(derived.key)
-  return keys
-}
-
-/**
- * Move the plaintext device file into the encrypted store, exactly once.
- *
- * The legacy copy is deleted only once every row it holds reads back out of
- * the store under its canonical state key, so an interrupted migration is
- * retried on the next launch instead of losing the viewer's history. The
- * read-back covers rows a previous run already moved as well as the ones this
- * run wrote: "we did not write it this time" is not evidence that it is safe.
- * Only a row carrying no identity at all is exempt, because there is nothing
- * in it to preserve.
- */
-function legacyEntryFromRaw(
-  raw: LegacyWatchRecord,
-  identity: WatchIdentity | null,
-  channelKey: string,
-  videoId: string,
-): WatchHistoryEntry {
-  return {
-    videoId,
-    channelKey,
-    publicBeeKey: text(raw?.publicBeeKey),
-    title: text(raw?.title) ?? 'Untitled',
-    channelName: text(raw?.channelName) ?? undefined,
-    thumbnailUrl: text(raw?.thumbnailUrl),
-    positionSec: finite(raw?.positionSec ?? raw?.position),
-    durationSec: finite(raw?.durationSec ?? raw?.duration),
-    updatedAt: finite(raw?.updatedAt),
-    completed: raw?.completed === true,
-    saved: raw?.saved === true,
-    identity,
-    playbackGeneration: 0,
-  }
-}
-
-async function migrateLegacyEntries(entries: readonly LegacyWatchRecord[], required: Set<string>): Promise<boolean> {
-  for (const raw of entries) {
-    const identity = identityOf(raw)
-    const channelKey = text(raw?.channelKey) ?? ''
-    const videoId = text(raw?.videoId) ?? ''
-    const key = stateKeyOf({ identity, channelKey, videoId })
-    if (!key) continue
-    required.add(key)
-    if (cache.has(key)) continue
-    const entry = legacyEntryFromRaw(raw, identity, channelKey, videoId)
-    const platform = await readyPlatform()
-    if (!platform) return false
-    try {
-      await platform.rpc.logWatchHistory(requestFor(entry, false))
-    } catch {
-      // A failed migration write means the legacy file stays exactly where it is.
-      return false
-    }
-    cache.set(key, entry)
-  }
-  return true
-}
-
-async function verifyLegacyStored(required: Set<string>): Promise<boolean> {
-  if (required.size === 0) return true
-  const platform = await readyPlatform()
-  if (!platform) return false
-  const stored = new Set<string>()
-  try {
-    const readback = await platform.rpc.listResumePositions()
-    for (const record of readback?.entries ?? []) {
-      for (const key of storedKeysOf(record)) stored.add(key)
-    }
-  } catch {
-    return false
-  }
-  for (const key of required) {
-    if (!stored.has(key)) return false
-  }
-  return true
-}
-
-async function migrateLegacyState(): Promise<void> {
-  const legacy = await readLegacySource()
-  if (!legacy) return
-
-  const required = new Set<string>()
-  const migrated = await migrateLegacyEntries(legacy.entries, required)
-  prune()
-  if (!migrated) return
-
-  const verified = await verifyLegacyStored(required)
-  if (!verified) return
-
-  try {
-    await legacy.clear()
-  } catch {
-    // The records are safe in the store; a stubborn legacy file is retried later.
-  }
-}
 
 async function loadFromStore(): Promise<void> {
   const platform = await readyPlatform()
@@ -668,7 +476,6 @@ async function loadFromStore(): Promise<void> {
   hydrated = true
   prune()
   notifyChanged()
-  await migrateLegacyState()
   await flushPending()
 }
 
@@ -828,10 +635,10 @@ export async function getEntry(coordinates: { channelKey?: string | null; videoI
     const direct = cache.get(key)
     if (direct) return direct
   }
-  const videoKey = legacyVideoKey(coordinates)
+  const videoKey = channelVideoKey(coordinates)
   if (!videoKey) return null
   for (const entry of cache.values()) {
-    if (legacyVideoKey(entry) === videoKey) return entry
+    if (channelVideoKey(entry) === videoKey) return entry
   }
   return null
 }
@@ -858,12 +665,12 @@ function tombstoneEntry(key: string, entry: WatchHistoryEntry, now: number): Pro
  */
 export async function removeEntry(channelKey: string, videoId: string): Promise<void> {
   await hydrate()
-  const videoKey = legacyVideoKey({ channelKey, videoId })
+  const videoKey = channelVideoKey({ channelKey, videoId })
   if (!videoKey) return
   const now = Date.now()
   const deleted: Promise<void>[] = []
   for (const [key, entry] of [...cache.entries()]) {
-    if (key !== videoKey && legacyVideoKey(entry) !== videoKey) continue
+    if (key !== videoKey && channelVideoKey(entry) !== videoKey) continue
     deleted.push(tombstoneEntry(key, entry, now))
   }
   await Promise.all(deleted)

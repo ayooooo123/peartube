@@ -103,7 +103,7 @@
  * @property {string} id - Video ID
  * @property {string} title - Video title
  * @property {string} description - Video description
- * @property {string} path - Legacy path reference (if present)
+ * @property {string} path - Hyperblobs path reference (if present)
  * @property {number} size - File size in bytes
  * @property {string} [mimeType] - MIME type
  * @property {number} uploadedAt - Upload timestamp

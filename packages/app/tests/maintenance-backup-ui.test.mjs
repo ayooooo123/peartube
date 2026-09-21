@@ -4,7 +4,7 @@ import { test } from 'node:test'
 
 const modelUrl = new URL('../components/maintenance/maintenance-model.mjs', import.meta.url)
 const fileTransferUrl = new URL('../lib/maintenance-file-transfer.mjs', import.meta.url)
-const panelUrl = new URL('../components/maintenance/MigrationBackupPanel.tsx', import.meta.url)
+const panelUrl = new URL('../components/maintenance/BackupPanel.tsx', import.meta.url)
 const routeUrl = new URL('../app/maintenance.tsx', import.meta.url)
 const profileUrl = new URL('../app/profile.tsx', import.meta.url)
 const developerSettingsUrl = new URL('../app/developer-settings.tsx', import.meta.url)
@@ -25,68 +25,11 @@ async function readRequired(url, label) {
   }
 }
 
-test('migration presentation covers every lifecycle state and all bounded counters', async () => {
-  const { migrationPresentation, migrationCounterRows, boundedDiagnosticCode, boundedError } = await importRequired(modelUrl, 'maintenance model')
+test('maintenance error text is bounded and never echoes a non-Error payload', async () => {
+  const { boundedError } = await importRequired(modelUrl, 'maintenance model')
 
-  assert.deepEqual(
-    ['pending', 'running', 'retrying', 'complete', 'failed'].map((state) => migrationPresentation(state).label),
-    ['Waiting to start', 'Import in progress', 'Retry in progress', 'Migration complete', 'Migration failed'],
-  )
-
-  assert.deepEqual(
-    migrationCounterRows({
-      processedCount: 12,
-      importedCount: 7,
-      skippedCount: 2,
-      quarantinedCount: 1,
-      unsupportedCount: 1,
-      remainingCount: 1,
-    }),
-    [
-      ['Processed', 12],
-      ['Imported', 7],
-      ['Skipped', 2],
-      ['Quarantined', 1],
-      ['Unsupported', 1],
-      ['Remaining', 1],
-    ],
-  )
-  assert.equal(migrationCounterRows({ processedCount: Number.MAX_SAFE_INTEGER })[0][1], 1_000_000_000)
   assert.equal(boundedError(new Error('x'.repeat(500))).length, 240)
   assert.equal(boundedError({ code: 'PRIVATE_ROOT', privateKey: 'secret' }), 'Maintenance action failed')
-  assert.equal(boundedDiagnosticCode(`\u0000${'X'.repeat(100)}`).length, 64)
-  assert.equal(boundedDiagnosticCode(null), 'MIGRATION_FAILED')
-})
-
-test('retry is gated to a retryable failed migration and refreshes through the injected RPC', async () => {
-  const { canRetryMigration, createMaintenanceActions } = await importRequired(modelUrl, 'maintenance model')
-  assert.equal(canRetryMigration({ state: 'failed', retryable: true }), true)
-  assert.equal(canRetryMigration({ state: 'failed', retryable: false }), false)
-  assert.equal(canRetryMigration({ state: 'running', retryable: true }), false)
-  assert.equal(canRetryMigration(null), false)
-
-  const calls = []
-  const statusCalls = []
-  const actions = createMaintenanceActions({
-    rpc: {
-      getMigrationStatus: async (request) => {
-        statusCalls.push(request)
-        return { success: true, migrationId: request.migrationId, state: 'pending', retryable: false }
-      },
-      retryMigration: async (request) => {
-        calls.push(request)
-        return { success: true, migrationId: request.migrationId, state: 'retrying', retryable: false }
-      },
-    },
-    files: {},
-  })
-  const status = await actions.getMigrationStatus()
-  assert.equal(status.state, 'pending')
-  assert.deepEqual(statusCalls, [{ migrationId: 'publication-v1' }])
-  await assert.rejects(() => actions.retryMigration({ state: 'running', retryable: true }), /not retryable/i)
-  const result = await actions.retryMigration({ state: 'failed', retryable: true })
-  assert.equal(result.state, 'retrying')
-  assert.deepEqual(calls, [{ migrationId: 'publication-v1' }])
 })
 
 test('maintenance capabilities fail closed for every missing RPC and file adapter', async () => {
@@ -94,7 +37,7 @@ test('maintenance capabilities fail closed for every missing RPC and file adapte
   const unavailable = maintenanceCapabilities({ rpc: {}, files: {} })
   assert.deepEqual(
     Object.fromEntries(Object.entries(unavailable).map(([name, capability]) => [name, capability.available])),
-    { status: false, retry: false, report: false, export: false, select: false, restore: false },
+    { export: false, select: false, restore: false },
   )
   for (const capability of Object.values(unavailable)) {
     assert.match(capability.reason, /unavailable/i)
@@ -108,9 +51,6 @@ test('maintenance capabilities fail closed for every missing RPC and file adapte
 
   const available = maintenanceCapabilities({
     rpc: {
-      getMigrationStatus() {},
-      retryMigration() {},
-      exportMigrationReport() {},
       exportPortableState() {},
       restorePortableState() {},
     },
@@ -119,23 +59,13 @@ test('maintenance capabilities fail closed for every missing RPC and file adapte
   assert.equal(Object.values(available).every((capability) => capability.available), true)
 })
 
-test('migration reports and portable state are saved as real files without secret material', async () => {
+test('portable state is saved as a real file without secret material', async () => {
   const { createMaintenanceActions } = await importRequired(modelUrl, 'maintenance model')
   const saved = []
   const manifestBytes = new TextEncoder().encode('{"subscriptions":["alice"]}')
   const portableExportCalls = []
-  const reportCalls = []
   const actions = createMaintenanceActions({
     rpc: {
-      exportMigrationReport: async (request) => {
-        reportCalls.push(request)
-        return ({
-        success: true,
-        migrationId: 'publication-v1',
-        reportBytes: new TextEncoder().encode('{"state":"complete"}'),
-        reportDigest: 'report-digest',
-        })
-      },
       exportPortableState: async (...args) => {
         portableExportCalls.push(args)
         return ({
@@ -157,14 +87,10 @@ test('migration reports and portable state are saved as real files without secre
     },
   })
 
-  await actions.saveMigrationReport()
   await actions.savePortableState()
   assert.deepEqual(portableExportCalls, [[]], 'the flat platform RPC accepts no export request object')
-  assert.deepEqual(reportCalls, [{ migrationId: 'publication-v1' }])
-  assert.equal(saved[0].fileName, 'peartube-publication-v1-migration-report.json')
-  assert.deepEqual(saved[0].bytes, new TextEncoder().encode('{"state":"complete"}'))
-  assert.equal(saved[1].fileName, 'peartube-portable-state.json')
-  const portableText = new TextDecoder().decode(saved[1].bytes)
+  assert.equal(saved[0].fileName, 'peartube-portable-state.json')
+  const portableText = new TextDecoder().decode(saved[0].bytes)
   assert.match(portableText, /"manifestDigest":"manifest-digest"/)
   assert.doesNotMatch(portableText, /privateRoot|signingKey|must-not-export|recovery|secret/i)
 })
@@ -290,17 +216,12 @@ test('maintenance route injects RPC, is gated, and is linked only from Developer
     readRequired(developerSettingsUrl, 'Developer Settings route'),
   ])
 
-  assert.match(route, /<MigrationBackupPanel\s+rpc=\{rpc\}/)
-  assert.match(panel, /getMigrationStatus/)
-  assert.match(panel, /saveMigrationReport/)
+  assert.match(route, /<BackupPanel\s+rpc=\{rpc\}/)
   assert.match(panel, /savePortableState/)
   assert.match(panel, /selectPortableState/)
   assert.match(panel, /restorePortableState/)
   assert.match(panel, /\{selection \?[\s\S]*Confirm destructive restore[\s\S]*Verify & restore/)
   assert.match(panel, /checksum/i)
-  assert.match(panel, /boundedDiagnosticCode\(status\.errorCode/)
-  assert.match(panel, /accessibilityHint=\{capabilities\.retry\.reason/)
-  assert.match(panel, /capabilities\.report\.available/)
   assert.match(panel, /capabilities\.export\.available/)
   assert.match(panel, /capabilities\.select\.available/)
   assert.match(panel, /capabilities\.restore\.available/)

@@ -234,27 +234,6 @@ test('desktop launcher prefers the bare bundle over the loose worker', () => {
   )
 })
 
-test('packaged desktop app ships the sibling hypercore reader worker with the bare bundle', () => {
-  const { scripts } = readPackageJson()
-  const workerSource = fs.readFileSync(path.join(appRoot, 'workers', 'desktop', 'index.ts'), 'utf8')
-
-  assert.match(
-    scripts['desktop:ecopy'],
-    /rsync -a desktop-build\/build\/workers\/hypercore-reader-worker\.mjs /,
-    'desktop:ecopy should copy the hypercore reader worker beside workers/core/index.bundle',
-  )
-  assert.match(
-    workerSource,
-    /import\.meta\.url/,
-    'desktop worker should resolve sibling worker code from its bundled resource path',
-  )
-  assert.doesNotMatch(
-    workerSource,
-    /const workerBaseDir = runtimeStorage \|\| os\.cwd\(\)/,
-    'desktop worker must not derive bundled code paths from mutable storage',
-  )
-})
-
 test('desktop worker boots the universal backend with the real backend context', () => {
   const workerSource = fs.readFileSync(path.join(appRoot, 'workers', 'desktop', 'index.ts'), 'utf8')
 

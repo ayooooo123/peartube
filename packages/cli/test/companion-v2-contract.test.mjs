@@ -272,7 +272,6 @@ test('acquisition policy updates require consent and revision and forward both',
   const policy = {
     policyVersion: 1,
     consentVersion: 1,
-    migrationRequired: false,
     enabled: true,
     acceptPublicRequests: false,
     requesterMode: 'local-only',

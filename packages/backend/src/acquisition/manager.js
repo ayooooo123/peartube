@@ -16,7 +16,6 @@ import {
   projectAcquisitionJob
 } from './contract.js'
 import { createAcquisitionAdmissionLedger } from './accounting.js'
-import { migrateLegacyIngest as migrateLegacy } from './store.js'
 
 const TERMINAL = new Set(TERMINAL_ACQUISITION_STATES)
 const RESET_PREFIX_ERRORS = new Set(['SOURCE_IDENTITY_CHANGED', 'ASSET_SOURCE_IDENTITY_CHANGED', 'ASSET_SOURCE_CHANGED', 'SOURCE_LENGTH_MISMATCH', 'HASH_MISMATCH', 'VERIFICATION_FAILED'])
@@ -881,7 +880,6 @@ export function createAcquisitionManager ({ store, policy, provider, sourceGrant
     },
     acceptRemoteRequest (input = {}) { return this.prepareRequest({ ...input, isRemote: true }) },
     async acceptOffer ({ acquisitionId, offer, principal } = {}) { const job = await owned(acquisitionId, principal); if (!job || TERMINAL.has(job.state)) return publicJob(job); await network?.assign?.({ acquisitionId, offer }); await dispatchQueued(); return publicJob(job) },
-    async migrateLegacyIngest ({ legacyStore, legacyPrincipalId = 'local', legacyPublisherId = 'local', now: migrationNow = now } = {}) { return migrateLegacy({ legacyStore, acquisitionStore: store, legacyPrincipalId, legacyPublisherId, now: migrationNow }) },
     subscribe (listener) {
       if (typeof listener !== 'function') throw new TypeError('acquisition listener must be a function')
       listeners.add(listener)

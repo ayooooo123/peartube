@@ -158,39 +158,6 @@ test('current admitted device is authorized to publish and transition', (t) => {
   t.is(projected.admissionExpiresAt, 1_900_000_000_000)
 })
 
-test('failed halfway legacy import maps to a secret-free unable state', (t) => {
-  const { authorizationState, localDevice } = fixture()
-  const legacyImport = {
-    state: 'failed',
-    phase: 'root-imported-before-writer-admission',
-    errorCode: 'RAW_BACKEND_FAILURE',
-    secretKey: key(200)
-  }
-  const projected = projectPublisherDeviceStatus({ authorizationState, localDevice, legacyImport })
-
-  t.is(projected.status, 'unable-to-publish')
-  t.is(projected.reasonCode, 'LEGACY_IMPORT_FAILED')
-  t.is(projected.legacyImportState, 'failed')
-  t.is(projected.canPublish, false)
-  t.is(projected.canRootTransition, false)
-  t.is(projected.canPlayLocal, true)
-  t.is(projected.canExportLocal, true)
-  t.is(projected.canDeleteLocal, true)
-  t.is(Object.keys(projected).length <= 13, true, 'status response has a fixed scalar-field bound')
-  t.absent(projected.secretKey)
-  t.absent(projected.errorCode)
-  t.absent(projected.phase)
-  t.absent(projected.rootPublicKey)
-  t.absent(projected.activeRootKey)
-  const repeated = projectPublisherDeviceStatus({
-    authorizationState,
-    localDevice,
-    legacyImport: { ...legacyImport, errorCode: 'DIFFERENT_FAILURE', secretKey: key(201) }
-  })
-  t.alike(repeated, projected, 'ignored secret and diagnostic material cannot affect projection')
-  t.ok(Object.isFrozen(projected), 'bounded response shape cannot be extended')
-})
-
 test('catalog admission matches the local writer while reporting the device signer public key', (t) => {
   const { authorizationState, localDevice, writerKey, devicePublicKey } = fixture()
   const projected = projectPublisherDeviceStatus({

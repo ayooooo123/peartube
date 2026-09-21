@@ -68,10 +68,6 @@ export {
   generateMnemonic,
   validateMnemonic
 } from './identity.js';
-export {
-  migrateLegacyPublisherRootsInMetaDb,
-  runLegacyPublisherRootPreflight
-} from './legacy-publisher-root-preflight.js';
 
 // Video Upload
 export { createUploadManager } from './upload.js';

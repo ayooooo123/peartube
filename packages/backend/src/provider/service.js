@@ -452,7 +452,7 @@ function requireOptionalAdapter(adapter, methods, name) {
 function validateProviderDependencies({ verifiedQueryView, indexVerificationRuntime, acquisitionManager, streamOpener, policy, acquisitionPolicy, publicationLookup, statusSource, now, randomBytes }) {
   requireAdapters(verifiedQueryView, ['query', 'getEntity', 'getPublication', 'getManifest', 'getRendition', 'authorizeRendition', 'isVisible'], 'verifiedQueryView')
   requireAdapters(indexVerificationRuntime, ['searchIndexCandidates', 'verifyIndexCandidate'], 'indexVerificationRuntime')
-  requireAdapters(acquisitionManager, ['findRequest', 'request', 'attachGrant', 'get', 'list', 'cancel', 'migrateLegacyIngest'], 'acquisitionManager')
+  requireAdapters(acquisitionManager, ['findRequest', 'request', 'attachGrant', 'get', 'list', 'cancel'], 'acquisitionManager')
   requireOptionalAdapter(streamOpener, ['openStream'], 'streamOpener')
   requireOptionalAdapter(policy, ['getPolicy', 'setPolicy'], 'policy')
   requireOptionalAdapter(acquisitionPolicy, ['getPolicy', 'setPolicy'], 'acquisitionPolicy')
@@ -1692,33 +1692,6 @@ function resolutionLabels(record) {
     return clonePublicPolicy(await acquisitionPolicy.setPolicy(nextPolicy, { consent, expectedRevision }))
   }
 
-  async function migrateLegacyIngest({
-    legacyStore,
-    legacyPrincipalId = 'local',
-    legacyPublisherId = 'local',
-    now: migrationNow = undefined,
-  } = {}) {
-    if (!legacyStore || typeof legacyStore !== 'object' || Array.isArray(legacyStore)) {
-      fail(PROVIDER_ERROR_CODES.INVALID_FIELD, 'legacyStore is required', { field: 'legacyStore' })
-    }
-    const input = {
-      legacyStore,
-      legacyPrincipalId: text(legacyPrincipalId, 'legacyPrincipalId', 256),
-      legacyPublisherId: text(legacyPublisherId, 'legacyPublisherId', 256),
-    }
-    if (migrationNow !== undefined) {
-      if (typeof migrationNow !== 'function' && (!Number.isSafeInteger(migrationNow) || migrationNow < 0)) {
-        fail(PROVIDER_ERROR_CODES.INVALID_FIELD, 'migration now is invalid', { field: 'now' })
-      }
-      input.now = migrationNow
-    }
-    const result = object(await acquisitionManager.migrateLegacyIngest(input), 'legacy migration result')
-    return Object.freeze({
-      migrated: uint(result.migrated, 'legacy migration migrated'),
-      skipped: uint(result.skipped, 'legacy migration skipped'),
-    })
-  }
-
   const service = Object.freeze({
     search,
     resolve,
@@ -1736,7 +1709,6 @@ function resolutionLabels(record) {
     setPolicy,
     getAcquisitionPolicy,
     setAcquisitionPolicy,
-    migrateLegacyIngest,
   })
   PROVIDER_INTERNALS.set(service, Object.freeze({ issueLocalResolution }))
   return service

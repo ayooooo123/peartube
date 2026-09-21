@@ -874,45 +874,6 @@
     },
     {
       "id": 67,
-      "name": "@peartube/get-migration-status",
-      "request": {
-        "name": "@peartube/get-migration-status-request",
-        "stream": false
-      },
-      "response": {
-        "name": "@peartube/get-migration-status-response",
-        "stream": false
-      },
-      "version": 1
-    },
-    {
-      "id": 68,
-      "name": "@peartube/retry-migration",
-      "request": {
-        "name": "@peartube/retry-migration-request",
-        "stream": false
-      },
-      "response": {
-        "name": "@peartube/retry-migration-response",
-        "stream": false
-      },
-      "version": 1
-    },
-    {
-      "id": 69,
-      "name": "@peartube/export-migration-report",
-      "request": {
-        "name": "@peartube/export-migration-report-request",
-        "stream": false
-      },
-      "response": {
-        "name": "@peartube/export-migration-report-response",
-        "stream": false
-      },
-      "version": 1
-    },
-    {
-      "id": 70,
       "name": "@peartube/get-publisher-device-status",
       "request": {
         "name": "@peartube/get-publisher-device-status-request",
@@ -925,7 +886,7 @@
       "version": 1
     },
     {
-      "id": 71,
+      "id": 68,
       "name": "@peartube/export-portable-state",
       "request": {
         "name": "@peartube/export-portable-state-request",
@@ -938,7 +899,7 @@
       "version": 1
     },
     {
-      "id": 72,
+      "id": 69,
       "name": "@peartube/restore-portable-state",
       "request": {
         "name": "@peartube/restore-portable-state-request",
@@ -951,7 +912,7 @@
       "version": 1
     },
     {
-      "id": 73,
+      "id": 70,
       "name": "@peartube/preview-storage-limit",
       "request": {
         "name": "@peartube/preview-storage-limit-request",
@@ -964,7 +925,7 @@
       "version": 1
     },
     {
-      "id": 74,
+      "id": 71,
       "name": "@peartube/get-archive-operator-status",
       "request": {
         "name": "@peartube/get-archive-operator-status-request",
@@ -977,7 +938,7 @@
       "version": 1
     },
     {
-      "id": 75,
+      "id": 72,
       "name": "@peartube/get-archive-participation",
       "request": {
         "name": "@peartube/get-archive-participation-request",
@@ -990,7 +951,7 @@
       "version": 1
     },
     {
-      "id": 76,
+      "id": 73,
       "name": "@peartube/set-archive-participation",
       "request": {
         "name": "@peartube/set-archive-participation-request",
@@ -1003,7 +964,7 @@
       "version": 1
     },
     {
-      "id": 77,
+      "id": 74,
       "name": "@peartube/request-archive-publication",
       "request": {
         "name": "@peartube/request-archive-publication-request",
@@ -1016,7 +977,7 @@
       "version": 1
     },
     {
-      "id": 78,
+      "id": 75,
       "name": "@peartube/get-network-policy",
       "request": {
         "name": "@peartube/get-network-policy-request",
@@ -1029,7 +990,7 @@
       "version": 1
     },
     {
-      "id": 79,
+      "id": 76,
       "name": "@peartube/set-network-policy",
       "request": {
         "name": "@peartube/set-network-policy-request",
@@ -1042,7 +1003,7 @@
       "version": 1
     },
     {
-      "id": 80,
+      "id": 77,
       "name": "@peartube/clear-cache",
       "request": {
         "name": "@peartube/clear-cache-request",
@@ -1055,7 +1016,7 @@
       "version": 1
     },
     {
-      "id": 81,
+      "id": 78,
       "name": "@peartube/assess-source-offload",
       "request": {
         "name": "@peartube/assess-source-offload-request",
@@ -1068,7 +1029,7 @@
       "version": 1
     },
     {
-      "id": 82,
+      "id": 79,
       "name": "@peartube/confirm-source-offload",
       "request": {
         "name": "@peartube/confirm-source-offload-request",
@@ -1081,7 +1042,7 @@
       "version": 1
     },
     {
-      "id": 83,
+      "id": 80,
       "name": "@peartube/get-video-thumbnail",
       "request": {
         "name": "@peartube/get-video-thumbnail-request",
@@ -1094,7 +1055,7 @@
       "version": 1
     },
     {
-      "id": 84,
+      "id": 81,
       "name": "@peartube/get-video-metadata",
       "request": {
         "name": "@peartube/get-video-metadata-request",
@@ -1107,7 +1068,7 @@
       "version": 1
     },
     {
-      "id": 85,
+      "id": 82,
       "name": "@peartube/set-video-thumbnail",
       "request": {
         "name": "@peartube/set-video-thumbnail-request",
@@ -1120,7 +1081,7 @@
       "version": 1
     },
     {
-      "id": 86,
+      "id": 83,
       "name": "@peartube/set-video-thumbnail-from-file",
       "request": {
         "name": "@peartube/set-video-thumbnail-from-file-request",
@@ -1133,7 +1094,7 @@
       "version": 1
     },
     {
-      "id": 87,
+      "id": 84,
       "name": "@peartube/get-status",
       "request": {
         "name": "@peartube/get-status-request",
@@ -1146,7 +1107,7 @@
       "version": 1
     },
     {
-      "id": 88,
+      "id": 85,
       "name": "@peartube/pick-video-file",
       "request": {
         "name": "@peartube/pick-video-file-request",
@@ -1159,7 +1120,7 @@
       "version": 1
     },
     {
-      "id": 89,
+      "id": 86,
       "name": "@peartube/pick-image-file",
       "request": {
         "name": "@peartube/pick-image-file-request",
@@ -1172,7 +1133,7 @@
       "version": 1
     },
     {
-      "id": 90,
+      "id": 87,
       "name": "@peartube/get-blob-server-port",
       "request": {
         "name": "@peartube/get-blob-server-port-request",
@@ -1185,7 +1146,7 @@
       "version": 1
     },
     {
-      "id": 91,
+      "id": 88,
       "name": "@peartube/global-search-videos",
       "request": {
         "name": "@peartube/global-search-videos-request",
@@ -1198,7 +1159,7 @@
       "version": 1
     },
     {
-      "id": 92,
+      "id": 89,
       "name": "@peartube/add-comment",
       "request": {
         "name": "@peartube/add-comment-request",
@@ -1211,7 +1172,7 @@
       "version": 1
     },
     {
-      "id": 93,
+      "id": 90,
       "name": "@peartube/list-comments",
       "request": {
         "name": "@peartube/list-comments-request",
@@ -1224,7 +1185,7 @@
       "version": 1
     },
     {
-      "id": 94,
+      "id": 91,
       "name": "@peartube/hide-comment",
       "request": {
         "name": "@peartube/hide-comment-request",
@@ -1237,7 +1198,7 @@
       "version": 1
     },
     {
-      "id": 95,
+      "id": 92,
       "name": "@peartube/remove-comment",
       "request": {
         "name": "@peartube/remove-comment-request",
@@ -1250,7 +1211,7 @@
       "version": 1
     },
     {
-      "id": 96,
+      "id": 93,
       "name": "@peartube/add-reaction",
       "request": {
         "name": "@peartube/add-reaction-request",
@@ -1263,7 +1224,7 @@
       "version": 1
     },
     {
-      "id": 97,
+      "id": 94,
       "name": "@peartube/remove-reaction",
       "request": {
         "name": "@peartube/remove-reaction-request",
@@ -1276,7 +1237,7 @@
       "version": 1
     },
     {
-      "id": 98,
+      "id": 95,
       "name": "@peartube/get-reactions",
       "request": {
         "name": "@peartube/get-reactions-request",
@@ -1289,7 +1250,7 @@
       "version": 1
     },
     {
-      "id": 99,
+      "id": 96,
       "name": "@peartube/event-ready",
       "request": {
         "name": "@peartube/event-ready",
@@ -1299,7 +1260,7 @@
       "version": 1
     },
     {
-      "id": 100,
+      "id": 97,
       "name": "@peartube/event-error",
       "request": {
         "name": "@peartube/event-error",
@@ -1309,7 +1270,7 @@
       "version": 1
     },
     {
-      "id": 101,
+      "id": 98,
       "name": "@peartube/event-upload-progress",
       "request": {
         "name": "@peartube/event-upload-progress",
@@ -1319,7 +1280,7 @@
       "version": 1
     },
     {
-      "id": 102,
+      "id": 99,
       "name": "@peartube/event-download-progress",
       "request": {
         "name": "@peartube/event-download-progress",
@@ -1329,7 +1290,7 @@
       "version": 1
     },
     {
-      "id": 103,
+      "id": 100,
       "name": "@peartube/event-media-graph-update",
       "request": {
         "name": "@peartube/event-media-graph-update",
@@ -1339,7 +1300,7 @@
       "version": 1
     },
     {
-      "id": 104,
+      "id": 101,
       "name": "@peartube/event-log",
       "request": {
         "name": "@peartube/event-log",
@@ -1349,7 +1310,7 @@
       "version": 1
     },
     {
-      "id": 105,
+      "id": 102,
       "name": "@peartube/event-video-stats",
       "request": {
         "name": "@peartube/event-video-stats",
@@ -1359,7 +1320,7 @@
       "version": 1
     },
     {
-      "id": 106,
+      "id": 103,
       "name": "@peartube/cast-available",
       "request": {
         "name": "@peartube/cast-available-request",
@@ -1372,7 +1333,7 @@
       "version": 1
     },
     {
-      "id": 107,
+      "id": 104,
       "name": "@peartube/cast-start-discovery",
       "request": {
         "name": "@peartube/cast-start-discovery-request",
@@ -1385,7 +1346,7 @@
       "version": 1
     },
     {
-      "id": 108,
+      "id": 105,
       "name": "@peartube/cast-stop-discovery",
       "request": {
         "name": "@peartube/cast-stop-discovery-request",
@@ -1398,7 +1359,7 @@
       "version": 1
     },
     {
-      "id": 109,
+      "id": 106,
       "name": "@peartube/cast-get-devices",
       "request": {
         "name": "@peartube/cast-get-devices-request",
@@ -1411,7 +1372,7 @@
       "version": 1
     },
     {
-      "id": 110,
+      "id": 107,
       "name": "@peartube/cast-add-manual-device",
       "request": {
         "name": "@peartube/cast-add-manual-device-request",
@@ -1424,7 +1385,7 @@
       "version": 1
     },
     {
-      "id": 111,
+      "id": 108,
       "name": "@peartube/cast-connect",
       "request": {
         "name": "@peartube/cast-connect-request",
@@ -1437,7 +1398,7 @@
       "version": 1
     },
     {
-      "id": 112,
+      "id": 109,
       "name": "@peartube/cast-disconnect",
       "request": {
         "name": "@peartube/cast-disconnect-request",
@@ -1450,7 +1411,7 @@
       "version": 1
     },
     {
-      "id": 113,
+      "id": 110,
       "name": "@peartube/cast-play",
       "request": {
         "name": "@peartube/cast-play-request",
@@ -1463,7 +1424,7 @@
       "version": 1
     },
     {
-      "id": 114,
+      "id": 111,
       "name": "@peartube/cast-pause",
       "request": {
         "name": "@peartube/cast-pause-request",
@@ -1476,7 +1437,7 @@
       "version": 1
     },
     {
-      "id": 115,
+      "id": 112,
       "name": "@peartube/cast-resume",
       "request": {
         "name": "@peartube/cast-resume-request",
@@ -1489,7 +1450,7 @@
       "version": 1
     },
     {
-      "id": 116,
+      "id": 113,
       "name": "@peartube/cast-stop",
       "request": {
         "name": "@peartube/cast-stop-request",
@@ -1502,7 +1463,7 @@
       "version": 1
     },
     {
-      "id": 117,
+      "id": 114,
       "name": "@peartube/cast-seek",
       "request": {
         "name": "@peartube/cast-seek-request",
@@ -1515,7 +1476,7 @@
       "version": 1
     },
     {
-      "id": 118,
+      "id": 115,
       "name": "@peartube/cast-set-volume",
       "request": {
         "name": "@peartube/cast-set-volume-request",
@@ -1528,7 +1489,7 @@
       "version": 1
     },
     {
-      "id": 119,
+      "id": 116,
       "name": "@peartube/cast-get-state",
       "request": {
         "name": "@peartube/cast-get-state-request",
@@ -1541,7 +1502,7 @@
       "version": 1
     },
     {
-      "id": 120,
+      "id": 117,
       "name": "@peartube/cast-is-connected",
       "request": {
         "name": "@peartube/cast-is-connected-request",
@@ -1554,7 +1515,7 @@
       "version": 1
     },
     {
-      "id": 121,
+      "id": 118,
       "name": "@peartube/event-cast-device-found",
       "request": {
         "name": "@peartube/event-cast-device-found",
@@ -1564,7 +1525,7 @@
       "version": 1
     },
     {
-      "id": 122,
+      "id": 119,
       "name": "@peartube/event-cast-device-lost",
       "request": {
         "name": "@peartube/event-cast-device-lost",
@@ -1574,7 +1535,7 @@
       "version": 1
     },
     {
-      "id": 123,
+      "id": 120,
       "name": "@peartube/event-cast-playback-state",
       "request": {
         "name": "@peartube/event-cast-playback-state",
@@ -1584,7 +1545,7 @@
       "version": 1
     },
     {
-      "id": 124,
+      "id": 121,
       "name": "@peartube/event-cast-time-update",
       "request": {
         "name": "@peartube/event-cast-time-update",
@@ -1594,7 +1555,7 @@
       "version": 1
     },
     {
-      "id": 125,
+      "id": 122,
       "name": "@peartube/search-videos",
       "request": {
         "name": "@peartube/search-videos-request",
@@ -1607,7 +1568,7 @@
       "version": 1
     },
     {
-      "id": 126,
+      "id": 123,
       "name": "@peartube/search-index-candidates",
       "request": {
         "name": "@peartube/search-index-candidates-request",
@@ -1620,7 +1581,7 @@
       "version": 1
     },
     {
-      "id": 127,
+      "id": 124,
       "name": "@peartube/verify-index-candidate",
       "request": {
         "name": "@peartube/verify-index-candidate-request",
@@ -1633,7 +1594,7 @@
       "version": 1
     },
     {
-      "id": 128,
+      "id": 125,
       "name": "@peartube/index-video-vectors",
       "request": {
         "name": "@peartube/index-video-vectors-request",
@@ -1646,7 +1607,7 @@
       "version": 1
     },
     {
-      "id": 129,
+      "id": 126,
       "name": "@peartube/update-video-metadata",
       "request": {
         "name": "@peartube/update-video-metadata-request",
@@ -1659,7 +1620,7 @@
       "version": 1
     },
     {
-      "id": 130,
+      "id": 127,
       "name": "@peartube/get-media-catalog",
       "request": {
         "name": "@peartube/media-page-request",
@@ -1672,7 +1633,7 @@
       "version": 1
     },
     {
-      "id": 131,
+      "id": 128,
       "name": "@peartube/get-media-entity",
       "request": {
         "name": "@peartube/get-media-entity-request",
@@ -1685,7 +1646,7 @@
       "version": 1
     },
     {
-      "id": 132,
+      "id": 129,
       "name": "@peartube/get-media-collection",
       "request": {
         "name": "@peartube/get-media-collection-request",
@@ -1698,7 +1659,7 @@
       "version": 1
     },
     {
-      "id": 133,
+      "id": 130,
       "name": "@peartube/get-media-collection-items",
       "request": {
         "name": "@peartube/get-media-collection-items-request",
@@ -1711,7 +1672,7 @@
       "version": 1
     },
     {
-      "id": 134,
+      "id": 131,
       "name": "@peartube/get-media-agent",
       "request": {
         "name": "@peartube/get-media-agent-request",
@@ -1724,7 +1685,7 @@
       "version": 1
     },
     {
-      "id": 135,
+      "id": 132,
       "name": "@peartube/get-agent-contributions",
       "request": {
         "name": "@peartube/get-agent-contributions-request",
@@ -1737,7 +1698,7 @@
       "version": 1
     },
     {
-      "id": 136,
+      "id": 133,
       "name": "@peartube/get-publication-sources",
       "request": {
         "name": "@peartube/get-publication-sources-request",
@@ -1750,7 +1711,7 @@
       "version": 1
     },
     {
-      "id": 137,
+      "id": 134,
       "name": "@peartube/get-entity-artwork",
       "request": {
         "name": "@peartube/get-entity-artwork-request",
@@ -1763,7 +1724,7 @@
       "version": 1
     },
     {
-      "id": 138,
+      "id": 135,
       "name": "@peartube/get-claim-provenance",
       "request": {
         "name": "@peartube/get-claim-provenance-request",
@@ -1776,7 +1737,7 @@
       "version": 1
     },
     {
-      "id": 139,
+      "id": 136,
       "name": "@peartube/set-source-preference",
       "request": {
         "name": "@peartube/set-source-preference-request",
@@ -1789,7 +1750,7 @@
       "version": 1
     },
     {
-      "id": 140,
+      "id": 137,
       "name": "@peartube/prepare-media-playback",
       "request": {
         "name": "@peartube/prepare-media-playback-request",
@@ -1802,7 +1763,7 @@
       "version": 1
     },
     {
-      "id": 141,
+      "id": 138,
       "name": "@peartube/desktop-bootstrap",
       "request": {
         "name": "@peartube/desktop-bootstrap-request",
@@ -1815,7 +1776,7 @@
       "version": 1
     },
     {
-      "id": 142,
+      "id": 139,
       "name": "@peartube/desktop-shutdown",
       "request": {
         "name": "@peartube/desktop-shutdown-request",
@@ -1828,7 +1789,7 @@
       "version": 1
     },
     {
-      "id": 143,
+      "id": 140,
       "name": "@peartube/desktop-refresh-browse",
       "request": {
         "name": "@peartube/desktop-refresh-browse-request",
@@ -1841,7 +1802,7 @@
       "version": 1
     },
     {
-      "id": 144,
+      "id": 141,
       "name": "@peartube/ffmpeg-decode-available",
       "request": {
         "name": "@peartube/ffmpeg-decode-available-request",
@@ -1854,7 +1815,7 @@
       "version": 1
     },
     {
-      "id": 145,
+      "id": 142,
       "name": "@peartube/update-channel-avatar",
       "request": {
         "name": "@peartube/update-channel-avatar-request",
@@ -1867,7 +1828,7 @@
       "version": 1
     },
     {
-      "id": 146,
+      "id": 143,
       "name": "@peartube/transcode-start",
       "request": {
         "name": "@peartube/transcode-start-request",
@@ -1880,7 +1841,7 @@
       "version": 1
     },
     {
-      "id": 147,
+      "id": 144,
       "name": "@peartube/transcode-stop",
       "request": {
         "name": "@peartube/transcode-stop-request",
@@ -1893,7 +1854,7 @@
       "version": 1
     },
     {
-      "id": 148,
+      "id": 145,
       "name": "@peartube/transcode-status",
       "request": {
         "name": "@peartube/transcode-status-request",
@@ -1906,7 +1867,7 @@
       "version": 1
     },
     {
-      "id": 149,
+      "id": 146,
       "name": "@peartube/event-transcode-progress",
       "request": {
         "name": "@peartube/event-transcode-progress",
@@ -1916,7 +1877,7 @@
       "version": 1
     },
     {
-      "id": 150,
+      "id": 147,
       "name": "@peartube/get-participation-status",
       "request": {
         "name": "@peartube/get-participation-status-request",
@@ -1929,7 +1890,7 @@
       "version": 1
     },
     {
-      "id": 151,
+      "id": 148,
       "name": "@peartube/set-device-conditions",
       "request": {
         "name": "@peartube/set-device-conditions-request",
@@ -1942,7 +1903,7 @@
       "version": 1
     },
     {
-      "id": 152,
+      "id": 149,
       "name": "@peartube/suspend-network",
       "request": {
         "name": "@peartube/suspend-network-request",
@@ -1955,7 +1916,7 @@
       "version": 1
     },
     {
-      "id": 153,
+      "id": 150,
       "name": "@peartube/resume-network",
       "request": {
         "name": "@peartube/resume-network-request",
@@ -1968,7 +1929,7 @@
       "version": 1
     },
     {
-      "id": 154,
+      "id": 151,
       "name": "@peartube/set-playback-active",
       "request": {
         "name": "@peartube/set-playback-active-request",
@@ -1981,7 +1942,7 @@
       "version": 1
     },
     {
-      "id": 155,
+      "id": 152,
       "name": "@peartube/provider-search",
       "request": {
         "name": "@peartube/provider-search-request",
@@ -1994,7 +1955,7 @@
       "version": 1
     },
     {
-      "id": 156,
+      "id": 153,
       "name": "@peartube/resolve-provider-ref",
       "request": {
         "name": "@peartube/resolve-provider-ref-request",
@@ -2007,7 +1968,7 @@
       "version": 1
     },
     {
-      "id": 157,
+      "id": 154,
       "name": "@peartube/request-acquisition",
       "request": {
         "name": "@peartube/request-acquisition-request",
@@ -2020,7 +1981,7 @@
       "version": 1
     },
     {
-      "id": 158,
+      "id": 155,
       "name": "@peartube/attach-source-grant",
       "request": {
         "name": "@peartube/attach-source-grant-request",
@@ -2033,7 +1994,7 @@
       "version": 1
     },
     {
-      "id": 159,
+      "id": 156,
       "name": "@peartube/get-acquisition",
       "request": {
         "name": "@peartube/get-acquisition-request",
@@ -2046,7 +2007,7 @@
       "version": 1
     },
     {
-      "id": 160,
+      "id": 157,
       "name": "@peartube/list-acquisitions",
       "request": {
         "name": "@peartube/list-acquisitions-request",
@@ -2059,7 +2020,7 @@
       "version": 1
     },
     {
-      "id": 161,
+      "id": 158,
       "name": "@peartube/cancel-acquisition",
       "request": {
         "name": "@peartube/cancel-acquisition-request",
@@ -2072,7 +2033,7 @@
       "version": 1
     },
     {
-      "id": 162,
+      "id": 159,
       "name": "@peartube/get-provider-publication",
       "request": {
         "name": "@peartube/get-provider-publication-request",
@@ -2085,7 +2046,7 @@
       "version": 1
     },
     {
-      "id": 163,
+      "id": 160,
       "name": "@peartube/open-provider-stream",
       "request": {
         "name": "@peartube/open-provider-stream-request",
@@ -2098,7 +2059,7 @@
       "version": 1
     },
     {
-      "id": 164,
+      "id": 161,
       "name": "@peartube/get-provider-status",
       "request": {
         "name": "@peartube/get-provider-status-request",
@@ -2111,7 +2072,7 @@
       "version": 1
     },
     {
-      "id": 165,
+      "id": 162,
       "name": "@peartube/get-provider-policy",
       "request": {
         "name": "@peartube/get-provider-policy-request",
@@ -2124,7 +2085,7 @@
       "version": 1
     },
     {
-      "id": 166,
+      "id": 163,
       "name": "@peartube/set-provider-policy",
       "request": {
         "name": "@peartube/set-provider-policy-request",
@@ -2137,7 +2098,7 @@
       "version": 1
     },
     {
-      "id": 167,
+      "id": 164,
       "name": "@peartube/get-acquisition-policy",
       "request": {
         "name": "@peartube/get-acquisition-policy-request",
@@ -2150,7 +2111,7 @@
       "version": 1
     },
     {
-      "id": 168,
+      "id": 165,
       "name": "@peartube/set-acquisition-policy",
       "request": {
         "name": "@peartube/set-acquisition-policy-request",
@@ -2163,7 +2124,7 @@
       "version": 1
     },
     {
-      "id": 169,
+      "id": 166,
       "name": "@peartube/retry-acquisition",
       "request": {
         "name": "@peartube/retry-acquisition-request",
@@ -2176,7 +2137,7 @@
       "version": 1
     },
     {
-      "id": 170,
+      "id": 167,
       "name": "@peartube/event-acquisition-lifecycle",
       "request": {
         "name": "@peartube/acquisition-lifecycle-event-v1",

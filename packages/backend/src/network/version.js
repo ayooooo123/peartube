@@ -92,28 +92,17 @@ function assertCanonicalCapabilities(advertised, normalized) {
 }
 
 export function assertProtocolCompatibility(value = {}, options = {}) {
-  const present = COMPATIBILITY_FIELDS.filter(field => Object.hasOwn(value, field))
-  let source = value
   if (!hasCompleteAdvertisement(value)) {
-    if (present.length !== 0 || !options.legacyCompatibility) {
-      compatibilityError(
-        PROTOCOL_ERROR_CODES.ADVERTISEMENT_REQUIRED,
-        'complete protocol compatibility advertisement is required'
-      )
-    }
-    source = options.legacyCompatibility
-    if (!hasCompleteAdvertisement(source)) {
-      compatibilityError(
-        PROTOCOL_ERROR_CODES.ADVERTISEMENT_REQUIRED,
-        'explicit legacy compatibility declaration is incomplete'
-      )
-    }
+    compatibilityError(
+      PROTOCOL_ERROR_CODES.ADVERTISEMENT_REQUIRED,
+      'complete protocol compatibility advertisement is required'
+    )
   }
 
   let advertisement
   try {
-    advertisement = normalizeAdvertisement(source)
-    assertCanonicalCapabilities(source.requiredCapabilities, advertisement.requiredCapabilities)
+    advertisement = normalizeAdvertisement(value)
+    assertCanonicalCapabilities(value.requiredCapabilities, advertisement.requiredCapabilities)
   } catch (error) {
     if (error instanceof ProtocolCompatibilityError) throw error
     compatibilityError(

@@ -22,7 +22,6 @@ const indexServiceRecords = new WeakMap([[EMPTY_INDEX_SERVICES, EMPTY_INDEX_SERV
 export const DEFAULT_NETWORK_POLICY = Object.freeze({
   policyVersion: NETWORK_POLICY_VERSION,
   consentVersion: 0,
-  migrationRequired: true,
   effectiveRole: 'watch-only',
   permissions: Object.freeze({ contribute: false, archive: false }),
   contributeWatchedMedia: false,
@@ -96,8 +95,7 @@ function effectiveRole(contribute, archive) {
 
 export function evaluateNetworkRole(policy = {}) {
   const current = policy.policyVersion === NETWORK_POLICY_VERSION &&
-    policy.consentVersion === 1 &&
-    policy.migrationRequired !== true
+    policy.consentVersion === 1
   const contribute = current && policy.contributeWatchedMedia === true
   const archive = current && policy.archiveEnabled === true
   const contributionBudgetBytes = boundedBytes(policy.contributionBudgetBytes ?? 0, 'contributionBudgetBytes')
@@ -105,7 +103,6 @@ export function evaluateNetworkRole(policy = {}) {
   return Object.freeze({
     policyVersion: NETWORK_POLICY_VERSION,
     consentVersion: boundedBytes(policy.consentVersion ?? 0, 'consentVersion'),
-    migrationRequired: !current,
     effectiveRole: effectiveRole(contribute, archive),
     permissions: Object.freeze({ contribute, archive }),
     contributionBudgetBytes,
@@ -173,7 +170,6 @@ function isCompleteExplicitPolicySnapshot(value) {
     !Array.isArray(value) &&
     value.policyVersion === NETWORK_POLICY_VERSION &&
     value.consentVersion === 1 &&
-    value.migrationRequired === false &&
     typeof value.contributeWatchedMedia === 'boolean' &&
     typeof value.archiveEnabled === 'boolean' &&
     hasOwn(value, 'contributionBudgetBytes') &&
@@ -188,7 +184,6 @@ function normalizePolicySnapshot(input = {}, base = DEFAULT_NETWORK_POLICY) {
   return normalizeNetworkPolicy({
     ...normalized,
     consentVersion: 0,
-    migrationRequired: true,
     contributeWatchedMedia: false,
     archiveEnabled: false,
   }, DEFAULT_NETWORK_POLICY)
@@ -245,7 +240,6 @@ function networkPolicyWireFields(policy) {
   return {
     policyVersion: policy.policyVersion,
     consentVersion: policy.consentVersion,
-    migrationRequired: policy.migrationRequired,
     effectiveRole: policy.effectiveRole,
     permissions: { ...policy.permissions },
     contributeWatchedMedia: policy.contributeWatchedMedia,
@@ -297,9 +291,6 @@ export function normalizeNetworkPolicy(input = {}, base = DEFAULT_NETWORK_POLICY
   )
   policy.policyVersion = NETWORK_POLICY_VERSION
   policy.consentVersion = boundedBytes(input.consentVersion ?? policy.consentVersion ?? 0, 'consentVersion')
-  policy.migrationRequired = hasOwn(input, 'migrationRequired')
-    ? input.migrationRequired === true
-    : policy.migrationRequired === true
   policy.contributeWatchedMedia = hasOwn(input, 'contributeWatchedMedia')
     ? input.contributeWatchedMedia === true
     : policy.contributeWatchedMedia === true
@@ -307,7 +298,6 @@ export function normalizeNetworkPolicy(input = {}, base = DEFAULT_NETWORK_POLICY
     ? input.archiveEnabled === true
     : policy.archiveEnabled === true
   const role = evaluateNetworkRole(policy)
-  policy.migrationRequired = role.migrationRequired
   policy.effectiveRole = role.effectiveRole
   policy.permissions = role.permissions
   return policy
@@ -326,65 +316,6 @@ async function readPolicyStore(store) {
 async function writePolicyStore(store, policy) {
   if (typeof store?.put === 'function') await store.put(NETWORK_POLICY_KEY, policy)
   else if (typeof store?.set === 'function') await store.set(NETWORK_POLICY_KEY, policy)
-}
-
-// The first release shipped 'manual'/0 as the default, and a stored policy
-// outranks any later default - so a device that merely booted once would refuse
-// to serve a byte forever, with nothing in the UI to explain why. A policy that
-// still carries the exact retired pair was never a choice anyone made, so it
-// migrates. An operator who deliberately picked 'manual' has a ceiling they set
-// or a 'disabled' permission, and either one is left alone.
-const RETIRED_UPLOAD_DEFAULT = Object.freeze({ uploadPermission: 'manual', uploadCeilingBytes: 0 })
-
-// Participation modes arrived after the ceilings did, and the releases before
-// them shipped a 5 GiB cache with an unbounded upload ceiling. A stored policy
-// with no participation mode is from one of those releases, so a ceiling that
-// still matches the retired default adopts the preset and anything else is a
-// number someone set and is left exactly where it is.
-const RETIRED_CEILING_DEFAULTS = Object.freeze({
-  diskCeilingBytes: 5 * 1024 * 1024 * 1024,
-  uploadCeilingBytes: Number.MAX_SAFE_INTEGER,
-})
-
-// Every release before this one shipped 'local-only', and that value alone
-// cannot say whether an operator chose it or merely inherited it. A policy
-// stored before backgroundModeExplicit existed adopts the new default; from here
-// on the choice is recorded when it is made, so this migration runs exactly once
-// per device and never second-guesses an operator again.
-const RETIRED_BACKGROUND_MODE_DEFAULT = 'local-only'
-
-function migrateStoredNetworkPolicy(stored, base) {
-  const next = { ...stored }
-  if (stored.uploadPermission === RETIRED_UPLOAD_DEFAULT.uploadPermission &&
-    Number(stored.uploadCeilingBytes ?? 0) === RETIRED_UPLOAD_DEFAULT.uploadCeilingBytes) {
-    next.uploadPermission = base.uploadPermission
-    next.uploadCeilingBytes = base.uploadCeilingBytes
-  }
-  if (stored.participationMode === undefined) {
-    next.participationMode = base.participationMode
-    if (Number(stored.diskCeilingBytes) === RETIRED_CEILING_DEFAULTS.diskCeilingBytes) {
-      next.diskCeilingBytes = base.diskCeilingBytes
-    }
-    if (Number(next.uploadCeilingBytes) === RETIRED_CEILING_DEFAULTS.uploadCeilingBytes) {
-      next.uploadCeilingBytes = base.uploadCeilingBytes
-    }
-  }
-  // The explicit-ceiling flags arrived after the ceilings did. In a policy
-  // stored before them, a ceiling that does not match its mode's preset is the
-  // only surviving evidence that someone chose it, so it seeds the flag once
-  // and every later mode change reads the flag instead of guessing again.
-  const limits = participationLimitsFor(next.participationMode)
-  for (const { field, flag, limit } of CEILING_FIELDS) {
-    if (next[flag] === undefined) {
-      next[flag] = Number(next[field] ?? base[field]) !== limits[limit]
-    }
-  }
-  if (next.backgroundModeExplicit === undefined) {
-    next.backgroundModeExplicit = stored.backgroundMode !== undefined &&
-      stored.backgroundMode !== RETIRED_BACKGROUND_MODE_DEFAULT
-    if (!next.backgroundModeExplicit) next.backgroundMode = base.backgroundMode
-  }
-  return next
 }
 
 // Switching modes moves every ceiling that is still following its preset and
@@ -431,27 +362,13 @@ export async function loadNetworkPolicy({ store = new Map(), defaults = DEFAULT_
   const stored = await readPolicyStore(store)
   if (stored == null) return base
   try {
-    // A record from before the consent identity existed carries no answer to
-    // the contribution and archive questions. Its operational fields still
-    // migrate forward - a ceiling someone chose is not forfeited by a schema
-    // bump - while the consent identity resets to watch-only.
-    const migrated = migrateStoredNetworkPolicy(stored, base)
-    if (stored.policyVersion !== NETWORK_POLICY_VERSION) {
-      return normalizeNetworkPolicy({
-        ...migrated,
-        consentVersion: 0,
-        migrationRequired: true,
-        contributeWatchedMedia: false,
-        archiveEnabled: false,
-      }, base)
-    }
-    return normalizePolicySnapshot(migrated, base)
+    // A stored policy from a retired policy version is discarded rather than
+    // carried forward. The device starts from the shipped defaults, which
+    // means watch-only until consent is recorded again.
+    if (stored.policyVersion !== NETWORK_POLICY_VERSION) return base
+    return normalizePolicySnapshot(stored, base)
   } catch {
-    return normalizeNetworkPolicy({
-      ...DEFAULT_NETWORK_POLICY,
-      consentVersion: 0,
-      migrationRequired: true,
-    }, DEFAULT_NETWORK_POLICY)
+    return normalizeNetworkPolicy({ ...DEFAULT_NETWORK_POLICY, consentVersion: 0 }, DEFAULT_NETWORK_POLICY)
   }
 }
 
@@ -801,7 +718,6 @@ export function createNetworkPolicyRuntime({
       archiveEnabled: effective.permissions.archive,
       contributionBudgetBytes: effective.contributionBudgetBytes,
       archiveBudgetBytes: effective.archiveBudgetBytes,
-      migrationRequired: effective.migrationRequired,
     })
 
     if (effective.networkMode === 'pause-network' && !transportSuspended) {

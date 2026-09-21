@@ -16,6 +16,7 @@ import type {
   PublisherSignedRecord,
   PublisherSubmitResponse,
 } from '../shared/rpc-types'
+import { IPC_CAPABILITY_PARAM } from '../bun/ipc-channel'
 import {
   version as PKG_VERSION,
   productName as PKG_PRODUCT_NAME,
@@ -271,34 +272,40 @@ function sendPearCommand(t: 'pear:apply' | 'pear:restart'): Promise<void> {
   })
 }
 
-// Discover the IPC WebSocket port from the static server
-// The Bun process exposes it through a same-origin endpoint.
-async function discoverIpcPort(): Promise<number> {
+// ── Shell capability ────────────────────────────────────────────────────
+// The Bun process mints a capability per launch and hands it to this view in
+// the URL it navigates the window to — the one bootstrap no other page and no
+// other local process can observe. It is lifted out of the address and the
+// address rewritten before the Expo bundle loads, so the capability never
+// reaches router state, a link, or a log line.
+function takeIpcCapabilityFromLocation(): string {
   try {
-    const resp = await fetch('/__peartube_ipc_port')
-    if (resp.ok) {
-      const { port } = await resp.json()
-      const parsedPort = Number(port)
-      if (Number.isInteger(parsedPort) && parsedPort > 0) {
-        return parsedPort
-      }
-    }
-  } catch { /* IPC port endpoint unavailable; fall back to scanning */ }
-
-  // Fallback: scan ports near the static server
-  const staticPort = parseInt(globalThis.window.location.port, 10)
-  for (let offset = 1; offset <= 10; offset++) {
-    try {
-      const ws = new WebSocket(`ws://127.0.0.1:${staticPort + offset}`)
-      await new Promise<void>((resolve, reject) => {
-        ws.onopen = () => { ws.close(); resolve() }
-        ws.onerror = () => reject()
-        setTimeout(reject, 200)
-      })
-      return staticPort + offset
-    } catch { /* candidate port refused; try the next offset */ }
+    const url = new URL(globalThis.window.location.href)
+    const capability = url.searchParams.get(IPC_CAPABILITY_PARAM) ?? ''
+    if (!capability) return ''
+    url.searchParams.delete(IPC_CAPABILITY_PARAM)
+    globalThis.history.replaceState(null, '', url.pathname + url.search + url.hash)
+    return capability
+  } catch {
+    return ''
   }
-  throw new Error('Could not discover IPC WebSocket port')
+}
+
+const ipcCapability = takeIpcCapabilityFromLocation()
+
+// Discover the IPC WebSocket port from the static server
+// The Bun process exposes it through a same-origin endpoint. There is no
+// fallback scan: an unauthorized socket is refused before it is upgraded, so
+// probing neighbouring ports could only ever produce rejected connections.
+async function discoverIpcPort(): Promise<number> {
+  const resp = await fetch('/__peartube_ipc_port')
+  if (!resp.ok) throw new Error('IPC port endpoint returned ' + resp.status)
+  const { port } = await resp.json()
+  const parsedPort = Number(port)
+  if (!Number.isInteger(parsedPort) || parsedPort <= 0) {
+    throw new Error('IPC port endpoint returned no usable port')
+  }
+  return parsedPort
 }
 
 function getIpcPort(): Promise<number> {
@@ -360,6 +367,15 @@ const bridge = {
     if (ipcSocket?.readyState === WebSocket.OPEN) return true
     if (ipcConnectPromise) return ipcConnectPromise
 
+    // Without the launch capability the upgrade will be refused, so say why
+    // instead of burning the 10s handshake timeout. Only the shell's own
+    // bootstrap URL can supply one; a page that loaded some other way is not
+    // the trusted view.
+    if (!ipcCapability) {
+      console.error('[bridge] No shell capability in the bootstrap URL — this page is not the PearTube shell view')
+      return false
+    }
+
     // Connect the IPC WebSocket — the Bun process spawns the worker on connect
     ipcConnectPromise = (async () => {
       try {
@@ -367,7 +383,11 @@ const bridge = {
         console.log('[bridge] Connecting IPC WebSocket on port', port)
 
         return new Promise<boolean>((resolve) => {
-          const ws = new WebSocket(`ws://127.0.0.1:${port}`)
+          // The capability rides the handshake URL: a browser WebSocket
+          // cannot set request headers.
+          const ws = new WebSocket(
+            `ws://127.0.0.1:${port}/?${IPC_CAPABILITY_PARAM}=${encodeURIComponent(ipcCapability)}`,
+          )
           ws.binaryType = 'arraybuffer'
           let settled = false
           let didOpen = false

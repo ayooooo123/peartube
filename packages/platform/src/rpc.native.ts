@@ -30,11 +30,7 @@ import type {
 // Screens render update state; they read the contract from the RPC module they
 // already import, not from the shared internals.
 export type { PearUpdateEvent, PearUpdateInfo, PearUpdateState, PearUpdatesRpc } from './rpc.shared';
-import {
-  createNativeRunner,
-  runNativeLegacyPublisherRootPreflight,
-} from './runner.native';
-import type { LegacyPublisherRootMigrationCallback } from './runner.native';
+import { createNativeRunner } from './runner.native';
 import { createJsonFrameParser, encodeJsonFrame } from './ipc-json-framing.js';
 import {
   createBundleCachePaths,
@@ -49,10 +45,6 @@ declare const Buffer: any;
 /** Metro/React Native build flag; absent outside the app bundle. */
 declare const __DEV__: boolean | undefined;
 
-// FileSystem from expo-file-system
-declare const FileSystem: {
-  documentDirectory: string | null;
-};
 
 // Module state
 let _blobServerPort: number | null = null;
@@ -418,18 +410,56 @@ type CastDeviceLostCallback = (data: { deviceId: string }) => void;
 type CastPlaybackStateCallback = (data: { state: string; error?: string }) => void;
 type CastTimeUpdateCallback = (data: { currentTime: number }) => void;
 
-function resolveStorageUri(FS: any, FSLegacy: any, configuredPath?: string): string {
+type ExpoFile = {
+  readonly uri: string;
+  readonly exists: boolean;
+  text(): Promise<string>;
+  write(content: string): void;
+  delete(): void;
+};
+
+type ExpoFileSystemModule = {
+  File?: new (uri: string) => ExpoFile;
+  Paths?: {
+    document?: { uri?: string };
+    cache?: { uri?: string };
+  };
+};
+
+function openFile(FS: ExpoFileSystemModule | null | undefined, uri: string): ExpoFile | null {
+  const FileCtor = FS?.File;
+  if (typeof FileCtor !== 'function') return null;
+  try {
+    return new FileCtor(uri);
+  } catch {
+    return null;
+  }
+}
+
+function fileExists(FS: ExpoFileSystemModule, uri: string): boolean {
+  const file = openFile(FS, uri);
+  if (!file) return false;
+  try {
+    return file.exists === true;
+  } catch {
+    return false;
+  }
+}
+
+function deleteFileIfPresent(FS: ExpoFileSystemModule, uri: string): void {
+  const file = openFile(FS, uri);
+  if (!file || file.exists !== true) return;
+  file.delete();
+}
+
+function resolveStorageUri(FS: ExpoFileSystemModule, configuredPath?: string): string {
   if (configuredPath && configuredPath.length > 0) {
     return configuredPath.startsWith('file://') ? configuredPath : `file://${configuredPath}`;
   }
 
   const candidates = [
     FS?.Paths?.document?.uri,
-    FSLegacy?.documentDirectory,
-    FS?.documentDirectory,
     FS?.Paths?.cache?.uri,
-    FSLegacy?.cacheDirectory,
-    FS?.cacheDirectory,
   ];
 
   for (const candidate of candidates) {
@@ -441,26 +471,32 @@ function resolveStorageUri(FS: any, FSLegacy: any, configuredPath?: string): str
   throw new Error('No writable storage directory available from expo-file-system');
 }
 
-function normalizeFsModule(mod: any): any {
-  return mod?.default ?? mod;
+function normalizeFsModule(mod: unknown): ExpoFileSystemModule {
+  // Metro hands back either the module namespace or a CJS interop wrapper whose
+  // real exports hang off `.default`; both shapes expose the same surface.
+  const namespace = mod as ExpoFileSystemModule & { default?: ExpoFileSystemModule };
+  return namespace?.default ?? namespace;
 }
 
-async function readOptionalTextAsync(FSLegacy: any, uri: string, encoding: string): Promise<string | null> {
-  if (typeof FSLegacy?.readAsStringAsync !== 'function') return null;
+async function readOptionalTextAsync(FS: ExpoFileSystemModule, uri: string): Promise<string | null> {
+  const file = openFile(FS, uri);
+  if (!file) return null;
 
   try {
-    const value = await FSLegacy.readAsStringAsync(uri, { encoding });
+    const value = await file.text();
     return typeof value === 'string' ? value.trim() : null;
   } catch {
     return null;
   }
 }
 
-async function writeOptionalTextAsync(FSLegacy: any, uri: string, contents: string, encoding: string): Promise<boolean> {
-  if (typeof FSLegacy?.writeAsStringAsync !== 'function') return false;
+// `File.write` creates the file when it is missing on both iOS and Android.
+function writeOptionalText(FS: ExpoFileSystemModule, uri: string, contents: string): boolean {
+  const file = openFile(FS, uri);
+  if (!file) return false;
 
   try {
-    await FSLegacy.writeAsStringAsync(uri, contents, { encoding });
+    file.write(contents);
     return true;
   } catch {
     return false;
@@ -468,38 +504,19 @@ async function writeOptionalTextAsync(FSLegacy: any, uri: string, contents: stri
 }
 
 async function inspectPersistedBundleCache(
-  FSLegacy: unknown,
+  FS: ExpoFileSystemModule,
   backendBundleUri: string,
   downloaderWorkerUri: string,
   versionMarkerUri: string,
-  encoding: string,
 ): Promise<{
   backendBundleExists: boolean;
   downloaderWorkerExists: boolean;
   cachedVersionKey: string | null;
 }> {
-  const legacy = FSLegacy as {
-    getInfoAsync?: (uri: string) => Promise<{ exists?: boolean } | null | undefined>;
-  } | null | undefined;
-  const getInfoAsync = legacy?.getInfoAsync;
-  if (typeof getInfoAsync !== 'function') {
-    return {
-      backendBundleExists: false,
-      downloaderWorkerExists: false,
-      cachedVersionKey: null,
-    };
-  }
-
-  const [backendResult, downloaderResult] = await Promise.all([
-    getInfoAsync(backendBundleUri),
-    getInfoAsync(downloaderWorkerUri),
-  ]);
-
-  const cachedVersionKey = await readOptionalTextAsync(FSLegacy, versionMarkerUri, encoding);
   return {
-    backendBundleExists: backendResult?.exists === true,
-    downloaderWorkerExists: downloaderResult?.exists === true,
-    cachedVersionKey,
+    backendBundleExists: fileExists(FS, backendBundleUri),
+    downloaderWorkerExists: fileExists(FS, downloaderWorkerUri),
+    cachedVersionKey: await readOptionalTextAsync(FS, versionMarkerUri),
   };
 }
 
@@ -521,9 +538,8 @@ async function resolveConfiguredBackendSource(config: {
 }
 
 async function resolveDownloaderWorkerPath(
-  FSLegacy: unknown,
+  FS: ExpoFileSystemModule,
   downloaderWorkerUri: string,
-  encoding: string,
   config: {
     downloaderWorkerSource?: string;
     loadDownloaderWorkerSource?: () => Promise<string | null | undefined>;
@@ -539,26 +555,16 @@ async function resolveDownloaderWorkerPath(
     downloaderWorkerSource = typeof loaded === 'string' ? loaded : '';
   }
 
-  if (downloaderWorkerSource) {
-    const wroteWorker = await writeOptionalTextAsync(
-      FSLegacy,
-      downloaderWorkerUri,
-      downloaderWorkerSource,
-      encoding,
-    );
-
-    if (wroteWorker) {
-      return normalizeBundleFilePath(downloaderWorkerUri);
-    }
+  if (downloaderWorkerSource && writeOptionalText(FS, downloaderWorkerUri, downloaderWorkerSource)) {
+    return normalizeBundleFilePath(downloaderWorkerUri);
   }
 
   return '';
 }
 
 async function resolveBundleLaunchFiles(
-  FSLegacy: any,
+  FS: ExpoFileSystemModule,
   storageUri: string,
-  encoding: string,
   config: {
     backendSource?: string;
     downloaderWorkerSource?: string;
@@ -582,11 +588,10 @@ async function resolveBundleLaunchFiles(
   );
 
   const cacheState = await inspectPersistedBundleCache(
-    FSLegacy,
+    FS,
     backendBundleUri,
     downloaderWorkerUri,
     versionMarkerUri,
-    encoding,
   );
 
   const expectedVersionKey = config.backendVersionKey ?? '';
@@ -608,16 +613,16 @@ async function resolveBundleLaunchFiles(
 
   const backendSource = await resolveConfiguredBackendSource(config);
 
-  const backendPath = await writeOptionalTextAsync(FSLegacy, backendBundleUri, backendSource, encoding)
+  const backendPath = writeOptionalText(FS, backendBundleUri, backendSource)
     ? normalizeBundleFilePath(backendBundleUri)
     : '';
 
   const downloaderWorkerPath = needsDownloaderWorker
-    ? await resolveDownloaderWorkerPath(FSLegacy, downloaderWorkerUri, encoding, config)
+    ? await resolveDownloaderWorkerPath(FS, downloaderWorkerUri, config)
     : '';
 
   if (backendPath && expectedVersionKey) {
-    await writeOptionalTextAsync(FSLegacy, versionMarkerUri, expectedVersionKey, encoding);
+    writeOptionalText(FS, versionMarkerUri, expectedVersionKey);
   }
 
   return {
@@ -636,17 +641,15 @@ export async function isHeadlessCastActive(): Promise<boolean> {
   try {
     // Get the storage path the same way initPlatformRPC does
     const FS = normalizeFsModule(require('expo-file-system'));
-    const FSLegacy = normalizeFsModule(require('expo-file-system/legacy'));
-    const storageUri = resolveStorageUri(FS, FSLegacy);
+    const storageUri = resolveStorageUri(FS);
     const flagUri = storageUri.endsWith('/')
       ? `${storageUri}.peartube-cast-headless`
       : `${storageUri}/.peartube-cast-headless`;
-    const getInfoAsync = FSLegacy?.getInfoAsync;
-    if (typeof getInfoAsync !== 'function') {
-      throw new Error('expo-file-system/legacy getInfoAsync is unavailable');
+    const flagFile = openFile(FS, flagUri);
+    if (!flagFile) {
+      throw new Error('expo-file-system File constructor is unavailable');
     }
-    const info = await getInfoAsync(flagUri);
-    return info.exists === true;
+    return flagFile.exists === true;
   } catch (err) {
     console.error('[Platform RPC] isHeadlessCastActive error:', err);
     return false;
@@ -727,7 +730,7 @@ async function canReuseMainBridge(reason: string): Promise<boolean> {
 }
 async function cleanupHeadlessCastIfActive(
   WorkletClass: BareWorkletCtor,
-  FSLegacy: { deleteAsync?: (uri: string, options?: { idempotent?: boolean }) => Promise<void> } | null | undefined,
+  FS: ExpoFileSystemModule,
   storageUri: string,
 ): Promise<void> {
   const headlessCastActive = await isHeadlessCastActive();
@@ -749,7 +752,7 @@ async function cleanupHeadlessCastIfActive(
   const flagUri = `${storageUri.endsWith('/') ? storageUri : storageUri + '/'}${'.peartube-cast-headless'}`;
 
   try {
-    await FSLegacy?.deleteAsync?.(lockUri, { idempotent: true });
+    deleteFileIfPresent(FS, lockUri);
     console.log('[CastDiag] Deleted stale Corestore LOCK file');
   } catch (e: unknown) {
     const message = e instanceof Error ? e.message : String(e);
@@ -757,7 +760,7 @@ async function cleanupHeadlessCastIfActive(
   }
 
   try {
-    await FSLegacy?.deleteAsync?.(flagUri, { idempotent: true });
+    deleteFileIfPresent(FS, flagUri);
     console.log('[CastDiag] Cleared stale headless cast flag file');
   } catch (e: unknown) {
     const message = e instanceof Error ? e.message : String(e);
@@ -815,32 +818,6 @@ function buildNativeWorkerArgs(
   ];
 }
 
-async function runLegacyPublisherRootMigration(
-  WorkletClass: BareWorkletCtor,
-  backendPath: string,
-  backendSource: string,
-  storagePath: string,
-  migrateLegacyPublisherRoot?: LegacyPublisherRootMigrationCallback,
-): Promise<void> {
-  if (typeof migrateLegacyPublisherRoot !== 'function') return;
-
-  try {
-    const summary = await runNativeLegacyPublisherRootPreflight({
-      WorkletCtor: WorkletClass,
-      backendPath,
-      backendSource: backendPath ? '' : backendSource,
-      storagePath,
-      migrateLegacyPublisherRoot,
-    });
-    if (summary.status === 'complete' && summary.migrated > 0) {
-      console.log('[Platform RPC] Legacy publisher-root migration completed:', summary.migrated);
-    }
-  } catch {
-    console.warn('[Platform RPC] Legacy publisher-root preflight unavailable');
-  }
-}
-
-
 /**
  * Initialize platform RPC for mobile
  *
@@ -856,8 +833,6 @@ export async function initPlatformRPC(config: {
   loadDownloaderWorkerSource?: () => Promise<string | null | undefined>;
   storagePath?: string;
   publisherSigner?: PublisherSignerBridgeLike | null;
-  migrateLegacyPublisherRoot?: LegacyPublisherRootMigrationCallback;
-
   launchOptions?: {
     network?: Record<string, unknown>;
     swarmOptions?: Record<string, unknown>;
@@ -887,11 +862,9 @@ export async function initPlatformRPC(config: {
     // Get dependencies at runtime
     const WorkletClass = require('react-native-bare-kit').Worklet as BareWorkletCtor;
     const FS = normalizeFsModule(require('expo-file-system'));
-    const FSLegacy = normalizeFsModule(require('expo-file-system/legacy'));
-    const encoding = FSLegacy.EncodingType?.UTF8 || FS.EncodingType?.UTF8 || 'utf8';
 
     // Determine storage path
-    const storageUri = resolveStorageUri(FS, FSLegacy, config.storagePath);
+    const storageUri = resolveStorageUri(FS, config.storagePath);
     let storagePath = storageUri;
     if (storagePath.startsWith('file://')) {
       storagePath = storagePath.slice(7);
@@ -905,13 +878,13 @@ export async function initPlatformRPC(config: {
 
     console.log('[Platform RPC] Initializing with storage:', storagePath);
 
-    await cleanupHeadlessCastIfActive(WorkletClass, FSLegacy, storageUri);
+    await cleanupHeadlessCastIfActive(WorkletClass, FS, storageUri);
 
     const {
       backendPath,
       backendSource,
       downloaderWorkerPath,
-    } = await resolveBundleLaunchFiles(FSLegacy, storageUri, encoding, config);
+    } = await resolveBundleLaunchFiles(FS, storageUri, config);
 
     nativeRuntimeConfig.backendPath = backendPath;
     nativeRuntimeConfig.backendSource = backendPath ? '' : backendSource;
@@ -926,14 +899,6 @@ export async function initPlatformRPC(config: {
     if (downloaderWorkerPath) {
       console.log('[Platform RPC] Downloader worker ready:', downloaderWorkerPath);
     }
-
-    await runLegacyPublisherRootMigration(
-      WorkletClass,
-      backendPath,
-      backendSource,
-      storagePath,
-      config.migrateLegacyPublisherRoot,
-    );
 
     _startupState = 'starting-worklet';
     await mainBridge.init();
@@ -1009,6 +974,7 @@ export function getBlobServerPort(): number | null {
 export function getHRPCInstance(): any {
   return mainBridge.getRpc();
 }
+
 
 // Helper to ensure RPC is ready
 function ensureRPC() {

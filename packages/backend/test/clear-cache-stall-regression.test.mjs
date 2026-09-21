@@ -86,7 +86,7 @@ test('clearCache schedules compaction and re-checks playback before compacting',
       timer.cleared = true
     }
   })
-  await manager.applyNetworkPolicy({ contributeWatchedMedia: true, contributionBudgetBytes: 20 * GB, migrationRequired: false })
+  await manager.applyNetworkPolicy({ contributeWatchedMedia: true, contributionBudgetBytes: 20 * GB })
   await manager.addSeed('drive-a', 'videos/watched.mp4', 'watched', {
     byteLength: 2 * GB,
     blobId: '3:5:0:1234',

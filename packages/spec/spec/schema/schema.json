@@ -1,5 +1,5 @@
 {
-  "version": 2,
+  "version": 1,
   "schema": [
     {
       "name": "empty",
@@ -6037,288 +6037,6 @@
       ]
     },
     {
-      "name": "get-migration-status-request",
-      "namespace": "peartube",
-      "compact": false,
-      "flagsPosition": -1,
-      "fields": [
-        {
-          "name": "migrationId",
-          "required": true,
-          "type": "string",
-          "version": 1
-        }
-      ]
-    },
-    {
-      "name": "get-migration-status-response",
-      "namespace": "peartube",
-      "compact": false,
-      "flagsPosition": 0,
-      "fields": [
-        {
-          "name": "success",
-          "required": false,
-          "type": "bool",
-          "version": 1
-        },
-        {
-          "name": "migrationId",
-          "required": true,
-          "type": "string",
-          "version": 1
-        },
-        {
-          "name": "state",
-          "required": true,
-          "type": "string",
-          "version": 1
-        },
-        {
-          "name": "version",
-          "required": true,
-          "type": "uint",
-          "version": 1
-        },
-        {
-          "name": "processedCount",
-          "required": true,
-          "type": "uint",
-          "version": 1
-        },
-        {
-          "name": "importedCount",
-          "required": true,
-          "type": "uint",
-          "version": 1
-        },
-        {
-          "name": "skippedCount",
-          "required": true,
-          "type": "uint",
-          "version": 1
-        },
-        {
-          "name": "quarantinedCount",
-          "required": true,
-          "type": "uint",
-          "version": 1
-        },
-        {
-          "name": "unsupportedCount",
-          "required": true,
-          "type": "uint",
-          "version": 1
-        },
-        {
-          "name": "remainingCount",
-          "required": true,
-          "type": "uint",
-          "version": 1
-        },
-        {
-          "name": "retryable",
-          "required": false,
-          "type": "bool",
-          "version": 1
-        },
-        {
-          "name": "updatedAt",
-          "required": true,
-          "type": "uint",
-          "version": 1
-        },
-        {
-          "name": "errorCode",
-          "required": false,
-          "type": "string",
-          "version": 1
-        },
-        {
-          "name": "errorMessage",
-          "required": false,
-          "type": "string",
-          "version": 1
-        },
-        {
-          "name": "reportDigest",
-          "required": false,
-          "type": "string",
-          "version": 1
-        }
-      ]
-    },
-    {
-      "name": "retry-migration-request",
-      "namespace": "peartube",
-      "compact": false,
-      "flagsPosition": -1,
-      "fields": [
-        {
-          "name": "migrationId",
-          "required": true,
-          "type": "string",
-          "version": 1
-        }
-      ]
-    },
-    {
-      "name": "retry-migration-response",
-      "namespace": "peartube",
-      "compact": false,
-      "flagsPosition": 0,
-      "fields": [
-        {
-          "name": "success",
-          "required": false,
-          "type": "bool",
-          "version": 1
-        },
-        {
-          "name": "migrationId",
-          "required": true,
-          "type": "string",
-          "version": 1
-        },
-        {
-          "name": "state",
-          "required": true,
-          "type": "string",
-          "version": 1
-        },
-        {
-          "name": "version",
-          "required": true,
-          "type": "uint",
-          "version": 1
-        },
-        {
-          "name": "processedCount",
-          "required": true,
-          "type": "uint",
-          "version": 1
-        },
-        {
-          "name": "importedCount",
-          "required": true,
-          "type": "uint",
-          "version": 1
-        },
-        {
-          "name": "skippedCount",
-          "required": true,
-          "type": "uint",
-          "version": 1
-        },
-        {
-          "name": "quarantinedCount",
-          "required": true,
-          "type": "uint",
-          "version": 1
-        },
-        {
-          "name": "unsupportedCount",
-          "required": true,
-          "type": "uint",
-          "version": 1
-        },
-        {
-          "name": "remainingCount",
-          "required": true,
-          "type": "uint",
-          "version": 1
-        },
-        {
-          "name": "retryable",
-          "required": false,
-          "type": "bool",
-          "version": 1
-        },
-        {
-          "name": "updatedAt",
-          "required": true,
-          "type": "uint",
-          "version": 1
-        },
-        {
-          "name": "joined",
-          "required": false,
-          "type": "bool",
-          "version": 1
-        },
-        {
-          "name": "errorCode",
-          "required": false,
-          "type": "string",
-          "version": 1
-        },
-        {
-          "name": "errorMessage",
-          "required": false,
-          "type": "string",
-          "version": 1
-        },
-        {
-          "name": "reportDigest",
-          "required": false,
-          "type": "string",
-          "version": 1
-        }
-      ]
-    },
-    {
-      "name": "export-migration-report-request",
-      "namespace": "peartube",
-      "compact": false,
-      "flagsPosition": -1,
-      "fields": [
-        {
-          "name": "migrationId",
-          "required": true,
-          "type": "string",
-          "version": 1
-        }
-      ]
-    },
-    {
-      "name": "export-migration-report-response",
-      "namespace": "peartube",
-      "compact": false,
-      "flagsPosition": 0,
-      "fields": [
-        {
-          "name": "success",
-          "required": false,
-          "type": "bool",
-          "version": 1
-        },
-        {
-          "name": "migrationId",
-          "required": true,
-          "type": "string",
-          "version": 1
-        },
-        {
-          "name": "reportBytes",
-          "required": false,
-          "type": "buffer",
-          "version": 1
-        },
-        {
-          "name": "reportDigest",
-          "required": false,
-          "type": "string",
-          "version": 1
-        },
-        {
-          "name": "errorCode",
-          "required": false,
-          "type": "string",
-          "version": 1
-        }
-      ]
-    },
-    {
       "name": "get-publisher-device-status-request",
       "namespace": "peartube",
       "compact": false,
@@ -6426,12 +6144,6 @@
           "name": "revocationCutoff",
           "required": false,
           "type": "uint",
-          "version": 1
-        },
-        {
-          "name": "legacyImportState",
-          "required": false,
-          "type": "string",
           "version": 1
         }
       ]
@@ -10418,44 +10130,6 @@
       ]
     },
     {
-      "name": "channel-op-migrate-schema",
-      "namespace": "peartube",
-      "compact": false,
-      "flagsPosition": 4,
-      "fields": [
-        {
-          "name": "type",
-          "required": true,
-          "type": "string",
-          "version": 1
-        },
-        {
-          "name": "schemaVersion",
-          "required": true,
-          "type": "uint",
-          "version": 1
-        },
-        {
-          "name": "fromVersion",
-          "required": true,
-          "type": "uint",
-          "version": 1
-        },
-        {
-          "name": "toVersion",
-          "required": true,
-          "type": "uint",
-          "version": 1
-        },
-        {
-          "name": "migratedAt",
-          "required": false,
-          "type": "uint",
-          "version": 1
-        }
-      ]
-    },
-    {
       "name": "add-comment-request",
       "namespace": "peartube",
       "compact": false,
@@ -12376,7 +12050,63 @@
           "name": "sourceFileName",
           "required": false,
           "type": "string",
-          "version": 2
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "provider-media-context-v1",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": 0,
+      "fields": [
+        {
+          "name": "kind",
+          "required": false,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "namespace",
+          "required": false,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "identifier",
+          "required": false,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "title",
+          "required": false,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "season",
+          "required": false,
+          "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "episode",
+          "required": false,
+          "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "releaseYear",
+          "required": false,
+          "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "workEntityId",
+          "required": false,
+          "type": "string",
+          "version": 1
         }
       ]
     },
@@ -12474,19 +12204,19 @@
           "name": "title",
           "required": false,
           "type": "string",
-          "version": 2
+          "version": 1
         },
         {
           "name": "sourceFileName",
           "required": false,
           "type": "string",
-          "version": 2
+          "version": 1
         },
         {
           "name": "mediaContext",
           "required": false,
           "type": "@peartube/provider-media-context-v1",
-          "version": 2
+          "version": 1
         }
       ]
     },
@@ -13173,12 +12903,6 @@
           "version": 1
         },
         {
-          "name": "migrationRequired",
-          "required": false,
-          "type": "bool",
-          "version": 1
-        },
-        {
           "name": "enabled",
           "required": false,
           "type": "bool",
@@ -13472,62 +13196,6 @@
           "required": false,
           "type": "string",
           "version": 1
-        }
-      ]
-    },
-    {
-      "name": "provider-media-context-v1",
-      "namespace": "peartube",
-      "compact": false,
-      "flagsPosition": 0,
-      "fields": [
-        {
-          "name": "kind",
-          "required": false,
-          "type": "string",
-          "version": 2
-        },
-        {
-          "name": "namespace",
-          "required": false,
-          "type": "string",
-          "version": 2
-        },
-        {
-          "name": "identifier",
-          "required": false,
-          "type": "string",
-          "version": 2
-        },
-        {
-          "name": "title",
-          "required": false,
-          "type": "string",
-          "version": 2
-        },
-        {
-          "name": "season",
-          "required": false,
-          "type": "uint",
-          "version": 2
-        },
-        {
-          "name": "episode",
-          "required": false,
-          "type": "uint",
-          "version": 2
-        },
-        {
-          "name": "releaseYear",
-          "required": false,
-          "type": "uint",
-          "version": 2
-        },
-        {
-          "name": "workEntityId",
-          "required": false,
-          "type": "string",
-          "version": 2
         }
       ]
     }

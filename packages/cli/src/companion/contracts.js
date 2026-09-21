@@ -34,7 +34,6 @@ const CONTRIBUTE_ACQUISITION_FIELDS = new Set(['idempotencyKey', 'title', 'selec
 const POLICY_FIELDS = new Set([
   'policyVersion',
   'consentVersion',
-  'migrationRequired',
   'contributeWatchedMedia',
   'archiveEnabled',
   'contributionBudgetBytes',
@@ -45,7 +44,6 @@ const POLICY_FIELDS = new Set([
 const ACQUISITION_POLICY_FIELDS = new Set([
   'policyVersion',
   'consentVersion',
-  'migrationRequired',
   'enabled',
   'acceptPublicRequests',
   'requesterMode',
@@ -502,7 +500,7 @@ export function decodeAcquisitionPolicyBody (body) {
   }
   if (value.policyVersion !== 1) throw new CompanionContractError(400, 'INVALID_FIELD', 'Invalid policyVersion', 'policyVersion')
   if (value.consentVersion !== 1) throw new CompanionContractError(400, 'INVALID_FIELD', 'Invalid consentVersion', 'consentVersion')
-  for (const field of ['migrationRequired', 'enabled', 'acceptPublicRequests']) {
+  for (const field of ['enabled', 'acceptPublicRequests']) {
     if (typeof value[field] !== 'boolean') {
       throw new CompanionContractError(400, 'INVALID_FIELD', `Invalid ${field}`, field)
     }
@@ -560,7 +558,6 @@ export function decodePolicyControlBody (body) {
   }
   if (value.policyVersion !== 2) throw new CompanionContractError(400, 'INVALID_FIELD', 'Invalid policyVersion', 'policyVersion')
   if (value.consentVersion !== 1) throw new CompanionContractError(400, 'INVALID_FIELD', 'Invalid consentVersion', 'consentVersion')
-  if (value.migrationRequired !== false) throw new CompanionContractError(400, 'INVALID_FIELD', 'Current consent is required', 'migrationRequired')
   if (typeof value.contributeWatchedMedia !== 'boolean') throw new CompanionContractError(400, 'INVALID_FIELD', 'Invalid contributeWatchedMedia', 'contributeWatchedMedia')
   if (typeof value.archiveEnabled !== 'boolean') throw new CompanionContractError(400, 'INVALID_FIELD', 'Invalid archiveEnabled', 'archiveEnabled')
   for (const field of ['contributionBudgetBytes', 'archiveBudgetBytes', 'uploadCeilingBytes']) {

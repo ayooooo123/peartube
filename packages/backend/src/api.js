@@ -990,8 +990,8 @@ export function createApi(rawOptions = {}) {
     try {
       const identities = await readStoredIdentityRecords(ctx.metaDb)
       if (identities.some((i) => i?.channelKey === channelKey || i?.driveKey === channelKey)) {
-        // Backfill marker so future checks are fast
-        try { await ctx.metaSubspaces.channelKinds.put(channelKey, { kind: 'autobase', backfilledAt: Date.now() }) } catch { /* best effort */ }
+        // Memoize the kind so future checks skip the identity scan.
+        try { await markAsMultiWriterChannel(channelKey) } catch { /* best effort */ }
         return true
       }
     } catch { /* best effort */ }
@@ -4142,8 +4142,8 @@ export function createApi(rawOptions = {}) {
      * @param {string} driveKey
      * @param {string} videoPath
      * @param {string} [publicBeeKey] - PublicBee key for fast viewer access
-     * @param {string} [blobId] - Legacy direct blobId
-     * @param {string} [blobsCoreKey] - Legacy direct blobsCoreKey
+     * @param {string} [blobId] - Direct hyperblobs id (channel with no publisher catalog)
+     * @param {string} [blobsCoreKey] - Direct hyperblobs core key
      * @param {string} [mimeType] - MIME type
      * @returns {Promise<{url: string}>}
      */
@@ -4160,7 +4160,7 @@ export function createApi(rawOptions = {}) {
 
       const playbackBlobRef = resolvePlaybackBlobRef(driveKey, videoPath, publicBeeKey, blobId, blobsCoreKey, mimeType)
       if (playbackBlobRef?.blobId && playbackBlobRef?.blobsCoreKey) {
-        console.log('[API] getVideoUrl: immutable publication absent; using legacy direct blobId/blobsCoreKey')
+        console.log('[API] getVideoUrl: no immutable publication; using direct blobId/blobsCoreKey')
         return blobPlayback.resolveDirectBlobUrl({
           blobsCoreKey: playbackBlobRef.blobsCoreKey,
           blobId: playbackBlobRef.blobId,

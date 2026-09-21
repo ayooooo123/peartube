@@ -328,6 +328,25 @@ export function isCompanionStreamRoute (rawUrl) {
   }
 }
 
+// A stream URL carries its own authority: the `cap` token in the query is the
+// grant, minted per publication and rendition for one client and consumed
+// once. Nothing ambient authorizes the read - not the socket address, not a
+// cookie - so a foreign page has nothing to borrow and CSRF protection buys
+// the route nothing while breaking the browser media elements that are its
+// real clients. Only the safe verbs qualify: anything else on this path is
+// not a media read and stays behind the transport guards.
+export function isCompanionStreamCapabilityRead (method, rawUrl) {
+  const verb = typeof method === 'string' ? method.toUpperCase() : ''
+  if (verb !== 'GET' && verb !== 'HEAD') return false
+  try {
+    const url = parseUrl(rawUrl)
+    if (!STREAM_PATH.test(url.pathname)) return false
+    return url.searchParams.getAll('cap').length === 1
+  } catch {
+    return false
+  }
+}
+
 export function createCompanionStreamRoute ({
   capabilities,
   service = null,
@@ -423,5 +442,5 @@ export function createCompanionStreamRoute ({
     return true
   }
 
-  return Object.freeze({ handle, matches: isCompanionStreamRoute })
+  return Object.freeze({ handle, matches: isCompanionStreamRoute, matchesCapabilityRead: isCompanionStreamCapabilityRead })
 }

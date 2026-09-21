@@ -24,6 +24,11 @@ services:
       PEARTUBE_ARCHIVE_UI_ENABLED: "true"
       PEARTUBE_ARCHIVE_UI_HOST: 0.0.0.0
       PEARTUBE_ARCHIVE_UI_PORT: "8174"
+      # Only needed behind a reverse proxy or on a custom hostname: the console
+      # refuses a mutating request whose Host is not one of the addresses it
+      # actually listens on, which is what stops a DNS-rebinding page from
+      # driving it. Comma-separated host[:port].
+      # PEARTUBE_ARCHIVE_UI_TRUSTED_HOSTS: relay.example.com,relay.example.com:8174
       # Companion API v2 (HTTP machine API on port 8174, open by default).
       PEARTUBE_COMPANION_ENABLED: "true"
       PEARTUBE_COMPANION_AUTH: "false"

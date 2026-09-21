@@ -1,4 +1,3 @@
-/* eslint-disable no-empty */
 /**
  * Pear OTA updater lifecycle, mobile worklet side.
  *
@@ -12,6 +11,7 @@
  * running code stays the old build until the app restarts.
  */
 import PearRuntime from 'pear-mobile'
+import { attachUpdateDriveReplication } from './pear-update-replication.mjs'
 
 /**
  * `pear-runtime-updater` samples ONE delay at construction — `random(0, delay)`
@@ -66,6 +66,62 @@ function inertUpdates({ productName, version, upgrade, reason, log }) {
 }
 
 /**
+ * Upstream treats store and swarm as one option: passing only one throws, and
+ * a store without a swarm would silently never replicate. Sharing PearTube's
+ * pair keeps a phone on a single swarm instead of opening a second one.
+ */
+function canShareRuntimeResources(store, swarm, log) {
+  const shared = Boolean(store) && Boolean(swarm) && store.closed !== true && swarm.destroyed !== true
+  if (!shared && (Boolean(store) || Boolean(swarm))) {
+    log('[pear-updates] shared corestore/swarm unusable, updater will open its own')
+  }
+  return shared
+}
+
+/**
+ * The pear link is parsed inside the updater constructor, so a missing or
+ * malformed `upgrade` throws here — even with `updates: false`, and even
+ * before anything is opened. The caller degrades to an inert updater rather
+ * than taking the backend down with it.
+ *
+ * The updater builds `new Hyperdrive(store, key)`, and closing a Hyperdrive
+ * closes the exact Corestore it was handed. Handing it a session keeps
+ * `updater.close()` from tearing down PearTube's root store; the session
+ * shares the root's core tracker, so replicating on the root still serves the
+ * upgrade drive.
+ */
+function constructRuntime({ shared, store, swarm, storage, version, upgrade, productName, updates, delay }) {
+  const pearStore = shared ? store.namespace('pear-runtime') : null
+  try {
+    return {
+      pearStore,
+      pear: new PearRuntime({
+        version,
+        upgrade,
+        name: productName,
+        updates: updates !== false,
+        // Never inherited: the default is an hour sampled at construction.
+        delay,
+        // `dir` and `app` are deliberately left at the pear-mobile defaults —
+        // they are the paths the pear-runtime-react-native boot patch reads
+        // (`<app dir>/pear-runtime/ota`). Overriding them hides the payload
+        // from the native bundle selection.
+        ...(shared ? { store: pearStore, swarm } : {}),
+        ...(storage ? { storage } : {}),
+      }),
+      error: null,
+    }
+  } catch (error) {
+    return { pearStore, pear: null, error }
+  }
+}
+
+async function closeQuietly(resource) {
+  if (!resource) return
+  try { await resource.close() } catch { /* never opened, or already gone */ }
+}
+
+/**
  * @param {object} options
  * @param {string} options.version current build version (package.json `version`)
  * @param {string} options.upgrade pear link the payload is staged on
@@ -105,46 +161,22 @@ export async function startPearUpdates({
     }
   }
 
-  // Upstream treats store and swarm as one option: passing only one throws, and
-  // a store without a swarm would silently never replicate. Sharing PearTube's
-  // pair keeps a phone on a single swarm instead of opening a second one.
-  const shared = Boolean(store) && Boolean(swarm) && store.closed !== true && swarm.destroyed !== true
-  if ((Boolean(store) || Boolean(swarm)) && !shared) {
-    log('[pear-updates] shared corestore/swarm unusable, updater will open its own')
-  }
+  const shared = canShareRuntimeResources(store, swarm, log)
+  const { pear, pearStore, error: constructionError } = constructRuntime({
+    shared,
+    store,
+    swarm,
+    storage,
+    version,
+    upgrade,
+    productName,
+    updates,
+    delay: resolveMirrorDelay(delay, debug),
+  })
 
-  const mirrorDelay = resolveMirrorDelay(delay, debug)
-  let pear = null
-  // The updater builds `new Hyperdrive(store, key)`, and closing a Hyperdrive
-  // closes the exact Corestore it was handed. Handing it a session keeps
-  // `updater.close()` from tearing down PearTube's root store; the session
-  // shares the root's core tracker, so replicating on the root still serves the
-  // upgrade drive.
-  let pearStore = null
-
-  try {
-    if (shared) pearStore = store.namespace('pear-runtime')
-    pear = new PearRuntime({
-      version,
-      upgrade,
-      name: productName,
-      updates: updates !== false,
-      // Never inherited: the default is an hour sampled at construction.
-      delay: mirrorDelay,
-      // `dir` and `app` are deliberately left at the pear-mobile defaults —
-      // they are the paths the pear-runtime-react-native boot patch reads
-      // (`<app dir>/pear-runtime/ota`). Overriding them hides the payload from
-      // the native bundle selection.
-      ...(shared ? { store: pearStore, swarm } : {}),
-      ...(storage ? { storage } : {}),
-    })
-  } catch (error) {
-    // The pear link is parsed inside the updater constructor, so a missing or
-    // malformed `upgrade` throws right here — even with `updates: false`, and
-    // even before anything is opened. The worklet still has to serve video, so
-    // the updater degrades to inert rather than taking the backend down.
-    if (pearStore) { try { await pearStore.close() } catch {} }
-    return inertUpdates({ productName, version, upgrade, reason: describeError(error), log })
+  if (constructionError) {
+    await closeQuietly(pearStore)
+    return inertUpdates({ productName, version, upgrade, reason: describeError(constructionError), log })
   }
 
   // EventEmitter throws when 'error' is emitted with no listener, and both the
@@ -171,47 +203,29 @@ export async function startPearUpdates({
   // shows nothing by default: surfacing the store install is the app's job.
   pear.on('minver-required', (data) => emit('minver-required', data))
 
-  let onConnection = null
+  let detachReplication = null
   let discovery = null
-
-  if (shared) {
-    // pear-mobile only wires replication and the topic join for a swarm it
-    // created itself, so a shared swarm has to be told about the upgrade drive.
-    onConnection = (connection) => {
-      try {
-        store.replicate(connection)
-      } catch (error) {
-        log(`[pear-updates] replication attach failed: ${describeError(error)}`)
-      }
-    }
-    swarm.on('connection', onConnection)
-    for (const connection of swarm.connections || []) onConnection(connection)
-  }
-
-  const detachConnections = () => {
-    if (!onConnection) return
-    try { swarm.removeListener('connection', onConnection) } catch {}
-    onConnection = null
-  }
 
   try {
     await pear.ready()
   } catch (error) {
-    detachConnections()
-    try { await pear.updater.close() } catch {}
-    if (pearStore) { try { await pearStore.close() } catch {} }
+    detachReplication?.()
+    await closeQuietly(pear.updater)
+    await closeQuietly(pearStore)
     return inertUpdates({ productName, version, upgrade, reason: describeError(error), log })
   }
 
   if (shared) {
-    try {
-      discovery = swarm.join(pear.updater.drive.core.discoveryKey, { client: true, server: false })
-    } catch (error) {
-      log(`[pear-updates] upgrade drive topic join failed: ${describeError(error)}`)
-    }
+    const attached = attachUpdateDriveReplication({
+      swarm,
+      drive: pear.updater.drive,
+      onError: (error, stage) => log(`[pear-updates] upgrade drive ${stage} failed: ${describeError(error)}`),
+    })
+    detachReplication = attached.detach
+    discovery = attached.discovery
   }
 
-  log(`[pear-updates] ready version=${version} delay=${mirrorDelay}ms shared-swarm=${shared}`)
+  log(`[pear-updates] ready version=${version} shared-swarm=${shared}`)
 
   let closed = false
 
@@ -233,9 +247,10 @@ export async function startPearUpdates({
     async close() {
       if (closed) return
       closed = true
-      detachConnections()
+      detachReplication?.()
+      detachReplication = null
       if (discovery) {
-        try { await discovery.destroy() } catch {}
+        try { await discovery.destroy() } catch { /* swarm already tearing down */ }
         discovery = null
       }
 
@@ -246,12 +261,12 @@ export async function startPearUpdates({
         // the drive — and leave the shared resources to the backend lifecycle
         // that owns them. Closing the drive already closes the session created
         // above; the explicit close only covers a drive that never opened.
-        try { await pear.updater.close() } catch {}
-        if (pearStore) { try { await pearStore.close() } catch {} }
+        await closeQuietly(pear.updater)
+        await closeQuietly(pearStore)
         return
       }
 
-      try { await pear.close() } catch {}
+      await closeQuietly(pear)
     },
   }
 }

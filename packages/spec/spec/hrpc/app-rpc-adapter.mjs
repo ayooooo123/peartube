@@ -749,39 +749,6 @@ export const APP_RPC_METADATA = Object.freeze({
     },
     {
       "id": 67,
-      "command": "get-migration-status",
-      "method": "getMigrationStatus",
-      "handler": "GetMigrationStatus",
-      "request": "@peartube/get-migration-status-request",
-      "response": "@peartube/get-migration-status-response",
-      "send": false,
-      "requestStream": false,
-      "responseStream": false
-    },
-    {
-      "id": 68,
-      "command": "retry-migration",
-      "method": "retryMigration",
-      "handler": "RetryMigration",
-      "request": "@peartube/retry-migration-request",
-      "response": "@peartube/retry-migration-response",
-      "send": false,
-      "requestStream": false,
-      "responseStream": false
-    },
-    {
-      "id": 69,
-      "command": "export-migration-report",
-      "method": "exportMigrationReport",
-      "handler": "ExportMigrationReport",
-      "request": "@peartube/export-migration-report-request",
-      "response": "@peartube/export-migration-report-response",
-      "send": false,
-      "requestStream": false,
-      "responseStream": false
-    },
-    {
-      "id": 70,
       "command": "get-publisher-device-status",
       "method": "getPublisherDeviceStatus",
       "handler": "GetPublisherDeviceStatus",
@@ -792,7 +759,7 @@ export const APP_RPC_METADATA = Object.freeze({
       "responseStream": false
     },
     {
-      "id": 71,
+      "id": 68,
       "command": "export-portable-state",
       "method": "exportPortableState",
       "handler": "ExportPortableState",
@@ -803,7 +770,7 @@ export const APP_RPC_METADATA = Object.freeze({
       "responseStream": false
     },
     {
-      "id": 72,
+      "id": 69,
       "command": "restore-portable-state",
       "method": "restorePortableState",
       "handler": "RestorePortableState",
@@ -814,7 +781,7 @@ export const APP_RPC_METADATA = Object.freeze({
       "responseStream": false
     },
     {
-      "id": 73,
+      "id": 70,
       "command": "preview-storage-limit",
       "method": "previewStorageLimit",
       "handler": "PreviewStorageLimit",
@@ -825,7 +792,7 @@ export const APP_RPC_METADATA = Object.freeze({
       "responseStream": false
     },
     {
-      "id": 74,
+      "id": 71,
       "command": "get-archive-operator-status",
       "method": "getArchiveOperatorStatus",
       "handler": "GetArchiveOperatorStatus",
@@ -836,7 +803,7 @@ export const APP_RPC_METADATA = Object.freeze({
       "responseStream": false
     },
     {
-      "id": 75,
+      "id": 72,
       "command": "get-archive-participation",
       "method": "getArchiveParticipation",
       "handler": "GetArchiveParticipation",
@@ -847,7 +814,7 @@ export const APP_RPC_METADATA = Object.freeze({
       "responseStream": false
     },
     {
-      "id": 76,
+      "id": 73,
       "command": "set-archive-participation",
       "method": "setArchiveParticipation",
       "handler": "SetArchiveParticipation",
@@ -858,7 +825,7 @@ export const APP_RPC_METADATA = Object.freeze({
       "responseStream": false
     },
     {
-      "id": 77,
+      "id": 74,
       "command": "request-archive-publication",
       "method": "requestArchivePublication",
       "handler": "RequestArchivePublication",
@@ -869,7 +836,7 @@ export const APP_RPC_METADATA = Object.freeze({
       "responseStream": false
     },
     {
-      "id": 78,
+      "id": 75,
       "command": "get-network-policy",
       "method": "getNetworkPolicy",
       "handler": "GetNetworkPolicy",
@@ -880,7 +847,7 @@ export const APP_RPC_METADATA = Object.freeze({
       "responseStream": false
     },
     {
-      "id": 79,
+      "id": 76,
       "command": "set-network-policy",
       "method": "setNetworkPolicy",
       "handler": "SetNetworkPolicy",
@@ -901,7 +868,7 @@ export const APP_RPC_METADATA = Object.freeze({
       ]
     },
     {
-      "id": 80,
+      "id": 77,
       "command": "clear-cache",
       "method": "clearCache",
       "handler": "ClearCache",
@@ -912,7 +879,7 @@ export const APP_RPC_METADATA = Object.freeze({
       "responseStream": false
     },
     {
-      "id": 81,
+      "id": 78,
       "command": "assess-source-offload",
       "method": "assessSourceOffload",
       "handler": "AssessSourceOffload",
@@ -923,7 +890,7 @@ export const APP_RPC_METADATA = Object.freeze({
       "responseStream": false
     },
     {
-      "id": 82,
+      "id": 79,
       "command": "confirm-source-offload",
       "method": "confirmSourceOffload",
       "handler": "ConfirmSourceOffload",
@@ -934,7 +901,7 @@ export const APP_RPC_METADATA = Object.freeze({
       "responseStream": false
     },
     {
-      "id": 83,
+      "id": 80,
       "command": "get-video-thumbnail",
       "method": "getVideoThumbnail",
       "handler": "GetVideoThumbnail",
@@ -945,7 +912,7 @@ export const APP_RPC_METADATA = Object.freeze({
       "responseStream": false
     },
     {
-      "id": 84,
+      "id": 81,
       "command": "get-video-metadata",
       "method": "getVideoMetadata",
       "handler": "GetVideoMetadata",
@@ -956,7 +923,7 @@ export const APP_RPC_METADATA = Object.freeze({
       "responseStream": false
     },
     {
-      "id": 85,
+      "id": 82,
       "command": "set-video-thumbnail",
       "method": "setVideoThumbnail",
       "handler": "SetVideoThumbnail",
@@ -967,7 +934,7 @@ export const APP_RPC_METADATA = Object.freeze({
       "responseStream": false
     },
     {
-      "id": 86,
+      "id": 83,
       "command": "set-video-thumbnail-from-file",
       "method": "setVideoThumbnailFromFile",
       "handler": "SetVideoThumbnailFromFile",
@@ -978,7 +945,7 @@ export const APP_RPC_METADATA = Object.freeze({
       "responseStream": false
     },
     {
-      "id": 87,
+      "id": 84,
       "command": "get-status",
       "method": "getStatus",
       "handler": "GetStatus",
@@ -989,7 +956,7 @@ export const APP_RPC_METADATA = Object.freeze({
       "responseStream": false
     },
     {
-      "id": 88,
+      "id": 85,
       "command": "pick-video-file",
       "method": "pickVideoFile",
       "handler": "PickVideoFile",
@@ -1000,7 +967,7 @@ export const APP_RPC_METADATA = Object.freeze({
       "responseStream": false
     },
     {
-      "id": 89,
+      "id": 86,
       "command": "pick-image-file",
       "method": "pickImageFile",
       "handler": "PickImageFile",
@@ -1011,7 +978,7 @@ export const APP_RPC_METADATA = Object.freeze({
       "responseStream": false
     },
     {
-      "id": 90,
+      "id": 87,
       "command": "get-blob-server-port",
       "method": "getBlobServerPort",
       "handler": "GetBlobServerPort",
@@ -1022,7 +989,7 @@ export const APP_RPC_METADATA = Object.freeze({
       "responseStream": false
     },
     {
-      "id": 91,
+      "id": 88,
       "command": "global-search-videos",
       "method": "globalSearchVideos",
       "handler": "GlobalSearchVideos",
@@ -1033,7 +1000,7 @@ export const APP_RPC_METADATA = Object.freeze({
       "responseStream": false
     },
     {
-      "id": 92,
+      "id": 89,
       "command": "add-comment",
       "method": "addComment",
       "handler": "AddComment",
@@ -1044,7 +1011,7 @@ export const APP_RPC_METADATA = Object.freeze({
       "responseStream": false
     },
     {
-      "id": 93,
+      "id": 90,
       "command": "list-comments",
       "method": "listComments",
       "handler": "ListComments",
@@ -1055,7 +1022,7 @@ export const APP_RPC_METADATA = Object.freeze({
       "responseStream": false
     },
     {
-      "id": 94,
+      "id": 91,
       "command": "hide-comment",
       "method": "hideComment",
       "handler": "HideComment",
@@ -1066,7 +1033,7 @@ export const APP_RPC_METADATA = Object.freeze({
       "responseStream": false
     },
     {
-      "id": 95,
+      "id": 92,
       "command": "remove-comment",
       "method": "removeComment",
       "handler": "RemoveComment",
@@ -1077,7 +1044,7 @@ export const APP_RPC_METADATA = Object.freeze({
       "responseStream": false
     },
     {
-      "id": 96,
+      "id": 93,
       "command": "add-reaction",
       "method": "addReaction",
       "handler": "AddReaction",
@@ -1088,7 +1055,7 @@ export const APP_RPC_METADATA = Object.freeze({
       "responseStream": false
     },
     {
-      "id": 97,
+      "id": 94,
       "command": "remove-reaction",
       "method": "removeReaction",
       "handler": "RemoveReaction",
@@ -1099,7 +1066,7 @@ export const APP_RPC_METADATA = Object.freeze({
       "responseStream": false
     },
     {
-      "id": 98,
+      "id": 95,
       "command": "get-reactions",
       "method": "getReactions",
       "handler": "GetReactions",
@@ -1110,7 +1077,7 @@ export const APP_RPC_METADATA = Object.freeze({
       "responseStream": false
     },
     {
-      "id": 99,
+      "id": 96,
       "command": "event-ready",
       "method": "eventReady",
       "handler": "EventReady",
@@ -1121,7 +1088,7 @@ export const APP_RPC_METADATA = Object.freeze({
       "responseStream": false
     },
     {
-      "id": 100,
+      "id": 97,
       "command": "event-error",
       "method": "eventError",
       "handler": "EventError",
@@ -1132,7 +1099,7 @@ export const APP_RPC_METADATA = Object.freeze({
       "responseStream": false
     },
     {
-      "id": 101,
+      "id": 98,
       "command": "event-upload-progress",
       "method": "eventUploadProgress",
       "handler": "EventUploadProgress",
@@ -1143,7 +1110,7 @@ export const APP_RPC_METADATA = Object.freeze({
       "responseStream": false
     },
     {
-      "id": 102,
+      "id": 99,
       "command": "event-download-progress",
       "method": "eventDownloadProgress",
       "handler": "EventDownloadProgress",
@@ -1154,7 +1121,7 @@ export const APP_RPC_METADATA = Object.freeze({
       "responseStream": false
     },
     {
-      "id": 103,
+      "id": 100,
       "command": "event-media-graph-update",
       "method": "eventMediaGraphUpdate",
       "handler": "EventMediaGraphUpdate",
@@ -1165,7 +1132,7 @@ export const APP_RPC_METADATA = Object.freeze({
       "responseStream": false
     },
     {
-      "id": 104,
+      "id": 101,
       "command": "event-log",
       "method": "eventLog",
       "handler": "EventLog",
@@ -1176,7 +1143,7 @@ export const APP_RPC_METADATA = Object.freeze({
       "responseStream": false
     },
     {
-      "id": 105,
+      "id": 102,
       "command": "event-video-stats",
       "method": "eventVideoStats",
       "handler": "EventVideoStats",
@@ -1187,7 +1154,7 @@ export const APP_RPC_METADATA = Object.freeze({
       "responseStream": false
     },
     {
-      "id": 106,
+      "id": 103,
       "command": "cast-available",
       "method": "castAvailable",
       "handler": "CastAvailable",
@@ -1198,7 +1165,7 @@ export const APP_RPC_METADATA = Object.freeze({
       "responseStream": false
     },
     {
-      "id": 107,
+      "id": 104,
       "command": "cast-start-discovery",
       "method": "castStartDiscovery",
       "handler": "CastStartDiscovery",
@@ -1209,7 +1176,7 @@ export const APP_RPC_METADATA = Object.freeze({
       "responseStream": false
     },
     {
-      "id": 108,
+      "id": 105,
       "command": "cast-stop-discovery",
       "method": "castStopDiscovery",
       "handler": "CastStopDiscovery",
@@ -1220,7 +1187,7 @@ export const APP_RPC_METADATA = Object.freeze({
       "responseStream": false
     },
     {
-      "id": 109,
+      "id": 106,
       "command": "cast-get-devices",
       "method": "castGetDevices",
       "handler": "CastGetDevices",
@@ -1231,7 +1198,7 @@ export const APP_RPC_METADATA = Object.freeze({
       "responseStream": false
     },
     {
-      "id": 110,
+      "id": 107,
       "command": "cast-add-manual-device",
       "method": "castAddManualDevice",
       "handler": "CastAddManualDevice",
@@ -1242,7 +1209,7 @@ export const APP_RPC_METADATA = Object.freeze({
       "responseStream": false
     },
     {
-      "id": 111,
+      "id": 108,
       "command": "cast-connect",
       "method": "castConnect",
       "handler": "CastConnect",
@@ -1253,7 +1220,7 @@ export const APP_RPC_METADATA = Object.freeze({
       "responseStream": false
     },
     {
-      "id": 112,
+      "id": 109,
       "command": "cast-disconnect",
       "method": "castDisconnect",
       "handler": "CastDisconnect",
@@ -1264,7 +1231,7 @@ export const APP_RPC_METADATA = Object.freeze({
       "responseStream": false
     },
     {
-      "id": 113,
+      "id": 110,
       "command": "cast-play",
       "method": "castPlay",
       "handler": "CastPlay",
@@ -1275,7 +1242,7 @@ export const APP_RPC_METADATA = Object.freeze({
       "responseStream": false
     },
     {
-      "id": 114,
+      "id": 111,
       "command": "cast-pause",
       "method": "castPause",
       "handler": "CastPause",
@@ -1286,7 +1253,7 @@ export const APP_RPC_METADATA = Object.freeze({
       "responseStream": false
     },
     {
-      "id": 115,
+      "id": 112,
       "command": "cast-resume",
       "method": "castResume",
       "handler": "CastResume",
@@ -1297,7 +1264,7 @@ export const APP_RPC_METADATA = Object.freeze({
       "responseStream": false
     },
     {
-      "id": 116,
+      "id": 113,
       "command": "cast-stop",
       "method": "castStop",
       "handler": "CastStop",
@@ -1308,7 +1275,7 @@ export const APP_RPC_METADATA = Object.freeze({
       "responseStream": false
     },
     {
-      "id": 117,
+      "id": 114,
       "command": "cast-seek",
       "method": "castSeek",
       "handler": "CastSeek",
@@ -1319,7 +1286,7 @@ export const APP_RPC_METADATA = Object.freeze({
       "responseStream": false
     },
     {
-      "id": 118,
+      "id": 115,
       "command": "cast-set-volume",
       "method": "castSetVolume",
       "handler": "CastSetVolume",
@@ -1330,7 +1297,7 @@ export const APP_RPC_METADATA = Object.freeze({
       "responseStream": false
     },
     {
-      "id": 119,
+      "id": 116,
       "command": "cast-get-state",
       "method": "castGetState",
       "handler": "CastGetState",
@@ -1341,7 +1308,7 @@ export const APP_RPC_METADATA = Object.freeze({
       "responseStream": false
     },
     {
-      "id": 120,
+      "id": 117,
       "command": "cast-is-connected",
       "method": "castIsConnected",
       "handler": "CastIsConnected",
@@ -1352,7 +1319,7 @@ export const APP_RPC_METADATA = Object.freeze({
       "responseStream": false
     },
     {
-      "id": 121,
+      "id": 118,
       "command": "event-cast-device-found",
       "method": "eventCastDeviceFound",
       "handler": "EventCastDeviceFound",
@@ -1363,7 +1330,7 @@ export const APP_RPC_METADATA = Object.freeze({
       "responseStream": false
     },
     {
-      "id": 122,
+      "id": 119,
       "command": "event-cast-device-lost",
       "method": "eventCastDeviceLost",
       "handler": "EventCastDeviceLost",
@@ -1374,7 +1341,7 @@ export const APP_RPC_METADATA = Object.freeze({
       "responseStream": false
     },
     {
-      "id": 123,
+      "id": 120,
       "command": "event-cast-playback-state",
       "method": "eventCastPlaybackState",
       "handler": "EventCastPlaybackState",
@@ -1385,7 +1352,7 @@ export const APP_RPC_METADATA = Object.freeze({
       "responseStream": false
     },
     {
-      "id": 124,
+      "id": 121,
       "command": "event-cast-time-update",
       "method": "eventCastTimeUpdate",
       "handler": "EventCastTimeUpdate",
@@ -1396,7 +1363,7 @@ export const APP_RPC_METADATA = Object.freeze({
       "responseStream": false
     },
     {
-      "id": 125,
+      "id": 122,
       "command": "search-videos",
       "method": "searchVideos",
       "handler": "SearchVideos",
@@ -1407,7 +1374,7 @@ export const APP_RPC_METADATA = Object.freeze({
       "responseStream": false
     },
     {
-      "id": 126,
+      "id": 123,
       "command": "search-index-candidates",
       "method": "searchIndexCandidates",
       "handler": "SearchIndexCandidates",
@@ -1418,7 +1385,7 @@ export const APP_RPC_METADATA = Object.freeze({
       "responseStream": false
     },
     {
-      "id": 127,
+      "id": 124,
       "command": "verify-index-candidate",
       "method": "verifyIndexCandidate",
       "handler": "VerifyIndexCandidate",
@@ -1429,7 +1396,7 @@ export const APP_RPC_METADATA = Object.freeze({
       "responseStream": false
     },
     {
-      "id": 128,
+      "id": 125,
       "command": "index-video-vectors",
       "method": "indexVideoVectors",
       "handler": "IndexVideoVectors",
@@ -1440,7 +1407,7 @@ export const APP_RPC_METADATA = Object.freeze({
       "responseStream": false
     },
     {
-      "id": 129,
+      "id": 126,
       "command": "update-video-metadata",
       "method": "updateVideoMetadata",
       "handler": "UpdateVideoMetadata",
@@ -1451,7 +1418,7 @@ export const APP_RPC_METADATA = Object.freeze({
       "responseStream": false
     },
     {
-      "id": 130,
+      "id": 127,
       "command": "get-media-catalog",
       "method": "getMediaCatalog",
       "handler": "GetMediaCatalog",
@@ -1468,7 +1435,7 @@ export const APP_RPC_METADATA = Object.freeze({
       ]
     },
     {
-      "id": 131,
+      "id": 128,
       "command": "get-media-entity",
       "method": "getMediaEntity",
       "handler": "GetMediaEntity",
@@ -1479,7 +1446,7 @@ export const APP_RPC_METADATA = Object.freeze({
       "responseStream": false
     },
     {
-      "id": 132,
+      "id": 129,
       "command": "get-media-collection",
       "method": "getMediaCollection",
       "handler": "GetMediaCollection",
@@ -1490,7 +1457,7 @@ export const APP_RPC_METADATA = Object.freeze({
       "responseStream": false
     },
     {
-      "id": 133,
+      "id": 130,
       "command": "get-media-collection-items",
       "method": "getMediaCollectionItems",
       "handler": "GetMediaCollectionItems",
@@ -1507,7 +1474,7 @@ export const APP_RPC_METADATA = Object.freeze({
       ]
     },
     {
-      "id": 134,
+      "id": 131,
       "command": "get-media-agent",
       "method": "getMediaAgent",
       "handler": "GetMediaAgent",
@@ -1518,7 +1485,7 @@ export const APP_RPC_METADATA = Object.freeze({
       "responseStream": false
     },
     {
-      "id": 135,
+      "id": 132,
       "command": "get-agent-contributions",
       "method": "getAgentContributions",
       "handler": "GetAgentContributions",
@@ -1535,7 +1502,7 @@ export const APP_RPC_METADATA = Object.freeze({
       ]
     },
     {
-      "id": 136,
+      "id": 133,
       "command": "get-publication-sources",
       "method": "getPublicationSources",
       "handler": "GetPublicationSources",
@@ -1552,7 +1519,7 @@ export const APP_RPC_METADATA = Object.freeze({
       ]
     },
     {
-      "id": 137,
+      "id": 134,
       "command": "get-entity-artwork",
       "method": "getEntityArtwork",
       "handler": "GetEntityArtwork",
@@ -1563,7 +1530,7 @@ export const APP_RPC_METADATA = Object.freeze({
       "responseStream": false
     },
     {
-      "id": 138,
+      "id": 135,
       "command": "get-claim-provenance",
       "method": "getClaimProvenance",
       "handler": "GetClaimProvenance",
@@ -1574,7 +1541,7 @@ export const APP_RPC_METADATA = Object.freeze({
       "responseStream": false
     },
     {
-      "id": 139,
+      "id": 136,
       "command": "set-source-preference",
       "method": "setSourcePreference",
       "handler": "SetSourcePreference",
@@ -1585,7 +1552,7 @@ export const APP_RPC_METADATA = Object.freeze({
       "responseStream": false
     },
     {
-      "id": 140,
+      "id": 137,
       "command": "prepare-media-playback",
       "method": "prepareMediaPlayback",
       "handler": "PrepareMediaPlayback",
@@ -1596,7 +1563,7 @@ export const APP_RPC_METADATA = Object.freeze({
       "responseStream": false
     },
     {
-      "id": 141,
+      "id": 138,
       "command": "desktop-bootstrap",
       "method": "desktopBootstrap",
       "handler": "DesktopBootstrap",
@@ -1607,7 +1574,7 @@ export const APP_RPC_METADATA = Object.freeze({
       "responseStream": false
     },
     {
-      "id": 142,
+      "id": 139,
       "command": "desktop-shutdown",
       "method": "desktopShutdown",
       "handler": "DesktopShutdown",
@@ -1618,7 +1585,7 @@ export const APP_RPC_METADATA = Object.freeze({
       "responseStream": false
     },
     {
-      "id": 143,
+      "id": 140,
       "command": "desktop-refresh-browse",
       "method": "desktopRefreshBrowse",
       "handler": "DesktopRefreshBrowse",
@@ -1629,7 +1596,7 @@ export const APP_RPC_METADATA = Object.freeze({
       "responseStream": false
     },
     {
-      "id": 144,
+      "id": 141,
       "command": "ffmpeg-decode-available",
       "method": "ffmpegDecodeAvailable",
       "handler": "FfmpegDecodeAvailable",
@@ -1640,7 +1607,7 @@ export const APP_RPC_METADATA = Object.freeze({
       "responseStream": false
     },
     {
-      "id": 145,
+      "id": 142,
       "command": "update-channel-avatar",
       "method": "updateChannelAvatar",
       "handler": "UpdateChannelAvatar",
@@ -1651,7 +1618,7 @@ export const APP_RPC_METADATA = Object.freeze({
       "responseStream": false
     },
     {
-      "id": 146,
+      "id": 143,
       "command": "transcode-start",
       "method": "transcodeStart",
       "handler": "TranscodeStart",
@@ -1662,7 +1629,7 @@ export const APP_RPC_METADATA = Object.freeze({
       "responseStream": false
     },
     {
-      "id": 147,
+      "id": 144,
       "command": "transcode-stop",
       "method": "transcodeStop",
       "handler": "TranscodeStop",
@@ -1673,7 +1640,7 @@ export const APP_RPC_METADATA = Object.freeze({
       "responseStream": false
     },
     {
-      "id": 148,
+      "id": 145,
       "command": "transcode-status",
       "method": "transcodeStatus",
       "handler": "TranscodeStatus",
@@ -1684,7 +1651,7 @@ export const APP_RPC_METADATA = Object.freeze({
       "responseStream": false
     },
     {
-      "id": 149,
+      "id": 146,
       "command": "event-transcode-progress",
       "method": "eventTranscodeProgress",
       "handler": "EventTranscodeProgress",
@@ -1695,7 +1662,7 @@ export const APP_RPC_METADATA = Object.freeze({
       "responseStream": false
     },
     {
-      "id": 150,
+      "id": 147,
       "command": "get-participation-status",
       "method": "getParticipationStatus",
       "handler": "GetParticipationStatus",
@@ -1706,7 +1673,7 @@ export const APP_RPC_METADATA = Object.freeze({
       "responseStream": false
     },
     {
-      "id": 151,
+      "id": 148,
       "command": "set-device-conditions",
       "method": "setDeviceConditions",
       "handler": "SetDeviceConditions",
@@ -1743,7 +1710,7 @@ export const APP_RPC_METADATA = Object.freeze({
       ]
     },
     {
-      "id": 152,
+      "id": 149,
       "command": "suspend-network",
       "method": "suspendNetwork",
       "handler": "SuspendNetwork",
@@ -1754,7 +1721,7 @@ export const APP_RPC_METADATA = Object.freeze({
       "responseStream": false
     },
     {
-      "id": 153,
+      "id": 150,
       "command": "resume-network",
       "method": "resumeNetwork",
       "handler": "ResumeNetwork",
@@ -1765,7 +1732,7 @@ export const APP_RPC_METADATA = Object.freeze({
       "responseStream": false
     },
     {
-      "id": 154,
+      "id": 151,
       "command": "set-playback-active",
       "method": "setPlaybackActive",
       "handler": "SetPlaybackActive",
@@ -1776,7 +1743,7 @@ export const APP_RPC_METADATA = Object.freeze({
       "responseStream": false
     },
     {
-      "id": 155,
+      "id": 152,
       "command": "provider-search",
       "method": "providerSearch",
       "handler": "ProviderSearch",
@@ -1787,7 +1754,7 @@ export const APP_RPC_METADATA = Object.freeze({
       "responseStream": false
     },
     {
-      "id": 156,
+      "id": 153,
       "command": "resolve-provider-ref",
       "method": "resolveProviderRef",
       "handler": "ResolveProviderRef",
@@ -1798,7 +1765,7 @@ export const APP_RPC_METADATA = Object.freeze({
       "responseStream": false
     },
     {
-      "id": 157,
+      "id": 154,
       "command": "request-acquisition",
       "method": "requestAcquisition",
       "handler": "RequestAcquisition",
@@ -1809,7 +1776,7 @@ export const APP_RPC_METADATA = Object.freeze({
       "responseStream": false
     },
     {
-      "id": 158,
+      "id": 155,
       "command": "attach-source-grant",
       "method": "attachSourceGrant",
       "handler": "AttachSourceGrant",
@@ -1820,7 +1787,7 @@ export const APP_RPC_METADATA = Object.freeze({
       "responseStream": false
     },
     {
-      "id": 159,
+      "id": 156,
       "command": "get-acquisition",
       "method": "getAcquisition",
       "handler": "GetAcquisition",
@@ -1831,7 +1798,7 @@ export const APP_RPC_METADATA = Object.freeze({
       "responseStream": false
     },
     {
-      "id": 160,
+      "id": 157,
       "command": "list-acquisitions",
       "method": "listAcquisitions",
       "handler": "ListAcquisitions",
@@ -1842,7 +1809,7 @@ export const APP_RPC_METADATA = Object.freeze({
       "responseStream": false
     },
     {
-      "id": 161,
+      "id": 158,
       "command": "cancel-acquisition",
       "method": "cancelAcquisition",
       "handler": "CancelAcquisition",
@@ -1853,7 +1820,7 @@ export const APP_RPC_METADATA = Object.freeze({
       "responseStream": false
     },
     {
-      "id": 162,
+      "id": 159,
       "command": "get-provider-publication",
       "method": "getProviderPublication",
       "handler": "GetProviderPublication",
@@ -1864,7 +1831,7 @@ export const APP_RPC_METADATA = Object.freeze({
       "responseStream": false
     },
     {
-      "id": 163,
+      "id": 160,
       "command": "open-provider-stream",
       "method": "openProviderStream",
       "handler": "OpenProviderStream",
@@ -1875,7 +1842,7 @@ export const APP_RPC_METADATA = Object.freeze({
       "responseStream": false
     },
     {
-      "id": 164,
+      "id": 161,
       "command": "get-provider-status",
       "method": "getProviderStatus",
       "handler": "GetProviderStatus",
@@ -1886,7 +1853,7 @@ export const APP_RPC_METADATA = Object.freeze({
       "responseStream": false
     },
     {
-      "id": 165,
+      "id": 162,
       "command": "get-provider-policy",
       "method": "getProviderPolicy",
       "handler": "GetProviderPolicy",
@@ -1897,7 +1864,7 @@ export const APP_RPC_METADATA = Object.freeze({
       "responseStream": false
     },
     {
-      "id": 166,
+      "id": 163,
       "command": "set-provider-policy",
       "method": "setProviderPolicy",
       "handler": "SetProviderPolicy",
@@ -1908,7 +1875,7 @@ export const APP_RPC_METADATA = Object.freeze({
       "responseStream": false
     },
     {
-      "id": 167,
+      "id": 164,
       "command": "get-acquisition-policy",
       "method": "getAcquisitionPolicy",
       "handler": "GetAcquisitionPolicy",
@@ -1919,7 +1886,7 @@ export const APP_RPC_METADATA = Object.freeze({
       "responseStream": false
     },
     {
-      "id": 168,
+      "id": 165,
       "command": "set-acquisition-policy",
       "method": "setAcquisitionPolicy",
       "handler": "SetAcquisitionPolicy",
@@ -1930,7 +1897,7 @@ export const APP_RPC_METADATA = Object.freeze({
       "responseStream": false
     },
     {
-      "id": 169,
+      "id": 166,
       "command": "retry-acquisition",
       "method": "retryAcquisition",
       "handler": "RetryAcquisition",
@@ -1941,7 +1908,7 @@ export const APP_RPC_METADATA = Object.freeze({
       "responseStream": false
     },
     {
-      "id": 170,
+      "id": 167,
       "command": "event-acquisition-lifecycle",
       "method": "eventAcquisitionLifecycle",
       "handler": "EventAcquisitionLifecycle",
@@ -1955,7 +1922,7 @@ export const APP_RPC_METADATA = Object.freeze({
   "namespaces": {
     "system": [
       {
-        "id": 87,
+        "id": 84,
         "command": "get-status",
         "method": "getStatus",
         "handler": "GetStatus",
@@ -1977,7 +1944,7 @@ export const APP_RPC_METADATA = Object.freeze({
         "responseStream": false
       },
       {
-        "id": 90,
+        "id": 87,
         "command": "get-blob-server-port",
         "method": "getBlobServerPort",
         "handler": "GetBlobServerPort",
@@ -1988,7 +1955,7 @@ export const APP_RPC_METADATA = Object.freeze({
         "responseStream": false
       },
       {
-        "id": 78,
+        "id": 75,
         "command": "get-network-policy",
         "method": "getNetworkPolicy",
         "handler": "GetNetworkPolicy",
@@ -1999,7 +1966,7 @@ export const APP_RPC_METADATA = Object.freeze({
         "responseStream": false
       },
       {
-        "id": 79,
+        "id": 76,
         "command": "set-network-policy",
         "method": "setNetworkPolicy",
         "handler": "SetNetworkPolicy",
@@ -2020,7 +1987,7 @@ export const APP_RPC_METADATA = Object.freeze({
         ]
       },
       {
-        "id": 150,
+        "id": 147,
         "command": "get-participation-status",
         "method": "getParticipationStatus",
         "handler": "GetParticipationStatus",
@@ -2031,7 +1998,7 @@ export const APP_RPC_METADATA = Object.freeze({
         "responseStream": false
       },
       {
-        "id": 151,
+        "id": 148,
         "command": "set-device-conditions",
         "method": "setDeviceConditions",
         "handler": "SetDeviceConditions",
@@ -2068,40 +2035,7 @@ export const APP_RPC_METADATA = Object.freeze({
         ]
       },
       {
-        "id": 67,
-        "command": "get-migration-status",
-        "method": "getMigrationStatus",
-        "handler": "GetMigrationStatus",
-        "request": "@peartube/get-migration-status-request",
-        "response": "@peartube/get-migration-status-response",
-        "send": false,
-        "requestStream": false,
-        "responseStream": false
-      },
-      {
-        "id": 68,
-        "command": "retry-migration",
-        "method": "retryMigration",
-        "handler": "RetryMigration",
-        "request": "@peartube/retry-migration-request",
-        "response": "@peartube/retry-migration-response",
-        "send": false,
-        "requestStream": false,
-        "responseStream": false
-      },
-      {
-        "id": 69,
-        "command": "export-migration-report",
-        "method": "exportMigrationReport",
-        "handler": "ExportMigrationReport",
-        "request": "@peartube/export-migration-report-request",
-        "response": "@peartube/export-migration-report-response",
-        "send": false,
-        "requestStream": false,
-        "responseStream": false
-      },
-      {
-        "id": 152,
+        "id": 149,
         "command": "suspend-network",
         "method": "suspendNetwork",
         "handler": "SuspendNetwork",
@@ -2112,7 +2046,7 @@ export const APP_RPC_METADATA = Object.freeze({
         "responseStream": false
       },
       {
-        "id": 153,
+        "id": 150,
         "command": "resume-network",
         "method": "resumeNetwork",
         "handler": "ResumeNetwork",
@@ -2123,7 +2057,7 @@ export const APP_RPC_METADATA = Object.freeze({
         "responseStream": false
       },
       {
-        "id": 154,
+        "id": 151,
         "command": "set-playback-active",
         "method": "setPlaybackActive",
         "handler": "SetPlaybackActive",
@@ -2292,7 +2226,7 @@ export const APP_RPC_METADATA = Object.freeze({
         "responseStream": false
       },
       {
-        "id": 70,
+        "id": 67,
         "command": "get-publisher-device-status",
         "method": "getPublisherDeviceStatus",
         "handler": "GetPublisherDeviceStatus",
@@ -2303,7 +2237,7 @@ export const APP_RPC_METADATA = Object.freeze({
         "responseStream": false
       },
       {
-        "id": 71,
+        "id": 68,
         "command": "export-portable-state",
         "method": "exportPortableState",
         "handler": "ExportPortableState",
@@ -2314,7 +2248,7 @@ export const APP_RPC_METADATA = Object.freeze({
         "responseStream": false
       },
       {
-        "id": 72,
+        "id": 69,
         "command": "restore-portable-state",
         "method": "restorePortableState",
         "handler": "RestorePortableState",
@@ -2388,7 +2322,7 @@ export const APP_RPC_METADATA = Object.freeze({
         "responseStream": false
       },
       {
-        "id": 145,
+        "id": 142,
         "command": "update-channel-avatar",
         "method": "updateChannelAvatar",
         "handler": "UpdateChannelAvatar",
@@ -2489,7 +2423,7 @@ export const APP_RPC_METADATA = Object.freeze({
     ],
     "mediaGraph": [
       {
-        "id": 130,
+        "id": 127,
         "command": "get-media-catalog",
         "method": "getMediaCatalog",
         "handler": "GetMediaCatalog",
@@ -2506,7 +2440,7 @@ export const APP_RPC_METADATA = Object.freeze({
         ]
       },
       {
-        "id": 131,
+        "id": 128,
         "command": "get-media-entity",
         "method": "getMediaEntity",
         "handler": "GetMediaEntity",
@@ -2517,7 +2451,7 @@ export const APP_RPC_METADATA = Object.freeze({
         "responseStream": false
       },
       {
-        "id": 132,
+        "id": 129,
         "command": "get-media-collection",
         "method": "getMediaCollection",
         "handler": "GetMediaCollection",
@@ -2528,7 +2462,7 @@ export const APP_RPC_METADATA = Object.freeze({
         "responseStream": false
       },
       {
-        "id": 133,
+        "id": 130,
         "command": "get-media-collection-items",
         "method": "getMediaCollectionItems",
         "handler": "GetMediaCollectionItems",
@@ -2545,7 +2479,7 @@ export const APP_RPC_METADATA = Object.freeze({
         ]
       },
       {
-        "id": 134,
+        "id": 131,
         "command": "get-media-agent",
         "method": "getMediaAgent",
         "handler": "GetMediaAgent",
@@ -2556,7 +2490,7 @@ export const APP_RPC_METADATA = Object.freeze({
         "responseStream": false
       },
       {
-        "id": 135,
+        "id": 132,
         "command": "get-agent-contributions",
         "method": "getAgentContributions",
         "handler": "GetAgentContributions",
@@ -2573,7 +2507,7 @@ export const APP_RPC_METADATA = Object.freeze({
         ]
       },
       {
-        "id": 136,
+        "id": 133,
         "command": "get-publication-sources",
         "method": "getPublicationSources",
         "handler": "GetPublicationSources",
@@ -2590,7 +2524,7 @@ export const APP_RPC_METADATA = Object.freeze({
         ]
       },
       {
-        "id": 137,
+        "id": 134,
         "command": "get-entity-artwork",
         "method": "getEntityArtwork",
         "handler": "GetEntityArtwork",
@@ -2601,7 +2535,7 @@ export const APP_RPC_METADATA = Object.freeze({
         "responseStream": false
       },
       {
-        "id": 138,
+        "id": 135,
         "command": "get-claim-provenance",
         "method": "getClaimProvenance",
         "handler": "GetClaimProvenance",
@@ -2612,7 +2546,7 @@ export const APP_RPC_METADATA = Object.freeze({
         "responseStream": false
       },
       {
-        "id": 139,
+        "id": 136,
         "command": "set-source-preference",
         "method": "setSourcePreference",
         "handler": "SetSourcePreference",
@@ -2623,7 +2557,7 @@ export const APP_RPC_METADATA = Object.freeze({
         "responseStream": false
       },
       {
-        "id": 140,
+        "id": 137,
         "command": "prepare-media-playback",
         "method": "prepareMediaPlayback",
         "handler": "PrepareMediaPlayback",
@@ -2691,7 +2625,7 @@ export const APP_RPC_METADATA = Object.freeze({
         "responseStream": false
       },
       {
-        "id": 84,
+        "id": 81,
         "command": "get-video-metadata",
         "method": "getVideoMetadata",
         "handler": "GetVideoMetadata",
@@ -2702,7 +2636,7 @@ export const APP_RPC_METADATA = Object.freeze({
         "responseStream": false
       },
       {
-        "id": 83,
+        "id": 80,
         "command": "get-video-thumbnail",
         "method": "getVideoThumbnail",
         "handler": "GetVideoThumbnail",
@@ -2746,7 +2680,7 @@ export const APP_RPC_METADATA = Object.freeze({
         "responseStream": false
       },
       {
-        "id": 129,
+        "id": 126,
         "command": "update-video-metadata",
         "method": "updateVideoMetadata",
         "handler": "UpdateVideoMetadata",
@@ -2757,7 +2691,7 @@ export const APP_RPC_METADATA = Object.freeze({
         "responseStream": false
       },
       {
-        "id": 85,
+        "id": 82,
         "command": "set-video-thumbnail",
         "method": "setVideoThumbnail",
         "handler": "SetVideoThumbnail",
@@ -2768,7 +2702,7 @@ export const APP_RPC_METADATA = Object.freeze({
         "responseStream": false
       },
       {
-        "id": 86,
+        "id": 83,
         "command": "set-video-thumbnail-from-file",
         "method": "setVideoThumbnailFromFile",
         "handler": "SetVideoThumbnailFromFile",
@@ -2779,7 +2713,7 @@ export const APP_RPC_METADATA = Object.freeze({
         "responseStream": false
       },
       {
-        "id": 92,
+        "id": 89,
         "command": "add-comment",
         "method": "addComment",
         "handler": "AddComment",
@@ -2790,7 +2724,7 @@ export const APP_RPC_METADATA = Object.freeze({
         "responseStream": false
       },
       {
-        "id": 93,
+        "id": 90,
         "command": "list-comments",
         "method": "listComments",
         "handler": "ListComments",
@@ -2801,7 +2735,7 @@ export const APP_RPC_METADATA = Object.freeze({
         "responseStream": false
       },
       {
-        "id": 94,
+        "id": 91,
         "command": "hide-comment",
         "method": "hideComment",
         "handler": "HideComment",
@@ -2812,7 +2746,7 @@ export const APP_RPC_METADATA = Object.freeze({
         "responseStream": false
       },
       {
-        "id": 95,
+        "id": 92,
         "command": "remove-comment",
         "method": "removeComment",
         "handler": "RemoveComment",
@@ -2823,7 +2757,7 @@ export const APP_RPC_METADATA = Object.freeze({
         "responseStream": false
       },
       {
-        "id": 96,
+        "id": 93,
         "command": "add-reaction",
         "method": "addReaction",
         "handler": "AddReaction",
@@ -2834,7 +2768,7 @@ export const APP_RPC_METADATA = Object.freeze({
         "responseStream": false
       },
       {
-        "id": 97,
+        "id": 94,
         "command": "remove-reaction",
         "method": "removeReaction",
         "handler": "RemoveReaction",
@@ -2845,7 +2779,7 @@ export const APP_RPC_METADATA = Object.freeze({
         "responseStream": false
       },
       {
-        "id": 98,
+        "id": 95,
         "command": "get-reactions",
         "method": "getReactions",
         "handler": "GetReactions",
@@ -3170,7 +3104,7 @@ export const APP_RPC_METADATA = Object.freeze({
         "responseStream": false
       },
       {
-        "id": 80,
+        "id": 77,
         "command": "clear-cache",
         "method": "clearCache",
         "handler": "ClearCache",
@@ -3181,7 +3115,7 @@ export const APP_RPC_METADATA = Object.freeze({
         "responseStream": false
       },
       {
-        "id": 81,
+        "id": 78,
         "command": "assess-source-offload",
         "method": "assessSourceOffload",
         "handler": "AssessSourceOffload",
@@ -3192,7 +3126,7 @@ export const APP_RPC_METADATA = Object.freeze({
         "responseStream": false
       },
       {
-        "id": 82,
+        "id": 79,
         "command": "confirm-source-offload",
         "method": "confirmSourceOffload",
         "handler": "ConfirmSourceOffload",
@@ -3203,7 +3137,7 @@ export const APP_RPC_METADATA = Object.freeze({
         "responseStream": false
       },
       {
-        "id": 73,
+        "id": 70,
         "command": "preview-storage-limit",
         "method": "previewStorageLimit",
         "handler": "PreviewStorageLimit",
@@ -3214,7 +3148,7 @@ export const APP_RPC_METADATA = Object.freeze({
         "responseStream": false
       },
       {
-        "id": 74,
+        "id": 71,
         "command": "get-archive-operator-status",
         "method": "getArchiveOperatorStatus",
         "handler": "GetArchiveOperatorStatus",
@@ -3225,7 +3159,7 @@ export const APP_RPC_METADATA = Object.freeze({
         "responseStream": false
       },
       {
-        "id": 75,
+        "id": 72,
         "command": "get-archive-participation",
         "method": "getArchiveParticipation",
         "handler": "GetArchiveParticipation",
@@ -3236,7 +3170,7 @@ export const APP_RPC_METADATA = Object.freeze({
         "responseStream": false
       },
       {
-        "id": 76,
+        "id": 73,
         "command": "set-archive-participation",
         "method": "setArchiveParticipation",
         "handler": "SetArchiveParticipation",
@@ -3247,7 +3181,7 @@ export const APP_RPC_METADATA = Object.freeze({
         "responseStream": false
       },
       {
-        "id": 77,
+        "id": 74,
         "command": "request-archive-publication",
         "method": "requestArchivePublication",
         "handler": "RequestArchivePublication",
@@ -3260,7 +3194,7 @@ export const APP_RPC_METADATA = Object.freeze({
     ],
     "search": [
       {
-        "id": 125,
+        "id": 122,
         "command": "search-videos",
         "method": "searchVideos",
         "handler": "SearchVideos",
@@ -3271,7 +3205,7 @@ export const APP_RPC_METADATA = Object.freeze({
         "responseStream": false
       },
       {
-        "id": 91,
+        "id": 88,
         "command": "global-search-videos",
         "method": "globalSearchVideos",
         "handler": "GlobalSearchVideos",
@@ -3282,7 +3216,7 @@ export const APP_RPC_METADATA = Object.freeze({
         "responseStream": false
       },
       {
-        "id": 128,
+        "id": 125,
         "command": "index-video-vectors",
         "method": "indexVideoVectors",
         "handler": "IndexVideoVectors",
@@ -3293,7 +3227,7 @@ export const APP_RPC_METADATA = Object.freeze({
         "responseStream": false
       },
       {
-        "id": 126,
+        "id": 123,
         "command": "search-index-candidates",
         "method": "searchIndexCandidates",
         "handler": "SearchIndexCandidates",
@@ -3304,7 +3238,7 @@ export const APP_RPC_METADATA = Object.freeze({
         "responseStream": false
       },
       {
-        "id": 127,
+        "id": 124,
         "command": "verify-index-candidate",
         "method": "verifyIndexCandidate",
         "handler": "VerifyIndexCandidate",
@@ -3317,7 +3251,7 @@ export const APP_RPC_METADATA = Object.freeze({
     ],
     "provider": [
       {
-        "id": 155,
+        "id": 152,
         "command": "provider-search",
         "method": "providerSearch",
         "handler": "ProviderSearch",
@@ -3328,7 +3262,7 @@ export const APP_RPC_METADATA = Object.freeze({
         "responseStream": false
       },
       {
-        "id": 156,
+        "id": 153,
         "command": "resolve-provider-ref",
         "method": "resolveProviderRef",
         "handler": "ResolveProviderRef",
@@ -3339,7 +3273,7 @@ export const APP_RPC_METADATA = Object.freeze({
         "responseStream": false
       },
       {
-        "id": 157,
+        "id": 154,
         "command": "request-acquisition",
         "method": "requestAcquisition",
         "handler": "RequestAcquisition",
@@ -3350,7 +3284,7 @@ export const APP_RPC_METADATA = Object.freeze({
         "responseStream": false
       },
       {
-        "id": 158,
+        "id": 155,
         "command": "attach-source-grant",
         "method": "attachSourceGrant",
         "handler": "AttachSourceGrant",
@@ -3361,7 +3295,7 @@ export const APP_RPC_METADATA = Object.freeze({
         "responseStream": false
       },
       {
-        "id": 159,
+        "id": 156,
         "command": "get-acquisition",
         "method": "getAcquisition",
         "handler": "GetAcquisition",
@@ -3372,7 +3306,7 @@ export const APP_RPC_METADATA = Object.freeze({
         "responseStream": false
       },
       {
-        "id": 160,
+        "id": 157,
         "command": "list-acquisitions",
         "method": "listAcquisitions",
         "handler": "ListAcquisitions",
@@ -3383,7 +3317,7 @@ export const APP_RPC_METADATA = Object.freeze({
         "responseStream": false
       },
       {
-        "id": 161,
+        "id": 158,
         "command": "cancel-acquisition",
         "method": "cancelAcquisition",
         "handler": "CancelAcquisition",
@@ -3394,7 +3328,7 @@ export const APP_RPC_METADATA = Object.freeze({
         "responseStream": false
       },
       {
-        "id": 169,
+        "id": 166,
         "command": "retry-acquisition",
         "method": "retryAcquisition",
         "handler": "RetryAcquisition",
@@ -3405,7 +3339,7 @@ export const APP_RPC_METADATA = Object.freeze({
         "responseStream": false
       },
       {
-        "id": 162,
+        "id": 159,
         "command": "get-provider-publication",
         "method": "getProviderPublication",
         "handler": "GetProviderPublication",
@@ -3416,7 +3350,7 @@ export const APP_RPC_METADATA = Object.freeze({
         "responseStream": false
       },
       {
-        "id": 163,
+        "id": 160,
         "command": "open-provider-stream",
         "method": "openProviderStream",
         "handler": "OpenProviderStream",
@@ -3427,7 +3361,7 @@ export const APP_RPC_METADATA = Object.freeze({
         "responseStream": false
       },
       {
-        "id": 164,
+        "id": 161,
         "command": "get-provider-status",
         "method": "getProviderStatus",
         "handler": "GetProviderStatus",
@@ -3438,7 +3372,7 @@ export const APP_RPC_METADATA = Object.freeze({
         "responseStream": false
       },
       {
-        "id": 165,
+        "id": 162,
         "command": "get-provider-policy",
         "method": "getProviderPolicy",
         "handler": "GetProviderPolicy",
@@ -3449,7 +3383,7 @@ export const APP_RPC_METADATA = Object.freeze({
         "responseStream": false
       },
       {
-        "id": 166,
+        "id": 163,
         "command": "set-provider-policy",
         "method": "setProviderPolicy",
         "handler": "SetProviderPolicy",
@@ -3460,7 +3394,7 @@ export const APP_RPC_METADATA = Object.freeze({
         "responseStream": false
       },
       {
-        "id": 167,
+        "id": 164,
         "command": "get-acquisition-policy",
         "method": "getAcquisitionPolicy",
         "handler": "GetAcquisitionPolicy",
@@ -3471,7 +3405,7 @@ export const APP_RPC_METADATA = Object.freeze({
         "responseStream": false
       },
       {
-        "id": 168,
+        "id": 165,
         "command": "set-acquisition-policy",
         "method": "setAcquisitionPolicy",
         "handler": "SetAcquisitionPolicy",
@@ -3484,7 +3418,7 @@ export const APP_RPC_METADATA = Object.freeze({
     ],
     "shell": [
       {
-        "id": 88,
+        "id": 85,
         "command": "pick-video-file",
         "method": "pickVideoFile",
         "handler": "PickVideoFile",
@@ -3495,7 +3429,7 @@ export const APP_RPC_METADATA = Object.freeze({
         "responseStream": false
       },
       {
-        "id": 89,
+        "id": 86,
         "command": "pick-image-file",
         "method": "pickImageFile",
         "handler": "PickImageFile",
@@ -3528,7 +3462,7 @@ export const APP_RPC_METADATA = Object.freeze({
         "responseStream": false
       },
       {
-        "id": 144,
+        "id": 141,
         "command": "ffmpeg-decode-available",
         "method": "ffmpegDecodeAvailable",
         "handler": "FfmpegDecodeAvailable",
@@ -3539,7 +3473,7 @@ export const APP_RPC_METADATA = Object.freeze({
         "responseStream": false
       },
       {
-        "id": 106,
+        "id": 103,
         "command": "cast-available",
         "method": "castAvailable",
         "handler": "CastAvailable",
@@ -3550,7 +3484,7 @@ export const APP_RPC_METADATA = Object.freeze({
         "responseStream": false
       },
       {
-        "id": 107,
+        "id": 104,
         "command": "cast-start-discovery",
         "method": "castStartDiscovery",
         "handler": "CastStartDiscovery",
@@ -3561,7 +3495,7 @@ export const APP_RPC_METADATA = Object.freeze({
         "responseStream": false
       },
       {
-        "id": 108,
+        "id": 105,
         "command": "cast-stop-discovery",
         "method": "castStopDiscovery",
         "handler": "CastStopDiscovery",
@@ -3572,7 +3506,7 @@ export const APP_RPC_METADATA = Object.freeze({
         "responseStream": false
       },
       {
-        "id": 109,
+        "id": 106,
         "command": "cast-get-devices",
         "method": "castGetDevices",
         "handler": "CastGetDevices",
@@ -3583,7 +3517,7 @@ export const APP_RPC_METADATA = Object.freeze({
         "responseStream": false
       },
       {
-        "id": 110,
+        "id": 107,
         "command": "cast-add-manual-device",
         "method": "castAddManualDevice",
         "handler": "CastAddManualDevice",
@@ -3594,7 +3528,7 @@ export const APP_RPC_METADATA = Object.freeze({
         "responseStream": false
       },
       {
-        "id": 111,
+        "id": 108,
         "command": "cast-connect",
         "method": "castConnect",
         "handler": "CastConnect",
@@ -3605,7 +3539,7 @@ export const APP_RPC_METADATA = Object.freeze({
         "responseStream": false
       },
       {
-        "id": 112,
+        "id": 109,
         "command": "cast-disconnect",
         "method": "castDisconnect",
         "handler": "CastDisconnect",
@@ -3616,7 +3550,7 @@ export const APP_RPC_METADATA = Object.freeze({
         "responseStream": false
       },
       {
-        "id": 113,
+        "id": 110,
         "command": "cast-play",
         "method": "castPlay",
         "handler": "CastPlay",
@@ -3627,7 +3561,7 @@ export const APP_RPC_METADATA = Object.freeze({
         "responseStream": false
       },
       {
-        "id": 114,
+        "id": 111,
         "command": "cast-pause",
         "method": "castPause",
         "handler": "CastPause",
@@ -3638,7 +3572,7 @@ export const APP_RPC_METADATA = Object.freeze({
         "responseStream": false
       },
       {
-        "id": 115,
+        "id": 112,
         "command": "cast-resume",
         "method": "castResume",
         "handler": "CastResume",
@@ -3649,7 +3583,7 @@ export const APP_RPC_METADATA = Object.freeze({
         "responseStream": false
       },
       {
-        "id": 116,
+        "id": 113,
         "command": "cast-stop",
         "method": "castStop",
         "handler": "CastStop",
@@ -3660,7 +3594,7 @@ export const APP_RPC_METADATA = Object.freeze({
         "responseStream": false
       },
       {
-        "id": 117,
+        "id": 114,
         "command": "cast-seek",
         "method": "castSeek",
         "handler": "CastSeek",
@@ -3671,7 +3605,7 @@ export const APP_RPC_METADATA = Object.freeze({
         "responseStream": false
       },
       {
-        "id": 118,
+        "id": 115,
         "command": "cast-set-volume",
         "method": "castSetVolume",
         "handler": "CastSetVolume",
@@ -3682,7 +3616,7 @@ export const APP_RPC_METADATA = Object.freeze({
         "responseStream": false
       },
       {
-        "id": 119,
+        "id": 116,
         "command": "cast-get-state",
         "method": "castGetState",
         "handler": "CastGetState",
@@ -3693,7 +3627,7 @@ export const APP_RPC_METADATA = Object.freeze({
         "responseStream": false
       },
       {
-        "id": 120,
+        "id": 117,
         "command": "cast-is-connected",
         "method": "castIsConnected",
         "handler": "CastIsConnected",
@@ -3704,7 +3638,7 @@ export const APP_RPC_METADATA = Object.freeze({
         "responseStream": false
       },
       {
-        "id": 146,
+        "id": 143,
         "command": "transcode-start",
         "method": "transcodeStart",
         "handler": "TranscodeStart",
@@ -3715,7 +3649,7 @@ export const APP_RPC_METADATA = Object.freeze({
         "responseStream": false
       },
       {
-        "id": 147,
+        "id": 144,
         "command": "transcode-stop",
         "method": "transcodeStop",
         "handler": "TranscodeStop",
@@ -3726,7 +3660,7 @@ export const APP_RPC_METADATA = Object.freeze({
         "responseStream": false
       },
       {
-        "id": 148,
+        "id": 145,
         "command": "transcode-status",
         "method": "transcodeStatus",
         "handler": "TranscodeStatus",
@@ -3771,7 +3705,6 @@ export const APP_RPC_METADATA = Object.freeze({
     "delete-playlist",
     "delete-video",
     "download-video",
-    "export-migration-report",
     "export-portable-state",
     "ffmpeg-decode-available",
     "get-acquisition",
@@ -3794,7 +3727,6 @@ export const APP_RPC_METADATA = Object.freeze({
     "get-media-collection",
     "get-media-collection-items",
     "get-media-entity",
-    "get-migration-status",
     "get-network-policy",
     "get-participation-status",
     "get-personal-settings",
@@ -3857,7 +3789,6 @@ export const APP_RPC_METADATA = Object.freeze({
     "restore-portable-state",
     "resume-network",
     "retry-acquisition",
-    "retry-migration",
     "revoke-personal-device",
     "search-index-candidates",
     "search-videos",
@@ -3896,7 +3827,7 @@ export const APP_RPC_METADATA = Object.freeze({
   ],
   "platformOnlyCommands": [
     {
-      "id": 141,
+      "id": 138,
       "command": "desktop-bootstrap",
       "method": "desktopBootstrap",
       "handler": "DesktopBootstrap",
@@ -3907,7 +3838,7 @@ export const APP_RPC_METADATA = Object.freeze({
       "responseStream": false
     },
     {
-      "id": 142,
+      "id": 139,
       "command": "desktop-shutdown",
       "method": "desktopShutdown",
       "handler": "DesktopShutdown",
@@ -3918,7 +3849,7 @@ export const APP_RPC_METADATA = Object.freeze({
       "responseStream": false
     },
     {
-      "id": 143,
+      "id": 140,
       "command": "desktop-refresh-browse",
       "method": "desktopRefreshBrowse",
       "handler": "DesktopRefreshBrowse",
@@ -3929,7 +3860,7 @@ export const APP_RPC_METADATA = Object.freeze({
       "responseStream": false
     },
     {
-      "id": 99,
+      "id": 96,
       "command": "event-ready",
       "method": "eventReady",
       "handler": "EventReady",
@@ -3940,7 +3871,7 @@ export const APP_RPC_METADATA = Object.freeze({
       "responseStream": false
     },
     {
-      "id": 100,
+      "id": 97,
       "command": "event-error",
       "method": "eventError",
       "handler": "EventError",
@@ -3951,7 +3882,7 @@ export const APP_RPC_METADATA = Object.freeze({
       "responseStream": false
     },
     {
-      "id": 101,
+      "id": 98,
       "command": "event-upload-progress",
       "method": "eventUploadProgress",
       "handler": "EventUploadProgress",
@@ -3962,7 +3893,7 @@ export const APP_RPC_METADATA = Object.freeze({
       "responseStream": false
     },
     {
-      "id": 102,
+      "id": 99,
       "command": "event-download-progress",
       "method": "eventDownloadProgress",
       "handler": "EventDownloadProgress",
@@ -3973,7 +3904,7 @@ export const APP_RPC_METADATA = Object.freeze({
       "responseStream": false
     },
     {
-      "id": 103,
+      "id": 100,
       "command": "event-media-graph-update",
       "method": "eventMediaGraphUpdate",
       "handler": "EventMediaGraphUpdate",
@@ -3984,7 +3915,7 @@ export const APP_RPC_METADATA = Object.freeze({
       "responseStream": false
     },
     {
-      "id": 104,
+      "id": 101,
       "command": "event-log",
       "method": "eventLog",
       "handler": "EventLog",
@@ -3995,7 +3926,7 @@ export const APP_RPC_METADATA = Object.freeze({
       "responseStream": false
     },
     {
-      "id": 105,
+      "id": 102,
       "command": "event-video-stats",
       "method": "eventVideoStats",
       "handler": "EventVideoStats",
@@ -4006,7 +3937,7 @@ export const APP_RPC_METADATA = Object.freeze({
       "responseStream": false
     },
     {
-      "id": 149,
+      "id": 146,
       "command": "event-transcode-progress",
       "method": "eventTranscodeProgress",
       "handler": "EventTranscodeProgress",
@@ -4017,7 +3948,7 @@ export const APP_RPC_METADATA = Object.freeze({
       "responseStream": false
     },
     {
-      "id": 121,
+      "id": 118,
       "command": "event-cast-device-found",
       "method": "eventCastDeviceFound",
       "handler": "EventCastDeviceFound",
@@ -4028,7 +3959,7 @@ export const APP_RPC_METADATA = Object.freeze({
       "responseStream": false
     },
     {
-      "id": 122,
+      "id": 119,
       "command": "event-cast-device-lost",
       "method": "eventCastDeviceLost",
       "handler": "EventCastDeviceLost",
@@ -4039,7 +3970,7 @@ export const APP_RPC_METADATA = Object.freeze({
       "responseStream": false
     },
     {
-      "id": 123,
+      "id": 120,
       "command": "event-cast-playback-state",
       "method": "eventCastPlaybackState",
       "handler": "EventCastPlaybackState",
@@ -4050,7 +3981,7 @@ export const APP_RPC_METADATA = Object.freeze({
       "responseStream": false
     },
     {
-      "id": 124,
+      "id": 121,
       "command": "event-cast-time-update",
       "method": "eventCastTimeUpdate",
       "handler": "EventCastTimeUpdate",
@@ -4072,7 +4003,7 @@ export const APP_RPC_METADATA = Object.freeze({
       "responseStream": false
     },
     {
-      "id": 170,
+      "id": 167,
       "command": "event-acquisition-lifecycle",
       "method": "eventAcquisitionLifecycle",
       "handler": "EventAcquisitionLifecycle",

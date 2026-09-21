@@ -15,7 +15,6 @@ import { classifySourceUrl } from './archive/source-id.js'
 import { createRelayBlockOffload } from './archive/block-offload.js'
 import { createStorageGuard } from './storage-guard.js'
 import { createCompanionServer } from './companion/server.js'
-import { createLegacyIngestMigrationStore } from './companion/legacy-ingest-migration-store.js'
 import { executeLocalFileAcquisition } from './local-file-acquisition.js'
 import tmdbFetch from '#fetch'
 
@@ -279,6 +278,14 @@ function archiveUiHost(config) {
   return config?.archive?.uiHost || '127.0.0.1'
 }
 
+// Extra authorities the console must accept a mutating request on - a reverse
+// proxy's hostname, a DNS alias. Everything else it trusts comes from the
+// socket it actually bound.
+function archiveUiTrustedHosts(config) {
+  const hosts = config?.archive?.uiTrustedHosts
+  return Array.isArray(hosts) ? hosts : []
+}
+
 function liveFreeDiskHeadroom({ fsModule, path, minFreeBytes = 0, log = null }) {
   const floor = Number.isFinite(Number(minFreeBytes)) && Number(minFreeBytes) > 0 ? Math.floor(Number(minFreeBytes)) : 0
   return () => {
@@ -316,12 +323,11 @@ function archiveWriteHeadroom({ tmpHeadroom, storageHeadroom, sharedVolume = tru
 // Bind the operator's HTTP surface before anything reads the store.
 //
 // Everything below this line walks storage: the relay catalog, the creators DB,
-// and above all the universal backend, whose bring-up rebuilds the media graph,
-// runs the publication-v1 migration and registers seed-pin before it hands back
-// a context. On a large store that is minutes, and it can stall indefinitely on
-// a core waiting for a peer. Binding after it is what left a populated relay
-// answering P2P traffic with its console port closed forever, indistinguishable
-// from a dead process.
+// and above all the universal backend, whose bring-up rebuilds the media graph
+// and registers seed-pin before it hands back a context. On a large store that
+// is minutes, and it can stall indefinitely on a core waiting for a peer.
+// Binding after it is what left a populated relay answering P2P traffic with
+// its console port closed forever, indistinguishable from a dead process.
 //
 // The surface answers as a warming relay until the console adopts it, so the
 // bind is unconditional and readiness is what arrives late.
@@ -570,19 +576,6 @@ async function deleteAcquisitionRelease({ runtime, publisherShell, acquisitionId
   }
   return { localRetracted, failureReason: null }
 }
-async function runLegacyIngestMigration(runtime, config, nowFn) {
-  if (!runtime.ctx?.metaDb) return
-  if (typeof runtime.provider?.migrateLegacyIngest !== 'function') {
-    throw new Error('ProviderService legacy acquisition migration is unavailable')
-  }
-  await runtime.provider.migrateLegacyIngest({
-    legacyStore: createLegacyIngestMigrationStore({ bee: runtime.ctx.metaDb, now: nowFn }),
-    legacyPrincipalId: config.companion.client,
-    legacyPublisherId: config.companion.publisherId,
-    now: nowFn
-  })
-}
-
 async function startArchiveConsole({
   config,
   logger,
@@ -604,6 +597,7 @@ async function startArchiveConsole({
     logger,
     host: archiveUiHost(config),
     port: archiveUiPort(config),
+    trustedHosts: archiveUiTrustedHosts(config),
     uploadDir: archiveSpoolRoot,
     uploadStorageHeadroom: archiveHeadroom,
     storageReservations: archiveStorageReservations,
@@ -989,7 +983,7 @@ function isNonNegativeSafeInteger(val) {
 }
 
 function completePolicyControl(policy) {
-  if (!policy || policy.policyVersion !== 2 || policy.consentVersion !== 1 || policy.migrationRequired !== false) {
+  if (!policy || policy.policyVersion !== 2 || policy.consentVersion !== 1) {
     return false
   }
   if (typeof policy.contributeWatchedMedia !== 'boolean' || typeof policy.archiveEnabled !== 'boolean') {
@@ -1058,7 +1052,7 @@ async function buildRelayService({
   // caller has to be able to tell "never consented" from "consented and full".
   function retentionBudget(retentionClass) {
     const policy = runtime.ctx?.networkPolicyRuntime?.getPolicy?.()
-    if (policy?.policyVersion !== 2 || policy.migrationRequired === true) return null
+    if (policy?.policyVersion !== 2 || policy.consentVersion !== 1) return null
     const contribution = retentionClass === 'contribution-cache'
     const allowed = contribution
       ? policy.contributeWatchedMedia === true
@@ -1378,10 +1372,10 @@ async function buildRelayService({
     const current = await runtime.provider.getAcquisitionPolicy()
     const allowedPublisherIds = [...new Set([...(current.allowedPublisherIds || []), publisherId])].sort()
     const enabledAdapterIds = runtime.configuredSourceAdapterIds || ['local-file']
-    const isInitialBootstrap = current.migrationRequired === true
-
-    // Preserve explicit operator allowlist removals on already-initialized policy;
-    // only seed configured enabled adapters when migrationRequired is true.
+    // A factory-default acquisition policy is closed: enabled is false and the
+    // allowlists are empty. Seed the configured adapters on that first pass
+    // only; afterwards an operator's explicit allowlist removals are preserved.
+    const isInitialBootstrap = current.enabled !== true
     const allowedAdapterIds = isInitialBootstrap
       ? [...new Set(enabledAdapterIds)].sort()
       : [...(current.allowedAdapterIds || [])].sort()
@@ -1400,7 +1394,6 @@ async function buildRelayService({
       policy: {
         policyVersion: 1,
         consentVersion: 1,
-        migrationRequired: false,
         enabled: true,
         acceptPublicRequests: false,
         requesterMode: 'allowlisted',
@@ -1600,7 +1593,6 @@ async function buildRelayService({
         : {
             policyVersion: 2,
             consentVersion: 0,
-            migrationRequired: true,
             contributeWatchedMedia: false,
             archiveEnabled: false,
             contributionBudgetBytes: 0,
@@ -1614,7 +1606,6 @@ async function buildRelayService({
       const result = await runtime.api.setNetworkPolicy({
         policyVersion: controlledPolicy.policyVersion,
         consentVersion: controlledPolicy.consentVersion,
-        migrationRequired: controlledPolicy.migrationRequired,
         contributeWatchedMedia: controlledPolicy.contributeWatchedMedia,
         archiveEnabled: controlledPolicy.archiveEnabled,
         contributionBudgetBytes: controlledPolicy.contributionBudgetBytes,
@@ -1636,12 +1627,10 @@ async function buildRelayService({
         throw new Error('network policy result is unavailable')
       }
       const policyControlApplied = effective?.policyVersion === 2 &&
-        effective?.consentVersion === 1 &&
-        effective?.migrationRequired === false
+        effective?.consentVersion === 1
       return {
         policyVersion: effective.policyVersion,
         consentVersion: effective.consentVersion,
-        migrationRequired: effective.migrationRequired,
         effectiveRole: effective.effectiveRole,
         permissions: { ...effective.permissions },
         contributionBudgetBytes: effective.contributionBudgetBytes,
@@ -1734,9 +1723,6 @@ async function buildRelayService({
         publisherShell,
         canPublish: retentionPermission
       })
-      if (runtime.ctx?.metaDb) {
-        await runLegacyIngestMigration(runtime, config, nowFn)
-      }
       archiveConsole = await startArchiveUiIfEnabled({
         config,
         logger,

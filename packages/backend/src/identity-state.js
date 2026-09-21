@@ -26,24 +26,7 @@ export function normalizeStoredIdentityState(value) {
 export async function readStoredIdentityState(metaDb) {
   if (typeof metaDb?.get !== 'function') return null
   const state = await metaDb.get(IDENTITY_STATE_KEY)
-  const authoritative = normalizeStoredIdentityState(state?.value)
-  if (authoritative) return authoritative
-
-  const [storedIdentities, storedActiveIdentity] = await Promise.all([
-    metaDb.get('identities'),
-    metaDb.get('activeIdentity'),
-  ])
-  const identities = Array.isArray(storedIdentities?.value)
-    ? storedIdentities.value
-    : []
-  const activeIdentity = storedActiveIdentity?.value || null
-  return {
-    version: 1,
-    activeIdentity: identities.some(identity => identity?.publicKey === activeIdentity)
-      ? activeIdentity
-      : null,
-    identities,
-  }
+  return normalizeStoredIdentityState(state?.value)
 }
 
 export async function readStoredIdentityRecords(metaDb) {

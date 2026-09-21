@@ -67,7 +67,7 @@ export function createSubscriptionsApi({ ctx, loadChannel }) {
     async getSubscriptions() {
       let subs
       if (ctx.personal) {
-        // Normalize personal-store rows to the legacy { driveKey, subscribedAt } shape.
+        // Personal-store rows carry channelKey; this API answers with driveKey.
         subs = (await ctx.personal.listSubscriptions()).map((s) => ({
           driveKey: s.channelKey,
           subscribedAt: s.subscribedAt,

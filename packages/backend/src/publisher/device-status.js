@@ -20,23 +20,6 @@ function writerForDevice (authorizationState, writerKey) {
   return authorizationState.writers.get(b4a.toString(writerKey, 'hex')) || null
 }
 
-const LEGACY_IMPORT_STATES = new Set([
-  'not-required',
-  'pending',
-  'running',
-  'complete',
-  'failed',
-  'retrying'
-])
-
-function normalizeLegacyImportState (legacyImport) {
-  if (legacyImport == null) return null
-  if (!legacyImport || typeof legacyImport !== 'object' || !LEGACY_IMPORT_STATES.has(legacyImport.state)) {
-    invalid('legacyImport.state is invalid')
-  }
-  return legacyImport.state
-}
-
 function validatePublisherDeviceInputs (authorizationState, localDevice) {
   if (!authorizationState || typeof authorizationState !== 'object') invalid('authorizationState is required')
   if (!localDevice || typeof localDevice !== 'object') invalid('localDevice is required')
@@ -97,8 +80,7 @@ function determineDeviceStatusAndReason ({
   localPolicyEpoch,
   writerKey,
   writer,
-  devicePublicKey,
-  legacyImportState
+  devicePublicKey
 }) {
   let status = 'authority-lost'
   let reasonCode = 'ROOT_AUTHORITY_LOST'
@@ -126,17 +108,11 @@ function determineDeviceStatusAndReason ({
     reasonCode = writerEval.reasonCode
   }
 
-  if (legacyImportState === 'failed') {
-    status = 'unable-to-publish'
-    reasonCode = 'LEGACY_IMPORT_FAILED'
-  }
-
   return { status, reasonCode, rootAuthorityCurrent }
 }
 
-export function projectPublisherDeviceStatus ({ authorizationState, localDevice, legacyImport } = {}) {
+export function projectPublisherDeviceStatus ({ authorizationState, localDevice } = {}) {
   const inputs = validatePublisherDeviceInputs(authorizationState, localDevice)
-  const legacyImportState = normalizeLegacyImportState(legacyImport)
   const writer = writerForDevice(authorizationState, inputs.writerKey)
   const { status, reasonCode, rootAuthorityCurrent } = determineDeviceStatusAndReason({
     localDevice,
@@ -147,8 +123,7 @@ export function projectPublisherDeviceStatus ({ authorizationState, localDevice,
     localPolicyEpoch: inputs.localPolicyEpoch,
     writerKey: inputs.writerKey,
     writer,
-    devicePublicKey: inputs.devicePublicKey,
-    legacyImportState
+    devicePublicKey: inputs.devicePublicKey
   })
 
   const projected = {
@@ -158,7 +133,7 @@ export function projectPublisherDeviceStatus ({ authorizationState, localDevice,
     canPlayLocal: true,
     canExportLocal: true,
     canDeleteLocal: true,
-    canRootTransition: rootAuthorityCurrent && status !== 'stale' && legacyImportState !== 'failed',
+    canRootTransition: rootAuthorityCurrent && status !== 'stale',
     catalogEpoch: inputs.catalogEpoch,
     policyEpoch: inputs.policyEpoch
   }
@@ -166,6 +141,5 @@ export function projectPublisherDeviceStatus ({ authorizationState, localDevice,
   if (inputs.devicePublicKey) projected.devicePublicKey = inputs.devicePublicKey
   if (writer) projected.admissionExpiresAt = uint(writer.expiresAt, 'writer.expiresAt')
   if (writer?.revocation) projected.revocationCutoff = uint(writer.revocation.acceptedThroughSequence, 'writer.revocation.acceptedThroughSequence')
-  if (legacyImportState) projected.legacyImportState = legacyImportState
   return Object.freeze(projected)
 }

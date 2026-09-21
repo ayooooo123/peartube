@@ -366,3 +366,41 @@ test('block offload with a half-configured bucket is refused, never downgraded t
   const accepted = resolveRelayConfig({ archive: { s3: { ...complete, offload: true } } }, { env: {} })
   t.is(accepted.archive.s3.offload, true, 'a complete bucket is accepted')
 })
+
+test('PEARTUBE_ARCHIVE_UI_TRUSTED_HOSTS becomes a bounded, validated authority list', async (t) => {
+  const config = resolveRelayConfig({}, {
+    env: { PEARTUBE_ARCHIVE_UI_TRUSTED_HOSTS: 'Relay.Example.com, relay.example.com:8174 ,,[2001:db8::1]:8174' }
+  })
+  t.alike(config.archive.uiTrustedHosts, ['relay.example.com', 'relay.example.com:8174', '[2001:db8::1]:8174'])
+
+  t.alike(resolveRelayConfig({}, { env: {} }).archive.uiTrustedHosts, [], 'no escape hatch unless the operator asks for one')
+
+  for (const value of [
+    'relay.example.com, relay.example.com',
+    'http://relay.example.com',
+    'relay.example.com/admin',
+    'evil.example@127.0.0.1:8174',
+    Array.from({ length: 33 }, (_, index) => `relay${index}.example.com`).join(',')
+  ]) {
+    t.exception(
+      () => resolveRelayConfig({}, { env: { PEARTUBE_ARCHIVE_UI_TRUSTED_HOSTS: value } }),
+      /uiTrustedHosts must contain up to 32 unique host/,
+      `refused: ${value.slice(0, 40)}`
+    )
+  }
+})
+
+test('a rendered example config round-trips its trusted console hosts', async (t) => {
+  const dir = makeTempDir('peartube-relay-trusted-')
+  const configPath = join(dir, 'relay.yml')
+  try {
+    const rendered = renderExampleConfig(resolveRelayConfig({}, {
+      env: { PEARTUBE_ARCHIVE_UI_TRUSTED_HOSTS: 'relay.example.com:8174' }
+    }))
+    writeFileSync(configPath, rendered)
+    const reloaded = await loadRelayConfig({ config: configPath }, { env: {} })
+    t.alike(reloaded.archive.uiTrustedHosts, ['relay.example.com:8174'])
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})

@@ -140,7 +140,6 @@ test('buildRelayStatus preserves safe policy, network, budget and public-work di
         policy: {
           policyVersion: 2,
           consentVersion: 3,
-          migrationRequired: false,
           effectiveRole: 'contributor',
           permissions: { contribute: true, archive: false },
           contributionBudgetBytes: 100,
@@ -221,7 +220,6 @@ test('status recursively excludes protected configuration and runtime material',
         policy: {
           policyVersion: 2,
           consentVersion: 1,
-          migrationRequired: false,
           effectiveRole: 'watch-only',
           permissions: { contribute: false, archive: false }
         }

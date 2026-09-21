@@ -2,6 +2,7 @@ import b4a from 'b4a'
 import test from 'brittle'
 
 import { createIdentityManager } from '../src/identity.js'
+import { IDENTITY_STATE_KEY } from '../src/identity-state.js'
 import { createBackendSeedPinAdmission } from '../src/seed-pin/admission.js'
 import { resolveSeedPinClientAuth } from '../src/seed-pin/registration.js'
 import { startBackendSeedPin } from '../src/orchestrator.js'
@@ -143,8 +144,7 @@ test('identity manager exposes narrow live owned/paired authorization facts', as
     },
   ]
   const values = new Map([
-    ['identities', stored],
-    ['activeIdentity', OWNED_IDENTITY],
+    [IDENTITY_STATE_KEY, { version: 1, activeIdentity: OWNED_IDENTITY, identities: stored }],
   ])
   const ctx = {
     metaDb: {

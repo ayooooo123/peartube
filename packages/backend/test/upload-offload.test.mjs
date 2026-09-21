@@ -2,8 +2,6 @@ import test from 'brittle'
 import {
   peerHasFullRange,
   collectFullCopyPeers,
-  assessOffloadEligibility,
-  DEFAULT_OFFLOAD_POLICY,
 } from '../src/upload-offload.js'
 
 // A peer that holds every block strictly below `have` (a contiguous prefix),
@@ -29,7 +27,6 @@ function peerWithContiguous(length, keyHex = null) {
 }
 
 const RELAY = 'aa'.repeat(32)
-const DEVICE = 'bb'.repeat(32)
 const PEER1 = 'cc'.repeat(32)
 const PEER2 = 'dd'.repeat(32)
 
@@ -65,59 +62,4 @@ test('collectFullCopyPeers rejects malformed ranges', (t) => {
   t.is(collectFullCopyPeers(peers, { blockOffset: -1, blockLength: 4 }).fullCopyKeys.length, 0)
   t.is(collectFullCopyPeers(peers, { blockOffset: 0, blockLength: 0 }).fullCopyKeys.length, 0)
   t.is(collectFullCopyPeers(peers, {}).fullCopyKeys.length, 0)
-})
-
-test('a configured relay full copy is diagnostic evidence but never deletion authority', (t) => {
-  const result = assessOffloadEligibility({
-    fullCopyKeys: [RELAY],
-    relayKeys: [RELAY],
-    deviceKeys: [DEVICE],
-  })
-  t.absent(result.eligible)
-  t.ok(result.relayHasFullCopy)
-  t.absent(result.ownDeviceHasFullCopy)
-  t.alike(result.reasons, [])
-})
-
-test('an own-device full copy alone makes an upload eligible', (t) => {
-  const result = assessOffloadEligibility({
-    fullCopyKeys: [DEVICE],
-    relayKeys: [RELAY],
-    deviceKeys: [DEVICE],
-  })
-  t.ok(result.eligible)
-  t.ok(result.ownDeviceHasFullCopy)
-})
-
-test('a single anonymous live peer is NOT enough (below redundancy threshold)', (t) => {
-  const result = assessOffloadEligibility({
-    fullCopyKeys: [PEER1],
-    relayKeys: [RELAY],
-    deviceKeys: [DEVICE],
-  })
-  t.absent(result.eligible, 'one transient peer must not justify deleting the source copy')
-  t.is(result.fullCopyPeers, 1)
-})
-
-test('any number of independent live viewers remains transient and ineligible', (t) => {
-  const result = assessOffloadEligibility({
-    fullCopyKeys: [PEER1, PEER2],
-    fullCopyAnonymous: 10,
-    relayKeys: [RELAY],
-    deviceKeys: [DEVICE],
-  })
-  t.absent(result.eligible)
-  t.is(result.fullCopyPeers, 12)
-  t.alike(result.reasons, [])
-})
-
-test('no full copies anywhere means never eligible', (t) => {
-  const result = assessOffloadEligibility({ fullCopyKeys: [], fullCopyAnonymous: 0 })
-  t.absent(result.eligible)
-  t.is(result.fullCopyPeers, 0)
-  t.alike(result.reasons, [])
-})
-
-test('legacy generic-peer threshold is permanently disabled', (t) => {
-  t.is(DEFAULT_OFFLOAD_POLICY.minFullCopyPeers, Number.MAX_SAFE_INTEGER)
 })

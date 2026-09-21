@@ -278,20 +278,6 @@ ns.register({
 })
 
 ns.register({
-  name: 'watchEvent',
-  compact: true,
-  fields: [
-    { name: 'videoId', type: 'string', required: true },
-    { name: 'eventId', type: 'string', required: true },
-    { name: 'channelKey', type: 'string' },
-    { name: 'watcherKeyHex', type: 'string' },
-    { name: 'duration', type: 'uint64' },
-    { name: 'completed', type: 'bool' },
-    { name: 'timestamp', type: 'uint64' }
-  ]
-})
-
-ns.register({
   name: 'vectorIndex',
   compact: true,
   fields: [
@@ -314,7 +300,6 @@ ch.collections.register({ name: 'videos', schema: '@peartubeChannel/video', key:
 ch.collections.register({ name: 'comments', schema: '@peartubeChannel/comment', key: ['videoId', 'commentId'] })
 ch.collections.register({ name: 'reactions', schema: '@peartubeChannel/reaction', key: ['videoId', 'authorKeyHex'] })
 ch.collections.register({ name: 'invites', schema: '@peartubeChannel/invite', key: ['idHex'] })
-ch.collections.register({ name: 'watchEvents', schema: '@peartubeChannel/watchEvent', key: ['videoId', 'eventId'] })
 ch.collections.register({ name: 'vectorIndexes', schema: '@peartubeChannel/vectorIndex', key: ['videoId'] })
 ch.collections.register({ name: 'channelProfiles', schema: '@peartubeChannel/channelProfile', key: ['id'] })
 ch.collections.register({
@@ -331,7 +316,6 @@ ch.indexes.register({ name: 'writers-by-role', collection: '@peartubeChannel/wri
 ch.indexes.register({ name: 'videos-by-uploaded-at', collection: '@peartubeChannel/videos', unique: false, key: ['uploadedAt'] })
 ch.indexes.register({ name: 'comments-by-video-timestamp', collection: '@peartubeChannel/comments', unique: false, key: ['videoId', 'timestamp'] })
 ch.indexes.register({ name: 'reactions-by-video-type', collection: '@peartubeChannel/reactions', unique: false, key: ['videoId', 'reactionType'] })
-ch.indexes.register({ name: 'watch-events-by-video-timestamp', collection: '@peartubeChannel/watchEvents', unique: false, key: ['videoId', 'timestamp'] })
 ch.indexes.register({ name: 'claims-by-writer', collection: '@peartubeChannel/importClaims', unique: false, key: ['identityKey', 'writerKey', 'claimantId'] })
 ch.indexes.register({ name: 'claims-by-identity', collection: '@peartubeChannel/importClaims', unique: false, key: ['identityKey', 'claimantId'] })
 ch.indexes.register({ name: 'videos-by-season-episode', collection: '@peartubeChannel/contentDetails', unique: false, key: ['seasonNumber', 'episodeNumber', 'id'] })

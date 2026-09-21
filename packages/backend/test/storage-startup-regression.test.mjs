@@ -37,7 +37,7 @@ async function loadStorageBoundaries(run = url => import(url.href)) {
     setupStorageBlobServer, startBlobServerListening, createBlobServerRequestHandler,
     wrapStoreForBlobServerStreaming, ownContextResource,
     scheduleWarmReconnect, createSwarmDiagnostics,
-    installSwarmConnectDiagnostics
+    installSwarmConnectDiagnostics, createOfflineSwarm
   }\n`, { flag: 'wx' })
   try {
     return await run(url)
@@ -661,6 +661,26 @@ test('offline swarm fallback exposes the swarm methods orchestrator and managers
 
 test('offline swarm fallback skips network discovery at startup', () => {
   assert.match(storageSource, /function createOfflineSwarm/)
+})
+
+test('offline swarm discovery rejects instead of reporting a settled flush', async () => {
+  const { createOfflineSwarm } = await loadStorageBoundaries()
+  const swarm = createOfflineSwarm({ publicKey: Buffer.alloc(32, 7) }, 'module-unavailable')
+  const discovery = swarm.join(Buffer.alloc(32, 3))
+
+  const isOffline = (err) => {
+    assert.equal(err.code, 'SWARM_OFFLINE')
+    assert.match(err.message, /module-unavailable/)
+    return true
+  }
+  await assert.rejects(() => discovery.flushed(), isOffline)
+  await assert.rejects(() => discovery.refresh(), isOffline)
+
+  // Teardown must still resolve so shutdown never hangs on an offline node.
+  await discovery.destroy()
+  await discovery.close()
+  await swarm.leave(Buffer.alloc(32, 3))
+  await swarm.destroy()
 })
 
 test('storage exposes public bee content discovery retention for cached serving cores', () => {

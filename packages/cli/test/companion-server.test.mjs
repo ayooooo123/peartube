@@ -89,6 +89,7 @@ function partialSignedRequest (nonce) {
   return [
     'POST /api/v2/status HTTP/1.1',
     'Host: companion',
+    'Content-Type: application/json',
     'Content-Length: 100',
     ...Object.entries(headers).map(([name, value]) => `${name}: ${value}`),
     '',
@@ -136,8 +137,7 @@ function fakeRuntime () {
     async getPolicy () { return {} },
     async setPolicy (value) { return value },
     async getAcquisitionPolicy () { return {} },
-    async setAcquisitionPolicy ({ policy }) { return policy },
-    async migrateLegacyIngest () { return { migrated: 0, skipped: 0 } }
+    async setAcquisitionPolicy ({ policy }) { return policy }
   }
   return runtime
 }
@@ -630,12 +630,15 @@ test('oversized bodies are rejected before v2 dispatch without buffering beyond 
     method: 'POST',
     path: '/api/v2/search',
     body,
-    headers: signedHeaders({
-      method: 'POST',
-      path: '/api/v2/search',
-      body,
-      nonce: 'large-nonce-0001'
-    })
+    headers: {
+      'content-type': 'application/json',
+      ...signedHeaders({
+        method: 'POST',
+        path: '/api/v2/search',
+        body,
+        nonce: 'large-nonce-0001'
+      })
+    }
   })
 
   t.is(response.statusCode, 413)
@@ -657,7 +660,8 @@ test('missing authentication is rejected before an oversized body is read', asyn
     port: state.port,
     method: 'POST',
     path: '/api/v2/search',
-    body: '12345'
+    body: '12345',
+    headers: { 'content-type': 'application/json' }
   })
 
   t.is(response.statusCode, 401)
@@ -828,7 +832,6 @@ test('authenticated policy control reaches ProviderService', async (t) => {
   const policy = {
     policyVersion: 2,
     consentVersion: 1,
-    migrationRequired: false,
     contributeWatchedMedia: true,
     archiveEnabled: false,
     contributionBudgetBytes: 4096,
@@ -1059,11 +1062,16 @@ test('auth-off relay verifies supplied credentials, denies remote unsigned mutat
   await listen(surface, { host: '127.0.0.1', port: 0 })
   t.teardown(async () => { await close(surface); await server.close().catch(noop) })
   const address = { host: '127.0.0.1', port: surface.address().port }
-  const send = (method, path, body = '', headers = {}) => request({ ...address, method, path, body, headers })
+  const send = (method, path, body = '', headers = {}) => request({
+    ...address,
+    method,
+    path,
+    body,
+    headers: body ? { 'content-type': 'application/json', ...headers } : headers
+  })
   const policyBody = JSON.stringify({
     policyVersion: 2,
     consentVersion: 1,
-    migrationRequired: false,
     contributeWatchedMedia: true,
     archiveEnabled: false,
     contributionBudgetBytes: 4096,
@@ -1113,6 +1121,92 @@ test('auth-off relay verifies supplied credentials, denies remote unsigned mutat
   const signedAcquire = await send('POST', '/api/v2/acquisitions', acquisitionBodyText,
     signedHeaders({ method: 'POST', path: '/api/v2/acquisitions', body: acquisitionBodyText, nonce: 'authoff-acq-00001' }))
   t.is(signedAcquire.statusCode, 202)
+})
+
+// A page open in a browser on the relay host reaches the companion listener as
+// a loopback peer, which is the one identity this API trusts without a
+// signature. These harnesses run the auth-off, loopback-trusted configuration -
+// the exact shape a cross-origin page would borrow.
+async function loopbackAcquisitionHarness (t) {
+  const acquired = []
+  const server = createCompanionServer({
+    config: tcpConfig(tempDir(t), { auth: false }),
+    clock: () => NOW,
+    logger,
+    service: {
+      async requestAcquisition ({ request: input }) {
+        acquired.push(input)
+        return {
+          schemaVersion: 1,
+          acquisitionId: 'acq-origin-1',
+          state: 'queued',
+          retentionClass: 'archive-pin',
+          bytesAcquired: 0,
+          expectedBytes: null,
+          recoverable: false,
+          createdAt: NOW,
+          updatedAt: NOW
+        }
+      }
+    }
+  })
+  const state = await server.start()
+  t.teardown(() => server.close().catch(noop))
+  const body = JSON.stringify({
+    idempotencyKey: 'origin-guard-1',
+    request: { schemaVersion: 1, resolutionRef: 'A'.repeat(43), publisherId: 'publisher-1', retentionClass: 'archive-pin' }
+  })
+  const acquire = (headers = {}) => request({
+    host: state.host,
+    port: state.port,
+    method: 'POST',
+    path: '/api/v2/acquisitions',
+    body,
+    headers: { 'content-type': 'application/json', ...headers }
+  })
+  return { acquired, acquire, state, body }
+}
+
+test('a browser Origin is refused before loopback authority is granted', async (t) => {
+  const { acquired, acquire } = await loopbackAcquisitionHarness(t)
+
+  const response = await acquire({ origin: 'https://evil.example' })
+
+  t.is(response.statusCode, 403)
+  t.is(JSON.parse(response.body).error.code, 'FORBIDDEN_ORIGIN')
+  t.is(acquired.length, 0, 'a cross-origin page never reaches the acquisition service')
+})
+
+test('a simple-request content type is refused as an unsupported media type', async (t) => {
+  const { acquired, acquire } = await loopbackAcquisitionHarness(t)
+
+  const response = await acquire({ 'content-type': 'text/plain' })
+
+  t.is(response.statusCode, 415)
+  t.is(JSON.parse(response.body).error.code, 'UNSUPPORTED_MEDIA_TYPE')
+  t.is(acquired.length, 0, 'the CORS simple-request path never reaches the acquisition service')
+})
+
+test('loopback JSON acquisition still succeeds with a charset parameter', async (t) => {
+  const { acquired, acquire } = await loopbackAcquisitionHarness(t)
+
+  const response = await acquire({ 'content-type': 'Application/JSON; charset=utf-8' })
+
+  t.is(response.statusCode, 202)
+  t.is(acquired.length, 1, 'the loopback CLI path is unchanged')
+  t.is(acquired[0].resolutionRef, 'A'.repeat(43))
+})
+
+test('Sec-Fetch-Site admits same-origin and refuses cross-site', async (t) => {
+  const { acquired, acquire } = await loopbackAcquisitionHarness(t)
+
+  const sameOrigin = await acquire({ 'sec-fetch-site': 'same-origin' })
+  t.is(sameOrigin.statusCode, 202)
+
+  const crossSite = await acquire({ 'sec-fetch-site': 'cross-site' })
+  t.is(crossSite.statusCode, 403)
+  t.is(JSON.parse(crossSite.body).error.code, 'FORBIDDEN_ORIGIN')
+  t.is(acquired.length, 1, 'only the same-origin caller reached the acquisition service')
 })
 
 test('mounted companion tracks exported handleRequest traffic, serves in-process dispatch, and close drains without the foreign listener', async (t) => {

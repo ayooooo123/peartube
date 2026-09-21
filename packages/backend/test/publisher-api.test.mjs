@@ -382,39 +382,6 @@ test('shell root intent path admits and revokes the normal device writer without
   t.is(fixture.registry.appended.length, 2)
 })
 
-test('writer admission fails closed while legacy publication migration is pending', async t => {
-  let migrationChecks = 0
-  const fixture = createNamespaceFixture({
-    ctx: {
-      async completePublicationV1Migration() {
-        migrationChecks++
-        return { status: 'pending' }
-      }
-    }
-  })
-  const recordType = PUBLISHER_RECORD_TYPES.WRITER_ADMISSION
-  const prepared = await fixture.api.preparePublisherRootOperation(prepareRequest(fixture, 62, {
-    recordType,
-    signerPublicKey: fixture.root.publicKey,
-    body: encodePublisherOperationBody(recordType, {
-      writerKey: fixture.registry.catalog.localWriterKey,
-      signerKey: fixture.registry.catalog.localSignerKey,
-      capabilities: ['claim', 'publish'],
-      firstAcceptedSequence: 1,
-      expiresAt: NOW + 100_000,
-      admissionNonce: bytes(16, 44)
-    }),
-    expiresInMs: 0
-  }))
-  t.is(prepared.success, true)
-  const submitted = await fixture.api.submitPublisherRootOperation(
-    signedSubmitRequest(fixture, prepared)
-  )
-  t.is(submitted.success, false)
-  t.is(submitted.reason, 'PUBLISHER_MIGRATION_PENDING')
-  t.is(migrationChecks, 1)
-})
-
 
 test('valid single-signed namespace intent appends exactly once and replay is rejected', async (t) => {
   const fixture = createNamespaceFixture()
@@ -982,10 +949,11 @@ test('provision skips and replaces a mapped catalog whose persisted local writer
   const replacementKey = bytes(32, 202)
   const mappingKey = `publisher-catalog:v1:${publisherIdHex}`
   values.set(mappingKey, {
-    version: 1,
+    version: 2,
     publisherId: publisherIdHex,
     genesisRootKey: b4a.toString(genesisRootKey, 'hex'),
-    catalogBootstrapKey: b4a.toString(mappedKey, 'hex')
+    catalogBootstrapKey: b4a.toString(mappedKey, 'hex'),
+    catalogNamespace: `peartube-publisher-${(publisherIdHex).slice(0, 32)}`,
   })
 
   const opens = []
@@ -1092,10 +1060,11 @@ test('listBindingPage paginates persisted bindings and admits/evicts under capac
     const bootKey = b4a.alloc(32, 100 + i)
     publishers.push({ pubId, pubHex, rootKey, bootKey })
     values.set(`publisher-catalog:v1:${pubHex}`, {
-      version: 1,
+      version: 2,
       publisherId: pubHex,
       genesisRootKey: b4a.toString(rootKey, 'hex'),
-      catalogBootstrapKey: b4a.toString(bootKey, 'hex')
+      catalogBootstrapKey: b4a.toString(bootKey, 'hex'),
+      catalogNamespace: `peartube-publisher-${(pubHex).slice(0, 32)}`,
     })
   }
 
@@ -1154,10 +1123,11 @@ test('listBindingPage pins current-page items and returns shorter page when rema
   const writablePubHex = b4a.toString(writablePubId, 'hex')
   const writableBoot = b4a.alloc(32, 199)
   values.set(`publisher-catalog:v1:${writablePubHex}`, {
-    version: 1,
+    version: 2,
     publisherId: writablePubHex,
     genesisRootKey: b4a.toString(writableRoot, 'hex'),
-    catalogBootstrapKey: b4a.toString(writableBoot, 'hex')
+    catalogBootstrapKey: b4a.toString(writableBoot, 'hex'),
+    catalogNamespace: `peartube-publisher-${(writablePubHex).slice(0, 32)}`,
   })
 
   for (let i = 1; i <= 3; i++) {
@@ -1166,10 +1136,11 @@ test('listBindingPage pins current-page items and returns shorter page when rema
     const pubHex = b4a.toString(pubId, 'hex')
     const bootKey = b4a.alloc(32, 100 + i)
     values.set(`publisher-catalog:v1:${pubHex}`, {
-      version: 1,
+      version: 2,
       publisherId: pubHex,
       genesisRootKey: b4a.toString(rootKey, 'hex'),
-      catalogBootstrapKey: b4a.toString(bootKey, 'hex')
+      catalogBootstrapKey: b4a.toString(bootKey, 'hex'),
+      catalogNamespace: `peartube-publisher-${(pubHex).slice(0, 32)}`,
     })
   }
 
@@ -1263,10 +1234,11 @@ test('failed resolve at capacity does not evict healthy open catalogs and leaves
     const bootKey = b4a.alloc(32, 100 + i)
     pubIds.push(pubId)
     values.set(`publisher-catalog:v1:${pubHex}`, {
-      version: 1,
+      version: 2,
       publisherId: pubHex,
       genesisRootKey: b4a.toString(rootKey, 'hex'),
-      catalogBootstrapKey: b4a.toString(bootKey, 'hex')
+      catalogBootstrapKey: b4a.toString(bootKey, 'hex'),
+      catalogNamespace: `peartube-publisher-${(pubHex).slice(0, 32)}`,
     })
   }
 
@@ -1319,18 +1291,19 @@ function putCatalogMapping(values, rootSeed, bootSeed) {
   const pubHex = b4a.toString(pubId, 'hex')
   const bootKey = b4a.alloc(32, bootSeed)
   values.set(`publisher-catalog:v1:${pubHex}`, {
-    version: 1,
+    version: 2,
     publisherId: pubHex,
     genesisRootKey: b4a.toString(rootKey, 'hex'),
-    catalogBootstrapKey: b4a.toString(bootKey, 'hex')
+    catalogBootstrapKey: b4a.toString(bootKey, 'hex'),
+    catalogNamespace: `peartube-publisher-${(pubHex).slice(0, 32)}`,
   })
   return { rootKey, pubId, pubHex, bootKey }
 }
 
 test('listBindingPage writableOnly bounds scanned mappings and open handles with no matches', async (t) => {
   const values = new Map()
-  values.set('publisher-catalog:v1:not-a-valid-hex-key', { version: 1 })
-  values.set('publisher-catalog:v1:zzzz', { version: 1 })
+  values.set('publisher-catalog:v1:not-a-valid-hex-key', { version: 2 })
+  values.set('publisher-catalog:v1:zzzz', { version: 2 })
   for (let i = 1; i <= 12; i++) putCatalogMapping(values, i, 40 + i)
 
   let liveOpens = 0

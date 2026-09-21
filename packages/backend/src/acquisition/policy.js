@@ -8,7 +8,7 @@ export const ACQUISITION_REQUESTER_MODES = Object.freeze(['local-only', 'allowli
 
 const ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/
 const MODES = new Set(ACQUISITION_REQUESTER_MODES)
-const BOOLEAN_FIELDS = ['migrationRequired', 'enabled', 'acceptPublicRequests']
+const BOOLEAN_FIELDS = ['enabled', 'acceptPublicRequests']
 const LIMIT_FIELDS = [
   'maxQueuedJobs',
   'maxConcurrentJobs',
@@ -38,7 +38,6 @@ const POLICY_FIELDS = new Set([
 export const CLOSED_ACQUISITION_POLICY = Object.freeze({
   policyVersion: ACQUISITION_POLICY_VERSION,
   consentVersion: ACQUISITION_CONSENT_VERSION,
-  migrationRequired: true,
   enabled: false,
   acceptPublicRequests: false,
   requesterMode: 'local-only',
@@ -102,7 +101,6 @@ export function normalizeAcquisitionPolicy (input = CLOSED_ACQUISITION_POLICY) {
   const result = {
     policyVersion: ACQUISITION_POLICY_VERSION,
     consentVersion: ACQUISITION_CONSENT_VERSION,
-    migrationRequired: input.migrationRequired,
     enabled: input.enabled,
     acceptPublicRequests: input.acceptPublicRequests,
     requesterMode: input.requesterMode,
@@ -129,7 +127,6 @@ function consentGranted (consent) {
 }
 
 function assertOpenPolicy (policy) {
-  if (policy.migrationRequired) fail('ACQUISITION_MIGRATION_REQUIRED', 'acquisition policy migration must be acknowledged', 403)
   if (!policy.enabled) fail('ACQUISITION_DISABLED', 'acquisition provider is disabled', 403)
   for (const field of LIMIT_FIELDS) {
     if (policy[field] <= 0) fail('ACQUISITION_POLICY_CLOSED', `${field} must be configured before acquisitions are enabled`, 403)
@@ -191,7 +188,7 @@ export function createAcquisitionPolicyRuntime ({ policy = CLOSED_ACQUISITION_PO
     },
     async setPolicy (input, { consent = null } = {}) {
       const next = normalizeAcquisitionPolicy(input)
-      if ((next.enabled || !next.migrationRequired) && !consentGranted(consent)) {
+      if (next.enabled && !consentGranted(consent)) {
         fail('ACQUISITION_CONSENT_REQUIRED', 'explicit current-version consent is required', 403)
       }
       const operation = writes.then(async () => {

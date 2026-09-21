@@ -3,7 +3,7 @@ import { Platform, Share } from 'react-native'
 import { useRouter } from 'expo-router'
 import * as DocumentPicker from 'expo-document-picker'
 import * as FileSystem from 'expo-file-system/legacy'
-import { MigrationBackupPanel } from '@/components/maintenance/MigrationBackupPanel'
+import { BackupPanel } from '@/components/maintenance/BackupPanel'
 import { useApp } from './_layout'
 import { saveBytesToFile, selectBytesFromFile, type SelectedFile } from '@/lib/maintenance-file-transfer.mjs'
 import type { MaintenanceFiles } from '@/components/maintenance/maintenance-model.mjs'
@@ -58,7 +58,7 @@ function MaintenanceScreen() {
     }),
   }), [])
 
-  return <MigrationBackupPanel rpc={rpc} files={files} onBack={() => router.back()} />
+  return <BackupPanel rpc={rpc} files={files} onBack={() => router.back()} />
 }
 
 export default function DeveloperMaintenanceScreen() {

@@ -66,7 +66,6 @@ function fakeRuntime (capacityCalls) {
   const policy = {
     policyVersion: 2,
     consentVersion: 1,
-    migrationRequired: false,
     contributeWatchedMedia: true,
     archiveEnabled: true,
     contributionBudgetBytes: ARCHIVE_BUDGET,

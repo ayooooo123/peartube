@@ -65,7 +65,6 @@ function queryView() {
 function policy() {
   return {
     ...CLOSED_ACQUISITION_POLICY,
-    migrationRequired: false,
     enabled: true,
     allowedPublisherIds: [PUBLISHER_ID],
     allowedAdapterIds: ['memory-source'],

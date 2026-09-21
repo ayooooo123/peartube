@@ -13,7 +13,6 @@ type AcquisitionPolicy = {
   policyVersion: 1
   revision: number
   consentVersion: number
-  migrationRequired: boolean
   enabled: boolean
   acceptPublicRequests: boolean
   requesterMode: 'local-only' | 'allowlisted' | 'public'
@@ -56,7 +55,6 @@ const CLOSED_POLICY: AcquisitionPolicy = {
   policyVersion: 1,
   revision: 0,
   consentVersion: 1,
-  migrationRequired: true,
   enabled: false,
   acceptPublicRequests: false,
   requesterMode: 'local-only',
@@ -97,7 +95,7 @@ function AcquisitionSettingsScreen() {
       if (!active) return
       if (response && typeof response === 'object' && 'success' in response && response.success === true && 'policy' in response && response.policy) {
         setPolicy(response.policy as AcquisitionPolicy)
-        setConsent(response.policy && typeof response.policy === 'object' && 'migrationRequired' in response.policy && response.policy.migrationRequired === false)
+        setConsent(response.policy && typeof response.policy === 'object' && 'enabled' in response.policy && response.policy.enabled === true)
         setStatus('ready')
       } else {
         setStatus('error')
@@ -119,7 +117,6 @@ function AcquisitionSettingsScreen() {
     const next = {
       ...policy,
       consentVersion: 1,
-      migrationRequired: policy.enabled ? false : policy.migrationRequired,
     }
     try {
       const response: unknown = await provider.setAcquisitionPolicy({

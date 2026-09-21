@@ -35,7 +35,9 @@ const IMPORT_CLAIM_STATE_RANK = Object.freeze({
   published: 1,
   released: 2
 })
-const LEGACY_VIDEO_FIELDS = [
+// Flat scalar fields a video record carries in the channel log, as opposed to
+// the structured contentDetails sidecar.
+const CHANNEL_VIDEO_FIELDS = [
   'title',
   'description',
   'path',
@@ -993,10 +995,6 @@ export class MultiWriterChannel extends ReadyResource {
       case 'remove-comment': return this.comments.removeComment(op.videoId, op.commentId, op)
       case 'add-reaction': return this.reactions.addReaction(op.videoId, op.reactionType, op)
       case 'remove-reaction': return this.reactions.removeReaction(op.videoId, op)
-      // Legacy, read-only: nothing produces 'log-watch-event' any more — viewer
-      // ranking is device-local. The case stays so channel logs written before
-      // the watch-telemetry removal keep replaying to the same derived state.
-      case 'log-watch-event': return this.addWatchEvent(op)
       case 'add-vector-index': return this.addVectorIndex(op)
       default: return null
     }
@@ -1349,7 +1347,7 @@ export class MultiWriterChannel extends ReadyResource {
     if (!id) throw new Error('Video id required')
     const nextClock = this._nextVideoLogicalClock()
     const videoMeta = stripUndefined({
-      ...pickDefinedFields(meta, LEGACY_VIDEO_FIELDS),
+      ...pickDefinedFields(meta, CHANNEL_VIDEO_FIELDS),
       id,
       title: typeof meta.title === 'string' ? meta.title : String(meta.title ?? ''),
       description: typeof meta.description === 'string' ? meta.description : '',
@@ -1417,7 +1415,7 @@ export class MultiWriterChannel extends ReadyResource {
     const nextClock = this._nextVideoLogicalClock()
     const videoMeta = stripUndefined({
       ...existing,
-      ...pickDefinedFields(updates, LEGACY_VIDEO_FIELDS),
+      ...pickDefinedFields(updates, CHANNEL_VIDEO_FIELDS),
       id,
       updatedAt: updates?.updatedAt || Date.now(),
       updatedBy: updates?.updatedBy || this.localWriterKeyHex,
@@ -1635,22 +1633,6 @@ export class MultiWriterChannel extends ReadyResource {
     if (videos.length > 0) return { success: true, videoCount: videos.length, state: 'synced' }
     onProgress('failed', { message: 'Sync timeout - no videos received yet' })
     return { success: false, videoCount: 0, state: 'failed' }
-  }
-
-  // Applies a legacy 'log-watch-event' op during replay. No producer calls this
-  // any more and no API reads the collection back; it exists only so a channel
-  // log written before the watch-telemetry removal derives the same state.
-  async addWatchEvent(event) {
-    const eventId = event.eventId || b4a.toString(crypto.randomBytes(16), 'hex')
-    await this.db.insert('@peartubeChannel/watchEvents', stripUndefined({
-      ...event,
-      eventId,
-      videoId: event.videoId,
-      channelKey: event.channelKey || this.keyHex,
-      timestamp: event.timestamp || Date.now()
-    }))
-    await this._flush()
-    return { success: true, eventId }
   }
 
   async addVectorIndex(record) {

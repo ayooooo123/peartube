@@ -502,7 +502,6 @@ function buildNetworkPolicy ({ config, reseedEnabled, maxBytes }) {
     uploadCeilingBytes: Number.MAX_SAFE_INTEGER,
     retentionMode: 'archive-pledges',
     consentVersion: 1,
-    migrationRequired: false,
     contributeWatchedMedia: true,
     archiveEnabled: true,
     ...(maxBytes > 0
@@ -668,7 +667,6 @@ function formatPolicyDiagnostics (scoped, policyResult) {
   return {
     policyVersion: Number(policy.policyVersion) || 0,
     consentVersion: Number(policy.consentVersion) || 0,
-    migrationRequired: policy.migrationRequired !== false,
     effectiveRole: policy.effectiveRole || 'watch-only',
     permissions: {
       contribute: policy.permissions?.contribute === true,

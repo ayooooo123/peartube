@@ -41,6 +41,10 @@ export const COMPANION_ROUTE_SCOPES = Object.freeze({
 // Mutating machine surfaces are not public facts: a remote caller on an
 // auth-off listener may read and stream but must prove identity before the
 // relay writes policy, acquires media, or accepts a private source grant.
+// Loopback stands in for proof here, which only holds because the HTTP server
+// refuses browser-shaped requests (Origin/Sec-Fetch-Site) and non-JSON bodies
+// before dispatch: without those guards any page on the relay host would be a
+// loopback caller.
 const PRIVILEGED_ROUTE_SCOPES = new Set([
   COMPANION_ROUTE_SCOPES.policyWrite,
   COMPANION_ROUTE_SCOPES.acquisitionPolicyWrite,

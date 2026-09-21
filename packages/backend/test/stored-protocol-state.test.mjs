@@ -5,7 +5,6 @@ import path from 'node:path'
 import test from 'node:test'
 import {
   STORED_PROTOCOL_ERROR_CODE,
-  DEFAULT_STORED_PROTOCOL_MIGRATIONS,
   STORED_PROTOCOL_MARKER_FILENAME,
   STORAGE_FORMAT_VERSION,
   prepareStoredProtocolState,
@@ -25,112 +24,93 @@ function writeMarker(storagePath, value) {
   fs.writeFileSync(markerPath(storagePath), JSON.stringify(value))
 }
 
-test('fresh storage stays uninitialized until successful startup commits its bounded marker', async (t) => {
+test('fresh storage stays uninitialized until successful startup commits its bounded marker', (t) => {
   const storagePath = makeStorage(t)
   const state = prepareStoredProtocolState({ storagePath, expectedVersion: 4, fs, path })
 
   assert.equal(state.status, 'uninitialized')
   assert.equal(state.storedVersion, null)
-  assert.equal(fs.existsSync(markerPath(storagePath)), false)
+  assert.equal(state.expectedVersion, 4)
+  assert.equal(state.markerPath, markerPath(storagePath))
+  assert.equal(fs.existsSync(markerPath(storagePath)), false, 'validation alone must not commit readiness')
 
-  await state.migrate({})
-  assert.equal(fs.existsSync(markerPath(storagePath)), false, 'validation and migration must not commit readiness')
-
-  state.commit()
+  assert.equal(state.commit(), true)
   const serialized = fs.readFileSync(markerPath(storagePath), 'utf8')
   assert.ok(Buffer.byteLength(serialized) <= 128)
   assert.deepEqual(JSON.parse(serialized), { protocolVersion: 4 })
 })
 
-test('same-version restart validates without rewriting the marker', (t) => {
+test('committing writes the marker atomically and leaves no partial temporary file', (t) => {
+  const storagePath = makeStorage(t)
+  prepareStoredProtocolState({ storagePath, expectedVersion: 4, fs, path }).commit()
+
+  assert.deepEqual(fs.readdirSync(storagePath), [STORED_PROTOCOL_MARKER_FILENAME])
+  assert.equal(fs.existsSync(`${markerPath(storagePath)}.tmp`), false)
+})
+
+test('same-version restart validates and commits without rewriting the marker', (t) => {
   const storagePath = makeStorage(t)
   writeMarker(storagePath, { protocolVersion: 4 })
   const before = fs.statSync(markerPath(storagePath)).mtimeMs
 
   const state = prepareStoredProtocolState({ storagePath, expectedVersion: 4, fs, path })
   assert.equal(state.status, 'compatible')
-  state.commit()
+  assert.equal(state.storedVersion, 4)
+  assert.equal(state.commit(), false, 'an already-current marker is never rewritten')
 
   assert.equal(fs.statSync(markerPath(storagePath)).mtimeMs, before)
   assert.deepEqual(JSON.parse(fs.readFileSync(markerPath(storagePath), 'utf8')), { protocolVersion: 4 })
 })
 
-test('older stored state runs every explicitly registered migration before commit', async (t) => {
+test('state written by a newer protocol is refused as newer-state without a write', (t) => {
   const storagePath = makeStorage(t)
-  writeMarker(storagePath, { protocolVersion: 2 })
-  const applied = []
-  const context = { records: [] }
-  const migrations = new Map([
-    [2, async (ctx, step) => { applied.push(step); ctx.records.push('v3') }],
-    [3, async (ctx, step) => { applied.push(step); ctx.records.push('v4') }],
-  ])
+  writeMarker(storagePath, { protocolVersion: 5 })
+  const before = fs.readFileSync(markerPath(storagePath))
 
-  const state = prepareStoredProtocolState({ storagePath, expectedVersion: 4, migrations, fs, path })
-  assert.equal(state.status, 'migration-required')
-  await state.migrate(context)
-
-  assert.deepEqual(applied, [
-    { fromVersion: 2, toVersion: 3, expectedVersion: 4 },
-    { fromVersion: 3, toVersion: 4, expectedVersion: 4 },
-  ])
-  assert.deepEqual(context.records, ['v3', 'v4'])
-  assert.deepEqual(JSON.parse(fs.readFileSync(markerPath(storagePath), 'utf8')), { protocolVersion: 2 })
-
-  state.commit()
-  assert.deepEqual(JSON.parse(fs.readFileSync(markerPath(storagePath), 'utf8')), { protocolVersion: 4 })
+  assert.throws(
+    () => prepareStoredProtocolState({ storagePath, expectedVersion: 4, fs, path }),
+    (error) => {
+      assert.equal(error.code, STORED_PROTOCOL_ERROR_CODE)
+      assert.equal(error.reason, 'newer-state')
+      assert.equal(error.storedVersion, 5)
+      assert.equal(error.expectedVersion, 4)
+      assert.deepEqual(error.details, { storedVersion: 5, expectedVersion: 4 })
+      return true
+    },
+  )
+  assert.deepEqual(fs.readFileSync(markerPath(storagePath)), before)
 })
 
-test('protocol 9 accepts protocol 8 storage without rewriting user data', async (t) => {
-  const storagePath = makeStorage(t)
-  writeMarker(storagePath, { protocolVersion: 8 })
-  const state = prepareStoredProtocolState({ storagePath, expectedVersion: 9, migrations: DEFAULT_STORED_PROTOCOL_MIGRATIONS, fs, path })
-
-  assert.equal(state.status, 'migration-required')
-  await state.migrate({})
-  assert.deepEqual(JSON.parse(fs.readFileSync(markerPath(storagePath), 'utf8')), { protocolVersion: 8 })
-  state.commit()
-  assert.deepEqual(JSON.parse(fs.readFileSync(markerPath(storagePath), 'utf8')), { protocolVersion: 9 })
-})
-test('protocol 10 advances stored protocol marker from 9 to 10 and validates transition', async (t) => {
-  const storagePath = makeStorage(t)
-  writeMarker(storagePath, { protocolVersion: 9 })
-  const state = prepareStoredProtocolState({ storagePath, expectedVersion: 10, migrations: DEFAULT_STORED_PROTOCOL_MIGRATIONS, fs, path })
-
-  assert.equal(state.status, 'migration-required')
-  await state.migrate({})
-  assert.deepEqual(JSON.parse(fs.readFileSync(markerPath(storagePath), 'utf8')), { protocolVersion: 9 })
-  state.commit()
-  assert.deepEqual(JSON.parse(fs.readFileSync(markerPath(storagePath), 'utf8')), { protocolVersion: 10 })
-})
-
-test('newer or unregistered older state fails closed with stable version details and no write', (t) => {
-  for (const storedVersion of [5, 2]) {
+test('state written by a retired protocol is refused as retired-state without a write', (t) => {
+  for (const storedVersion of [1, STORAGE_FORMAT_VERSION - 1]) {
     const storagePath = makeStorage(t)
     writeMarker(storagePath, { protocolVersion: storedVersion })
     const before = fs.readFileSync(markerPath(storagePath))
 
     assert.throws(
-      () => prepareStoredProtocolState({ storagePath, expectedVersion: 4, fs, path }),
+      () => prepareStoredProtocolState({ storagePath, expectedVersion: STORAGE_FORMAT_VERSION, fs, path }),
       (error) => {
         assert.equal(error.code, STORED_PROTOCOL_ERROR_CODE)
+        assert.equal(error.reason, 'retired-state', 'older state is retired, never migrated forward')
         assert.equal(error.storedVersion, storedVersion)
-        assert.equal(error.expectedVersion, 4)
+        assert.equal(error.expectedVersion, STORAGE_FORMAT_VERSION)
         return true
       },
     )
-    assert.deepEqual(fs.readFileSync(markerPath(storagePath)), before)
+    assert.deepEqual(fs.readFileSync(markerPath(storagePath)), before, 'refused state is left untouched')
   }
 })
 
-test('malformed and oversized markers fail closed without being replaced', (t) => {
-  const malformedValues = [
-    '{"protocolVersion":"4"}',
-    '{"protocolVersion":0}',
-    '{"protocolVersion":4,"unexpected":true}',
-    'x'.repeat(129),
+test('malformed and oversized markers fail closed with a stable reason and are not replaced', (t) => {
+  const cases = [
+    ['x'.repeat(129), 'marker-size-invalid'],
+    ['not json', 'marker-json-invalid'],
+    ['{"protocolVersion":"4"}', 'marker-shape-invalid'],
+    ['{"protocolVersion":0}', 'marker-shape-invalid'],
+    ['{"protocolVersion":4,"unexpected":true}', 'marker-shape-invalid'],
   ]
 
-  for (const serialized of malformedValues) {
+  for (const [serialized, reason] of cases) {
     const storagePath = makeStorage(t)
     fs.writeFileSync(markerPath(storagePath), serialized)
 
@@ -138,6 +118,7 @@ test('malformed and oversized markers fail closed without being replaced', (t) =
       () => prepareStoredProtocolState({ storagePath, expectedVersion: 4, fs, path }),
       (error) => {
         assert.equal(error.code, STORED_PROTOCOL_ERROR_CODE)
+        assert.equal(error.reason, reason)
         assert.equal(error.storedVersion, null)
         assert.equal(error.expectedVersion, 4)
         return true
@@ -147,10 +128,25 @@ test('malformed and oversized markers fail closed without being replaced', (t) =
   }
 })
 
-test('a crash before marker commit remains distinguishable as uninitialized storage', async (t) => {
+test('an unreadable marker fails closed rather than being treated as fresh storage', (t) => {
   const storagePath = makeStorage(t)
-  const firstAttempt = prepareStoredProtocolState({ storagePath, expectedVersion: 4, fs, path })
-  await firstAttempt.migrate({})
+  fs.mkdirSync(markerPath(storagePath))
+
+  assert.throws(
+    () => prepareStoredProtocolState({ storagePath, expectedVersion: 4, fs, path }),
+    (error) => {
+      assert.equal(error.code, STORED_PROTOCOL_ERROR_CODE)
+      assert.equal(error.reason, 'marker-unreadable')
+      assert.equal(error.storedVersion, null)
+      return true
+    },
+  )
+  assert.equal(fs.existsSync(markerPath(storagePath)), true)
+})
+
+test('a crash before marker commit remains distinguishable as uninitialized storage', (t) => {
+  const storagePath = makeStorage(t)
+  prepareStoredProtocolState({ storagePath, expectedVersion: 4, fs, path })
 
   const retry = prepareStoredProtocolState({ storagePath, expectedVersion: 4, fs, path })
   assert.equal(retry.status, 'uninitialized')
@@ -158,30 +154,33 @@ test('a crash before marker commit remains distinguishable as uninitialized stor
   assert.equal(fs.existsSync(markerPath(storagePath)), false)
 })
 
-test('STORAGE_FORMAT_VERSION is baseline 10 and default expectedVersion', (t) => {
-  assert.equal(STORAGE_FORMAT_VERSION, 10)
+test('a marker at the current format reads back compatible under the default expectedVersion', (t) => {
   const storagePath = makeStorage(t)
-  writeMarker(storagePath, { protocolVersion: 10 })
+  writeMarker(storagePath, { protocolVersion: STORAGE_FORMAT_VERSION })
 
   const state = prepareStoredProtocolState({ storagePath, fs, path })
   assert.equal(state.status, 'compatible')
-  assert.equal(state.storedVersion, 10)
+  assert.equal(state.storedVersion, STORAGE_FORMAT_VERSION)
+  assert.equal(state.expectedVersion, STORAGE_FORMAT_VERSION)
 })
 
-test('storage format 10 decouples from wire version without missing-migration-10-11 failure', async (t) => {
+test('a marker one format behind is refused, because nothing migrates it', (t) => {
   const storagePath = makeStorage(t)
-  writeMarker(storagePath, { protocolVersion: 9 })
+  writeMarker(storagePath, { protocolVersion: STORAGE_FORMAT_VERSION - 1 })
 
-  const state = prepareStoredProtocolState({
-    storagePath,
-    expectedVersion: STORAGE_FORMAT_VERSION,
-    migrations: DEFAULT_STORED_PROTOCOL_MIGRATIONS,
-    fs,
-    path
-  })
-  assert.equal(state.status, 'migration-required')
-  await state.migrate({})
-  state.commit()
+  assert.throws(
+    () => prepareStoredProtocolState({ storagePath, fs, path }),
+    (error) => error.code === STORED_PROTOCOL_ERROR_CODE && error.storedVersion === STORAGE_FORMAT_VERSION - 1,
+  )
+})
 
-  assert.deepEqual(JSON.parse(fs.readFileSync(markerPath(storagePath), 'utf8')), { protocolVersion: 10 })
+test('prepared state is frozen and exposes no migration escape hatch', (t) => {
+  const storagePath = makeStorage(t)
+  const state = prepareStoredProtocolState({ storagePath, expectedVersion: 4, fs, path })
+
+  assert.equal(Object.isFrozen(state), true)
+  assert.deepEqual(
+    Object.keys(state).sort(),
+    ['commit', 'expectedVersion', 'markerPath', 'status', 'storedVersion'],
+  )
 })

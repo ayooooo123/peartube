@@ -121,7 +121,7 @@ export function createRemoteBlockStore({ provider, prefix = '', coreKey } = {}) 
   }
   const core = coreKey ? normalizeCoreKey(coreKey) : null
   const keyFor = (blockIndex) => {
-    if (!core) throw new Error('coreKey is required for legacy block index key')
+    if (!core) throw new Error('coreKey is required for an index-addressed block key')
     return remoteBlockKey({ prefix, coreKey: core, blockIndex })
   }
   const contentKeyFor = (hash) => contentBlockKey({ prefix, hash })
@@ -270,13 +270,16 @@ export function createRemoteBlockStore({ provider, prefix = '', coreKey } = {}) 
     async get(blockIndexOrHash, { expectedHash } = {}) {
       const { hash, blockIndex } = resolveBlockQuery(blockIndexOrHash, expectedHash)
       const contentKey = contentKeyFor(hash)
-      const legacyKey = core && blockIndex !== null ? keyFor(blockIndex) : null
+      // A store bound to a core writes index-addressed objects; the
+      // content-addressed key is what a coreless store writes. Either may hold
+      // the block, and the hash check below is what makes reading both safe.
+      const indexKey = core && blockIndex !== null ? keyFor(blockIndex) : null
 
       let raw = null
-      if (legacyKey !== null) {
-        raw = await fetchBlockKey(provider, legacyKey)
+      if (indexKey !== null) {
+        raw = await fetchBlockKey(provider, indexKey)
       }
-      if ((raw === null || raw === undefined) && contentKey !== null) {
+      if (raw === null || raw === undefined) {
         raw = await fetchBlockKey(provider, contentKey)
       }
       return verifyRestoredBlockData(raw, hash)

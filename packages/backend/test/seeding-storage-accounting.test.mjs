@@ -76,7 +76,6 @@ async function enableRetention(manager, contributionBudgetBytes = 20 * GB, archi
     archiveEnabled: true,
     contributionBudgetBytes,
     archiveBudgetBytes,
-    migrationRequired: false
   })
 }
 
@@ -271,7 +270,6 @@ test('watch-only blocks public seeds while contribution eviction preserves archi
     archiveEnabled: true,
     contributionBudgetBytes: 0,
     archiveBudgetBytes: 16,
-    migrationRequired: false
   })
   const status = await manager.getStatus()
   t.is(status.activeContributionSeeds, 0)

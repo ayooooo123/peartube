@@ -1,1 +1,1 @@
-export { tmpdir } from 'node:os'
+export { networkInterfaces, tmpdir } from 'node:os'

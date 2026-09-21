@@ -71,7 +71,6 @@ const REASON_COPY: Readonly<Record<string, string>> = Object.freeze({
   LOCAL_SIGNER_UNAVAILABLE: 'The local publisher signer is unavailable.',
   DEVICE_SIGNER_MISMATCH: 'The local signer does not match this device authorization.',
   DEVICE_REVOKED: 'This device authorization has been revoked.',
-  LEGACY_IMPORT_FAILED: 'The local legacy publisher import did not complete.',
 })
 
 const VALID_STATUS: Readonly<Record<PublisherDeviceState, true>> = Object.freeze({

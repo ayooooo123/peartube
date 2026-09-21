@@ -23,7 +23,6 @@ function service(overrides = {}) {
     async setPolicy(value) { return value },
     async getAcquisitionPolicy() { return { policyVersion: 1 } },
     async setAcquisitionPolicy({ policy }) { return policy },
-    async migrateLegacyIngest() { return { migrated: 0, skipped: 0 } },
     ...overrides,
   }
 }

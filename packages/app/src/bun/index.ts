@@ -11,16 +11,22 @@ import type { PearTubeRPC } from '../shared/rpc-types'
 import { join, dirname, basename, resolve, sep } from 'path'
 import { fileURLToPath } from 'url'
 import { homedir, platform } from 'os'
-import { existsSync } from 'fs'
+import { existsSync, realpathSync } from 'fs'
 import { execSync, spawn } from 'child_process'
 import { createPublisherSignerBridge } from '../../lib/publisher-signer-bridge'
 import { createBunPublisherKeyVault } from './publisher-key-vault'
 import { createBunPersonalSecretVault } from './personal-secret-vault'
 import {
+  IPC_CAPABILITY_PARAM,
+  createIpcChannelHandlers,
+  mintIpcCapability,
+  type IpcClient,
+} from './ipc-channel'
+import { createStaticFileHandler } from './static-files'
+import {
   createPublisherShellService,
   createDesktopPublisherLifecycleHandlers,
 } from '../../lib/publisher-shell-service'
-import { runLegacyPublisherRootPreflight } from '@peartube/backend/legacy-publisher-root-preflight'
 // The DESKTOP Pear drive. The mobile worklet swarms a different link —
 // packages/app/package.json `upgrade` — because the two drives carry different
 // distributables: the iOS/Android payload versus this desktop app bundle. The
@@ -34,23 +40,6 @@ import {
   productName as APP_PRODUCT_NAME,
   name as APP_PACKAGE_NAME,
 } from '../../package.json'
-
-type LegacyPublisherRootMigrationRequest = {
-  version: 1
-  identityPublicKey: string | Uint8Array
-  secretKey: string | Uint8Array
-  challenge: string | Uint8Array
-}
-
-type LegacyPublisherRootPreflightSummary = {
-  status: string
-  scanned: number
-  migrated: number
-  remaining: number
-  errorCode?: string
-}
-
-
 
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
@@ -236,40 +225,12 @@ const publisherShellService = createPublisherShellService({
     },
   },
 })
-let legacyPublisherRootPreflightSettled = false
 
 const desktopPublisherLifecycleHandlers = createDesktopPublisherLifecycleHandlers({
   publisherShell: publisherShellService,
 })
 
-const legacyPublisherRootPreflightPromise = runLegacyPublisherRootPreflight({
-  storagePath,
-  migrateLegacyPublisherRoot: (request: LegacyPublisherRootMigrationRequest) =>
-    publisherKeyVault.importLegacyRootMigration(request),
-  waitForLock: false,
-}).then((summary: LegacyPublisherRootPreflightSummary) => {
-  if (summary.status === 'complete' && summary.migrated > 0) {
-    console.log('[main] Legacy publisher-root migration completed:', summary.migrated)
-  }
-  return summary
-}).catch(() => ({
-  status: 'unavailable',
-  scanned: 0,
-  migrated: 0,
-  remaining: 0,
-  errorCode: 'MIGRATION_UNAVAILABLE',
-}))
-.finally(() => {
-  legacyPublisherRootPreflightSettled = true
-})
-
-
-
-
 function getWorker(specifier: string) {
-  if (!legacyPublisherRootPreflightSettled) {
-    throw new Error('legacy publisher-root preflight pending')
-  }
   if (workers.has(specifier)) return workers.get(specifier)
 
 
@@ -360,76 +321,41 @@ function destroyAllWorkers() {
 // renderer and the Bare worker's IPC stream — no JSON, no interpretation.
 // Text frames are this process talking to the view about Pear updates; the
 // WebSocket frame type keeps them from ever being mistaken for HRPC bytes.
+//
+// The socket is the renderer's whole authority over the backend and over the
+// app bundle on disk, and a loopback listener is reachable by every page the
+// user has open and every process on the machine. Authorization lives in
+// ./ipc-channel: a launch capability is required before the upgrade, and a
+// request that carries an Origin must also come from this shell's own server.
 const BACKEND_WORKER = '/pear/build/workers/core/index.js'
 let ipcWsPort = 0
-let ipcWsServer: any = null
-type IpcClient = { send(data: string): unknown; readyState: number }
+let ipcWsServer: { port?: number; stop?(closeActiveConnections?: boolean): void } | null = null
 const ipcClients = new Set<IpcClient>()
 
-function removeWorkerDataListener(worker: any, listener: (d: Buffer) => void) {
-  if (!worker || !listener) return
-  if (typeof worker.off === 'function') {
-    worker.off('data', listener)
-    return
-  }
-  if (typeof worker.removeListener === 'function') {
-    worker.removeListener('data', listener)
-  }
-}
+// Minted once per launch, held only in this process's memory: never logged,
+// never persisted, and never served over the loopback HTTP surface. The view
+// receives it in the URL the shell navigates the window to.
+const ipcCapability = mintIpcCapability()
 
 function startIPCWebSocket() {
   if (ipcWsServer) return ipcWsPort
 
+  const handlers = createIpcChannelHandlers({
+    capability: ipcCapability,
+    // Read per request: the static server's port is ephemeral and is only
+    // known once it is listening.
+    allowedOrigins: () => (staticPort ? ['http://127.0.0.1:' + staticPort] : []),
+    clients: ipcClients,
+    greeting: () => JSON.stringify({ t: 'pear:state', pkg: pearPkg }),
+    startWorker: () => getWorker(BACKEND_WORKER),
+    runningWorker: () => workers.get(BACKEND_WORKER),
+    onControlFrame: (ws, raw) => { void handleViewControlFrame(ws, raw) },
+  })
+
   const server = globalThis.Bun.serve({
     port: 0,
     hostname: '127.0.0.1',
-    fetch(req, server) {
-      if (server.upgrade(req)) return
-      return new Response('WebSocket only', { status: 426 })
-    },
-    websocket: {
-      open(ws) {
-        console.log('[main] IPC WebSocket connected')
-        ipcClients.add(ws)
-        ws.send(JSON.stringify({ t: 'pear:state', pkg: pearPkg }))
-        try {
-          const worker = getWorker(BACKEND_WORKER)
-          // Pipe: worker IPC → WebSocket → renderer
-          const forwardWorkerData = (d: Buffer) => {
-            if (ws.readyState === 1) ws.sendBinary(d)
-          }
-          Object.assign(ws, { data: { worker, forwardWorkerData } })
-          worker.on('data', forwardWorkerData)
-        } catch {
-          console.error('[main] IPC WebSocket worker startup failed')
-          try { ws.close(1011, 'worker startup failed') } catch { /* best effort */ }
-        }
-      },
-      message(ws, message) {
-        if (typeof message === 'string') {
-          void handleViewControlFrame(ws, message)
-          return
-        }
-        // Pipe: renderer → WebSocket → worker IPC
-        const worker = workers.get(BACKEND_WORKER)
-        if (worker) {
-          const buf = message instanceof ArrayBuffer
-            ? Buffer.from(message)
-            : Buffer.from(message as Uint8Array)
-          worker.write(buf)
-        }
-      },
-      close(ws) {
-        ipcClients.delete(ws)
-        const data = (ws as any).data || {}
-        const worker = data.worker || workers.get(BACKEND_WORKER)
-        const forwardWorkerData = data.forwardWorkerData
-        if (worker && forwardWorkerData) {
-          removeWorkerDataListener(worker, forwardWorkerData)
-        }
-        console.log('[main] IPC WebSocket closed')
-      },
-    },
+    ...handlers,
   })
 
   ipcWsServer = server
@@ -626,67 +552,40 @@ const appRPC = BrowserView.defineRPC<PearTubeRPC>({
 // Expo Router reads window.location.pathname to determine the route.
 // views://app/index.html gives pathname "/app/index.html" which doesn't match.
 // A local HTTP server gives a clean "/" pathname that Expo Router expects.
-const MIME_TYPES: Record<string, string> = {
-  '.html': 'text/html', '.js': 'application/javascript', '.css': 'text/css',
-  '.json': 'application/json', '.png': 'image/png', '.jpg': 'image/jpeg',
-  '.svg': 'image/svg+xml', '.ico': 'image/x-icon', '.woff': 'font/woff',
-  '.woff2': 'font/woff2', '.ttf': 'font/ttf', '.map': 'application/json',
-}
-
+//
+// The request path (decode, containment, SPA fallback, MIME, HTML injection)
+// lives in ./static-files so it can be tested without Bun globals.
 let staticPort = 0
-let staticServer: any = null
+let staticServer: { port?: number; stop?(closeActiveConnections?: boolean): void } | null = null
 
 async function startStaticServer() {
   if (staticServer) return staticPort
 
-  const viewsDir = join(appCodeDir, 'views', 'app')
+  // Canonicalised once here, never per request: every containment check
+  // compares against this exact string. realpath needs the directory to
+  // exist, which it does in a packaged app; `resolve` keeps a dev tree with a
+  // missing export usable (every request then 404s, as before).
+  const viewsPath = join(appCodeDir, 'views', 'app')
+  let viewsDir: string
+  try {
+    viewsDir = realpathSync(viewsPath)
+  } catch {
+    viewsDir = resolve(viewsPath)
+  }
+
+  const fetchStatic = createStaticFileHandler({
+    viewsDir,
+    openFile: (filePath) => {
+      const file = globalThis.Bun.file(filePath)
+      return { size: file.size, text: () => file.text(), body: file }
+    },
+    ipcPort: () => ipcWsPort,
+  })
+
   const server = globalThis.Bun.serve({
     port: 0, // auto-assign
     hostname: '127.0.0.1',
-    async fetch(req) {
-      const url = new URL(req.url)
-
-      // IPC port discovery
-      if (url.pathname === '/__peartube_ipc_port') {
-        return new Response(JSON.stringify({ port: ipcWsPort }), {
-          headers: { 'Content-Type': 'application/json' },
-        })
-      }
-
-      let filePath = join(viewsDir, decodeURIComponent(url.pathname === '/' ? '/index.html' : url.pathname))
-
-      const file = globalThis.Bun.file(filePath)
-      if (!file.size) {
-        // SPA fallback: serve index.html for navigation routes
-        const ext = filePath.split('.').pop() || ''
-        if (!ext || ext === 'html') {
-          filePath = join(viewsDir, 'index.html')
-        } else {
-          return new Response('Not found', { status: 404 })
-        }
-      }
-
-      const ext = '.' + (filePath.split('.').pop() || '')
-
-      // Inject Electrobun view script into HTML at serve time.
-      // This replaces the build-time inject-desktop-shell.js script — no
-      // post-processing of files on disk, no fragile regex replacements.
-      if (ext === '.html') {
-        let html = await globalThis.Bun.file(filePath).text()
-        // Inject view entrypoint before the Expo bundle so window.bridge is ready
-        if (!html.includes('views://app/index.js')) {
-          html = html.replace(
-            /(<script[^>]*src="[^"]*_expo\/static\/js\/web\/[^"]*"[^>]*><\/script>)/,
-            '<script src="views://app/index.js"></script>\n$1'
-          )
-        }
-        return new Response(html, { headers: { 'Content-Type': 'text/html' } })
-      }
-
-      return new Response(globalThis.Bun.file(filePath), {
-        headers: { 'Content-Type': MIME_TYPES[ext] || 'application/octet-stream' },
-      })
-    },
+    fetch: fetchStatic,
   })
 
   staticServer = server
@@ -704,13 +603,17 @@ function stopStaticServer() {
 
 // ── Create Window ───────────────────────────────────────────────────────
 async function createWindow() {
-  await legacyPublisherRootPreflightPromise
   await startStaticServer()
   startIPCWebSocket()
 
+  // The bootstrap URL is the capability's only delivery path. It is handed to
+  // the webview natively — it never crosses the loopback HTTP surface as a
+  // response body, so a local process that probes the static server cannot
+  // read it, and no other page can read this window's location. The view
+  // strips the parameter from the address the moment it reads it.
   mainWindow = new BrowserWindow({
     title: APP_NAME,
-    url: `http://127.0.0.1:${staticPort}`,
+    url: `http://127.0.0.1:${staticPort}/?${IPC_CAPABILITY_PARAM}=${ipcCapability}`,
     frame: { x: 0, y: 0, width: 1280, height: 800 },
     titleBarStyle: 'hiddenInset',
     renderer: 'native',

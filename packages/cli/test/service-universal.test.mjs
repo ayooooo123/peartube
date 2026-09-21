@@ -40,7 +40,6 @@ function fakeRuntime (calls) {
   let currentPolicy = {
     policyVersion: 2,
     consentVersion: 0,
-    migrationRequired: true,
     contributeWatchedMedia: false,
     archiveEnabled: false,
     contributionBudgetBytes: 0,
@@ -97,9 +96,8 @@ function fakeRuntime (calls) {
       async getStatus () { return { ready: true } },
       async getPolicy () { return {} },
       async setPolicy (value) { return value },
-      async getAcquisitionPolicy () { return { enabled: false, migrationRequired: true } },
-      async setAcquisitionPolicy ({ policy }) { return policy },
-      async migrateLegacyIngest () { return { migrated: 0, skipped: 0 } }
+      async getAcquisitionPolicy () { return { enabled: false } },
+      async setAcquisitionPolicy ({ policy }) { return policy }
     },
     identityManager: {},
     uploadManager: {},
@@ -242,7 +240,6 @@ test('archive WebUI publisher follows current explicit archive consent', async (
   await service.applyNetworkPolicy({
     policyVersion: 2,
     consentVersion: 1,
-    migrationRequired: false,
     contributeWatchedMedia: true,
     archiveEnabled: false,
     contributionBudgetBytes: 4096,
@@ -267,7 +264,6 @@ test('archive WebUI publisher follows current explicit archive consent', async (
   await service.applyNetworkPolicy({
     policyVersion: 2,
     consentVersion: 1,
-    migrationRequired: false,
     contributeWatchedMedia: true,
     archiveEnabled: true,
     contributionBudgetBytes: 4096,
@@ -310,7 +306,6 @@ test('completed archive publishes an authenticated catalog and retains bounded a
   await service.applyNetworkPolicy({
     policyVersion: 2,
     consentVersion: 1,
-    migrationRequired: false,
     contributeWatchedMedia: true,
     archiveEnabled: true,
     contributionBudgetBytes: 4096,

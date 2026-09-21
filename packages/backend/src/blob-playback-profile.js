@@ -22,7 +22,6 @@ import b4a from 'b4a'
 import { normalizeBlobRefInput, stringifyBlobId } from './blob-ref.js'
 import { probeMp4PlaybackProfile, isMp4MimeType } from './mp4-playback-probe.js'
 
-const PROFILE_DB_PREFIX = 'playback-profile!'
 const MAX_REGISTERED_PROFILES = 16
 const REMOTE_PROBE_TIMEOUT_MS = 8000
 // Remote moov reads ride P2P replication; bound them tighter than local probes.
@@ -37,12 +36,8 @@ export function getBlobProfileRegistryKey(coreKeyHex, blob) {
   return `${coreKeyHex}:${blob.blockOffset}:${blob.blockLength}`
 }
 
-function profileDbKey(blobsCoreKey, blobId) {
-  return `${PROFILE_DB_PREFIX}${blobsCoreKey}!${blobId}`
-}
-
 // Key within the `playback-profile` metaDb subspace (no namespace prefix — the
-// sub-encoder adds it). Mirrors the legacy key minus the PROFILE_DB_PREFIX.
+// sub-encoder adds it). Also the in-process dedupe key for remote probes.
 function profileSubKey(blobsCoreKey, blobId) {
   return `${blobsCoreKey}!${blobId}`
 }
@@ -173,7 +168,7 @@ export async function attachBlobPlaybackProfile(ctx, { blobsCoreKey, blobId, mim
     let profile = await loadBlobPlaybackProfile(ctx, { blobsCoreKey, blobId: blobIdStr })
 
     if (!profile && options.allowRemoteProbe !== false && isMp4MimeType(mimeType)) {
-      const dbKey = profileDbKey(blobsCoreKey, blobIdStr)
+      const dbKey = profileSubKey(blobsCoreKey, blobIdStr)
       let inflight = inflightRemoteProbes.get(dbKey)
       if (!inflight) {
         inflight = probeRemoteBlobPlaybackProfile(ctx, { blobsCoreKey, blob }, options)

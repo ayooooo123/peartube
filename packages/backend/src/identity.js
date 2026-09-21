@@ -7,7 +7,7 @@
 
 import b4a from 'b4a';
 import crypto from 'hypercore-crypto';
-import { IDENTITY_STATE_KEY } from './identity-state.js'
+import { IDENTITY_STATE_KEY, normalizeStoredIdentityState } from './identity-state.js'
 import { createChannel, deriveDeterministicChannelSeed, loadChannel } from './storage.js'
 import { logger } from './logger.js'
 import {
@@ -212,7 +212,7 @@ async function resolveExistingSignedDescriptor(channel, identity, deferredInacti
   return null
 }
 
-async function backfillIdentityDescriptor({ identity, channelKey, ctx, log }) {
+async function ensureIdentityChannelDescriptor({ identity, channelKey, ctx, log }) {
   const channel = await loadChannel(ctx, channelKey, {
     encryptionKeyHex: identity.channelEncryptionKey || null,
     writerKeyName: identity.channelWriterKeyName || null,
@@ -238,7 +238,7 @@ async function backfillIdentityDescriptor({ identity, channelKey, ctx, log }) {
 
   const proofHex = getIdentityAttestationProof(identity)
   if (!proofHex) {
-    log.warn(' Descriptor backfill: no attestation proof for channel', channelKey.slice(0, 16), '- recover with mnemonic to re-sign')
+    log.warn(' Channel root descriptor: no attestation proof for channel', channelKey.slice(0, 16), '- recover with mnemonic to re-sign')
     return { status: 'missingProof' }
   }
 
@@ -261,14 +261,14 @@ async function backfillIdentityDescriptor({ identity, channelKey, ctx, log }) {
     proofHex,
   })
   if (!signResult.ok) {
-    log.warn(' Descriptor backfill: self-verification failed for channel', channelKey.slice(0, 16), signResult.error || '')
+    log.warn(' Channel root descriptor: self-verification failed for channel', channelKey.slice(0, 16), signResult.error || '')
     return { status: 'failed' }
   }
   const { signed } = signResult
 
   await applyChannelDescriptor(channel, { signed, profile, deferredInactive })
 
-  log.info(' Descriptor backfill: signed channel root for', channelKey.slice(0, 16))
+  log.info(' Channel root descriptor: signed channel root for', channelKey.slice(0, 16))
   return {
     status: 'signed',
     update: {
@@ -278,7 +278,7 @@ async function backfillIdentityDescriptor({ identity, channelKey, ctx, log }) {
   }
 }
 
-function recordBackfillOutcome(summary, descriptorUpdates, publicKey, result) {
+function recordDescriptorOutcome(summary, descriptorUpdates, publicKey, result) {
   if (result.status === 'signed') {
     descriptorUpdates.set(publicKey, result.update)
     summary.signed++
@@ -304,7 +304,7 @@ async function persistDescriptorUpdates(updateIdentityState, descriptorUpdates, 
       activeIdentity: current.activeIdentity,
     }))
   } catch (err) {
-    log.warn(' Descriptor backfill: persisting identities failed:', err?.message)
+    log.warn(' Channel root descriptor: persisting identities failed:', err?.message)
   }
 }
 
@@ -336,38 +336,6 @@ export function validateMnemonic(mnemonic) {
   return validatePearTubeMnemonic(mnemonic)
 }
 
-const LEGACY_ROOT_MIGRATION_VERSION = 1
-const LEGACY_ROOT_CHALLENGE_DOMAIN = b4a.from('peartube:legacy-publisher-root-migration:v1\0')
-const PUBLIC_KEY_BYTES = 32
-const SECRET_KEY_BYTES = 64
-const SIGNATURE_BYTES = 64
-
-function fixedBytes (value, length) {
-  if (typeof value === 'string') {
-    if (value.length !== length * 2 || !/^[0-9a-f]+$/i.test(value)) return null
-    return b4a.from(value, 'hex')
-  }
-
-  if (b4a.isBuffer(value) || value instanceof Uint8Array) {
-    if (value.byteLength !== length) return null
-    return b4a.from(value)
-  }
-
-  // compact-encoding's JSON codec restores persisted Node Buffers as their
-  // JSON representation and persisted Bare Buffers as a plain byte array.
-  const jsonBytes = Array.isArray(value)
-    ? value
-    : value?.type === 'Buffer' && Array.isArray(value.data) ? value.data : null
-  if (jsonBytes?.length === length) {
-    for (const byte of jsonBytes) {
-      if (!Number.isInteger(byte) || byte < 0 || byte > 255) return null
-    }
-    return b4a.from(jsonBytes)
-  }
-
-  return null
-}
-
 function normalizeStoredIdentity (identity, activeIdentity) {
   const channelKey = identity.channelKey || identity.driveKey || null
   return {
@@ -386,71 +354,14 @@ function normalizeStoredIdentity (identity, activeIdentity) {
   }
 }
 
-async function hasDurableLegacyRootAcknowledgement (identity, migrateLegacyPublisherRoot) {
-  let secretKey = fixedBytes(identity.secretKey, SECRET_KEY_BYTES)
-  let nonce = null
-  let challenge = null
-  let verificationChallenge = null
-
-  if (!secretKey) return false
-
-  try {
-    const publicKey = fixedBytes(identity.publicKey, PUBLIC_KEY_BYTES)
-    if (!publicKey) return false
-
-    nonce = crypto.randomBytes(32)
-    verificationChallenge = b4a.concat([
-      LEGACY_ROOT_CHALLENGE_DOMAIN,
-      publicKey,
-      nonce,
-    ])
-    challenge = b4a.from(verificationChallenge)
-
-    const acknowledgement = await migrateLegacyPublisherRoot({
-      version: LEGACY_ROOT_MIGRATION_VERSION,
-      identityPublicKey: identity.publicKey,
-      secretKey,
-      challenge,
-    })
-    if (!acknowledgement || typeof acknowledgement !== 'object' ||
-        acknowledgement.version !== LEGACY_ROOT_MIGRATION_VERSION ||
-        acknowledgement.durable !== true) {
-      return false
-    }
-
-    const acknowledgedPublicKey = fixedBytes(acknowledgement.publicKey, PUBLIC_KEY_BYTES)
-    const signature = fixedBytes(acknowledgement.challengeSignature, SIGNATURE_BYTES)
-    if (!acknowledgedPublicKey || !signature ||
-        !b4a.equals(acknowledgedPublicKey, publicKey)) {
-      return false
-    }
-
-    return crypto.verify(verificationChallenge, signature, publicKey)
-  } catch {
-    log.warn(' Legacy publisher-root migration attempt failed')
-    return false
-  } finally {
-    secretKey.fill(0)
-    nonce?.fill(0)
-    challenge?.fill(0)
-    verificationChallenge?.fill(0)
-    secretKey = null
-    nonce = null
-    challenge = null
-    verificationChallenge = null
-  }
-}
-
 /**
  * Create the identity manager
  *
  * @param {Object} deps
  * @param {StorageContext} deps.ctx - Storage context
- * @param {Function} [deps.migrateLegacyPublisherRoot] - Authenticated local,
- * migration-only transfer callback
  * @returns {Object} Identity manager API
  */
-export function createIdentityManager({ ctx, migrateLegacyPublisherRoot = null }) {
+export function createIdentityManager({ ctx }) {
   /** @type {Identity[]} */
   let identities = [];
 
@@ -469,15 +380,6 @@ export function createIdentityManager({ ctx, migrateLegacyPublisherRoot = null }
     }
   }
 
-  async function mirrorLegacyState(snapshot) {
-    try {
-      await ctx.metaDb.put('identities', snapshot.identities)
-      await ctx.metaDb.put('activeIdentity', snapshot.activeIdentity)
-    } catch (error) {
-      log.warn(' Legacy identity metadata mirror failed:', error?.message)
-    }
-  }
-
   async function commitIdentityState(nextIdentities, nextActiveIdentity) {
     if (
       nextActiveIdentity != null &&
@@ -489,7 +391,6 @@ export function createIdentityManager({ ctx, migrateLegacyPublisherRoot = null }
     await ctx.metaDb.put(IDENTITY_STATE_KEY, snapshot)
     identities = snapshot.identities
     activeIdentity = snapshot.activeIdentity
-    await mirrorLegacyState(snapshot)
     return stateSnapshot()
   }
 
@@ -547,83 +448,28 @@ export function createIdentityManager({ ctx, migrateLegacyPublisherRoot = null }
   }
 
   async function performIdentityLoad () {
-    let stored
-    let storedActive
     let storedState
     try {
       storedState = await ctx.metaDb.get(IDENTITY_STATE_KEY)
-      stored = await ctx.metaDb.get('identities')
-      storedActive = await ctx.metaDb.get('activeIdentity')
     } catch {
       throw new Error('Identity metadata unavailable')
     }
 
-    const authoritative = (
-      storedState?.value?.version === 1 &&
-      Array.isArray(storedState.value.identities) &&
-      (
-        storedState.value.activeIdentity == null ||
-        storedState.value.identities.some(identity =>
-          identity?.publicKey === storedState.value.activeIdentity
-        )
-      )
-    ) ? storedState.value : null
-    const loaded = authoritative
-      ? authoritative.identities
-      : (Array.isArray(stored?.value) ? stored.value : [])
-    activeIdentity = authoritative
-      ? authoritative.activeIdentity
-      : (storedActive?.value || null)
+    const authoritative = normalizeStoredIdentityState(storedState?.value)
+    const loaded = authoritative ? authoritative.identities : []
+    activeIdentity = authoritative ? authoritative.activeIdentity : null
     log.info(` Loaded ${loaded.length} identities`)
 
     const normalized = loaded
       .filter(identity => identity && typeof identity.publicKey === 'string' && identity.publicKey)
       .map(identity => normalizeStoredIdentity(identity, activeIdentity))
-    const hasLegacySource = normalized.some(identity =>
-      Object.prototype.hasOwnProperty.call(identity, 'secretKey')
-    )
-    // A persisted source is authoritative even if a completion marker is
-    // present. Only absence of the source proves a prior commit completed.
-    const candidate = normalized.slice()
 
-    if (typeof migrateLegacyPublisherRoot === 'function') {
-      for (let index = 0; index < candidate.length; index++) {
-        const identity = candidate[index]
-        if (!Object.prototype.hasOwnProperty.call(identity, 'secretKey')) continue
-
-        const acknowledged = await hasDurableLegacyRootAcknowledgement(
-          identity,
-          migrateLegacyPublisherRoot
-        )
-        if (!acknowledged) continue
-
-        const { secretKey, ...safeIdentity } = identity
-        candidate[index] = {
-          ...safeIdentity,
-          legacyPublisherRootMigration: {
-            version: LEGACY_ROOT_MIGRATION_VERSION,
-            status: 'completed',
-            publicKey: identity.publicKey,
-          },
-        }
-      }
-    }
-
+    // Keep the loaded state in memory even when the write fails, so a later
+    // save cannot commit a partial write that never reached the store.
+    identities = normalized
     try {
-      // One metadata write atomically commits both source deletion and the
-      // durable per-identity completion marker.
-      await ctx.metaDb.put('identities', candidate)
-      identities = candidate
-      await ctx.metaDb.put(IDENTITY_STATE_KEY, stateSnapshot(candidate, activeIdentity))
+      await ctx.metaDb.put(IDENTITY_STATE_KEY, stateSnapshot(normalized, activeIdentity))
     } catch {
-      // A migration source remains the authoritative state until the atomic
-      // metadata write succeeds. Keep it in memory so later saves cannot
-      // accidentally commit a deletion that was never acknowledged durably.
-      identities = normalized
-      if (hasLegacySource) {
-        log.warn(' Legacy publisher-root migration persistence failed')
-        return
-      }
       throw new Error('Identity persistence failed')
     }
   }
@@ -1174,22 +1020,27 @@ export function createIdentityManager({ ctx, migrateLegacyPublisherRoot = null }
     },
 
     /**
-     * Backfill signed channel root descriptors for locally owned channels.
+     * Ensure every locally owned identity channel carries a valid signed
+     * `channel/root` descriptor.
      *
-     * Channels created before descriptor signing existed (or before the
-     * descriptor was bound to the channel key) have no usable
-     * `channel/root` record, so strict peers reject their gossip entries
-     * with missing-signed-descriptor / descriptor-channel-mismatch.
-     * Re-signing only needs the device (swarm) keypair plus a persisted
-     * attestation proof — never the identity secret key. Channels without
-     * a stored proof are skipped and reported.
+     * Only `createIdentity` signs a descriptor inline. Identities adopted by
+     * mnemonic recovery or device pairing hold a channel with no local
+     * descriptor, and a channel that defers its public projection keeps its
+     * descriptor staged rather than written, so the staging is re-applied on
+     * every start. Strict peers reject gossip entries from a channel with no
+     * usable descriptor (missing-signed-descriptor / descriptor-channel-
+     * mismatch), so this runs before seed-pin registration and discovery.
+     *
+     * Signing needs the device (swarm) keypair plus a persisted attestation
+     * proof — never the identity secret key. Channels without a stored proof
+     * are skipped and reported.
      *
      * @returns {Promise<{checked: number, signed: number, ok: number, missingProof: number, skipped: number, failed: number}>}
      */
     async ensureSignedChannelDescriptors() {
       const summary = { checked: 0, signed: 0, ok: 0, missingProof: 0, skipped: 0, failed: 0 }
       if (!ctx?.swarm?.keyPair?.publicKey || !ctx?.swarm?.keyPair?.secretKey) {
-        log.warn(' Descriptor backfill skipped: device swarm keypair unavailable')
+        log.warn(' Channel root descriptor pass skipped: device swarm keypair unavailable')
         return summary
       }
 
@@ -1200,11 +1051,11 @@ export function createIdentityManager({ ctx, migrateLegacyPublisherRoot = null }
         summary.checked++
 
         try {
-          const result = await backfillIdentityDescriptor({ identity, channelKey, ctx, log })
-          recordBackfillOutcome(summary, descriptorUpdates, identity.publicKey, result)
+          const result = await ensureIdentityChannelDescriptor({ identity, channelKey, ctx, log })
+          recordDescriptorOutcome(summary, descriptorUpdates, identity.publicKey, result)
         } catch (err) {
           summary.failed++
-          log.warn(' Descriptor backfill failed for channel', String(channelKey).slice(0, 16), err?.message)
+          log.warn(' Channel root descriptor failed for channel', String(channelKey).slice(0, 16), err?.message)
         }
       }
 
@@ -1221,7 +1072,7 @@ export function createIdentityManager({ ctx, migrateLegacyPublisherRoot = null }
      *
      * The descriptor binds the channel key + public bee + blobs drive, vouched
      * for by the active identity's device attestation (the same persisted proof
-     * the backfill reuses; never needs the identity secret key). Idempotent: a
+     * the descriptor pass reuses; never needs the identity secret key). Idempotent: a
      * valid descriptor already bound to this channel/publicBee is left as-is.
      *
      * @param {import('./channel/multi-writer-channel.js').MultiWriterChannel|string} channelOrKey

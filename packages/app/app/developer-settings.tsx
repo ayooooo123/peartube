@@ -31,7 +31,7 @@ const developerRoutes: readonly DeveloperRoute[] = [
   { label: 'Publishing security', detail: 'Review publisher writer capability and signer status.', icon: 'lock', path: '/publisher-security' },
   { label: 'Network policy', detail: 'Configure transfer, retention, and local network behavior.', icon: 'sliders', path: '/network-policy' },
   { label: 'Acquisition policy', detail: 'Set consent, admission, budgets, retention, and retry limits.', icon: 'download-cloud', path: '/acquisition-settings' },
-  { label: 'Archive & maintenance', detail: 'Migration, backups, reports, import, and export.', icon: 'archive', path: '/maintenance' },
+  { label: 'Archive & maintenance', detail: 'Portable state backups, import, and export.', icon: 'archive', path: '/maintenance' },
   { label: 'Feed trust', detail: 'Choose publisher catalogs and signed indexes to follow.', icon: 'rss', path: '/subscriptions' },
   { label: 'Moderation administration', detail: 'Manage local moderation feeds and analysis.', icon: 'shield', path: '/moderation' },
   { label: 'Identity tools', detail: 'Manage the local channel and linked devices.', icon: 'key', path: '/profile?developer=identity' },

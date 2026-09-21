@@ -26,11 +26,6 @@ import { PUBLISHER_LIMITS, publisherCanonicalInternals } from './canonical.js'
 const PUBLISHER_ID_DOMAIN = b4a.from('peartube/publisher-id/v1')
 const NAMESPACE_VERSION = 1
 export const PUBLISHER_CATALOG_CAPABILITY = 'publisher-catalog:v1'
-export const PUBLISHER_CATALOG_LEGACY_COMPATIBILITY = Object.freeze({
-  minimumProtocolMajor: PROTOCOL_MAJOR,
-  protocolMinor: 0,
-  requiredCapabilities: Object.freeze([PUBLISHER_CATALOG_CAPABILITY]),
-})
 
 const {
   assertOptionalExactFields,
@@ -141,18 +136,16 @@ function uintLength (value) {
   return varintLength(value)
 }
 
-function encodeNamespaceDescriptor (descriptor, includeCompatibility) {
+export function encodePublisherNamespaceDescriptor (descriptor) {
   validateDescriptor(descriptor)
   const profileLength = varintLength(descriptor.profileRef.byteLength) + descriptor.profileRef.byteLength
   const transitionLength = descriptor.previousRootKey ? 65 : 1
-  const capabilities = includeCompatibility
-    ? descriptor.requiredCapabilities.map(capability => utf8(capability, 'required capability', MAX_PROTOCOL_CAPABILITY_BYTES))
-    : []
-  const compatibilityLength = includeCompatibility
-    ? uintLength(descriptor.minimumProtocolMajor) + uintLength(descriptor.protocolMinor) +
-      uintLength(capabilities.length) +
-      capabilities.reduce((total, capability) => total + varintLength(capability.byteLength) + capability.byteLength, 0)
-    : 0
+  const capabilities = descriptor.requiredCapabilities.map(
+    capability => utf8(capability, 'required capability', MAX_PROTOCOL_CAPABILITY_BYTES)
+  )
+  const compatibilityLength = uintLength(descriptor.minimumProtocolMajor) + uintLength(descriptor.protocolMinor) +
+    uintLength(capabilities.length) +
+    capabilities.reduce((total, capability) => total + varintLength(capability.byteLength) + capability.byteLength, 0)
   const length = 1 + 32 + 32 + 32 + uintLength(descriptor.catalogEpoch) + profileLength +
     uintLength(descriptor.policySequence) + uintLength(descriptor.recoveryKeys.length) +
     descriptor.recoveryKeys.length * 32 + uintLength(descriptor.recoveryThreshold) +
@@ -174,17 +167,11 @@ function encodeNamespaceDescriptor (descriptor, includeCompatibility) {
     output.set(descriptor.previousRootKey, offset); offset += 32
     output.set(descriptor.rootTransitionProof, offset); offset += 32
   }
-  if (includeCompatibility) {
-    offset = writeVarint(output, offset, descriptor.minimumProtocolMajor)
-    offset = writeVarint(output, offset, descriptor.protocolMinor)
-    offset = writeVarint(output, offset, capabilities.length)
-    for (const capability of capabilities) offset = writeField(output, offset, capability)
-  }
+  offset = writeVarint(output, offset, descriptor.minimumProtocolMajor)
+  offset = writeVarint(output, offset, descriptor.protocolMinor)
+  offset = writeVarint(output, offset, capabilities.length)
+  for (const capability of capabilities) offset = writeField(output, offset, capability)
   return output
-}
-
-export function encodePublisherNamespaceDescriptor (descriptor) {
-  return encodeNamespaceDescriptor(descriptor, true)
 }
 
 export function decodePublisherNamespaceDescriptor (input, options = {}) {
@@ -215,34 +202,26 @@ export function decodePublisherNamespaceDescriptor (input, options = {}) {
     descriptor.rootTransitionProof = readFixed(state, 'rootTransitionProof', 32)
   }
 
-  const legacy = state.offset === input.byteLength
-  if (legacy) {
-    Object.assign(descriptor, assertProtocolCompatibility({}, {
-      protocolMajor: options.protocolMajor,
-      supportedCapabilities: options.supportedCapabilities || [PUBLISHER_CATALOG_CAPABILITY],
-      legacyCompatibility: options.legacyCompatibility,
-    }))
-  } else {
-    descriptor.minimumProtocolMajor = readVarint(state, 'minimumProtocolMajor', 255)
-    descriptor.protocolMinor = readVarint(state, 'protocolMinor', 255)
-    const count = readVarint(state, 'requiredCapabilities count', MAX_PROTOCOL_CAPABILITIES)
-    descriptor.requiredCapabilities = new Array(count)
-    for (let index = 0; index < count; index++) {
-      const encoded = readField(state, 'required capability', MAX_PROTOCOL_CAPABILITY_BYTES)
-      const capability = b4a.toString(encoded)
-      if (!equalBytes(utf8(capability, 'required capability', MAX_PROTOCOL_CAPABILITY_BYTES), encoded)) {
-        invalid('required capability encoding is noncanonical')
-      }
-      descriptor.requiredCapabilities[index] = capability
+  descriptor.minimumProtocolMajor = readVarint(state, 'minimumProtocolMajor', 255)
+  descriptor.protocolMinor = readVarint(state, 'protocolMinor', 255)
+  const count = readVarint(state, 'requiredCapabilities count', MAX_PROTOCOL_CAPABILITIES)
+  descriptor.requiredCapabilities = new Array(count)
+  for (let index = 0; index < count; index++) {
+    const encoded = readField(state, 'required capability', MAX_PROTOCOL_CAPABILITY_BYTES)
+    const capability = b4a.toString(encoded)
+    if (!equalBytes(utf8(capability, 'required capability', MAX_PROTOCOL_CAPABILITY_BYTES), encoded)) {
+      invalid('required capability encoding is noncanonical')
     }
-    if (state.offset !== input.byteLength) invalid('trailing bytes')
-    assertProtocolCompatibility(descriptor, {
-      protocolMajor: options.protocolMajor,
-      supportedCapabilities: options.supportedCapabilities || [PUBLISHER_CATALOG_CAPABILITY],
-    })
+    descriptor.requiredCapabilities[index] = capability
   }
+  if (state.offset !== input.byteLength) invalid('trailing bytes')
+  assertProtocolCompatibility(descriptor, {
+    protocolMajor: options.protocolMajor,
+    supportedCapabilities: options.supportedCapabilities || [PUBLISHER_CATALOG_CAPABILITY],
+  })
+
   validateDescriptor(descriptor)
-  const canonical = encodeNamespaceDescriptor(descriptor, !legacy)
+  const canonical = encodePublisherNamespaceDescriptor(descriptor)
   if (!equalBytes(canonical, input)) invalid('noncanonical namespace descriptor encoding')
   return descriptor
 }

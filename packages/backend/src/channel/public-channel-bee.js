@@ -1,9 +1,9 @@
 /**
- * PublicChannelBee - legacy local channel projection
+ * PublicChannelBee - local channel projection
  *
- * This typed HyperDB projection remains readable for local migration and
- * compatibility paths. It does not own discovery or replication; network
- * access is authorized by the scoped publisher and asset runtime.
+ * This typed HyperDB projection is a local read model. It does not own
+ * discovery or replication; network access is authorized by the scoped
+ * publisher and asset runtime.
  */
 
 import HyperDB from 'hyperdb'
@@ -124,7 +124,9 @@ const CONTENT_STORAGE_DEFAULTS = {
 const ROOT_DESCRIPTOR_KEY = b4a.from('channel/root')
 const PROJECTION_FORMAT_KEY = b4a.from('channel/projection-format')
 const CANONICAL_RECONCILIATION_REVISION_KEY = b4a.from('channel/canonical-reconciliation-revision')
-const PROJECTION_FORMATS = new Set(['legacy', 'modern'])
+// A public projection either materializes per-video contentDetails rows
+// ('detailed') or publishes the video list alone ('summary').
+const PROJECTION_FORMATS = new Set(['summary', 'detailed'])
 function projectionClaimKey(videoId) {
   return b4a.from(`channel/projection-claim/${b4a.toString(b4a.from(videoId), 'hex')}`)
 }
@@ -319,7 +321,8 @@ export class PublicChannelBee extends ReadyResource {
     this.store = store
     this.opts = opts
     this.db = null
-    // Kept for legacy tests/callers that verify the raw Hyperbee path is gone.
+    // Public state is HyperDB-only; these stay null so callers that reach for
+    // the raw Hyperbee path fail loudly instead of silently reading nothing.
     this.bee = null
     this.core = null
     this._explicitlyDeletedVideoIds = new Set()
@@ -617,8 +620,8 @@ export class PublicChannelBee extends ReadyResource {
     if (!this.db?.db) throw new Error('Public HyperDB not ready')
     const current = await this.getProjectionFormat()
     if (current === format) return current
-    if (current === 'modern' && format !== 'modern') {
-      throw new Error('Cannot downgrade modern public projection format')
+    if (current === 'detailed' && format !== 'detailed') {
+      throw new Error('Cannot downgrade a detailed public projection format')
     }
     await this.db.db.put(PROJECTION_FORMAT_KEY, b4a.from(format))
     this.db.update?.()
@@ -665,8 +668,8 @@ export class PublicChannelBee extends ReadyResource {
 
   async _contentDetailsRequired() {
     const format = await this.getProjectionFormat()
-    if (format === 'modern') return true
-    if (format === 'legacy') return false
+    if (format === 'detailed') return true
+    if (format === 'summary') return false
     if (!this.db?.db || typeof this.db.db.get !== 'function') {
       throw new Error('Public projection format evidence is unavailable')
     }
@@ -822,7 +825,7 @@ export class PublicChannelBee extends ReadyResource {
   async putContentDetails(videoId, details, { merge = false } = {}) {
     if (!this.writable) throw new Error('Not writable')
     if (!videoId) throw new Error('Video id required')
-    await this.setProjectionFormat('modern')
+    await this.setProjectionFormat('detailed')
     if (details?.importIdentityKey && details?.importClaimantId) {
       await this._writeProjectionClaimIndex({ id: videoId, ...details })
     }
@@ -1072,15 +1075,15 @@ export class PublicChannelBee extends ReadyResource {
     if (!this.db) throw new Error('Public HyperDB not ready')
     const { video, details } = splitPublicVideo({ ...(metadata || {}), id: videoId })
     let format = await this.getProjectionFormat()
-    if (details) format = await this.setProjectionFormat('modern')
-    else if (!format) format = await this.setProjectionFormat('legacy')
+    if (details) format = await this.setProjectionFormat('detailed')
+    else if (!format) format = await this.setProjectionFormat('summary')
     await this._writeProjectionClaimIndex({ ...(metadata || {}), id: videoId })
     this._explicitlyDeletedVideoIds?.delete(videoId)
     await this.db.insert('@peartubePublic/videos', this._sanitizePublicVideo({
       ...video,
       syncedAt: Date.now()
     }))
-    if (details || format === 'modern') {
+    if (details || format === 'detailed') {
       await this.db.insert(
         '@peartubePublic/contentDetails',
         encodeStoredRecord(details || { id: videoId }, CONTENT_STORAGE_DEFAULTS)
@@ -1107,10 +1110,10 @@ export class PublicChannelBee extends ReadyResource {
       ...(change.value || {}),
       id: change.id
     }).details)) {
-      return this.setProjectionFormat('modern')
+      return this.setProjectionFormat('detailed')
     }
     if (putChanges.length > 0 && !format) {
-      return this.setProjectionFormat('legacy')
+      return this.setProjectionFormat('summary')
     }
     return format
   }
@@ -1129,7 +1132,7 @@ export class PublicChannelBee extends ReadyResource {
         ...video,
         syncedAt: now
       })])
-      if (details || format === 'modern') {
+      if (details || format === 'detailed') {
         batch.push([
           '@peartubePublic/contentDetails',
           encodeStoredRecord(details || { id: change.id }, CONTENT_STORAGE_DEFAULTS)
@@ -1180,13 +1183,13 @@ export class PublicChannelBee extends ReadyResource {
       )
     })
     if (materializeContentDetails || hasStructuredProjection || hasImmutableBindingMismatch) {
-      format = await this.setProjectionFormat('modern')
+      format = await this.setProjectionFormat('detailed')
     } else if (!format && list.length > 0) {
-      format = await this.setProjectionFormat('legacy')
+      format = await this.setProjectionFormat('summary')
     }
     return {
       format,
-      materializeContentDetails: format === 'modern' || materializeContentDetails
+      materializeContentDetails: format === 'detailed' || materializeContentDetails
     }
   }
 
@@ -1522,9 +1525,9 @@ export class PublicChannelBee extends ReadyResource {
       if (publicProfile?.canonicalRevision !== rootRevision) {
         throw new Error('Public projection profile revision evidence is incomplete')
       }
-      return this.setProjectionFormat('modern')
+      return this.setProjectionFormat('detailed')
     }
-    return this.setProjectionFormat('legacy')
+    return this.setProjectionFormat('summary')
   }
 
   async _resolveMissingProjectionFormat(publicListing, publicCandidates, logicalProfile, videos, reconciliationStatus) {
@@ -1537,14 +1540,14 @@ export class PublicChannelBee extends ReadyResource {
       publicCandidates.length === 0 &&
       !logicalProfile?.canonicalRevision
     ) {
-      return this.setProjectionFormat('legacy')
+      return this.setProjectionFormat('summary')
     }
     if (
       !logicalProfile?.canonicalRevision &&
       !(videos || []).some((candidate) => Boolean(splitPublicVideo(candidate).details)) &&
       reconciliationStatus.scanComplete !== false
     ) {
-      return this.setProjectionFormat('legacy')
+      return this.setProjectionFormat('summary')
     }
     throw new Error('Public projection format evidence is unavailable')
   }
@@ -1633,7 +1636,7 @@ export class PublicChannelBee extends ReadyResource {
         videos,
         reconciliationStatus
       )
-      const materializeContentDetails = projectionFormat === 'modern'
+      const materializeContentDetails = projectionFormat === 'detailed'
       const claims = await this._readProjectionClaims(channel, videos, publicCandidates)
       const groupedClaims = groupClaimsByIdentity(claims)
       const claimWinners = this._buildInitialClaimWinners(groupedClaims, blockAllClaimPromotions)
@@ -1788,7 +1791,7 @@ export class PublicChannelBee extends ReadyResource {
       stagedDescriptor,
       expectedChannelId
     )
-    await this.setProjectionFormat('modern')
+    await this.setProjectionFormat('detailed')
 
     await this._applyStagedProfile(stagedProfile, stagedDescriptorAccepted, acceptedDescriptor)
     for (const source of stagedSources || []) await this.putChannelSource(source)

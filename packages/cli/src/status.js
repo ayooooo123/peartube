@@ -72,7 +72,6 @@ function buildEffectivePolicy(policy) {
   return {
     policyVersion: count(policy.policyVersion),
     consentVersion: count(policy.consentVersion),
-    migrationRequired: policy.migrationRequired !== false,
     effectiveRole,
     permissions
   }
@@ -211,7 +210,7 @@ function formatPolicyLines(status) {
   const archive = status.budgets?.archive || {}
   return [
     `mode: ${status.mode || 'unknown'}`,
-    `role: ${policy.effectiveRole || 'watch-only'} migrationRequired=${policy.migrationRequired !== false} consentVersion=${policy.consentVersion || 0}`,
+    `role: ${policy.effectiveRole || 'watch-only'} consentVersion=${policy.consentVersion || 0}`,
     `permissions: contribute=${policy.permissions?.contribute === true} archive=${policy.permissions?.archive === true}`,
     `contributionBudget: ${contribution.usedBytes || 0}/${contribution.configuredBytes || 0} bytes`,
     `archiveBudget: ${archive.usedBytes || 0}/${archive.configuredBytes || 0} bytes`

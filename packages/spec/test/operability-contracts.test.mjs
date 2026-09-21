@@ -12,9 +12,6 @@ const messageFields = (schema, name) => {
 }
 
 const COMMANDS = [
-  'get-migration-status',
-  'retry-migration',
-  'export-migration-report',
   'get-publisher-device-status',
   'export-portable-state',
   'restore-portable-state',
@@ -33,28 +30,17 @@ test('operability commands and grouped app metadata are generated', (t) => {
       new Set(methods.map((method) => method.command))
     ])
   )
-  for (const command of COMMANDS.slice(0, 3)) t.ok(grouped.system?.has(command), `${command} is grouped under system`)
-  for (const command of COMMANDS.slice(3, 6)) t.ok(grouped.publisher?.has(command), `${command} is grouped under publisher`)
-  for (const command of COMMANDS.slice(6)) t.ok(grouped.transfer?.has(command), `${command} is grouped under transfer`)
+  for (const command of COMMANDS.slice(0, 3)) t.ok(grouped.publisher?.has(command), `${command} is grouped under publisher`)
+  for (const command of COMMANDS.slice(3)) t.ok(grouped.transfer?.has(command), `${command} is grouped under transfer`)
 })
 
 test('operability responses use bounded structured fields and public-only portability data', (t) => {
   const schema = readJson('../spec/schema/schema.json')
 
   for (const field of [
-    'success', 'migrationId', 'state', 'version', 'processedCount', 'importedCount',
-    'skippedCount', 'quarantinedCount', 'unsupportedCount', 'remainingCount', 'retryable',
-    'updatedAt', 'errorCode', 'errorMessage', 'reportDigest'
-  ]) t.ok(messageFields(schema, 'get-migration-status-response').has(field), `migration status has ${field}`)
-  t.ok(messageFields(schema, 'retry-migration-response').has('joined'), 'retry response reports a joined in-flight retry')
-  for (const field of ['success', 'migrationId', 'reportBytes', 'reportDigest', 'errorCode']) {
-    t.ok(messageFields(schema, 'export-migration-report-response').has(field), `migration report has ${field}`)
-  }
-
-  for (const field of [
     'success', 'publisherId', 'devicePublicKey', 'status', 'reasonCode', 'canPublish',
     'canPlayLocal', 'canExportLocal', 'canDeleteLocal', 'canRootTransition', 'catalogEpoch',
-    'policyEpoch', 'admissionExpiresAt', 'revocationCutoff', 'legacyImportState'
+    'policyEpoch', 'admissionExpiresAt', 'revocationCutoff'
   ]) t.ok(messageFields(schema, 'get-publisher-device-status-response').has(field), `publisher device status has ${field}`)
 
   for (const field of ['success', 'schemaVersion', 'manifestBytes', 'manifestDigest', 'itemCount', 'errorCode']) {
@@ -70,7 +56,6 @@ test('operability responses use bounded structured fields and public-only portab
   t.absent(portableFields.find((field) => /secret|private|rootkey|root-key/.test(field)), 'portable contracts expose no secret/root-key field')
 
   const schemaSource = fs.readFileSync(new URL('../schema.cjs', import.meta.url), 'utf8')
-  t.ok(schemaSource.includes('MAX_MIGRATION_REPORT_BYTES = 65_536'), 'migration reports have an explicit 64 KiB contract bound')
   t.ok(schemaSource.includes('MAX_PORTABLE_MANIFEST_BYTES = 1_048_576'), 'portable manifests have an explicit 1 MiB contract bound')
   t.ok(schemaSource.includes('MAX_PORTABLE_ITEMS = 2_048'), 'portable manifests have an explicit item bound')
   t.ok(schemaSource.includes('MAX_STORAGE_PREVIEW_ITEMS = 32'), 'storage preview arrays have an explicit contract bound')

@@ -35,11 +35,59 @@ declare module 'pear-runtime' {
     readonly stderr: Readable
   }
 
+  // The mirror's Hyperdrive cores. Only `replicate` and the discovery key are
+  // touched here; the drive is otherwise driven by pear-runtime-updater.
+  interface PearReplicableCore {
+    replicate(mux: unknown): unknown
+  }
+
+  interface PearUpdaterDrive {
+    core: PearReplicableCore & { discoveryKey: Uint8Array | null }
+    blobs: { core: PearReplicableCore } | null
+    ready(): Promise<void>
+    update(): Promise<void>
+    get(path: string): Promise<Uint8Array | null>
+    on(event: 'blobs', listener: (blobs: { core: PearReplicableCore }) => void): void
+  }
+
+  interface PearUpdater {
+    drive: PearUpdaterDrive
+    version: string
+    nextVersion: string | null
+    bundled: boolean
+    updates: boolean
+    updated: boolean
+    applied?: boolean
+    applyUpdate(): Promise<void>
+    close(): Promise<void>
+    on(event: string, listener: (value?: unknown) => void): void
+  }
+
+  interface PearRuntimeOptions {
+    dir?: string
+    storage?: string
+    version: string
+    upgrade: string
+    name?: string
+    app?: string
+    store?: unknown
+    swarm?: unknown
+    updates?: boolean
+    delay?: number
+    skipUpdate?: () => boolean | Promise<boolean>
+  }
+
   // module.exports = class PearRuntime — `run` is a static (and instance) alias
-  // for lib/run, which returns the bare-sidecar IPC duplex.
+  // for lib/run, which returns the bare-sidecar IPC duplex. The constructor
+  // form is the updater host; the published package ships no types for it.
   class PearRuntime {
+    constructor(options: PearRuntimeOptions)
     static run(entrypoint: string, args?: string[], opts?: Record<string, unknown>): PearRuntimeIpc
     run(entrypoint: string, args?: string[], opts?: Record<string, unknown>): PearRuntimeIpc
+    updater: PearUpdater
+    ready(): Promise<void>
+    close(): Promise<void>
+    on(event: string, listener: (value?: unknown) => void): void
   }
 
   export = PearRuntime

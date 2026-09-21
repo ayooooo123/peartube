@@ -20,6 +20,9 @@ import {
   DEFAULT_TMDB_LANGUAGE,
   DEFAULT_SEED_PIN_CONFIG,
   DEFAULT_RELAY_CONFIG,
+  ARCHIVE_UI_AUTHORITY_PATTERN,
+  ARCHIVE_UI_MAX_AUTHORITY_LENGTH,
+  ARCHIVE_UI_MAX_TRUSTED_HOSTS,
   MAX_SEED_PIN_CONCURRENT,
   MAX_SEED_PIN_TRUSTED_CLIENTS,
   RELAY_CATALOG_FILENAME,
@@ -367,38 +370,57 @@ function archiveTorboxFromEnv(env) {
   return torbox
 }
 
+// Straight value mappings. Everything needing more than a transform is spelled
+// out in the function below; keeping the flat cases in a table is what stops
+// this growing one branch per environment variable.
+const ARCHIVE_ENV_FIELDS = [
+  ['PEARTUBE_ARCHIVE_UI_ENABLED', 'uiEnabled', parseBoolean],
+  ['PEARTUBE_ARCHIVE_UI_HOST', 'uiHost'],
+  ['PEARTUBE_ARCHIVE_UI_PORT', 'uiPort', Number],
+  ['PEARTUBE_ARCHIVE_UI_TRUSTED_HOSTS', 'uiTrustedHosts'],
+  ['PEARTUBE_ARCHIVE_TMP_PATH', 'tmpPath'],
+  ['PEARTUBE_ARCHIVE_POLL', 'poll', Number],
+  ['PEARTUBE_ARCHIVE_FORMAT', 'format'],
+  ['PEARTUBE_ARCHIVE_YT_DLP_PATH', 'ytDlpPath'],
+  ['PEARTUBE_ARCHIVE_FFMPEG_PATH', 'ffmpegPath'],
+  ['PEARTUBE_ARCHIVE_COOKIES_PATH', 'cookiesPath'],
+  ['PEARTUBE_ARCHIVE_JS_RUNTIME', 'jsRuntime'],
+  ['PEARTUBE_ARCHIVE_YT_DLP_EXTRA_ARGS', 'ytDlpExtraArgs', splitShellArgs],
+  ['PEARTUBE_ARCHIVE_SOURCES', 'sources', (value) => splitCommaList(value).map((url) => ({ url }))],
+]
+
+const ARCHIVE_ENV_SECTIONS = [
+  ['s3', archiveS3FromEnv],
+  ['localMirror', archiveLocalMirrorFromEnv],
+  ['torbox', archiveTorboxFromEnv],
+]
+
 function archiveFromEnv(env) {
   const archive = {}
-  if (env.PEARTUBE_ARCHIVE_UI_ENABLED) archive.uiEnabled = parseBoolean(env.PEARTUBE_ARCHIVE_UI_ENABLED)
-  if (env.PEARTUBE_ARCHIVE_UI_HOST) archive.uiHost = env.PEARTUBE_ARCHIVE_UI_HOST
-  if (env.PEARTUBE_ARCHIVE_UI_PORT) archive.uiPort = Number(env.PEARTUBE_ARCHIVE_UI_PORT)
-  if (env.PEARTUBE_ARCHIVE_TMP_PATH) archive.tmpPath = env.PEARTUBE_ARCHIVE_TMP_PATH
+  for (const [key, field, transform] of ARCHIVE_ENV_FIELDS) {
+    const raw = env[key]
+    if (!raw) continue
+    archive[field] = transform ? transform(raw) : raw
+  }
+
+  // An unparseable boolean leaves the field unset rather than defaulting it.
   if (env.PEARTUBE_ARCHIVE_ENABLED) {
     const parsed = parseBoolean(env.PEARTUBE_ARCHIVE_ENABLED)
     if (parsed !== undefined) archive.enabled = parsed
   }
-  if (env.PEARTUBE_ARCHIVE_POLL) archive.poll = Number(env.PEARTUBE_ARCHIVE_POLL)
-  if (env.PEARTUBE_ARCHIVE_FORMAT) archive.format = env.PEARTUBE_ARCHIVE_FORMAT
-  if (env.PEARTUBE_ARCHIVE_YT_DLP_PATH) archive.ytDlpPath = env.PEARTUBE_ARCHIVE_YT_DLP_PATH
-  if (env.PEARTUBE_ARCHIVE_FFMPEG_PATH) archive.ffmpegPath = env.PEARTUBE_ARCHIVE_FFMPEG_PATH
-  if (env.PEARTUBE_ARCHIVE_COOKIES_PATH) archive.cookiesPath = env.PEARTUBE_ARCHIVE_COOKIES_PATH
-  if (env.PEARTUBE_ARCHIVE_JS_RUNTIME) archive.jsRuntime = env.PEARTUBE_ARCHIVE_JS_RUNTIME
-  if (env.PEARTUBE_ARCHIVE_YT_DLP_EXTRA_ARGS) archive.ytDlpExtraArgs = splitShellArgs(env.PEARTUBE_ARCHIVE_YT_DLP_EXTRA_ARGS)
+
+  // `||` separates whole retry attempts, each of which is its own argv.
   if (env.PEARTUBE_ARCHIVE_YT_DLP_RETRY_EXTRA_ARGS) {
     archive.ytDlpRetryExtraArgs = String(env.PEARTUBE_ARCHIVE_YT_DLP_RETRY_EXTRA_ARGS)
       .split(/\s*\|\|\s*/)
       .map(splitShellArgs)
       .filter((args) => args.length)
   }
-  if (env.PEARTUBE_ARCHIVE_SOURCES) {
-    archive.sources = splitCommaList(env.PEARTUBE_ARCHIVE_SOURCES).map((url) => ({ url }))
+
+  for (const [field, readSection] of ARCHIVE_ENV_SECTIONS) {
+    const section = readSection(env)
+    if (section) archive[field] = section
   }
-  const s3 = archiveS3FromEnv(env)
-  if (s3) archive.s3 = s3
-  const localMirror = archiveLocalMirrorFromEnv(env)
-  if (localMirror) archive.localMirror = localMirror
-  const torbox = archiveTorboxFromEnv(env)
-  if (torbox) archive.torbox = torbox
 
   return Object.keys(archive).length ? archive : null
 }
@@ -665,6 +687,24 @@ function resolveLocalMirrorConfig(rawLocalMirror) {
   return resolved
 }
 
+// Authorities an operator reaches the console on that the relay cannot infer
+// from its own bind: a reverse proxy's hostname, a DNS alias. The console
+// refuses a mutating request whose Host it does not recognise, so without
+// this a proxied relay would lock its operator out of every POST route.
+function resolveArchiveUiTrustedHosts(value) {
+  const entries = Array.isArray(value)
+    ? value
+    : typeof value === 'string'
+      ? value.split(',')
+      : []
+  const hosts = entries.map(entry => String(entry).trim().toLowerCase()).filter(Boolean)
+  if (hosts.length > ARCHIVE_UI_MAX_TRUSTED_HOSTS || new Set(hosts).size !== hosts.length ||
+      hosts.some(host => host.length > ARCHIVE_UI_MAX_AUTHORITY_LENGTH || !ARCHIVE_UI_AUTHORITY_PATTERN.test(host))) {
+    throw new Error(`archive.uiTrustedHosts must contain up to ${ARCHIVE_UI_MAX_TRUSTED_HOSTS} unique host[:port] entries`)
+  }
+  return hosts
+}
+
 function resolveArchiveConfig(rawArchive, { storagePath }) {
   const merged = deepMerge(DEFAULT_ARCHIVE_CONFIG, isPlainObject(rawArchive) ? rawArchive : {})
 
@@ -696,9 +736,9 @@ function resolveArchiveConfig(rawArchive, { storagePath }) {
     merged.maxItems = DEFAULT_ARCHIVE_MAX_ITEMS
   }
 
-  // Legacy archive.maxDirectDownloadBytes is no longer a policy surface.
-  // File-size limits are storage policy, not archive downloader policy, so
-  // normalize every value to the no-cap sentinel.
+  // archive.maxDirectDownloadBytes is not a policy surface: file-size limits
+  // are storage policy, not archive downloader policy, so every supplied value
+  // normalizes to the no-cap sentinel.
   merged.maxDirectDownloadBytes = 0
 
   if (typeof merged.tmpPath !== 'string' || !merged.tmpPath) {
@@ -713,6 +753,7 @@ function resolveArchiveConfig(rawArchive, { storagePath }) {
   if (!Number.isFinite(merged.uiPort) || merged.uiPort <= 0) {
     throw new Error('archive.uiPort must be a positive number')
   }
+  merged.uiTrustedHosts = resolveArchiveUiTrustedHosts(merged.uiTrustedHosts)
 
   const sourceDefaults = {
     format: merged.format,
@@ -983,9 +1024,37 @@ function renderCompanionLines(rawCompanion) {
   ]
 }
 
+// A YAML block sequence when there is something to list, an inline empty list
+// otherwise. Both spellings reload through the parser as the same value.
+function renderListLines(label, values, renderItem) {
+  if (!Array.isArray(values) || values.length === 0) return [`  ${label}: []`]
+  const lines = [`  ${label}:`]
+  for (const value of values) lines.push(...renderItem(value))
+  return lines
+}
+
+function renderLocalMirrorLines(localMirror = {}) {
+  return [
+    '  localMirror:',
+    `    enabled: ${Boolean(localMirror.enabled)}`,
+    `    path: ${localMirror.path || ''}`,
+    `    poll: ${localMirror.poll || DEFAULT_LOCAL_MIRROR_POLL_SECONDS}`,
+    `    channelName: "${localMirror.channelName || 'Local Drive Mirror'}"`,
+    `    description: "${localMirror.description || ''}"`,
+    `    recursive: ${localMirror.recursive !== false}`,
+    `    maxFiles: ${localMirror.maxFiles || DEFAULT_ARCHIVE_MAX_ITEMS}`
+  ]
+}
+
+function renderArchiveSourceLines(source) {
+  const lines = [`    - url: ${source.url}`]
+  if (source.label) lines.push(`      label: ${source.label}`)
+  return lines
+}
+
 function renderArchiveLines(rawArchive) {
   const archive = rawArchive || DEFAULT_ARCHIVE_CONFIG
-  const lines = [
+  return [
     'archive:',
     `  uiEnabled: ${Boolean(archive.uiEnabled)}`,
     `  uiHost: ${archive.uiHost || '127.0.0.1'}`,
@@ -995,29 +1064,11 @@ function renderArchiveLines(rawArchive) {
     `  poll: ${archive.poll || DEFAULT_ARCHIVE_POLL_SECONDS}`,
     `  maxItems: ${archive.maxItems || DEFAULT_ARCHIVE_MAX_ITEMS}`,
     `  maxRetries: ${archive.maxRetries ?? DEFAULT_ARCHIVE_MAX_RETRIES}`,
-    `  format: "${archive.format || DEFAULT_ARCHIVE_FORMAT}"`
+    `  format: "${archive.format || DEFAULT_ARCHIVE_FORMAT}"`,
+    ...renderListLines('uiTrustedHosts', archive.uiTrustedHosts, (trusted) => [`    - ${trusted}`]),
+    ...renderLocalMirrorLines(archive.localMirror),
+    ...renderListLines('sources', archive.sources, renderArchiveSourceLines)
   ]
-  const localMirror = archive.localMirror || {}
-  lines.push(
-    '  localMirror:',
-    `    enabled: ${Boolean(localMirror.enabled)}`,
-    `    path: ${localMirror.path || ''}`,
-    `    poll: ${localMirror.poll || DEFAULT_LOCAL_MIRROR_POLL_SECONDS}`,
-    `    channelName: "${localMirror.channelName || 'Local Drive Mirror'}"`,
-    `    description: "${localMirror.description || ''}"`,
-    `    recursive: ${localMirror.recursive !== false}`,
-    `    maxFiles: ${localMirror.maxFiles || DEFAULT_ARCHIVE_MAX_ITEMS}`
-  )
-  if (Array.isArray(archive.sources) && archive.sources.length) {
-    lines.push('  sources:')
-    for (const source of archive.sources) {
-      lines.push(`    - url: ${source.url}`)
-      if (source.label) lines.push(`      label: ${source.label}`)
-    }
-  } else {
-    lines.push('  sources: []')
-  }
-  return lines
 }
 
 export function renderExampleConfig(config = DEFAULT_RELAY_CONFIG) {

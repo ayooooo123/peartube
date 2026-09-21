@@ -148,7 +148,6 @@ test('persisted policy loads before manager startup and survives restart', async
     uploadCeilingBytes: 512,
     retentionMode: 'archive-pledges',
     consentVersion: 1,
-    migrationRequired: false,
     contributeWatchedMedia: true,
     archiveEnabled: true,
     contributionBudgetBytes: 1536,
@@ -180,7 +179,6 @@ test('runtime policy transitions stop forbidden work, release reservations, and 
     retentionMode: 'archive-pledges',
     diskCeilingBytes: 4096,
     consentVersion: 1,
-    migrationRequired: false,
     contributeWatchedMedia: true,
     archiveEnabled: true,
     contributionBudgetBytes: 2048,
@@ -232,7 +230,6 @@ test('deferred runtime startup applies the latest policy exactly once', async (t
     uploadPermission: 'enabled',
     uploadCeilingBytes: 77,
     consentVersion: 1,
-    migrationRequired: false,
     contributeWatchedMedia: true,
     contributionBudgetBytes: 77,
   })
@@ -248,7 +245,6 @@ test('failed manager reconfiguration rolls runtime and persisted policy back', a
   const initialPolicy = normalizeNetworkPolicy({
     ...await loadNetworkPolicy({ store }),
     consentVersion: 1,
-    migrationRequired: false,
     contributeWatchedMedia: true,
   })
   const applied = []
@@ -292,7 +288,6 @@ test('failed manager reconfiguration rolls runtime and persisted policy back', a
     uploadPermission: 'enabled',
     uploadCeilingBytes: 1024,
     consentVersion: 1,
-    migrationRequired: false,
     archiveEnabled: true,
     archiveBudgetBytes: 1024,
   })
@@ -318,7 +313,6 @@ test('archive consent is unsupported when the archive runtime is unavailable', a
     initialPolicy: {
       ...initialPolicy,
       consentVersion: 1,
-      migrationRequired: false,
       archiveEnabled: true,
       archiveBudgetBytes: 1024,
     },
@@ -421,7 +415,8 @@ test('failed feed reconciliation restores the prior transport subscriptions tran
   ], 'rollback reconciles from observed partial state')
 })
 
-test('legacy persisted policy is migration-required watch-only despite permissive legacy fields', async (t) => {
+test('a persisted policy from a retired policy version is discarded for the shipped defaults', async (t) => {
+  const defaults = await loadNetworkPolicy({ store: asyncPolicyStore() })
   const policy = await loadNetworkPolicy({
     store: asyncPolicyStore({
       uploadPermission: 'enabled',
@@ -430,7 +425,7 @@ test('legacy persisted policy is migration-required watch-only despite permissiv
       diskCeilingBytes: 8192,
     }),
   })
-  t.is(policy.migrationRequired, true)
+  t.alike(policy, defaults, 'a pre-v2 record carries none of its fields forward')
   t.is(policy.effectiveRole, 'watch-only')
   t.is(policy.permissions.contribute, false)
   t.is(policy.permissions.archive, false)
@@ -438,12 +433,11 @@ test('legacy persisted policy is migration-required watch-only despite permissiv
   t.is(policy.archiveBudgetBytes, 0)
 })
 
-test('incomplete or invalid current policy loads as migration-required watch-only', async (t) => {
+test('incomplete or invalid current policy loads as watch-only', async (t) => {
   for (const stored of [
     {
       policyVersion: 2,
       consentVersion: 0,
-      migrationRequired: false,
       contributeWatchedMedia: true,
       archiveEnabled: true,
       contributionBudgetBytes: 4096,
@@ -452,23 +446,11 @@ test('incomplete or invalid current policy loads as migration-required watch-onl
     {
       policyVersion: 2,
       consentVersion: 1,
-      migrationRequired: false,
       contributeWatchedMedia: true,
       uploadPermission: 'always'
     },
     {
-      policyVersion: 2,
       consentVersion: 1,
-      contributeWatchedMedia: true,
-      archiveEnabled: false,
-      contributionBudgetBytes: 4096,
-      archiveBudgetBytes: 0,
-      uploadPermission: 'enabled',
-      uploadCeilingBytes: 4096
-    },
-    {
-      consentVersion: 1,
-      migrationRequired: false,
       contributeWatchedMedia: true,
       archiveEnabled: false,
       contributionBudgetBytes: 4096,
@@ -478,7 +460,6 @@ test('incomplete or invalid current policy loads as migration-required watch-onl
     }
   ]) {
     const policy = await loadNetworkPolicy({ store: asyncPolicyStore(stored) })
-    t.is(policy.migrationRequired, true)
     t.is(policy.effectiveRole, 'watch-only')
     t.is(policy.permissions.contribute, false)
     t.is(policy.permissions.archive, false)
@@ -492,12 +473,12 @@ test('direct runtime input cannot synthesize explicit consent identity from defa
     contributeWatchedMedia: true,
     archiveEnabled: true,
     contributionBudgetBytes: 4096,
-    archiveBudgetBytes: 4096,
+    // A snapshot that never states its archive budget is not a complete
+    // explicit consent record, so the runtime refuses to read consent into it.
     uploadPermission: 'enabled',
     uploadCeilingBytes: 8192
   })
   const effective = await harness.runtime.start()
-  t.is(effective.migrationRequired, true)
   t.is(effective.effectiveRole, 'watch-only')
   t.is(effective.permissions.contribute, false)
   t.is(effective.permissions.archive, false)
@@ -620,42 +601,6 @@ test('resubmitting the whole policy unchanged does not freeze the ceilings', asy
   const switched = await policyApi.getNetworkPolicy()
   t.is(switched.diskCeilingBytes, 100 * GIB, 'a ceiling nobody edited still follows the preset')
   t.is(switched.uploadCeilingBytes, 5 * GIB)
-})
-
-test('a stored policy from before participation modes keeps a ceiling someone chose', async (t) => {
-  const chosen = await loadNetworkPolicy({
-    store: asyncPolicyStore({
-      uploadPermission: 'enabled',
-      meteredNetwork: 'pause-network',
-      backgroundMode: 'local-only',
-      diskCeilingBytes: 3 * GIB,
-      uploadCeilingBytes: Number.MAX_SAFE_INTEGER,
-      retentionMode: 'none',
-      followedPublishers: [],
-      followedIndexes: [],
-      trustedModerationFeeds: [],
-      aiAnalysis: 'disabled',
-    }),
-  })
-  t.is(chosen.participationMode, 'balanced')
-  t.is(chosen.diskCeilingBytes, 3 * GIB, 'a cache ceiling that never matched the retired default was chosen')
-  t.is(chosen.uploadCeilingBytes, 1 * GIB, 'the retired unbounded upload default adopts Balanced')
-
-  const untouched = await loadNetworkPolicy({
-    store: asyncPolicyStore({
-      uploadPermission: 'enabled',
-      meteredNetwork: 'pause-network',
-      backgroundMode: 'local-only',
-      diskCeilingBytes: 5 * GIB,
-      uploadCeilingBytes: Number.MAX_SAFE_INTEGER,
-      retentionMode: 'none',
-      followedPublishers: [],
-      followedIndexes: [],
-      trustedModerationFeeds: [],
-      aiAnalysis: 'disabled',
-    }),
-  })
-  t.is(untouched.diskCeilingBytes, 20 * GIB, 'the retired defaults were never a choice, so Balanced applies')
 })
 
 test('backgrounding the app without OS permission suspends instead of pretending to seed', async (t) => {
@@ -832,7 +777,6 @@ test('the transport refuses uploads exactly when the status says suspended', asy
   const initialPolicy = {
     ...await loadNetworkPolicy({ store }),
     consentVersion: 1,
-    migrationRequired: false,
     contributeWatchedMedia: true,
   }
   const transport = runtimeHarness(initialPolicy)
@@ -1085,7 +1029,6 @@ test('a fresh install can actually run the background work the OS permits', asyn
   const installed = {
     ...await loadNetworkPolicy({ store }),
     consentVersion: 1,
-    migrationRequired: false,
     contributeWatchedMedia: true,
   }
   t.is(installed.backgroundMode, 'allow',
@@ -1132,62 +1075,6 @@ test('an operator who narrows background work keeps that choice', async (t) => {
   t.is((await policyApi.setNetworkPolicy({ backgroundMode: 'allow' })).success, true)
   const released = await loadNetworkPolicy({ store })
   t.is(released.backgroundModeExplicit, false)
-})
-
-test('a stored policy carrying the retired background default adopts the new one', async (t) => {
-  const inherited = await loadNetworkPolicy({
-    store: asyncPolicyStore({
-      uploadPermission: 'enabled',
-      meteredNetwork: 'pause-network',
-      backgroundMode: 'local-only',
-      participationMode: 'balanced',
-      diskCeilingBytes: 20 * GIB,
-      uploadCeilingBytes: 1 * GIB,
-      retentionMode: 'none',
-      followedPublishers: [],
-      followedIndexes: [],
-      trustedModerationFeeds: [],
-      aiAnalysis: 'disabled',
-    }),
-  })
-  t.is(inherited.backgroundMode, 'allow', 'a value nobody chose is not a choice')
-  t.is(inherited.backgroundModeExplicit, false)
-
-  const narrowed = await loadNetworkPolicy({
-    store: asyncPolicyStore({
-      uploadPermission: 'enabled',
-      meteredNetwork: 'pause-network',
-      backgroundMode: 'pause-network',
-      participationMode: 'balanced',
-      diskCeilingBytes: 20 * GIB,
-      uploadCeilingBytes: 1 * GIB,
-      retentionMode: 'none',
-      followedPublishers: [],
-      followedIndexes: [],
-      trustedModerationFeeds: [],
-      aiAnalysis: 'disabled',
-    }),
-  })
-  t.is(narrowed.backgroundMode, 'pause-network', 'a value only an operator could have set survives')
-  t.is(narrowed.backgroundModeExplicit, true)
-
-  const recorded = await loadNetworkPolicy({
-    store: asyncPolicyStore({
-      uploadPermission: 'enabled',
-      meteredNetwork: 'pause-network',
-      backgroundMode: 'local-only',
-      backgroundModeExplicit: true,
-      participationMode: 'balanced',
-      diskCeilingBytes: 20 * GIB,
-      uploadCeilingBytes: 1 * GIB,
-      retentionMode: 'none',
-      followedPublishers: [],
-      followedIndexes: [],
-      trustedModerationFeeds: [],
-      aiAnalysis: 'disabled',
-    }),
-  })
-  t.is(recorded.backgroundMode, 'local-only', 'a recorded choice is never revisited by a later default')
 })
 
 const INDEX_POLICY_NOW = 1_700_000_000_000
@@ -1541,7 +1428,6 @@ test('failed rollback surfaces NETWORK_POLICY_ROLLBACK_FAILED', async (t) => {
       ...initialPolicy,
       uploadPermission: 'enabled',
       consentVersion: 1,
-      migrationRequired: false,
       contributeWatchedMedia: true,
       contributionBudgetBytes: 1024,
     }),

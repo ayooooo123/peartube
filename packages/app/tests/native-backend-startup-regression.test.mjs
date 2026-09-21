@@ -455,7 +455,6 @@ test('backend orchestrator starts scoped discovery and accounts for scoped peer 
     purpose: 'asset',
     topicHex: 'topic',
     state: 'active',
-    assetResponseCount: 1,
     archiveServing: true,
   }])
   assert.doesNotMatch(orchestrator, /publicFeed\.handleDiscoveredPeer/)

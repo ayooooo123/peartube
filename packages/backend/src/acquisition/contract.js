@@ -541,7 +541,7 @@ export function requestIntentFromCoordination (record) {
     publicationIntentDigest: record.publicationIntentDigest,
     budget: record.budget,
     output: record.output,
-    generation: record.requestGeneration ?? record.epoch,
+    generation: record.requestGeneration,
     resultHoldUntil: record.resultHoldUntil,
     deadline: record.deadline
   })
@@ -666,11 +666,9 @@ export function normalizeCoordinationRecord (input) {
   const epoch = uint(input.epoch, 'epoch', { minimum: 0, code: 'COORDINATION_RECORD_INVALID' })
   // Request generation is the requester's local policy revision. It is kept
   // separately from epoch, which becomes the worker's negotiated policy epoch
-  // once an offer is assigned. Legacy requester records used epoch for both
-  // values while peers incorrectly shared one revision, so that is a safe
-  // restart migration fallback for records without the appended field.
+  // once an offer is assigned.
   const requestGeneration = input.requestGeneration == null
-    ? (input.role === 'requester' ? epoch : null)
+    ? null
     : uint(input.requestGeneration, 'requestGeneration', { minimum: 0, code: 'COORDINATION_RECORD_INVALID' })
   const deadline = uint(input.deadline, 'deadline', { minimum: 1, code: 'COORDINATION_RECORD_INVALID' })
   const createdAt = uint(input.createdAt, 'createdAt', { minimum: 1, code: 'COORDINATION_RECORD_INVALID' })

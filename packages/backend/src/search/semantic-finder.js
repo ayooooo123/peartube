@@ -75,11 +75,6 @@ function extractSearchChannelName(video) {
   return String(video.channelName || video.channel?.name || '').trim()
 }
 
-function getIndexedMetadata(globalIndex, index, videoId) {
-  return globalIndex.vectors.get(videoId)?.metadata || index.vectors.get(videoId)?.metadata || {}
-}
-
-
 /**
  * Semantic Finder for video search
  */
@@ -94,8 +89,6 @@ export class SemanticFinder {
     this.metaDb = opts.metaDb || null
     // Single GLOBAL index for fast search across all channels
     this.globalIndex = new VectorIndex()
-    // Legacy per-channel indexes (for backward compatibility)
-    this.index = this.globalIndex // alias
     /** @type {Map<string, VectorIndex>} */
     this._channelIndexes = new Map()
     /** @type {Map<string, number>} channelKey -> last indexed vector count */
@@ -156,18 +149,18 @@ export class SemanticFinder {
           const probe = await this._extractor('probe', { pooling: 'mean', normalize: true })
           const vec = probe?.data instanceof Float32Array ? probe.data : null
           const dim = vec?.length || DEFAULT_DIMENSION
-          this.index.dimension = dim
+          this.globalIndex.dimension = dim
         } catch {
-          this.index.dimension = DEFAULT_DIMENSION
+          this.globalIndex.dimension = DEFAULT_DIMENSION
         }
       } catch (err) {
         // transformers.js not installed or model load failed — continue with fallback
         console.log('[SemanticFinder] transformers.js not available, using hash fallback:', err?.message)
         this._extractor = null
-        this.index.dimension = DEFAULT_DIMENSION
+        this.globalIndex.dimension = DEFAULT_DIMENSION
       } finally {
         this.initialized = true
-        console.log('[SemanticFinder] Init complete, dimension:', this.index.dimension)
+        console.log('[SemanticFinder] Init complete, dimension:', this.globalIndex.dimension)
       }
     })()
 
@@ -200,7 +193,7 @@ export class SemanticFinder {
   }
 
   _simpleEmbed(text) {
-    const vec = new Float32Array(this.index.dimension || DEFAULT_DIMENSION)
+    const vec = new Float32Array(this.globalIndex.dimension || DEFAULT_DIMENSION)
     const input = String(text || '')
     for (let i = 0; i < input.length; i++) {
       const slot = i % vec.length
@@ -219,12 +212,12 @@ export class SemanticFinder {
    * @returns {VectorIndex}
    */
   _getChannelIndex(channelKey) {
-    if (!channelKey) return this.index
+    if (!channelKey) return this.globalIndex
     const existing = this._channelIndexes.get(channelKey)
     if (existing) return existing
     const idx = new VectorIndex()
     // Keep dimension in sync with the embedder
-    idx.dimension = this.index.dimension || DEFAULT_DIMENSION
+    idx.dimension = this.globalIndex.dimension || DEFAULT_DIMENSION
     this._channelIndexes.set(channelKey, idx)
     return idx
   }
@@ -270,7 +263,7 @@ export class SemanticFinder {
     if (rows.length && rows.length === lastCount) return
 
     const idx = this._getChannelIndex(channelKey)
-    idx.dimension = this.index.dimension || DEFAULT_DIMENSION
+    idx.dimension = this.globalIndex.dimension || DEFAULT_DIMENSION
     idx.clear()
 
     for (const value of rows) {
@@ -339,7 +332,7 @@ export class SemanticFinder {
     if (rows.length && rows.length === lastCount) return
 
     const idx = this.globalIndex
-    idx.dimension = this.index.dimension || DEFAULT_DIMENSION
+    idx.dimension = this.globalIndex.dimension || DEFAULT_DIMENSION
     let indexed = 0
 
     for (const value of rows) {
@@ -380,8 +373,8 @@ export class SemanticFinder {
 
     const embedding = await this.embed(text)
     const channelKey = normalized.channelKey || metadata?.channelKey || null
-    const idx = channelKey ? this._getChannelIndex(channelKey) : this.index
-    idx.dimension = this.index.dimension || DEFAULT_DIMENSION
+    const idx = channelKey ? this._getChannelIndex(channelKey) : this.globalIndex
+    idx.dimension = this.globalIndex.dimension || DEFAULT_DIMENSION
     const storedMetadata = buildStoredMetadata(normalized, channelKey, metadata)
     idx.add(normalized.videoId, embedding, storedMetadata)
     if (this.globalIndex !== idx) {
@@ -464,7 +457,7 @@ export class SemanticFinder {
   async search(query, topK = 10, options = {}) {
     const queryEmbedding = await this.embed(query)
     const channelKey = options?.channelKey || null
-    const idx = channelKey ? this._getChannelIndex(channelKey) : this.index
+    const idx = channelKey ? this._getChannelIndex(channelKey) : this.globalIndex
     return idx.search(queryEmbedding, topK)
   }
 
@@ -473,7 +466,7 @@ export class SemanticFinder {
    * @returns {number}
    */
   size() {
-    return this.index.size()
+    return this.globalIndex.size()
   }
 
   /**
@@ -509,7 +502,7 @@ export class SemanticFinder {
     const videoId = video.videoId || video.id
     if (!videoId || !this._indexedVideoIds.has(videoId)) return false
 
-    const existing = getIndexedMetadata(this.globalIndex, this.index, videoId)
+    const existing = this.globalIndex.vectors.get(videoId)?.metadata || {}
     const nextCreatorName = extractSearchCreatorName(video)
     if (nextCreatorName && existing.creatorName !== nextCreatorName) return true
 

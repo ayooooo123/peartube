@@ -145,7 +145,6 @@ function fixture({ published = false, visible = true, titleIndexed = true, provi
     list: [],
     cancel: [],
     stream: [],
-    migrate: [],
   }
   const localPublication = publication()
   const localManifest = manifest()
@@ -256,10 +255,6 @@ function fixture({ published = false, visible = true, titleIndexed = true, provi
       calls.cancel.push(input)
       const current = jobs.get(input.acquisitionId)
       return current ? { ...current, state: 'cancelled', updatedAt: NOW + 1 } : null
-    },
-    async migrateLegacyIngest(input) {
-      calls.migrate.push(input)
-      return { migrated: 2, skipped: 1 }
     },
   }
 
@@ -464,23 +459,6 @@ test('default published references remain valid while a person chooses and start
   const resolved = await f.service.resolve({ ref: page.candidates[0].ref })
   t.is(resolved.kind, 'published')
   t.is(resolved.publicationId, PUBLICATION)
-})
-
-
-test('legacy ingest migration stays behind the provider service seam', async t => {
-  const f = fixture()
-  const legacyStore = { async list() { return [] } }
-  const result = await f.service.migrateLegacyIngest({
-    legacyStore,
-    legacyPrincipalId: 'legacy-machine',
-    legacyPublisherId: 'legacy-publisher',
-    now: NOW,
-  })
-
-  t.alike(result, { migrated: 2, skipped: 1 })
-  t.is(f.calls.migrate.length, 1)
-  t.is(f.calls.migrate[0].legacyStore, legacyStore)
-  t.is(f.service.acquisitionStore, undefined)
 })
 
 test('in-flight active acquisition search immediately returns matching candidates by external reference', async t => {

@@ -5,6 +5,7 @@ import b4a from 'b4a'
 import IdentityKey from 'keet-identity-key'
 
 import { createIdentityManager } from '../src/identity.js'
+import { IDENTITY_STATE_KEY } from '../src/identity-state.js'
 import { verifySignedChannelRootDescriptor } from '../src/channel-descriptor.js'
 
 function hexKey (fill) {
@@ -12,8 +13,10 @@ function hexKey (fill) {
 }
 
 // Minimal metaDb stub backing the identity manager's persistence.
-function createMetaDb (seed = {}) {
-  const store = new Map(Object.entries(seed))
+function createMetaDb (identities, activeIdentity) {
+  const store = new Map([
+    [IDENTITY_STATE_KEY, { version: 1, activeIdentity, identities }],
+  ])
   return {
     async get (key) {
       return store.has(key) ? { value: store.get(key) } : null
@@ -57,16 +60,13 @@ test('signs a grouped channel root descriptor bound to the channel key, vouched 
   const publicBeeKey = hexKey(0xbb)
   const blobsKeyHex = hexKey(0xcc)
 
-  const metaDb = createMetaDb({
-    identities: [{
-      publicKey: identityPublicKey,
-      channelKey: hexKey(0x11),
-      driveKey: hexKey(0x11),
-      name: 'Relay',
-      signedDescriptor: { proof: proofHex },
-    }],
-    activeIdentity: identityPublicKey,
-  })
+  const metaDb = createMetaDb([{
+    publicKey: identityPublicKey,
+    channelKey: hexKey(0x11),
+    driveKey: hexKey(0x11),
+    name: 'Relay',
+    signedDescriptor: { proof: proofHex },
+  }], identityPublicKey)
   const ctx = { metaDb, swarm: { keyPair: device } }
   const manager = createIdentityManager({ ctx })
   await manager.loadIdentities()
@@ -92,10 +92,10 @@ test('signs a grouped channel root descriptor bound to the channel key, vouched 
 test('is idempotent when a valid descriptor already exists', async () => {
   const { identityPublicKey, proofHex, device } = await bootstrapActiveIdentity()
   const channelKey = hexKey(0xa1)
-  const metaDb = createMetaDb({
-    identities: [{ publicKey: identityPublicKey, channelKey: hexKey(0x12), driveKey: hexKey(0x12), name: 'Relay', signedDescriptor: { proof: proofHex } }],
-    activeIdentity: identityPublicKey,
-  })
+  const metaDb = createMetaDb(
+    [{ publicKey: identityPublicKey, channelKey: hexKey(0x12), driveKey: hexKey(0x12), name: 'Relay', signedDescriptor: { proof: proofHex } }],
+    identityPublicKey,
+  )
   const manager = createIdentityManager({ ctx: { metaDb, swarm: { keyPair: device } } })
   await manager.loadIdentities()
 
@@ -109,10 +109,10 @@ test('is idempotent when a valid descriptor already exists', async () => {
 
 test('fails closed without an active identity proof', async () => {
   const device = crypto.keyPair()
-  const metaDb = createMetaDb({
-    identities: [{ publicKey: hexKey(0x99), channelKey: hexKey(0x13), driveKey: hexKey(0x13), name: 'Relay' }],
-    activeIdentity: hexKey(0x99),
-  })
+  const metaDb = createMetaDb(
+    [{ publicKey: hexKey(0x99), channelKey: hexKey(0x13), driveKey: hexKey(0x13), name: 'Relay' }],
+    hexKey(0x99),
+  )
   const manager = createIdentityManager({ ctx: { metaDb, swarm: { keyPair: device } } })
   await manager.loadIdentities()
 

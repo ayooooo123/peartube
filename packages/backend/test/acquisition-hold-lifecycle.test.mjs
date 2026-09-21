@@ -28,7 +28,6 @@ function hex (byte) {
 function openPolicy (overrides = {}) {
   const current = normalizeAcquisitionPolicy({
     ...CLOSED_ACQUISITION_POLICY,
-    migrationRequired: false,
     enabled: true,
     acceptPublicRequests: true,
     requesterMode: 'public',

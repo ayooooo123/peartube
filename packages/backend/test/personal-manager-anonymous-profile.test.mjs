@@ -147,16 +147,16 @@ test('anonymous desktop profile uses one encrypted PersonalStore across restart 
     await manager.provisionSecret({ secret: identitySecret })
     await controller.reload()
 
-    t.alike(controller.getEffectiveCuratorSubscriptions(), ['bb'.repeat(32)], 'identity activation preserves the profile')
     t.ok(ctx.personal.writable)
     t.alike(
-      await ctx.personal.getSetting(CONSUMER_MODERATION_PROFILE_SETTING_KEY),
-      await controller.inspect(),
-      'profile exists in the active identity store',
+      controller.getEffectiveCuratorSubscriptions(),
+      DEFAULT_CONSUMER_MODERATION_PROFILE.curatorSubscriptions,
+      'the identity store starts from its own profile instead of inheriting the device-local one',
     )
-    t.absent(
-      await manager.getAnonymous()?.getSetting(CONSUMER_MODERATION_PROFILE_SETTING_KEY),
-      'durable migration clears the device-local duplicate',
+    t.alike(
+      (await manager.getAnonymous()?.getSetting(CONSUMER_MODERATION_PROFILE_SETTING_KEY))?.profile?.curatorSubscriptions,
+      ['bb'.repeat(32)],
+      'the device-local profile stays in the device-local store',
     )
 
     await manager.close()

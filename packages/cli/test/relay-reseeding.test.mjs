@@ -343,7 +343,6 @@ function serviceRuntime(calls, { mirrorResult = { requested: true, status: 'publ
           return {
             policyVersion: 2,
             consentVersion: 1,
-            migrationRequired: false,
             contributeWatchedMedia: true,
             archiveEnabled: true,
             contributionBudgetBytes: 4096,
@@ -463,7 +462,6 @@ test('relay status reports both mirroring directions', async (t) => {
       policy: {
         policyVersion: 1,
         consentVersion: 1,
-        migrationRequired: false,
         effectiveRole: 'archive-enabled',
         permissions: { contribute: true, archive: true },
         contributionBudgetBytes: 2048,
@@ -502,7 +500,7 @@ test('a relay that has mirrored nothing says so without implying durability', as
   t.is(status.budgets.archive.configuredBytes, 0)
   t.is(status.budgets.archive.usedBytes, 0)
   t.is(status.effectivePolicy.effectiveRole, 'watch-only')
-  t.is(status.effectivePolicy.migrationRequired, true)
+  t.is(status.effectivePolicy.consentVersion, 0)
 
   const text = formatRelayStatus(status)
   t.ok(text.includes('archiveBudget: 0/0 bytes'), text)

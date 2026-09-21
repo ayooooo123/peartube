@@ -1,6 +1,6 @@
 const CONSOLE_METHODS = ['log', 'info', 'warn', 'error', 'debug']
 
-// Temporarily routes legacy console.* output from backend code on the single
+// Temporarily routes stray console.* output from backend code on the single
 // command's execution path to the injected stderr logger, then restores the
 // originals. It never captures the explicit stdout result writer.
 export function createDiagnosticScope ({ logger, target = console } = {}) {

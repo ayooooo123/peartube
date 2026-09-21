@@ -5,16 +5,12 @@ import type {
   ConfirmSourceOffloadResponse,
   ArchiveOperatorStatusResponse,
   ArchiveParticipationStatusResponse,
-  ExportMigrationReportResponse,
   ExportPortableStateResponse,
   GetPublisherDeviceStatusRequest,
   GetPublisherDeviceStatusResponse,
-  MigrationStatusRequest,
-  MigrationStatusResponse,
   PreviewStorageLimitResponse,
   RestorePortableStateRequest,
   RestorePortableStateResponse,
-  RetryMigrationResponse,
   RequestArchivePublicationRequest,
   RequestArchivePublicationResponse,
   SetArchiveParticipationRequest,
@@ -68,16 +64,12 @@ export type {
   ConfirmSourceOffloadResponse,
   ArchiveOperatorStatusResponse,
   ArchiveParticipationStatusResponse,
-  ExportMigrationReportResponse,
   ExportPortableStateResponse,
   GetPublisherDeviceStatusRequest,
   GetPublisherDeviceStatusResponse,
-  MigrationStatusRequest,
-  MigrationStatusResponse,
   PreviewStorageLimitResponse,
   RestorePortableStateRequest,
   RestorePortableStateResponse,
-  RetryMigrationResponse,
   RequestArchivePublicationRequest,
   RequestArchivePublicationResponse,
   SetArchiveParticipationRequest,
@@ -1182,24 +1174,6 @@ export function createPersonalRpc(ensureRPC: () => any) {
  */
 export function createOperabilityRpc(ensureRPC: () => any) {
   return {
-    async getMigrationStatus(
-      request: MigrationStatusRequest,
-    ): Promise<MigrationStatusResponse> {
-      return ensureRPC().getMigrationStatus(request)
-    },
-
-    async retryMigration(
-      request: MigrationStatusRequest,
-    ): Promise<RetryMigrationResponse> {
-      return ensureRPC().retryMigration(request)
-    },
-
-    async exportMigrationReport(
-      request: MigrationStatusRequest,
-    ): Promise<ExportMigrationReportResponse> {
-      return ensureRPC().exportMigrationReport(request)
-    },
-
     async getPublisherDeviceStatus(
       request: GetPublisherDeviceStatusRequest = {},
     ): Promise<GetPublisherDeviceStatusResponse> {

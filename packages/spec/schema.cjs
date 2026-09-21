@@ -18,9 +18,6 @@ const ns = schema.namespace('peartube')
 
 // Operability handler contract bounds. HRPC codecs describe wire types; every
 // producer and consumer MUST reject/truncate before crossing these limits.
-// MAX_MIGRATION_ID_BYTES = 64
-// MAX_MIGRATION_ERROR_MESSAGE_BYTES = 256
-// MAX_MIGRATION_REPORT_BYTES = 65_536
 // MAX_PORTABLE_MANIFEST_BYTES = 1_048_576
 // MAX_PORTABLE_ITEMS = 2_048
 // MAX_STORAGE_PREVIEW_ITEMS = 32 per affectedCategories/consequences array
@@ -1277,8 +1274,8 @@ ns.register({
 })
 
 // Device-local viewer progress identity and ordering. Media identity is the
-// entity/edition/member triple; `videoKey` remains only so legacy device state
-// can be migrated. Concurrent devices are resolved by
+// entity/edition/member triple; `videoKey` is the fallback coordinate for
+// state that carries no media identity. Concurrent devices are resolved by
 // (playbackGeneration, lamport, writerKey) and never by wall-clock time.
 ns.register({
   name: 'personal-progress-identity',
@@ -1947,81 +1944,6 @@ ns.register({
 // ============================================
 
 ns.register({
-  name: 'get-migration-status-request',
-  fields: [
-    { name: 'migrationId', type: 'string', required: true }
-  ]
-})
-
-ns.register({
-  name: 'get-migration-status-response',
-  fields: [
-    { name: 'success', type: 'bool', required: true },
-    { name: 'migrationId', type: 'string', required: true },
-    { name: 'state', type: 'string', required: true },
-    { name: 'version', type: 'uint', required: true },
-    { name: 'processedCount', type: 'uint', required: true },
-    { name: 'importedCount', type: 'uint', required: true },
-    { name: 'skippedCount', type: 'uint', required: true },
-    { name: 'quarantinedCount', type: 'uint', required: true },
-    { name: 'unsupportedCount', type: 'uint', required: true },
-    { name: 'remainingCount', type: 'uint', required: true },
-    { name: 'retryable', type: 'bool', required: true },
-    { name: 'updatedAt', type: 'uint', required: true },
-    { name: 'errorCode', type: 'string', required: false },
-    { name: 'errorMessage', type: 'string', required: false },
-    { name: 'reportDigest', type: 'string', required: false }
-  ]
-})
-
-ns.register({
-  name: 'retry-migration-request',
-  fields: [
-    { name: 'migrationId', type: 'string', required: true }
-  ]
-})
-
-ns.register({
-  name: 'retry-migration-response',
-  fields: [
-    { name: 'success', type: 'bool', required: true },
-    { name: 'migrationId', type: 'string', required: true },
-    { name: 'state', type: 'string', required: true },
-    { name: 'version', type: 'uint', required: true },
-    { name: 'processedCount', type: 'uint', required: true },
-    { name: 'importedCount', type: 'uint', required: true },
-    { name: 'skippedCount', type: 'uint', required: true },
-    { name: 'quarantinedCount', type: 'uint', required: true },
-    { name: 'unsupportedCount', type: 'uint', required: true },
-    { name: 'remainingCount', type: 'uint', required: true },
-    { name: 'retryable', type: 'bool', required: true },
-    { name: 'updatedAt', type: 'uint', required: true },
-    { name: 'joined', type: 'bool', required: true },
-    { name: 'errorCode', type: 'string', required: false },
-    { name: 'errorMessage', type: 'string', required: false },
-    { name: 'reportDigest', type: 'string', required: false }
-  ]
-})
-
-ns.register({
-  name: 'export-migration-report-request',
-  fields: [
-    { name: 'migrationId', type: 'string', required: true }
-  ]
-})
-
-ns.register({
-  name: 'export-migration-report-response',
-  fields: [
-    { name: 'success', type: 'bool', required: true },
-    { name: 'migrationId', type: 'string', required: true },
-    { name: 'reportBytes', type: 'buffer', required: false },
-    { name: 'reportDigest', type: 'string', required: false },
-    { name: 'errorCode', type: 'string', required: false }
-  ]
-})
-
-ns.register({
   name: 'get-publisher-device-status-request',
   fields: [
     { name: 'publisherId', type: 'buffer', required: false },
@@ -2045,8 +1967,7 @@ ns.register({
     { name: 'catalogEpoch', type: 'uint', required: false },
     { name: 'policyEpoch', type: 'uint', required: false },
     { name: 'admissionExpiresAt', type: 'uint', required: false },
-    { name: 'revocationCutoff', type: 'uint', required: false },
-    { name: 'legacyImportState', type: 'string', required: false }
+    { name: 'revocationCutoff', type: 'uint', required: false }
   ]
 })
 
@@ -3303,34 +3224,6 @@ ns.register({
   ]
 })
 
-// Legacy, read-only: no writer produces this op any more (viewer ranking is
-// device-local). The message stays registered so channel logs written before
-// the watch-telemetry removal still decode and replay deterministically.
-ns.register({
-  name: 'channel-op-log-watch-event',
-  fields: [
-    { name: 'type', type: 'string', required: true },
-    { name: 'schemaVersion', type: 'uint', required: false },
-    { name: 'videoId', type: 'string', required: true },
-    { name: 'channelKey', type: 'string', required: false },
-    { name: 'watcherKeyHex', type: 'string', required: false },
-    { name: 'duration', type: 'uint', required: false },
-    { name: 'completed', type: 'bool', required: false },
-    { name: 'timestamp', type: 'uint', required: false }
-  ]
-})
-
-ns.register({
-  name: 'channel-op-migrate-schema',
-  fields: [
-    { name: 'type', type: 'string', required: true },
-    { name: 'schemaVersion', type: 'uint', required: true },
-    { name: 'fromVersion', type: 'uint', required: true },
-    { name: 'toVersion', type: 'uint', required: true },
-    { name: 'migratedAt', type: 'uint', required: false }
-  ]
-})
-
 // ============================================
 // Comments RPC (matching existing schema.json)
 // ============================================
@@ -4294,7 +4187,6 @@ ns.register({
     { name: 'policyVersion', type: 'uint', required: true },
     { name: 'revision', type: 'uint', required: true },
     { name: 'consentVersion', type: 'uint', required: true },
-    { name: 'migrationRequired', type: 'bool', required: true },
     { name: 'enabled', type: 'bool', required: true },
     { name: 'acceptPublicRequests', type: 'bool', required: true },
     { name: 'requesterMode', type: 'string', required: true },
@@ -4803,9 +4695,6 @@ rpcNs.register({
 })
 
 for (const name of [
-  'get-migration-status',
-  'retry-migration',
-  'export-migration-report',
   'get-publisher-device-status',
   'export-portable-state',
   'restore-portable-state',

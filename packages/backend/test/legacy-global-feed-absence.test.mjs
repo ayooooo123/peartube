@@ -30,9 +30,6 @@ const forbidden = [
   /feedTopicHex/,
   /store\.replicate\(conn\)/,
 ]
-const allowed = new Set([
-  'packages/backend/src/migrations/publication-v1.js',
-])
 const ignoredDirectories = new Set([
   '.expo',
   'build',
@@ -57,7 +54,6 @@ test('production source has no legacy global feed data plane identifiers', (t) =
   for (const base of productionRoots) {
     for (const file of walk(path.join(root, base))) {
       const rel = path.relative(root, file)
-      if (allowed.has(rel)) continue
       const text = fs.readFileSync(file, 'utf8')
       for (const pattern of forbidden) {
         if (pattern.test(text)) failures.push(`${rel}: ${pattern}`)

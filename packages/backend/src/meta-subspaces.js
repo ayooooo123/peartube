@@ -3,46 +3,30 @@ import SubEncoder from 'sub-encoder'
 /**
  * Sub-encoded keyspaces for the metadata Hyperbee (metaDb).
  *
- * Historically the prefixed collections below shared the flat metaDb keyspace
- * via hand-rolled string prefixes (`download-intent:…`, `mw-channel:…`,
- * `playback-profile!…`). sub-encoder gives each its own binary-prefixed
- * keyspace, so range scans can't collide with unrelated keys and a sub can be
- * iterated wholesale without `gte/lt` sentinels.
- *
- * A one-time, idempotent migration (`migrateMetaSubspaces`) relocates any
- * existing legacy-prefixed keys into their sub before normal operation. The
- * legacy keys are deleted after the copy; all three collections are
- * regenerable caches/markers, so a forward-only move is safe.
+ * sub-encoder gives each collection its own binary-prefixed keyspace, so range
+ * scans can't collide with unrelated keys and a sub can be iterated wholesale
+ * without `gte/lt` sentinels.
  */
-
-export const META_SUBSPACES_MIGRATION_KEY = 'meta-subspaces-migrated-v1'
 
 /**
  * @typedef {Object} CollectionDef
  * @property {string} name - accessor name on the returned subspaces object
  * @property {string} namespace - sub-encoder prefix
- * @property {string} legacyPrefix - flat-key prefix used before subspaces
  */
 
 /** @type {CollectionDef[]} */
 export const META_SUBSPACE_COLLECTIONS = [
-  // `download-intent:${driveKey}:${videoPath}` -> sub key `${driveKey}:${videoPath}`
-  { name: 'downloadIntents', namespace: 'download-intent', legacyPrefix: 'download-intent:' },
-  // `mw-channel:${channelKey}` -> sub key `${channelKey}`
-  { name: 'channelKinds', namespace: 'mw-channel', legacyPrefix: 'mw-channel:' },
-  // `playback-profile!${blobsCoreKey}!${blobId}` -> sub key `${blobsCoreKey}!${blobId}`
-  { name: 'playbackProfiles', namespace: 'playback-profile', legacyPrefix: 'playback-profile!' },
+  // `${driveKey}:${videoPath}`
+  { name: 'downloadIntents', namespace: 'download-intent' },
+  // `${channelKey}`
+  { name: 'channelKinds', namespace: 'mw-channel' },
+  // `${blobsCoreKey}!${blobId}`
+  { name: 'playbackProfiles', namespace: 'playback-profile' },
   // Durable deferred-publication activation marker keyed by canonical channel key.
-  { name: 'publicProjectionStates', namespace: 'public-projection-state', legacyPrefix: 'public-projection-state:' },
+  { name: 'publicProjectionStates', namespace: 'public-projection-state' },
   // Local media graph claim/projection records keyed by deterministic graph keys.
-  { name: 'mediaGraphClaims', namespace: 'media-graph-claim', legacyPrefix: 'media-graph-claim:' },
+  { name: 'mediaGraphClaims', namespace: 'media-graph-claim' },
 ]
-
-// Smallest string strictly greater than every key starting with `prefix`:
-// bump the final byte. Used to scan the legacy flat-key range.
-function bumpPrefix(prefix) {
-  return prefix.slice(0, -1) + String.fromCharCode(prefix.charCodeAt(prefix.length - 1) + 1)
-}
 
 function makeAccessor(metaDb, namespace, enc) {
   const sub = enc.sub(namespace, 'utf-8')
@@ -84,52 +68,3 @@ export function createMetaSubspaces(metaDb) {
   return subspaces
 }
 
-/**
- * Relocate legacy flat-prefixed keys into their subspaces. Idempotent: sets a
- * marker when complete and no-ops thereafter; if interrupted (no marker), it
- * safely resumes on the next run since already-moved legacy keys are gone.
- * @param {import('hyperbee')} metaDb
- * @param {ReturnType<typeof createMetaSubspaces>} subspaces
- * @param {{ logger?: { info?: Function, warn?: Function } }} [opts]
- * @returns {Promise<{ migrated: number, skipped: boolean, incomplete?: boolean, error?: string }>}
- */
-async function migrateCollection(metaDb, accessor, c) {
-  const lt = bumpPrefix(c.legacyPrefix)
-  // Collect first, then copy+delete, so we never mutate a range we're still
-  // streaming.
-  const legacy = []
-  for await (const node of metaDb.createReadStream({ gte: c.legacyPrefix, lt })) {
-    if (typeof node.key === 'string' && node.key.startsWith(c.legacyPrefix)) legacy.push(node)
-  }
-  let migrated = 0
-  for (const node of legacy) {
-    const subKey = node.key.slice(c.legacyPrefix.length)
-    if (!subKey) continue
-    await accessor.put(subKey, node.value)
-    await metaDb.del(node.key)
-    migrated++
-  }
-  return migrated
-}
-
-export async function migrateMetaSubspaces(metaDb, subspaces, { logger = console } = {}) {
-  const marker = await metaDb.get(META_SUBSPACES_MIGRATION_KEY).catch(() => null)
-  if (marker?.value?.done) return { migrated: 0, skipped: true }
-
-  let migrated = 0
-  for (const c of META_SUBSPACE_COLLECTIONS) {
-    const accessor = subspaces[c.name]
-    try {
-      migrated += await migrateCollection(metaDb, accessor, c)
-    } catch (err) {
-      const errorMsg = err?.message || String(err)
-      logger?.warn?.('[meta-subspaces] migration failed', { collection: c.name, error: errorMsg })
-      // Leave the marker unset so the next startup retries from where it stopped.
-      return { migrated, skipped: false, incomplete: true, error: errorMsg }
-    }
-  }
-
-  await metaDb.put(META_SUBSPACES_MIGRATION_KEY, { done: true, version: 1, at: Date.now() })
-  if (migrated > 0) logger?.info?.('[meta-subspaces] migrated legacy keys', { migrated })
-  return { migrated, skipped: false }
-}

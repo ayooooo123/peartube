@@ -20,14 +20,6 @@ test('chaos: upload bytes survive SIGKILL before publication seal and seal on re
   assert.equal(result.catalogCommitted, true)
 })
 
-test('chaos: migration killed while running before checkpoint retries from prior durable checkpoint', { timeout: TIMEOUT_MS * 2 }, async (t) => {
-  const result = await run(t, 'migration-running-before-checkpoint')
-  assert.equal(result.state, 'complete')
-  assert.equal(result.attempts, 2)
-  assert.equal(result.resumedCheckpoint, null)
-  assert.equal(result.processedCount, 1)
-})
-
 test('chaos: offload assessment killed before confirmation retains source and fails closed', { timeout: TIMEOUT_MS * 2 }, async (t) => {
   const result = await run(t, 'offload-assessment-before-confirmation')
   assert.equal(result.confirmation.accepted, false)

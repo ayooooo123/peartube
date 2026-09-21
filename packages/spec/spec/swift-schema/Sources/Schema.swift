@@ -11481,444 +11481,6 @@ public struct SetStorageLimitResponseCodec: Codec {
 
 public let setStorageLimitResponse = SetStorageLimitResponseCodec()
 
-// @peartube/get-migration-status-request
-public struct GetMigrationStatusRequest {
-  public var migrationId: String
-
-  public init(migrationId: String) {
-    self.migrationId = migrationId
-  }
-}
-
-public struct GetMigrationStatusRequestCodec: Codec {
-  public typealias Value = GetMigrationStatusRequest
-
-  let _migrationIdCodec = Primitive.UTF8()
-
-  public init() {}
-
-  public func preencode(_ state: inout State, _ value: GetMigrationStatusRequest) {
-    _migrationIdCodec.preencode(&state, value.migrationId)
-  }
-
-  public func encode(_ state: inout State, _ value: GetMigrationStatusRequest) throws {
-    try _migrationIdCodec.encode(&state, value.migrationId)
-  }
-
-  public func decode(_ state: inout State) throws -> GetMigrationStatusRequest {
-    return GetMigrationStatusRequest(
-      migrationId: try _migrationIdCodec.decode(&state)
-    )
-  }
-}
-
-public let getMigrationStatusRequest = GetMigrationStatusRequestCodec()
-
-// @peartube/get-migration-status-response
-public struct GetMigrationStatusResponse {
-  public var success: Bool
-  public var migrationId: String
-  public var state: String
-  public var version: UInt
-  public var processedCount: UInt
-  public var importedCount: UInt
-  public var skippedCount: UInt
-  public var quarantinedCount: UInt
-  public var unsupportedCount: UInt
-  public var remainingCount: UInt
-  public var retryable: Bool
-  public var updatedAt: UInt
-  public var errorCode: String?
-  public var errorMessage: String?
-  public var reportDigest: String?
-
-  public init(success: Bool = false, migrationId: String, state: String, version: UInt, processedCount: UInt, importedCount: UInt, skippedCount: UInt, quarantinedCount: UInt, unsupportedCount: UInt, remainingCount: UInt, retryable: Bool = false, updatedAt: UInt, errorCode: String? = nil, errorMessage: String? = nil, reportDigest: String? = nil) {
-    self.success = success
-    self.migrationId = migrationId
-    self.state = state
-    self.version = version
-    self.processedCount = processedCount
-    self.importedCount = importedCount
-    self.skippedCount = skippedCount
-    self.quarantinedCount = quarantinedCount
-    self.unsupportedCount = unsupportedCount
-    self.remainingCount = remainingCount
-    self.retryable = retryable
-    self.updatedAt = updatedAt
-    self.errorCode = errorCode
-    self.errorMessage = errorMessage
-    self.reportDigest = reportDigest
-  }
-}
-
-public struct GetMigrationStatusResponseCodec: Codec {
-  public typealias Value = GetMigrationStatusResponse
-
-  let _errorCodeCodec = Primitive.UTF8()
-  let _errorMessageCodec = Primitive.UTF8()
-  let _importedCountCodec = Primitive.UInt()
-  let _migrationIdCodec = Primitive.UTF8()
-  let _processedCountCodec = Primitive.UInt()
-  let _quarantinedCountCodec = Primitive.UInt()
-  let _remainingCountCodec = Primitive.UInt()
-  let _reportDigestCodec = Primitive.UTF8()
-  let _skippedCountCodec = Primitive.UInt()
-  let _stateCodec = Primitive.UTF8()
-  let _unsupportedCountCodec = Primitive.UInt()
-  let _updatedAtCodec = Primitive.UInt()
-  let _versionCodec = Primitive.UInt()
-
-  public init() {}
-
-  public func preencode(_ state: inout State, _ value: GetMigrationStatusResponse) {
-    state.end += 1 // flags
-    _migrationIdCodec.preencode(&state, value.migrationId)
-    _stateCodec.preencode(&state, value.state)
-    _versionCodec.preencode(&state, value.version)
-    _processedCountCodec.preencode(&state, value.processedCount)
-    _importedCountCodec.preencode(&state, value.importedCount)
-    _skippedCountCodec.preencode(&state, value.skippedCount)
-    _quarantinedCountCodec.preencode(&state, value.quarantinedCount)
-    _unsupportedCountCodec.preencode(&state, value.unsupportedCount)
-    _remainingCountCodec.preencode(&state, value.remainingCount)
-    _updatedAtCodec.preencode(&state, value.updatedAt)
-    if let v = value.errorCode { _errorCodeCodec.preencode(&state, v) }
-    if let v = value.errorMessage { _errorMessageCodec.preencode(&state, v) }
-    if let v = value.reportDigest { _reportDigestCodec.preencode(&state, v) }
-  }
-
-  public func encode(_ state: inout State, _ value: GetMigrationStatusResponse) throws {
-    var flags: UInt = 0
-    if value.success { flags |= 1 }
-    if value.retryable { flags |= 2 }
-    if value.errorCode != nil { flags |= 4 }
-    if value.errorMessage != nil { flags |= 8 }
-    if value.reportDigest != nil { flags |= 16 }
-
-    try Primitive.UInt().encode(&state, flags)
-    try _migrationIdCodec.encode(&state, value.migrationId)
-    try _stateCodec.encode(&state, value.state)
-    try _versionCodec.encode(&state, value.version)
-    try _processedCountCodec.encode(&state, value.processedCount)
-    try _importedCountCodec.encode(&state, value.importedCount)
-    try _skippedCountCodec.encode(&state, value.skippedCount)
-    try _quarantinedCountCodec.encode(&state, value.quarantinedCount)
-    try _unsupportedCountCodec.encode(&state, value.unsupportedCount)
-    try _remainingCountCodec.encode(&state, value.remainingCount)
-    try _updatedAtCodec.encode(&state, value.updatedAt)
-    if let v = value.errorCode { try _errorCodeCodec.encode(&state, v) }
-    if let v = value.errorMessage { try _errorMessageCodec.encode(&state, v) }
-    if let v = value.reportDigest { try _reportDigestCodec.encode(&state, v) }
-  }
-
-  public func decode(_ state: inout State) throws -> GetMigrationStatusResponse {
-    let flags = try Primitive.UInt().decode(&state)
-    let _r0 = try _migrationIdCodec.decode(&state)
-    let _r1 = try _stateCodec.decode(&state)
-    let _r2 = try _versionCodec.decode(&state)
-    let _r3 = try _processedCountCodec.decode(&state)
-    let _r4 = try _importedCountCodec.decode(&state)
-    let _r5 = try _skippedCountCodec.decode(&state)
-    let _r6 = try _quarantinedCountCodec.decode(&state)
-    let _r7 = try _unsupportedCountCodec.decode(&state)
-    let _r8 = try _remainingCountCodec.decode(&state)
-    let _r9 = try _updatedAtCodec.decode(&state)
-    let _r10: String? = (flags & 4) != 0 ? try _errorCodeCodec.decode(&state) : nil
-    let _r11: String? = (flags & 8) != 0 ? try _errorMessageCodec.decode(&state) : nil
-    let _r12: String? = (flags & 16) != 0 ? try _reportDigestCodec.decode(&state) : nil
-    return GetMigrationStatusResponse(
-      success: (flags & 1) != 0,
-      migrationId: _r0,
-      state: _r1,
-      version: _r2,
-      processedCount: _r3,
-      importedCount: _r4,
-      skippedCount: _r5,
-      quarantinedCount: _r6,
-      unsupportedCount: _r7,
-      remainingCount: _r8,
-      retryable: (flags & 2) != 0,
-      updatedAt: _r9,
-      errorCode: _r10,
-      errorMessage: _r11,
-      reportDigest: _r12
-    )
-  }
-}
-
-public let getMigrationStatusResponse = GetMigrationStatusResponseCodec()
-
-// @peartube/retry-migration-request
-public struct RetryMigrationRequest {
-  public var migrationId: String
-
-  public init(migrationId: String) {
-    self.migrationId = migrationId
-  }
-}
-
-public struct RetryMigrationRequestCodec: Codec {
-  public typealias Value = RetryMigrationRequest
-
-  let _migrationIdCodec = Primitive.UTF8()
-
-  public init() {}
-
-  public func preencode(_ state: inout State, _ value: RetryMigrationRequest) {
-    _migrationIdCodec.preencode(&state, value.migrationId)
-  }
-
-  public func encode(_ state: inout State, _ value: RetryMigrationRequest) throws {
-    try _migrationIdCodec.encode(&state, value.migrationId)
-  }
-
-  public func decode(_ state: inout State) throws -> RetryMigrationRequest {
-    return RetryMigrationRequest(
-      migrationId: try _migrationIdCodec.decode(&state)
-    )
-  }
-}
-
-public let retryMigrationRequest = RetryMigrationRequestCodec()
-
-// @peartube/retry-migration-response
-public struct RetryMigrationResponse {
-  public var success: Bool
-  public var migrationId: String
-  public var state: String
-  public var version: UInt
-  public var processedCount: UInt
-  public var importedCount: UInt
-  public var skippedCount: UInt
-  public var quarantinedCount: UInt
-  public var unsupportedCount: UInt
-  public var remainingCount: UInt
-  public var retryable: Bool
-  public var updatedAt: UInt
-  public var joined: Bool
-  public var errorCode: String?
-  public var errorMessage: String?
-  public var reportDigest: String?
-
-  public init(success: Bool = false, migrationId: String, state: String, version: UInt, processedCount: UInt, importedCount: UInt, skippedCount: UInt, quarantinedCount: UInt, unsupportedCount: UInt, remainingCount: UInt, retryable: Bool = false, updatedAt: UInt, joined: Bool = false, errorCode: String? = nil, errorMessage: String? = nil, reportDigest: String? = nil) {
-    self.success = success
-    self.migrationId = migrationId
-    self.state = state
-    self.version = version
-    self.processedCount = processedCount
-    self.importedCount = importedCount
-    self.skippedCount = skippedCount
-    self.quarantinedCount = quarantinedCount
-    self.unsupportedCount = unsupportedCount
-    self.remainingCount = remainingCount
-    self.retryable = retryable
-    self.updatedAt = updatedAt
-    self.joined = joined
-    self.errorCode = errorCode
-    self.errorMessage = errorMessage
-    self.reportDigest = reportDigest
-  }
-}
-
-public struct RetryMigrationResponseCodec: Codec {
-  public typealias Value = RetryMigrationResponse
-
-  let _errorCodeCodec = Primitive.UTF8()
-  let _errorMessageCodec = Primitive.UTF8()
-  let _importedCountCodec = Primitive.UInt()
-  let _migrationIdCodec = Primitive.UTF8()
-  let _processedCountCodec = Primitive.UInt()
-  let _quarantinedCountCodec = Primitive.UInt()
-  let _remainingCountCodec = Primitive.UInt()
-  let _reportDigestCodec = Primitive.UTF8()
-  let _skippedCountCodec = Primitive.UInt()
-  let _stateCodec = Primitive.UTF8()
-  let _unsupportedCountCodec = Primitive.UInt()
-  let _updatedAtCodec = Primitive.UInt()
-  let _versionCodec = Primitive.UInt()
-
-  public init() {}
-
-  public func preencode(_ state: inout State, _ value: RetryMigrationResponse) {
-    state.end += 1 // flags
-    _migrationIdCodec.preencode(&state, value.migrationId)
-    _stateCodec.preencode(&state, value.state)
-    _versionCodec.preencode(&state, value.version)
-    _processedCountCodec.preencode(&state, value.processedCount)
-    _importedCountCodec.preencode(&state, value.importedCount)
-    _skippedCountCodec.preencode(&state, value.skippedCount)
-    _quarantinedCountCodec.preencode(&state, value.quarantinedCount)
-    _unsupportedCountCodec.preencode(&state, value.unsupportedCount)
-    _remainingCountCodec.preencode(&state, value.remainingCount)
-    _updatedAtCodec.preencode(&state, value.updatedAt)
-    if let v = value.errorCode { _errorCodeCodec.preencode(&state, v) }
-    if let v = value.errorMessage { _errorMessageCodec.preencode(&state, v) }
-    if let v = value.reportDigest { _reportDigestCodec.preencode(&state, v) }
-  }
-
-  public func encode(_ state: inout State, _ value: RetryMigrationResponse) throws {
-    var flags: UInt = 0
-    if value.success { flags |= 1 }
-    if value.retryable { flags |= 2 }
-    if value.joined { flags |= 4 }
-    if value.errorCode != nil { flags |= 8 }
-    if value.errorMessage != nil { flags |= 16 }
-    if value.reportDigest != nil { flags |= 32 }
-
-    try Primitive.UInt().encode(&state, flags)
-    try _migrationIdCodec.encode(&state, value.migrationId)
-    try _stateCodec.encode(&state, value.state)
-    try _versionCodec.encode(&state, value.version)
-    try _processedCountCodec.encode(&state, value.processedCount)
-    try _importedCountCodec.encode(&state, value.importedCount)
-    try _skippedCountCodec.encode(&state, value.skippedCount)
-    try _quarantinedCountCodec.encode(&state, value.quarantinedCount)
-    try _unsupportedCountCodec.encode(&state, value.unsupportedCount)
-    try _remainingCountCodec.encode(&state, value.remainingCount)
-    try _updatedAtCodec.encode(&state, value.updatedAt)
-    if let v = value.errorCode { try _errorCodeCodec.encode(&state, v) }
-    if let v = value.errorMessage { try _errorMessageCodec.encode(&state, v) }
-    if let v = value.reportDigest { try _reportDigestCodec.encode(&state, v) }
-  }
-
-  public func decode(_ state: inout State) throws -> RetryMigrationResponse {
-    let flags = try Primitive.UInt().decode(&state)
-    let _r0 = try _migrationIdCodec.decode(&state)
-    let _r1 = try _stateCodec.decode(&state)
-    let _r2 = try _versionCodec.decode(&state)
-    let _r3 = try _processedCountCodec.decode(&state)
-    let _r4 = try _importedCountCodec.decode(&state)
-    let _r5 = try _skippedCountCodec.decode(&state)
-    let _r6 = try _quarantinedCountCodec.decode(&state)
-    let _r7 = try _unsupportedCountCodec.decode(&state)
-    let _r8 = try _remainingCountCodec.decode(&state)
-    let _r9 = try _updatedAtCodec.decode(&state)
-    let _r10: String? = (flags & 8) != 0 ? try _errorCodeCodec.decode(&state) : nil
-    let _r11: String? = (flags & 16) != 0 ? try _errorMessageCodec.decode(&state) : nil
-    let _r12: String? = (flags & 32) != 0 ? try _reportDigestCodec.decode(&state) : nil
-    return RetryMigrationResponse(
-      success: (flags & 1) != 0,
-      migrationId: _r0,
-      state: _r1,
-      version: _r2,
-      processedCount: _r3,
-      importedCount: _r4,
-      skippedCount: _r5,
-      quarantinedCount: _r6,
-      unsupportedCount: _r7,
-      remainingCount: _r8,
-      retryable: (flags & 2) != 0,
-      updatedAt: _r9,
-      joined: (flags & 4) != 0,
-      errorCode: _r10,
-      errorMessage: _r11,
-      reportDigest: _r12
-    )
-  }
-}
-
-public let retryMigrationResponse = RetryMigrationResponseCodec()
-
-// @peartube/export-migration-report-request
-public struct ExportMigrationReportRequest {
-  public var migrationId: String
-
-  public init(migrationId: String) {
-    self.migrationId = migrationId
-  }
-}
-
-public struct ExportMigrationReportRequestCodec: Codec {
-  public typealias Value = ExportMigrationReportRequest
-
-  let _migrationIdCodec = Primitive.UTF8()
-
-  public init() {}
-
-  public func preencode(_ state: inout State, _ value: ExportMigrationReportRequest) {
-    _migrationIdCodec.preencode(&state, value.migrationId)
-  }
-
-  public func encode(_ state: inout State, _ value: ExportMigrationReportRequest) throws {
-    try _migrationIdCodec.encode(&state, value.migrationId)
-  }
-
-  public func decode(_ state: inout State) throws -> ExportMigrationReportRequest {
-    return ExportMigrationReportRequest(
-      migrationId: try _migrationIdCodec.decode(&state)
-    )
-  }
-}
-
-public let exportMigrationReportRequest = ExportMigrationReportRequestCodec()
-
-// @peartube/export-migration-report-response
-public struct ExportMigrationReportResponse {
-  public var success: Bool
-  public var migrationId: String
-  public var reportBytes: Data?
-  public var reportDigest: String?
-  public var errorCode: String?
-
-  public init(success: Bool = false, migrationId: String, reportBytes: Data? = nil, reportDigest: String? = nil, errorCode: String? = nil) {
-    self.success = success
-    self.migrationId = migrationId
-    self.reportBytes = reportBytes
-    self.reportDigest = reportDigest
-    self.errorCode = errorCode
-  }
-}
-
-public struct ExportMigrationReportResponseCodec: Codec {
-  public typealias Value = ExportMigrationReportResponse
-
-  let _errorCodeCodec = Primitive.UTF8()
-  let _migrationIdCodec = Primitive.UTF8()
-  let _reportBytesCodec = Primitive.Buffer()
-  let _reportDigestCodec = Primitive.UTF8()
-
-  public init() {}
-
-  public func preencode(_ state: inout State, _ value: ExportMigrationReportResponse) {
-    state.end += 1 // flags
-    _migrationIdCodec.preencode(&state, value.migrationId)
-    if let v = value.reportBytes { _reportBytesCodec.preencode(&state, v) }
-    if let v = value.reportDigest { _reportDigestCodec.preencode(&state, v) }
-    if let v = value.errorCode { _errorCodeCodec.preencode(&state, v) }
-  }
-
-  public func encode(_ state: inout State, _ value: ExportMigrationReportResponse) throws {
-    var flags: UInt = 0
-    if value.success { flags |= 1 }
-    if value.reportBytes != nil { flags |= 2 }
-    if value.reportDigest != nil { flags |= 4 }
-    if value.errorCode != nil { flags |= 8 }
-
-    try Primitive.UInt().encode(&state, flags)
-    try _migrationIdCodec.encode(&state, value.migrationId)
-    if let v = value.reportBytes { try _reportBytesCodec.encode(&state, v) }
-    if let v = value.reportDigest { try _reportDigestCodec.encode(&state, v) }
-    if let v = value.errorCode { try _errorCodeCodec.encode(&state, v) }
-  }
-
-  public func decode(_ state: inout State) throws -> ExportMigrationReportResponse {
-    let flags = try Primitive.UInt().decode(&state)
-    let _r0 = try _migrationIdCodec.decode(&state)
-    let _r1: Data? = (flags & 2) != 0 ? try _reportBytesCodec.decode(&state) : nil
-    let _r2: String? = (flags & 4) != 0 ? try _reportDigestCodec.decode(&state) : nil
-    let _r3: String? = (flags & 8) != 0 ? try _errorCodeCodec.decode(&state) : nil
-    return ExportMigrationReportResponse(
-      success: (flags & 1) != 0,
-      migrationId: _r0,
-      reportBytes: _r1,
-      reportDigest: _r2,
-      errorCode: _r3
-    )
-  }
-}
-
-public let exportMigrationReportResponse = ExportMigrationReportResponseCodec()
-
 // @peartube/get-publisher-device-status-request
 public struct GetPublisherDeviceStatusRequest {
   public var publisherId: Data?
@@ -11983,9 +11545,8 @@ public struct GetPublisherDeviceStatusResponse {
   public var policyEpoch: UInt?
   public var admissionExpiresAt: UInt?
   public var revocationCutoff: UInt?
-  public var legacyImportState: String?
 
-  public init(success: Bool = false, publisherId: Data? = nil, devicePublicKey: Data? = nil, status: String, reasonCode: String? = nil, canPublish: Bool = false, canPlayLocal: Bool = false, canExportLocal: Bool = false, canDeleteLocal: Bool = false, canRootTransition: Bool = false, catalogEpoch: UInt? = nil, policyEpoch: UInt? = nil, admissionExpiresAt: UInt? = nil, revocationCutoff: UInt? = nil, legacyImportState: String? = nil) {
+  public init(success: Bool = false, publisherId: Data? = nil, devicePublicKey: Data? = nil, status: String, reasonCode: String? = nil, canPublish: Bool = false, canPlayLocal: Bool = false, canExportLocal: Bool = false, canDeleteLocal: Bool = false, canRootTransition: Bool = false, catalogEpoch: UInt? = nil, policyEpoch: UInt? = nil, admissionExpiresAt: UInt? = nil, revocationCutoff: UInt? = nil) {
     self.success = success
     self.publisherId = publisherId
     self.devicePublicKey = devicePublicKey
@@ -12000,7 +11561,6 @@ public struct GetPublisherDeviceStatusResponse {
     self.policyEpoch = policyEpoch
     self.admissionExpiresAt = admissionExpiresAt
     self.revocationCutoff = revocationCutoff
-    self.legacyImportState = legacyImportState
   }
 }
 
@@ -12010,7 +11570,6 @@ public struct GetPublisherDeviceStatusResponseCodec: Codec {
   let _admissionExpiresAtCodec = Primitive.UInt()
   let _catalogEpochCodec = Primitive.UInt()
   let _devicePublicKeyCodec = Primitive.Buffer()
-  let _legacyImportStateCodec = Primitive.UTF8()
   let _policyEpochCodec = Primitive.UInt()
   let _publisherIdCodec = Primitive.Buffer()
   let _reasonCodeCodec = Primitive.UTF8()
@@ -12035,7 +11594,6 @@ public struct GetPublisherDeviceStatusResponseCodec: Codec {
     if value.policyEpoch != nil { flags |= 1024 }
     if value.admissionExpiresAt != nil { flags |= 2048 }
     if value.revocationCutoff != nil { flags |= 4096 }
-    if value.legacyImportState != nil { flags |= 8192 }
 
     Primitive.UInt().preencode(&state, flags)
     if let v = value.publisherId { _publisherIdCodec.preencode(&state, v) }
@@ -12046,7 +11604,6 @@ public struct GetPublisherDeviceStatusResponseCodec: Codec {
     if let v = value.policyEpoch { _policyEpochCodec.preencode(&state, v) }
     if let v = value.admissionExpiresAt { _admissionExpiresAtCodec.preencode(&state, v) }
     if let v = value.revocationCutoff { _revocationCutoffCodec.preencode(&state, v) }
-    if let v = value.legacyImportState { _legacyImportStateCodec.preencode(&state, v) }
   }
 
   public func encode(_ state: inout State, _ value: GetPublisherDeviceStatusResponse) throws {
@@ -12064,7 +11621,6 @@ public struct GetPublisherDeviceStatusResponseCodec: Codec {
     if value.policyEpoch != nil { flags |= 1024 }
     if value.admissionExpiresAt != nil { flags |= 2048 }
     if value.revocationCutoff != nil { flags |= 4096 }
-    if value.legacyImportState != nil { flags |= 8192 }
 
     try Primitive.UInt().encode(&state, flags)
     if let v = value.publisherId { try _publisherIdCodec.encode(&state, v) }
@@ -12075,7 +11631,6 @@ public struct GetPublisherDeviceStatusResponseCodec: Codec {
     if let v = value.policyEpoch { try _policyEpochCodec.encode(&state, v) }
     if let v = value.admissionExpiresAt { try _admissionExpiresAtCodec.encode(&state, v) }
     if let v = value.revocationCutoff { try _revocationCutoffCodec.encode(&state, v) }
-    if let v = value.legacyImportState { try _legacyImportStateCodec.encode(&state, v) }
   }
 
   public func decode(_ state: inout State) throws -> GetPublisherDeviceStatusResponse {
@@ -12088,7 +11643,6 @@ public struct GetPublisherDeviceStatusResponseCodec: Codec {
     let _r5: UInt? = (flags & 1024) != 0 ? try _policyEpochCodec.decode(&state) : nil
     let _r6: UInt? = (flags & 2048) != 0 ? try _admissionExpiresAtCodec.decode(&state) : nil
     let _r7: UInt? = (flags & 4096) != 0 ? try _revocationCutoffCodec.decode(&state) : nil
-    let _r8: String? = (flags & 8192) != 0 ? try _legacyImportStateCodec.decode(&state) : nil
     return GetPublisherDeviceStatusResponse(
       success: (flags & 1) != 0,
       publisherId: _r0,
@@ -12103,8 +11657,7 @@ public struct GetPublisherDeviceStatusResponseCodec: Codec {
       catalogEpoch: _r4,
       policyEpoch: _r5,
       admissionExpiresAt: _r6,
-      revocationCutoff: _r7,
-      legacyImportState: _r8
+      revocationCutoff: _r7
     )
   }
 }
@@ -17970,74 +17523,6 @@ public struct ChannelOpLogWatchEventCodec: Codec {
 }
 
 public let channelOpLogWatchEvent = ChannelOpLogWatchEventCodec()
-
-// @peartube/channel-op-migrate-schema
-public struct ChannelOpMigrateSchema {
-  public var type: String
-  public var schemaVersion: UInt
-  public var fromVersion: UInt
-  public var toVersion: UInt
-  public var migratedAt: UInt?
-
-  public init(type: String, schemaVersion: UInt, fromVersion: UInt, toVersion: UInt, migratedAt: UInt? = nil) {
-    self.type = type
-    self.schemaVersion = schemaVersion
-    self.fromVersion = fromVersion
-    self.toVersion = toVersion
-    self.migratedAt = migratedAt
-  }
-}
-
-public struct ChannelOpMigrateSchemaCodec: Codec {
-  public typealias Value = ChannelOpMigrateSchema
-
-  let _fromVersionCodec = Primitive.UInt()
-  let _migratedAtCodec = Primitive.UInt()
-  let _schemaVersionCodec = Primitive.UInt()
-  let _toVersionCodec = Primitive.UInt()
-  let _typeCodec = Primitive.UTF8()
-
-  public init() {}
-
-  public func preencode(_ state: inout State, _ value: ChannelOpMigrateSchema) {
-    _typeCodec.preencode(&state, value.type)
-    _schemaVersionCodec.preencode(&state, value.schemaVersion)
-    _fromVersionCodec.preencode(&state, value.fromVersion)
-    _toVersionCodec.preencode(&state, value.toVersion)
-    state.end += 1 // flags
-    if let v = value.migratedAt { _migratedAtCodec.preencode(&state, v) }
-  }
-
-  public func encode(_ state: inout State, _ value: ChannelOpMigrateSchema) throws {
-    var flags: UInt = 0
-    if value.migratedAt != nil { flags |= 1 }
-
-    try _typeCodec.encode(&state, value.type)
-    try _schemaVersionCodec.encode(&state, value.schemaVersion)
-    try _fromVersionCodec.encode(&state, value.fromVersion)
-    try _toVersionCodec.encode(&state, value.toVersion)
-    try Primitive.UInt().encode(&state, flags)
-    if let v = value.migratedAt { try _migratedAtCodec.encode(&state, v) }
-  }
-
-  public func decode(_ state: inout State) throws -> ChannelOpMigrateSchema {
-    let _r0 = try _typeCodec.decode(&state)
-    let _r1 = try _schemaVersionCodec.decode(&state)
-    let _r2 = try _fromVersionCodec.decode(&state)
-    let _r3 = try _toVersionCodec.decode(&state)
-    let flags = try Primitive.UInt().decode(&state)
-    let _r4: UInt? = (flags & 1) != 0 ? try _migratedAtCodec.decode(&state) : nil
-    return ChannelOpMigrateSchema(
-      type: _r0,
-      schemaVersion: _r1,
-      fromVersion: _r2,
-      toVersion: _r3,
-      migratedAt: _r4
-    )
-  }
-}
-
-public let channelOpMigrateSchema = ChannelOpMigrateSchemaCodec()
 
 // @peartube/add-comment-request
 public struct AddCommentRequest {

@@ -12,7 +12,6 @@ import {
   verifyMediaClaim,
 } from '../media-graph/index.js'
 import {
-  PUBLISHER_CATALOG_LEGACY_COMPATIBILITY,
   PUBLISHER_LIMITS,
   PUBLISHER_RECORD_TYPES,
   decodePublisherCatalogFrame,
@@ -213,7 +212,11 @@ function dedupeRows(rows) {
   return output
 }
 
-function legacyPublicationWorkLinks(rows) {
+// A publication manifest carries renditions and provenance, never a work-role
+// claim: the work binding is published as sibling CLAIM operations in the same
+// catalog batch. This resolves each publicationId to the work entity those
+// claims name, preferring an exact episode coordinate over a looser subject.
+function publicationWorkLinksFromClaims(rows) {
   const links = new Map()
   for (const entry of rows) {
     if (entry.collection !== COLLECTIONS.sourceRecords || entry.record.recordType !== PUBLISHER_RECORD_TYPES.CLAIM) continue
@@ -234,16 +237,18 @@ function legacyPublicationWorkLinks(rows) {
         }
       }
     } catch {
-      // Every source row was already verified while it was normalized. A
-      // non-claim or legacy body simply contributes no compatibility link.
+      // Every source row was already verified while it was normalized, so a
+      // body that is not a decodable claim simply contributes no work link.
     }
   }
   return links
 }
 
-function reconcileLegacyPublicationWorkIds(rows) {
-  const links = legacyPublicationWorkLinks(rows)
+function resolvePublicationWorkIds(rows) {
+  const links = publicationWorkLinksFromClaims(rows)
   return rows.map(entry => {
+    // `workEntityId === publicationId` is the unresolved sentinel the manifest
+    // normalizer emits when no work entity is known from the manifest alone.
     if (entry.collection !== COLLECTIONS.publicationProjections ||
         entry.record.workEntityId !== entry.record.publicationId) return entry
     const link = links.get(entry.record.publicationId)
@@ -598,7 +603,7 @@ async function collectCurrentRows(context, pinnedView, budget) {
     appendBounded(rows, normalized, budget)
   }
   throwIfAborted(context.signal)
-  return reconcileLegacyPublicationWorkIds(rows)
+  return resolvePublicationWorkIds(rows)
 }
 
 async function collectChanges(context, pinnedView, previousVersion, budget) {
@@ -708,9 +713,7 @@ async function verifyPinnedView(pinnedView, context, signal) {
   const acceptedDescriptor = await pinnedView.get('state/descriptor')
   throwIfAborted(signal)
   if (!acceptedDescriptor) invalid('pinned catalog has no accepted namespace descriptor')
-  const decodedDescriptor = decodePublisherNamespaceDescriptor(acceptedDescriptor.value, {
-    legacyCompatibility: PUBLISHER_CATALOG_LEGACY_COMPATIBILITY,
-  })
+  const decodedDescriptor = decodePublisherNamespaceDescriptor(acceptedDescriptor.value)
   verifyPublisherNamespaceDescriptor(decodedDescriptor)
   if (!sameBytes(encodePublisherNamespaceDescriptor(decodedDescriptor), context.descriptorBytes)) {
     invalid('pinned catalog descriptor does not match the verified descriptor')

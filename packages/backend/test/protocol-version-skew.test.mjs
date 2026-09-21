@@ -112,26 +112,6 @@ test('protocol compatibility fails closed with stable major, capability, and omi
   } catch (error) {
     t.is(error.code, PROTOCOL_ERROR_CODES.ADVERTISEMENT_REQUIRED)
   }
-  const acceptedLegacy = assertProtocolCompatibility({}, {
-    legacyCompatibility: {
-      minimumProtocolMajor: 4,
-      protocolMinor: 0,
-      requiredCapabilities: [],
-    },
-  })
-  t.is(acceptedLegacy.minimumProtocolMajor, 4)
-  try {
-    assertProtocolCompatibility({}, {
-      legacyCompatibility: {
-        minimumProtocolMajor: 1,
-        protocolMinor: 0,
-        requiredCapabilities: [],
-      },
-    })
-    t.fail('explicit legacy metadata must still match the local major')
-  } catch (error) {
-    t.is(error.code, PROTOCOL_ERROR_CODES.MAJOR_UNSUPPORTED)
-  }
 })
 
 test('protocol version skew rejects v1 peer frames with the stable compatibility code', (t) => {

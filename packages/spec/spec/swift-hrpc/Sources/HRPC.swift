@@ -85,8 +85,6 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
   private let eventTranscodeProgress = EventTranscodeProgressCodec()
   private let eventUploadProgress = EventUploadProgressCodec()
   private let eventVideoStats = EventVideoStatsCodec()
-  private let exportMigrationReportRequest = ExportMigrationReportRequestCodec()
-  private let exportMigrationReportResponse = ExportMigrationReportResponseCodec()
   private let exportPortableStateRequest = ExportPortableStateRequestCodec()
   private let exportPortableStateResponse = ExportPortableStateResponseCodec()
   private let ffmpegDecodeAvailableRequest = FfmpegDecodeAvailableRequestCodec()
@@ -124,8 +122,6 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
   private let getMediaCollectionResponse = GetMediaCollectionResponseCodec()
   private let getMediaEntityRequest = GetMediaEntityRequestCodec()
   private let getMediaEntityResponse = GetMediaEntityResponseCodec()
-  private let getMigrationStatusRequest = GetMigrationStatusRequestCodec()
-  private let getMigrationStatusResponse = GetMigrationStatusResponseCodec()
   private let getParticipationStatusRequest = GetParticipationStatusRequestCodec()
   private let getParticipationStatusResponse = GetParticipationStatusResponseCodec()
   private let setDeviceConditionsRequest = SetDeviceConditionsRequestCodec()
@@ -237,8 +233,6 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
   private let requestArchivePublicationResponse = RequestArchivePublicationResponseCodec()
   private let restorePortableStateRequest = RestorePortableStateRequestCodec()
   private let restorePortableStateResponse = RestorePortableStateResponseCodec()
-  private let retryMigrationRequest = RetryMigrationRequestCodec()
-  private let retryMigrationResponse = RetryMigrationResponseCodec()
   private let retrySyncChannelRequest = RetrySyncChannelRequestCodec()
   private let retrySyncChannelResponse = RetrySyncChannelResponseCodec()
   private let searchVideosRequest = SearchVideosRequestCodec()
@@ -1199,48 +1193,9 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
   }
 
   // Request/response — client
-  public func getMigrationStatus(_ args: GetMigrationStatusRequest) async throws -> GetMigrationStatusResponse {
-    let encoded = try _encode(getMigrationStatusRequest, args)
-    guard let raw = try await _rpc.request(67, data: encoded) else {
-      throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
-    }
-    return try _decode(getMigrationStatusResponse, raw)
-  }
-
-  public func onGetMigrationStatus(_ handler: @escaping (GetMigrationStatusRequest) async throws -> GetMigrationStatusResponse) {
-    _handlers["@peartube/get-migration-status"] = handler
-  }
-
-  // Request/response — client
-  public func retryMigration(_ args: RetryMigrationRequest) async throws -> RetryMigrationResponse {
-    let encoded = try _encode(retryMigrationRequest, args)
-    guard let raw = try await _rpc.request(68, data: encoded) else {
-      throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
-    }
-    return try _decode(retryMigrationResponse, raw)
-  }
-
-  public func onRetryMigration(_ handler: @escaping (RetryMigrationRequest) async throws -> RetryMigrationResponse) {
-    _handlers["@peartube/retry-migration"] = handler
-  }
-
-  // Request/response — client
-  public func exportMigrationReport(_ args: ExportMigrationReportRequest) async throws -> ExportMigrationReportResponse {
-    let encoded = try _encode(exportMigrationReportRequest, args)
-    guard let raw = try await _rpc.request(69, data: encoded) else {
-      throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
-    }
-    return try _decode(exportMigrationReportResponse, raw)
-  }
-
-  public func onExportMigrationReport(_ handler: @escaping (ExportMigrationReportRequest) async throws -> ExportMigrationReportResponse) {
-    _handlers["@peartube/export-migration-report"] = handler
-  }
-
-  // Request/response — client
   public func getPublisherDeviceStatus(_ args: GetPublisherDeviceStatusRequest) async throws -> GetPublisherDeviceStatusResponse {
     let encoded = try _encode(getPublisherDeviceStatusRequest, args)
-    guard let raw = try await _rpc.request(70, data: encoded) else {
+    guard let raw = try await _rpc.request(67, data: encoded) else {
       throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
     }
     return try _decode(getPublisherDeviceStatusResponse, raw)
@@ -1253,7 +1208,7 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
   // Request/response — client
   public func exportPortableState(_ args: ExportPortableStateRequest) async throws -> ExportPortableStateResponse {
     let encoded = try _encode(exportPortableStateRequest, args)
-    guard let raw = try await _rpc.request(71, data: encoded) else {
+    guard let raw = try await _rpc.request(68, data: encoded) else {
       throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
     }
     return try _decode(exportPortableStateResponse, raw)
@@ -1266,7 +1221,7 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
   // Request/response — client
   public func restorePortableState(_ args: RestorePortableStateRequest) async throws -> RestorePortableStateResponse {
     let encoded = try _encode(restorePortableStateRequest, args)
-    guard let raw = try await _rpc.request(72, data: encoded) else {
+    guard let raw = try await _rpc.request(69, data: encoded) else {
       throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
     }
     return try _decode(restorePortableStateResponse, raw)
@@ -1279,7 +1234,7 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
   // Request/response — client
   public func previewStorageLimit(_ args: PreviewStorageLimitRequest) async throws -> PreviewStorageLimitResponse {
     let encoded = try _encode(previewStorageLimitRequest, args)
-    guard let raw = try await _rpc.request(73, data: encoded) else {
+    guard let raw = try await _rpc.request(70, data: encoded) else {
       throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
     }
     return try _decode(previewStorageLimitResponse, raw)
@@ -1292,7 +1247,7 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
   // Request/response — client
   public func getArchiveOperatorStatus(_ args: GetArchiveOperatorStatusRequest) async throws -> GetArchiveOperatorStatusResponse {
     let encoded = try _encode(getArchiveOperatorStatusRequest, args)
-    guard let raw = try await _rpc.request(74, data: encoded) else {
+    guard let raw = try await _rpc.request(71, data: encoded) else {
       throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
     }
     return try _decode(getArchiveOperatorStatusResponse, raw)
@@ -1305,7 +1260,7 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
   // Request/response — client
   public func getArchiveParticipation(_ args: GetArchiveParticipationRequest) async throws -> GetArchiveParticipationResponse {
     let encoded = try _encode(getArchiveParticipationRequest, args)
-    guard let raw = try await _rpc.request(75, data: encoded) else {
+    guard let raw = try await _rpc.request(72, data: encoded) else {
       throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
     }
     return try _decode(getArchiveParticipationResponse, raw)
@@ -1318,7 +1273,7 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
   // Request/response — client
   public func setArchiveParticipation(_ args: SetArchiveParticipationRequest) async throws -> SetArchiveParticipationResponse {
     let encoded = try _encode(setArchiveParticipationRequest, args)
-    guard let raw = try await _rpc.request(76, data: encoded) else {
+    guard let raw = try await _rpc.request(73, data: encoded) else {
       throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
     }
     return try _decode(setArchiveParticipationResponse, raw)
@@ -1331,7 +1286,7 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
   // Request/response — client
   public func requestArchivePublication(_ args: RequestArchivePublicationRequest) async throws -> RequestArchivePublicationResponse {
     let encoded = try _encode(requestArchivePublicationRequest, args)
-    guard let raw = try await _rpc.request(77, data: encoded) else {
+    guard let raw = try await _rpc.request(74, data: encoded) else {
       throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
     }
     return try _decode(requestArchivePublicationResponse, raw)
@@ -1344,7 +1299,7 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
   // Request/response — client
   public func getNetworkPolicy(_ args: GetNetworkPolicyRequest) async throws -> GetNetworkPolicyResponse {
     let encoded = try _encode(getNetworkPolicyRequest, args)
-    guard let raw = try await _rpc.request(78, data: encoded) else {
+    guard let raw = try await _rpc.request(75, data: encoded) else {
       throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
     }
     return try _decode(getNetworkPolicyResponse, raw)
@@ -1357,7 +1312,7 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
   // Request/response — client
   public func setNetworkPolicy(_ args: SetNetworkPolicyRequest) async throws -> SetNetworkPolicyResponse {
     let encoded = try _encode(setNetworkPolicyRequest, args)
-    guard let raw = try await _rpc.request(79, data: encoded) else {
+    guard let raw = try await _rpc.request(76, data: encoded) else {
       throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
     }
     return try _decode(setNetworkPolicyResponse, raw)
@@ -1370,7 +1325,7 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
   // Request/response — client
   public func setDeviceConditions(_ args: SetDeviceConditionsRequest) async throws -> SetDeviceConditionsResponse {
     let encoded = try _encode(setDeviceConditionsRequest, args)
-    guard let raw = try await _rpc.request(151, data: encoded) else {
+    guard let raw = try await _rpc.request(148, data: encoded) else {
       throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
     }
     return try _decode(setDeviceConditionsResponse, raw)
@@ -1383,7 +1338,7 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
   // Request/response — client
   public func getParticipationStatus(_ args: GetParticipationStatusRequest) async throws -> GetParticipationStatusResponse {
     let encoded = try _encode(getParticipationStatusRequest, args)
-    guard let raw = try await _rpc.request(150, data: encoded) else {
+    guard let raw = try await _rpc.request(147, data: encoded) else {
       throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
     }
     return try _decode(getParticipationStatusResponse, raw)
@@ -1396,7 +1351,7 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
   // Request/response — client
   public func clearCache(_ args: ClearCacheRequest) async throws -> ClearCacheResponse {
     let encoded = try _encode(clearCacheRequest, args)
-    guard let raw = try await _rpc.request(80, data: encoded) else {
+    guard let raw = try await _rpc.request(77, data: encoded) else {
       throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
     }
     return try _decode(clearCacheResponse, raw)
@@ -1409,7 +1364,7 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
   // Request/response — client
   public func assessSourceOffload(_ args: AssessSourceOffloadRequest) async throws -> AssessSourceOffloadResponse {
     let encoded = try _encode(assessSourceOffloadRequest, args)
-    guard let raw = try await _rpc.request(81, data: encoded) else {
+    guard let raw = try await _rpc.request(78, data: encoded) else {
       throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
     }
     return try _decode(assessSourceOffloadResponse, raw)
@@ -1422,7 +1377,7 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
   // Request/response — client
   public func confirmSourceOffload(_ args: ConfirmSourceOffloadRequest) async throws -> ConfirmSourceOffloadResponse {
     let encoded = try _encode(confirmSourceOffloadRequest, args)
-    guard let raw = try await _rpc.request(82, data: encoded) else {
+    guard let raw = try await _rpc.request(79, data: encoded) else {
       throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
     }
     return try _decode(confirmSourceOffloadResponse, raw)
@@ -1435,7 +1390,7 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
   // Request/response — client
   public func getVideoThumbnail(_ args: GetVideoThumbnailRequest) async throws -> GetVideoThumbnailResponse {
     let encoded = try _encode(getVideoThumbnailRequest, args)
-    guard let raw = try await _rpc.request(83, data: encoded) else {
+    guard let raw = try await _rpc.request(80, data: encoded) else {
       throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
     }
     return try _decode(getVideoThumbnailResponse, raw)
@@ -1448,7 +1403,7 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
   // Request/response — client
   public func getVideoMetadata(_ args: GetVideoMetadataRequest) async throws -> GetVideoMetadataResponse {
     let encoded = try _encode(getVideoMetadataRequest, args)
-    guard let raw = try await _rpc.request(84, data: encoded) else {
+    guard let raw = try await _rpc.request(81, data: encoded) else {
       throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
     }
     return try _decode(getVideoMetadataResponse, raw)
@@ -1461,7 +1416,7 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
   // Request/response — client
   public func setVideoThumbnail(_ args: SetVideoThumbnailRequest) async throws -> SetVideoThumbnailResponse {
     let encoded = try _encode(setVideoThumbnailRequest, args)
-    guard let raw = try await _rpc.request(85, data: encoded) else {
+    guard let raw = try await _rpc.request(82, data: encoded) else {
       throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
     }
     return try _decode(setVideoThumbnailResponse, raw)
@@ -1474,7 +1429,7 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
   // Request/response — client
   public func setVideoThumbnailFromFile(_ args: SetVideoThumbnailFromFileRequest) async throws -> SetVideoThumbnailFromFileResponse {
     let encoded = try _encode(setVideoThumbnailFromFileRequest, args)
-    guard let raw = try await _rpc.request(86, data: encoded) else {
+    guard let raw = try await _rpc.request(83, data: encoded) else {
       throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
     }
     return try _decode(setVideoThumbnailFromFileResponse, raw)
@@ -1487,7 +1442,7 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
   // Request/response — client
   public func getStatus(_ args: GetStatusRequest) async throws -> GetStatusResponse {
     let encoded = try _encode(getStatusRequest, args)
-    guard let raw = try await _rpc.request(87, data: encoded) else {
+    guard let raw = try await _rpc.request(84, data: encoded) else {
       throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
     }
     return try _decode(getStatusResponse, raw)
@@ -1500,7 +1455,7 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
   // Request/response — client
   public func pickVideoFile(_ args: PickVideoFileRequest) async throws -> PickVideoFileResponse {
     let encoded = try _encode(pickVideoFileRequest, args)
-    guard let raw = try await _rpc.request(88, data: encoded) else {
+    guard let raw = try await _rpc.request(85, data: encoded) else {
       throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
     }
     return try _decode(pickVideoFileResponse, raw)
@@ -1513,7 +1468,7 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
   // Request/response — client
   public func pickImageFile(_ args: PickImageFileRequest) async throws -> PickImageFileResponse {
     let encoded = try _encode(pickImageFileRequest, args)
-    guard let raw = try await _rpc.request(89, data: encoded) else {
+    guard let raw = try await _rpc.request(86, data: encoded) else {
       throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
     }
     return try _decode(pickImageFileResponse, raw)
@@ -1526,7 +1481,7 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
   // Request/response — client
   public func getBlobServerPort(_ args: GetBlobServerPortRequest) async throws -> GetBlobServerPortResponse {
     let encoded = try _encode(getBlobServerPortRequest, args)
-    guard let raw = try await _rpc.request(90, data: encoded) else {
+    guard let raw = try await _rpc.request(87, data: encoded) else {
       throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
     }
     return try _decode(getBlobServerPortResponse, raw)
@@ -1539,7 +1494,7 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
   // Request/response — client
   public func globalSearchVideos(_ args: GlobalSearchVideosRequest) async throws -> GlobalSearchVideosResponse {
     let encoded = try _encode(globalSearchVideosRequest, args)
-    guard let raw = try await _rpc.request(91, data: encoded) else {
+    guard let raw = try await _rpc.request(88, data: encoded) else {
       throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
     }
     return try _decode(globalSearchVideosResponse, raw)
@@ -1552,7 +1507,7 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
   // Request/response — client
   public func addComment(_ args: AddCommentRequest) async throws -> AddCommentResponse {
     let encoded = try _encode(addCommentRequest, args)
-    guard let raw = try await _rpc.request(92, data: encoded) else {
+    guard let raw = try await _rpc.request(89, data: encoded) else {
       throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
     }
     return try _decode(addCommentResponse, raw)
@@ -1565,7 +1520,7 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
   // Request/response — client
   public func listComments(_ args: ListCommentsRequest) async throws -> ListCommentsResponse {
     let encoded = try _encode(listCommentsRequest, args)
-    guard let raw = try await _rpc.request(93, data: encoded) else {
+    guard let raw = try await _rpc.request(90, data: encoded) else {
       throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
     }
     return try _decode(listCommentsResponse, raw)
@@ -1578,7 +1533,7 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
   // Request/response — client
   public func hideComment(_ args: HideCommentRequest) async throws -> HideCommentResponse {
     let encoded = try _encode(hideCommentRequest, args)
-    guard let raw = try await _rpc.request(94, data: encoded) else {
+    guard let raw = try await _rpc.request(91, data: encoded) else {
       throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
     }
     return try _decode(hideCommentResponse, raw)
@@ -1591,7 +1546,7 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
   // Request/response — client
   public func removeComment(_ args: RemoveCommentRequest) async throws -> RemoveCommentResponse {
     let encoded = try _encode(removeCommentRequest, args)
-    guard let raw = try await _rpc.request(95, data: encoded) else {
+    guard let raw = try await _rpc.request(92, data: encoded) else {
       throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
     }
     return try _decode(removeCommentResponse, raw)
@@ -1604,7 +1559,7 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
   // Request/response — client
   public func addReaction(_ args: AddReactionRequest) async throws -> AddReactionResponse {
     let encoded = try _encode(addReactionRequest, args)
-    guard let raw = try await _rpc.request(96, data: encoded) else {
+    guard let raw = try await _rpc.request(93, data: encoded) else {
       throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
     }
     return try _decode(addReactionResponse, raw)
@@ -1617,7 +1572,7 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
   // Request/response — client
   public func removeReaction(_ args: RemoveReactionRequest) async throws -> RemoveReactionResponse {
     let encoded = try _encode(removeReactionRequest, args)
-    guard let raw = try await _rpc.request(97, data: encoded) else {
+    guard let raw = try await _rpc.request(94, data: encoded) else {
       throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
     }
     return try _decode(removeReactionResponse, raw)
@@ -1630,7 +1585,7 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
   // Request/response — client
   public func getReactions(_ args: GetReactionsRequest) async throws -> GetReactionsResponse {
     let encoded = try _encode(getReactionsRequest, args)
-    guard let raw = try await _rpc.request(98, data: encoded) else {
+    guard let raw = try await _rpc.request(95, data: encoded) else {
       throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
     }
     return try _decode(getReactionsResponse, raw)
@@ -1643,7 +1598,7 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
   // Send-only — client (fire and forget)
   public func eventReady(_ args: EventReady) throws {
     let encoded = try _encode(eventReady, args)
-    _rpc.event(99, data: encoded)
+    _rpc.event(96, data: encoded)
   }
 
   public func onEventReady(_ handler: @escaping (EventReady) async -> Void) {
@@ -1653,7 +1608,7 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
   // Send-only — client (fire and forget)
   public func eventError(_ args: EventError) throws {
     let encoded = try _encode(eventError, args)
-    _rpc.event(100, data: encoded)
+    _rpc.event(97, data: encoded)
   }
 
   public func onEventError(_ handler: @escaping (EventError) async -> Void) {
@@ -1663,7 +1618,7 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
   // Send-only — client (fire and forget)
   public func eventUploadProgress(_ args: EventUploadProgress) throws {
     let encoded = try _encode(eventUploadProgress, args)
-    _rpc.event(101, data: encoded)
+    _rpc.event(98, data: encoded)
   }
 
   public func onEventUploadProgress(_ handler: @escaping (EventUploadProgress) async -> Void) {
@@ -1673,7 +1628,7 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
   // Send-only — client (fire and forget)
   public func eventDownloadProgress(_ args: EventDownloadProgress) throws {
     let encoded = try _encode(eventDownloadProgress, args)
-    _rpc.event(102, data: encoded)
+    _rpc.event(99, data: encoded)
   }
 
   public func onEventDownloadProgress(_ handler: @escaping (EventDownloadProgress) async -> Void) {
@@ -1683,7 +1638,7 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
   // Send-only — client (fire and forget)
   public func eventMediaGraphUpdate(_ args: EventMediaGraphUpdate) throws {
     let encoded = try _encode(eventMediaGraphUpdate, args)
-    _rpc.event(103, data: encoded)
+    _rpc.event(100, data: encoded)
   }
 
   public func onEventMediaGraphUpdate(_ handler: @escaping (EventMediaGraphUpdate) async -> Void) {
@@ -1693,7 +1648,7 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
   // Send-only — client (fire and forget)
   public func eventLog(_ args: EventLog) throws {
     let encoded = try _encode(eventLog, args)
-    _rpc.event(104, data: encoded)
+    _rpc.event(101, data: encoded)
   }
 
   public func onEventLog(_ handler: @escaping (EventLog) async -> Void) {
@@ -1703,7 +1658,7 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
   // Send-only — client (fire and forget)
   public func eventVideoStats(_ args: EventVideoStats) throws {
     let encoded = try _encode(eventVideoStats, args)
-    _rpc.event(105, data: encoded)
+    _rpc.event(102, data: encoded)
   }
 
   public func onEventVideoStats(_ handler: @escaping (EventVideoStats) async -> Void) {
@@ -1713,7 +1668,7 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
   // Request/response — client
   public func castAvailable(_ args: CastAvailableRequest) async throws -> CastAvailableResponse {
     let encoded = try _encode(castAvailableRequest, args)
-    guard let raw = try await _rpc.request(106, data: encoded) else {
+    guard let raw = try await _rpc.request(103, data: encoded) else {
       throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
     }
     return try _decode(castAvailableResponse, raw)
@@ -1726,7 +1681,7 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
   // Request/response — client
   public func castStartDiscovery(_ args: CastStartDiscoveryRequest) async throws -> CastStartDiscoveryResponse {
     let encoded = try _encode(castStartDiscoveryRequest, args)
-    guard let raw = try await _rpc.request(107, data: encoded) else {
+    guard let raw = try await _rpc.request(104, data: encoded) else {
       throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
     }
     return try _decode(castStartDiscoveryResponse, raw)
@@ -1739,7 +1694,7 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
   // Request/response — client
   public func castStopDiscovery(_ args: CastStopDiscoveryRequest) async throws -> CastStopDiscoveryResponse {
     let encoded = try _encode(castStopDiscoveryRequest, args)
-    guard let raw = try await _rpc.request(108, data: encoded) else {
+    guard let raw = try await _rpc.request(105, data: encoded) else {
       throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
     }
     return try _decode(castStopDiscoveryResponse, raw)
@@ -1752,7 +1707,7 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
   // Request/response — client
   public func castGetDevices(_ args: CastGetDevicesRequest) async throws -> CastGetDevicesResponse {
     let encoded = try _encode(castGetDevicesRequest, args)
-    guard let raw = try await _rpc.request(109, data: encoded) else {
+    guard let raw = try await _rpc.request(106, data: encoded) else {
       throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
     }
     return try _decode(castGetDevicesResponse, raw)
@@ -1765,7 +1720,7 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
   // Request/response — client
   public func castAddManualDevice(_ args: CastAddManualDeviceRequest) async throws -> CastAddManualDeviceResponse {
     let encoded = try _encode(castAddManualDeviceRequest, args)
-    guard let raw = try await _rpc.request(110, data: encoded) else {
+    guard let raw = try await _rpc.request(107, data: encoded) else {
       throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
     }
     return try _decode(castAddManualDeviceResponse, raw)
@@ -1778,7 +1733,7 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
   // Request/response — client
   public func castConnect(_ args: CastConnectRequest) async throws -> CastConnectResponse {
     let encoded = try _encode(castConnectRequest, args)
-    guard let raw = try await _rpc.request(111, data: encoded) else {
+    guard let raw = try await _rpc.request(108, data: encoded) else {
       throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
     }
     return try _decode(castConnectResponse, raw)
@@ -1791,7 +1746,7 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
   // Request/response — client
   public func castDisconnect(_ args: CastDisconnectRequest) async throws -> CastDisconnectResponse {
     let encoded = try _encode(castDisconnectRequest, args)
-    guard let raw = try await _rpc.request(112, data: encoded) else {
+    guard let raw = try await _rpc.request(109, data: encoded) else {
       throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
     }
     return try _decode(castDisconnectResponse, raw)
@@ -1804,7 +1759,7 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
   // Request/response — client
   public func castPlay(_ args: CastPlayRequest) async throws -> CastPlayResponse {
     let encoded = try _encode(castPlayRequest, args)
-    guard let raw = try await _rpc.request(113, data: encoded) else {
+    guard let raw = try await _rpc.request(110, data: encoded) else {
       throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
     }
     return try _decode(castPlayResponse, raw)
@@ -1817,7 +1772,7 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
   // Request/response — client
   public func castPause(_ args: CastPauseRequest) async throws -> CastPauseResponse {
     let encoded = try _encode(castPauseRequest, args)
-    guard let raw = try await _rpc.request(114, data: encoded) else {
+    guard let raw = try await _rpc.request(111, data: encoded) else {
       throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
     }
     return try _decode(castPauseResponse, raw)
@@ -1830,7 +1785,7 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
   // Request/response — client
   public func castResume(_ args: CastResumeRequest) async throws -> CastResumeResponse {
     let encoded = try _encode(castResumeRequest, args)
-    guard let raw = try await _rpc.request(115, data: encoded) else {
+    guard let raw = try await _rpc.request(112, data: encoded) else {
       throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
     }
     return try _decode(castResumeResponse, raw)
@@ -1843,7 +1798,7 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
   // Request/response — client
   public func castStop(_ args: CastStopRequest) async throws -> CastStopResponse {
     let encoded = try _encode(castStopRequest, args)
-    guard let raw = try await _rpc.request(116, data: encoded) else {
+    guard let raw = try await _rpc.request(113, data: encoded) else {
       throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
     }
     return try _decode(castStopResponse, raw)
@@ -1856,7 +1811,7 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
   // Request/response — client
   public func castSeek(_ args: CastSeekRequest) async throws -> CastSeekResponse {
     let encoded = try _encode(castSeekRequest, args)
-    guard let raw = try await _rpc.request(117, data: encoded) else {
+    guard let raw = try await _rpc.request(114, data: encoded) else {
       throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
     }
     return try _decode(castSeekResponse, raw)
@@ -1869,7 +1824,7 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
   // Request/response — client
   public func castSetVolume(_ args: CastSetVolumeRequest) async throws -> CastSetVolumeResponse {
     let encoded = try _encode(castSetVolumeRequest, args)
-    guard let raw = try await _rpc.request(118, data: encoded) else {
+    guard let raw = try await _rpc.request(115, data: encoded) else {
       throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
     }
     return try _decode(castSetVolumeResponse, raw)
@@ -1882,7 +1837,7 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
   // Request/response — client
   public func castGetState(_ args: CastGetStateRequest) async throws -> CastGetStateResponse {
     let encoded = try _encode(castGetStateRequest, args)
-    guard let raw = try await _rpc.request(119, data: encoded) else {
+    guard let raw = try await _rpc.request(116, data: encoded) else {
       throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
     }
     return try _decode(castGetStateResponse, raw)
@@ -1895,7 +1850,7 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
   // Request/response — client
   public func castIsConnected(_ args: CastIsConnectedRequest) async throws -> CastIsConnectedResponse {
     let encoded = try _encode(castIsConnectedRequest, args)
-    guard let raw = try await _rpc.request(120, data: encoded) else {
+    guard let raw = try await _rpc.request(117, data: encoded) else {
       throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
     }
     return try _decode(castIsConnectedResponse, raw)
@@ -1908,7 +1863,7 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
   // Send-only — client (fire and forget)
   public func eventCastDeviceFound(_ args: EventCastDeviceFound) throws {
     let encoded = try _encode(eventCastDeviceFound, args)
-    _rpc.event(121, data: encoded)
+    _rpc.event(118, data: encoded)
   }
 
   public func onEventCastDeviceFound(_ handler: @escaping (EventCastDeviceFound) async -> Void) {
@@ -1918,7 +1873,7 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
   // Send-only — client (fire and forget)
   public func eventCastDeviceLost(_ args: EventCastDeviceLost) throws {
     let encoded = try _encode(eventCastDeviceLost, args)
-    _rpc.event(122, data: encoded)
+    _rpc.event(119, data: encoded)
   }
 
   public func onEventCastDeviceLost(_ handler: @escaping (EventCastDeviceLost) async -> Void) {
@@ -1928,7 +1883,7 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
   // Send-only — client (fire and forget)
   public func eventCastPlaybackState(_ args: EventCastPlaybackState) throws {
     let encoded = try _encode(eventCastPlaybackState, args)
-    _rpc.event(123, data: encoded)
+    _rpc.event(120, data: encoded)
   }
 
   public func onEventCastPlaybackState(_ handler: @escaping (EventCastPlaybackState) async -> Void) {
@@ -1938,7 +1893,7 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
   // Send-only — client (fire and forget)
   public func eventCastTimeUpdate(_ args: EventCastTimeUpdate) throws {
     let encoded = try _encode(eventCastTimeUpdate, args)
-    _rpc.event(124, data: encoded)
+    _rpc.event(121, data: encoded)
   }
 
   public func onEventCastTimeUpdate(_ handler: @escaping (EventCastTimeUpdate) async -> Void) {
@@ -1948,7 +1903,7 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
   // Request/response — client
   public func searchVideos(_ args: SearchVideosRequest) async throws -> SearchVideosResponse {
     let encoded = try _encode(searchVideosRequest, args)
-    guard let raw = try await _rpc.request(125, data: encoded) else {
+    guard let raw = try await _rpc.request(122, data: encoded) else {
       throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
     }
     return try _decode(searchVideosResponse, raw)
@@ -1961,7 +1916,7 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
   // Request/response — client
   public func indexVideoVectors(_ args: IndexVideoVectorsRequest) async throws -> IndexVideoVectorsResponse {
     let encoded = try _encode(indexVideoVectorsRequest, args)
-    guard let raw = try await _rpc.request(128, data: encoded) else {
+    guard let raw = try await _rpc.request(125, data: encoded) else {
       throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
     }
     return try _decode(indexVideoVectorsResponse, raw)
@@ -1974,7 +1929,7 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
   // Request/response — client
   public func updateVideoMetadata(_ args: UpdateVideoMetadataRequest) async throws -> UpdateVideoMetadataResponse {
     let encoded = try _encode(updateVideoMetadataRequest, args)
-    guard let raw = try await _rpc.request(129, data: encoded) else {
+    guard let raw = try await _rpc.request(126, data: encoded) else {
       throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
     }
     return try _decode(updateVideoMetadataResponse, raw)
@@ -1987,7 +1942,7 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
   // Request/response — client
   public func getMediaCatalog(_ args: MediaPageRequest) async throws -> GetMediaCatalogResponse {
     let encoded = try _encode(mediaPageRequest, args)
-    guard let raw = try await _rpc.request(130, data: encoded) else {
+    guard let raw = try await _rpc.request(127, data: encoded) else {
       throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
     }
     return try _decode(getMediaCatalogResponse, raw)
@@ -2000,7 +1955,7 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
   // Request/response — client
   public func getMediaEntity(_ args: GetMediaEntityRequest) async throws -> GetMediaEntityResponse {
     let encoded = try _encode(getMediaEntityRequest, args)
-    guard let raw = try await _rpc.request(131, data: encoded) else {
+    guard let raw = try await _rpc.request(128, data: encoded) else {
       throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
     }
     return try _decode(getMediaEntityResponse, raw)
@@ -2013,7 +1968,7 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
   // Request/response — client
   public func getMediaCollection(_ args: GetMediaCollectionRequest) async throws -> GetMediaCollectionResponse {
     let encoded = try _encode(getMediaCollectionRequest, args)
-    guard let raw = try await _rpc.request(132, data: encoded) else {
+    guard let raw = try await _rpc.request(129, data: encoded) else {
       throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
     }
     return try _decode(getMediaCollectionResponse, raw)
@@ -2026,7 +1981,7 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
   // Request/response — client
   public func getMediaCollectionItems(_ args: GetMediaCollectionItemsRequest) async throws -> GetMediaCollectionItemsResponse {
     let encoded = try _encode(getMediaCollectionItemsRequest, args)
-    guard let raw = try await _rpc.request(133, data: encoded) else {
+    guard let raw = try await _rpc.request(130, data: encoded) else {
       throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
     }
     return try _decode(getMediaCollectionItemsResponse, raw)
@@ -2039,7 +1994,7 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
   // Request/response — client
   public func getMediaAgent(_ args: GetMediaAgentRequest) async throws -> GetMediaAgentResponse {
     let encoded = try _encode(getMediaAgentRequest, args)
-    guard let raw = try await _rpc.request(134, data: encoded) else {
+    guard let raw = try await _rpc.request(131, data: encoded) else {
       throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
     }
     return try _decode(getMediaAgentResponse, raw)
@@ -2052,7 +2007,7 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
   // Request/response — client
   public func getAgentContributions(_ args: GetAgentContributionsRequest) async throws -> GetAgentContributionsResponse {
     let encoded = try _encode(getAgentContributionsRequest, args)
-    guard let raw = try await _rpc.request(135, data: encoded) else {
+    guard let raw = try await _rpc.request(132, data: encoded) else {
       throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
     }
     return try _decode(getAgentContributionsResponse, raw)
@@ -2065,7 +2020,7 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
   // Request/response — client
   public func getPublicationSources(_ args: GetPublicationSourcesRequest) async throws -> GetPublicationSourcesResponse {
     let encoded = try _encode(getPublicationSourcesRequest, args)
-    guard let raw = try await _rpc.request(136, data: encoded) else {
+    guard let raw = try await _rpc.request(133, data: encoded) else {
       throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
     }
     return try _decode(getPublicationSourcesResponse, raw)
@@ -2078,7 +2033,7 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
   // Request/response — client
   public func getClaimProvenance(_ args: GetClaimProvenanceRequest) async throws -> GetClaimProvenanceResponse {
     let encoded = try _encode(getClaimProvenanceRequest, args)
-    guard let raw = try await _rpc.request(138, data: encoded) else {
+    guard let raw = try await _rpc.request(135, data: encoded) else {
       throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
     }
     return try _decode(getClaimProvenanceResponse, raw)
@@ -2091,7 +2046,7 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
   // Request/response — client
   public func setSourcePreference(_ args: SetSourcePreferenceRequest) async throws -> SetSourcePreferenceResponse {
     let encoded = try _encode(setSourcePreferenceRequest, args)
-    guard let raw = try await _rpc.request(139, data: encoded) else {
+    guard let raw = try await _rpc.request(136, data: encoded) else {
       throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
     }
     return try _decode(setSourcePreferenceResponse, raw)
@@ -2104,7 +2059,7 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
   // Request/response — client
   public func prepareMediaPlayback(_ args: PrepareMediaPlaybackRequest) async throws -> PrepareMediaPlaybackResponse {
     let encoded = try _encode(prepareMediaPlaybackRequest, args)
-    guard let raw = try await _rpc.request(140, data: encoded) else {
+    guard let raw = try await _rpc.request(137, data: encoded) else {
       throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
     }
     return try _decode(prepareMediaPlaybackResponse, raw)
@@ -2117,7 +2072,7 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
   // Request/response — client
   public func desktopBootstrap(_ args: DesktopBootstrapRequest) async throws -> DesktopBootstrapResponse {
     let encoded = try _encode(desktopBootstrapRequest, args)
-    guard let raw = try await _rpc.request(141, data: encoded) else {
+    guard let raw = try await _rpc.request(138, data: encoded) else {
       throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
     }
     return try _decode(desktopBootstrapResponse, raw)
@@ -2130,7 +2085,7 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
   // Request/response — client
   public func desktopShutdown(_ args: DesktopShutdownRequest) async throws -> DesktopShutdownResponse {
     let encoded = try _encode(desktopShutdownRequest, args)
-    guard let raw = try await _rpc.request(142, data: encoded) else {
+    guard let raw = try await _rpc.request(139, data: encoded) else {
       throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
     }
     return try _decode(desktopShutdownResponse, raw)
@@ -2143,7 +2098,7 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
   // Request/response — client
   public func desktopRefreshBrowse(_ args: DesktopRefreshBrowseRequest) async throws -> DesktopRefreshBrowseResponse {
     let encoded = try _encode(desktopRefreshBrowseRequest, args)
-    guard let raw = try await _rpc.request(143, data: encoded) else {
+    guard let raw = try await _rpc.request(140, data: encoded) else {
       throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
     }
     return try _decode(desktopRefreshBrowseResponse, raw)
@@ -2156,7 +2111,7 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
   // Request/response — client
   public func ffmpegDecodeAvailable(_ args: FfmpegDecodeAvailableRequest) async throws -> FfmpegDecodeAvailableResponse {
     let encoded = try _encode(ffmpegDecodeAvailableRequest, args)
-    guard let raw = try await _rpc.request(144, data: encoded) else {
+    guard let raw = try await _rpc.request(141, data: encoded) else {
       throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
     }
     return try _decode(ffmpegDecodeAvailableResponse, raw)
@@ -2169,7 +2124,7 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
   // Request/response — client
   public func updateChannelAvatar(_ args: UpdateChannelAvatarRequest) async throws -> UpdateChannelAvatarResponse {
     let encoded = try _encode(updateChannelAvatarRequest, args)
-    guard let raw = try await _rpc.request(145, data: encoded) else {
+    guard let raw = try await _rpc.request(142, data: encoded) else {
       throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
     }
     return try _decode(updateChannelAvatarResponse, raw)
@@ -2182,7 +2137,7 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
   // Request/response — client
   public func transcodeStart(_ args: TranscodeStartRequest) async throws -> TranscodeStartResponse {
     let encoded = try _encode(transcodeStartRequest, args)
-    guard let raw = try await _rpc.request(146, data: encoded) else {
+    guard let raw = try await _rpc.request(143, data: encoded) else {
       throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
     }
     return try _decode(transcodeStartResponse, raw)
@@ -2195,7 +2150,7 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
   // Request/response — client
   public func transcodeStop(_ args: TranscodeStopRequest) async throws -> TranscodeStopResponse {
     let encoded = try _encode(transcodeStopRequest, args)
-    guard let raw = try await _rpc.request(147, data: encoded) else {
+    guard let raw = try await _rpc.request(144, data: encoded) else {
       throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
     }
     return try _decode(transcodeStopResponse, raw)
@@ -2208,7 +2163,7 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
   // Request/response — client
   public func transcodeStatus(_ args: TranscodeStatusRequest) async throws -> TranscodeStatusResponse {
     let encoded = try _encode(transcodeStatusRequest, args)
-    guard let raw = try await _rpc.request(148, data: encoded) else {
+    guard let raw = try await _rpc.request(145, data: encoded) else {
       throw RPCRemoteError(message: "Missing response", code: "MISSING_RESPONSE")
     }
     return try _decode(transcodeStatusResponse, raw)
@@ -2221,7 +2176,7 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
   // Send-only — client (fire and forget)
   public func eventTranscodeProgress(_ args: EventTranscodeProgress) throws {
     let encoded = try _encode(eventTranscodeProgress, args)
-    _rpc.event(149, data: encoded)
+    _rpc.event(146, data: encoded)
   }
 
   public func onEventTranscodeProgress(_ handler: @escaping (EventTranscodeProgress) async -> Void) {
@@ -3049,46 +3004,7 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
       } catch {
         req.reject(error.localizedDescription, code: "HANDLER_ERROR")
       }
-    case 67:   // @peartube/get-migration-status
-      guard let handler = _handlers["@peartube/get-migration-status"] as? (GetMigrationStatusRequest) async throws -> GetMigrationStatusResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
-      guard let rawData = req.data else {
-        req.reject("Missing request data", code: "BAD_REQUEST")
-        return
-      }
-      do {
-        let args = try _decode(getMigrationStatusRequest, rawData)
-        let response = try await handler(args)
-        req.reply(try _encode(getMigrationStatusResponse, response))
-      } catch {
-        req.reject(error.localizedDescription, code: "HANDLER_ERROR")
-      }
-    case 68:   // @peartube/retry-migration
-      guard let handler = _handlers["@peartube/retry-migration"] as? (RetryMigrationRequest) async throws -> RetryMigrationResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
-      guard let rawData = req.data else {
-        req.reject("Missing request data", code: "BAD_REQUEST")
-        return
-      }
-      do {
-        let args = try _decode(retryMigrationRequest, rawData)
-        let response = try await handler(args)
-        req.reply(try _encode(retryMigrationResponse, response))
-      } catch {
-        req.reject(error.localizedDescription, code: "HANDLER_ERROR")
-      }
-    case 69:   // @peartube/export-migration-report
-      guard let handler = _handlers["@peartube/export-migration-report"] as? (ExportMigrationReportRequest) async throws -> ExportMigrationReportResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
-      guard let rawData = req.data else {
-        req.reject("Missing request data", code: "BAD_REQUEST")
-        return
-      }
-      do {
-        let args = try _decode(exportMigrationReportRequest, rawData)
-        let response = try await handler(args)
-        req.reply(try _encode(exportMigrationReportResponse, response))
-      } catch {
-        req.reject(error.localizedDescription, code: "HANDLER_ERROR")
-      }
-    case 70:   // @peartube/get-publisher-device-status
+    case 67:   // @peartube/get-publisher-device-status
       guard let handler = _handlers["@peartube/get-publisher-device-status"] as? (GetPublisherDeviceStatusRequest) async throws -> GetPublisherDeviceStatusResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
       guard let rawData = req.data else {
         req.reject("Missing request data", code: "BAD_REQUEST")
@@ -3101,7 +3017,7 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
       } catch {
         req.reject(error.localizedDescription, code: "HANDLER_ERROR")
       }
-    case 71:   // @peartube/export-portable-state
+    case 68:   // @peartube/export-portable-state
       guard let handler = _handlers["@peartube/export-portable-state"] as? (ExportPortableStateRequest) async throws -> ExportPortableStateResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
       guard let rawData = req.data else {
         req.reject("Missing request data", code: "BAD_REQUEST")
@@ -3114,7 +3030,7 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
       } catch {
         req.reject(error.localizedDescription, code: "HANDLER_ERROR")
       }
-    case 72:   // @peartube/restore-portable-state
+    case 69:   // @peartube/restore-portable-state
       guard let handler = _handlers["@peartube/restore-portable-state"] as? (RestorePortableStateRequest) async throws -> RestorePortableStateResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
       guard let rawData = req.data else {
         req.reject("Missing request data", code: "BAD_REQUEST")
@@ -3127,7 +3043,7 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
       } catch {
         req.reject(error.localizedDescription, code: "HANDLER_ERROR")
       }
-    case 73:   // @peartube/preview-storage-limit
+    case 70:   // @peartube/preview-storage-limit
       guard let handler = _handlers["@peartube/preview-storage-limit"] as? (PreviewStorageLimitRequest) async throws -> PreviewStorageLimitResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
       guard let rawData = req.data else {
         req.reject("Missing request data", code: "BAD_REQUEST")
@@ -3140,7 +3056,7 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
       } catch {
         req.reject(error.localizedDescription, code: "HANDLER_ERROR")
       }
-    case 74:   // @peartube/get-archive-operator-status
+    case 71:   // @peartube/get-archive-operator-status
       guard let handler = _handlers["@peartube/get-archive-operator-status"] as? (GetArchiveOperatorStatusRequest) async throws -> GetArchiveOperatorStatusResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
       guard let rawData = req.data else {
         req.reject("Missing request data", code: "BAD_REQUEST")
@@ -3153,7 +3069,7 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
       } catch {
         req.reject(error.localizedDescription, code: "HANDLER_ERROR")
       }
-    case 75:   // @peartube/get-archive-participation
+    case 72:   // @peartube/get-archive-participation
       guard let handler = _handlers["@peartube/get-archive-participation"] as? (GetArchiveParticipationRequest) async throws -> GetArchiveParticipationResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
       guard let rawData = req.data else {
         req.reject("Missing request data", code: "BAD_REQUEST")
@@ -3166,7 +3082,7 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
       } catch {
         req.reject(error.localizedDescription, code: "HANDLER_ERROR")
       }
-    case 76:   // @peartube/set-archive-participation
+    case 73:   // @peartube/set-archive-participation
       guard let handler = _handlers["@peartube/set-archive-participation"] as? (SetArchiveParticipationRequest) async throws -> SetArchiveParticipationResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
       guard let rawData = req.data else {
         req.reject("Missing request data", code: "BAD_REQUEST")
@@ -3179,7 +3095,7 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
       } catch {
         req.reject(error.localizedDescription, code: "HANDLER_ERROR")
       }
-    case 77:   // @peartube/request-archive-publication
+    case 74:   // @peartube/request-archive-publication
       guard let handler = _handlers["@peartube/request-archive-publication"] as? (RequestArchivePublicationRequest) async throws -> RequestArchivePublicationResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
       guard let rawData = req.data else {
         req.reject("Missing request data", code: "BAD_REQUEST")
@@ -3192,7 +3108,7 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
       } catch {
         req.reject(error.localizedDescription, code: "HANDLER_ERROR")
       }
-    case 78:   // @peartube/get-network-policy
+    case 75:   // @peartube/get-network-policy
       guard let handler = _handlers["@peartube/get-network-policy"] as? (GetNetworkPolicyRequest) async throws -> GetNetworkPolicyResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
       guard let rawData = req.data else {
         req.reject("Missing request data", code: "BAD_REQUEST")
@@ -3205,7 +3121,7 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
       } catch {
         req.reject(error.localizedDescription, code: "HANDLER_ERROR")
       }
-    case 79:   // @peartube/set-network-policy
+    case 76:   // @peartube/set-network-policy
       guard let handler = _handlers["@peartube/set-network-policy"] as? (SetNetworkPolicyRequest) async throws -> SetNetworkPolicyResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
       guard let rawData = req.data else {
         req.reject("Missing request data", code: "BAD_REQUEST")
@@ -3218,7 +3134,7 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
       } catch {
         req.reject(error.localizedDescription, code: "HANDLER_ERROR")
       }
-    case 80:   // @peartube/clear-cache
+    case 77:   // @peartube/clear-cache
       guard let handler = _handlers["@peartube/clear-cache"] as? (ClearCacheRequest) async throws -> ClearCacheResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
       guard let rawData = req.data else {
         req.reject("Missing request data", code: "BAD_REQUEST")
@@ -3231,7 +3147,7 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
       } catch {
         req.reject(error.localizedDescription, code: "HANDLER_ERROR")
       }
-    case 81:   // @peartube/assess-source-offload
+    case 78:   // @peartube/assess-source-offload
       guard let handler = _handlers["@peartube/assess-source-offload"] as? (AssessSourceOffloadRequest) async throws -> AssessSourceOffloadResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
       guard let rawData = req.data else {
         req.reject("Missing request data", code: "BAD_REQUEST")
@@ -3244,7 +3160,7 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
       } catch {
         req.reject(error.localizedDescription, code: "HANDLER_ERROR")
       }
-    case 82:   // @peartube/confirm-source-offload
+    case 79:   // @peartube/confirm-source-offload
       guard let handler = _handlers["@peartube/confirm-source-offload"] as? (ConfirmSourceOffloadRequest) async throws -> ConfirmSourceOffloadResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
       guard let rawData = req.data else {
         req.reject("Missing request data", code: "BAD_REQUEST")
@@ -3257,7 +3173,7 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
       } catch {
         req.reject(error.localizedDescription, code: "HANDLER_ERROR")
       }
-    case 83:   // @peartube/get-video-thumbnail
+    case 80:   // @peartube/get-video-thumbnail
       guard let handler = _handlers["@peartube/get-video-thumbnail"] as? (GetVideoThumbnailRequest) async throws -> GetVideoThumbnailResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
       guard let rawData = req.data else {
         req.reject("Missing request data", code: "BAD_REQUEST")
@@ -3270,7 +3186,7 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
       } catch {
         req.reject(error.localizedDescription, code: "HANDLER_ERROR")
       }
-    case 84:   // @peartube/get-video-metadata
+    case 81:   // @peartube/get-video-metadata
       guard let handler = _handlers["@peartube/get-video-metadata"] as? (GetVideoMetadataRequest) async throws -> GetVideoMetadataResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
       guard let rawData = req.data else {
         req.reject("Missing request data", code: "BAD_REQUEST")
@@ -3283,7 +3199,7 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
       } catch {
         req.reject(error.localizedDescription, code: "HANDLER_ERROR")
       }
-    case 85:   // @peartube/set-video-thumbnail
+    case 82:   // @peartube/set-video-thumbnail
       guard let handler = _handlers["@peartube/set-video-thumbnail"] as? (SetVideoThumbnailRequest) async throws -> SetVideoThumbnailResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
       guard let rawData = req.data else {
         req.reject("Missing request data", code: "BAD_REQUEST")
@@ -3296,7 +3212,7 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
       } catch {
         req.reject(error.localizedDescription, code: "HANDLER_ERROR")
       }
-    case 86:   // @peartube/set-video-thumbnail-from-file
+    case 83:   // @peartube/set-video-thumbnail-from-file
       guard let handler = _handlers["@peartube/set-video-thumbnail-from-file"] as? (SetVideoThumbnailFromFileRequest) async throws -> SetVideoThumbnailFromFileResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
       guard let rawData = req.data else {
         req.reject("Missing request data", code: "BAD_REQUEST")
@@ -3309,7 +3225,7 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
       } catch {
         req.reject(error.localizedDescription, code: "HANDLER_ERROR")
       }
-    case 87:   // @peartube/get-status
+    case 84:   // @peartube/get-status
       guard let handler = _handlers["@peartube/get-status"] as? (GetStatusRequest) async throws -> GetStatusResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
       guard let rawData = req.data else {
         req.reject("Missing request data", code: "BAD_REQUEST")
@@ -3322,7 +3238,7 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
       } catch {
         req.reject(error.localizedDescription, code: "HANDLER_ERROR")
       }
-    case 88:   // @peartube/pick-video-file
+    case 85:   // @peartube/pick-video-file
       guard let handler = _handlers["@peartube/pick-video-file"] as? (PickVideoFileRequest) async throws -> PickVideoFileResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
       guard let rawData = req.data else {
         req.reject("Missing request data", code: "BAD_REQUEST")
@@ -3335,7 +3251,7 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
       } catch {
         req.reject(error.localizedDescription, code: "HANDLER_ERROR")
       }
-    case 89:   // @peartube/pick-image-file
+    case 86:   // @peartube/pick-image-file
       guard let handler = _handlers["@peartube/pick-image-file"] as? (PickImageFileRequest) async throws -> PickImageFileResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
       guard let rawData = req.data else {
         req.reject("Missing request data", code: "BAD_REQUEST")
@@ -3348,7 +3264,7 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
       } catch {
         req.reject(error.localizedDescription, code: "HANDLER_ERROR")
       }
-    case 90:   // @peartube/get-blob-server-port
+    case 87:   // @peartube/get-blob-server-port
       guard let handler = _handlers["@peartube/get-blob-server-port"] as? (GetBlobServerPortRequest) async throws -> GetBlobServerPortResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
       guard let rawData = req.data else {
         req.reject("Missing request data", code: "BAD_REQUEST")
@@ -3361,7 +3277,7 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
       } catch {
         req.reject(error.localizedDescription, code: "HANDLER_ERROR")
       }
-    case 91:   // @peartube/global-search-videos
+    case 88:   // @peartube/global-search-videos
       guard let handler = _handlers["@peartube/global-search-videos"] as? (GlobalSearchVideosRequest) async throws -> GlobalSearchVideosResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
       guard let rawData = req.data else {
         req.reject("Missing request data", code: "BAD_REQUEST")
@@ -3374,7 +3290,7 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
       } catch {
         req.reject(error.localizedDescription, code: "HANDLER_ERROR")
       }
-    case 92:   // @peartube/add-comment
+    case 89:   // @peartube/add-comment
       guard let handler = _handlers["@peartube/add-comment"] as? (AddCommentRequest) async throws -> AddCommentResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
       guard let rawData = req.data else {
         req.reject("Missing request data", code: "BAD_REQUEST")
@@ -3387,7 +3303,7 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
       } catch {
         req.reject(error.localizedDescription, code: "HANDLER_ERROR")
       }
-    case 93:   // @peartube/list-comments
+    case 90:   // @peartube/list-comments
       guard let handler = _handlers["@peartube/list-comments"] as? (ListCommentsRequest) async throws -> ListCommentsResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
       guard let rawData = req.data else {
         req.reject("Missing request data", code: "BAD_REQUEST")
@@ -3400,7 +3316,7 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
       } catch {
         req.reject(error.localizedDescription, code: "HANDLER_ERROR")
       }
-    case 94:   // @peartube/hide-comment
+    case 91:   // @peartube/hide-comment
       guard let handler = _handlers["@peartube/hide-comment"] as? (HideCommentRequest) async throws -> HideCommentResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
       guard let rawData = req.data else {
         req.reject("Missing request data", code: "BAD_REQUEST")
@@ -3413,7 +3329,7 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
       } catch {
         req.reject(error.localizedDescription, code: "HANDLER_ERROR")
       }
-    case 95:   // @peartube/remove-comment
+    case 92:   // @peartube/remove-comment
       guard let handler = _handlers["@peartube/remove-comment"] as? (RemoveCommentRequest) async throws -> RemoveCommentResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
       guard let rawData = req.data else {
         req.reject("Missing request data", code: "BAD_REQUEST")
@@ -3426,7 +3342,7 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
       } catch {
         req.reject(error.localizedDescription, code: "HANDLER_ERROR")
       }
-    case 96:   // @peartube/add-reaction
+    case 93:   // @peartube/add-reaction
       guard let handler = _handlers["@peartube/add-reaction"] as? (AddReactionRequest) async throws -> AddReactionResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
       guard let rawData = req.data else {
         req.reject("Missing request data", code: "BAD_REQUEST")
@@ -3439,7 +3355,7 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
       } catch {
         req.reject(error.localizedDescription, code: "HANDLER_ERROR")
       }
-    case 97:   // @peartube/remove-reaction
+    case 94:   // @peartube/remove-reaction
       guard let handler = _handlers["@peartube/remove-reaction"] as? (RemoveReactionRequest) async throws -> RemoveReactionResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
       guard let rawData = req.data else {
         req.reject("Missing request data", code: "BAD_REQUEST")
@@ -3452,7 +3368,7 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
       } catch {
         req.reject(error.localizedDescription, code: "HANDLER_ERROR")
       }
-    case 98:   // @peartube/get-reactions
+    case 95:   // @peartube/get-reactions
       guard let handler = _handlers["@peartube/get-reactions"] as? (GetReactionsRequest) async throws -> GetReactionsResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
       guard let rawData = req.data else {
         req.reject("Missing request data", code: "BAD_REQUEST")
@@ -3465,7 +3381,7 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
       } catch {
         req.reject(error.localizedDescription, code: "HANDLER_ERROR")
       }
-    case 106:   // @peartube/cast-available
+    case 103:   // @peartube/cast-available
       guard let handler = _handlers["@peartube/cast-available"] as? (CastAvailableRequest) async throws -> CastAvailableResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
       guard let rawData = req.data else {
         req.reject("Missing request data", code: "BAD_REQUEST")
@@ -3478,7 +3394,7 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
       } catch {
         req.reject(error.localizedDescription, code: "HANDLER_ERROR")
       }
-    case 107:   // @peartube/cast-start-discovery
+    case 104:   // @peartube/cast-start-discovery
       guard let handler = _handlers["@peartube/cast-start-discovery"] as? (CastStartDiscoveryRequest) async throws -> CastStartDiscoveryResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
       guard let rawData = req.data else {
         req.reject("Missing request data", code: "BAD_REQUEST")
@@ -3491,7 +3407,7 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
       } catch {
         req.reject(error.localizedDescription, code: "HANDLER_ERROR")
       }
-    case 108:   // @peartube/cast-stop-discovery
+    case 105:   // @peartube/cast-stop-discovery
       guard let handler = _handlers["@peartube/cast-stop-discovery"] as? (CastStopDiscoveryRequest) async throws -> CastStopDiscoveryResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
       guard let rawData = req.data else {
         req.reject("Missing request data", code: "BAD_REQUEST")
@@ -3504,7 +3420,7 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
       } catch {
         req.reject(error.localizedDescription, code: "HANDLER_ERROR")
       }
-    case 109:   // @peartube/cast-get-devices
+    case 106:   // @peartube/cast-get-devices
       guard let handler = _handlers["@peartube/cast-get-devices"] as? (CastGetDevicesRequest) async throws -> CastGetDevicesResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
       guard let rawData = req.data else {
         req.reject("Missing request data", code: "BAD_REQUEST")
@@ -3517,7 +3433,7 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
       } catch {
         req.reject(error.localizedDescription, code: "HANDLER_ERROR")
       }
-    case 110:   // @peartube/cast-add-manual-device
+    case 107:   // @peartube/cast-add-manual-device
       guard let handler = _handlers["@peartube/cast-add-manual-device"] as? (CastAddManualDeviceRequest) async throws -> CastAddManualDeviceResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
       guard let rawData = req.data else {
         req.reject("Missing request data", code: "BAD_REQUEST")
@@ -3530,7 +3446,7 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
       } catch {
         req.reject(error.localizedDescription, code: "HANDLER_ERROR")
       }
-    case 111:   // @peartube/cast-connect
+    case 108:   // @peartube/cast-connect
       guard let handler = _handlers["@peartube/cast-connect"] as? (CastConnectRequest) async throws -> CastConnectResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
       guard let rawData = req.data else {
         req.reject("Missing request data", code: "BAD_REQUEST")
@@ -3543,7 +3459,7 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
       } catch {
         req.reject(error.localizedDescription, code: "HANDLER_ERROR")
       }
-    case 112:   // @peartube/cast-disconnect
+    case 109:   // @peartube/cast-disconnect
       guard let handler = _handlers["@peartube/cast-disconnect"] as? (CastDisconnectRequest) async throws -> CastDisconnectResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
       guard let rawData = req.data else {
         req.reject("Missing request data", code: "BAD_REQUEST")
@@ -3556,7 +3472,7 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
       } catch {
         req.reject(error.localizedDescription, code: "HANDLER_ERROR")
       }
-    case 113:   // @peartube/cast-play
+    case 110:   // @peartube/cast-play
       guard let handler = _handlers["@peartube/cast-play"] as? (CastPlayRequest) async throws -> CastPlayResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
       guard let rawData = req.data else {
         req.reject("Missing request data", code: "BAD_REQUEST")
@@ -3569,7 +3485,7 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
       } catch {
         req.reject(error.localizedDescription, code: "HANDLER_ERROR")
       }
-    case 114:   // @peartube/cast-pause
+    case 111:   // @peartube/cast-pause
       guard let handler = _handlers["@peartube/cast-pause"] as? (CastPauseRequest) async throws -> CastPauseResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
       guard let rawData = req.data else {
         req.reject("Missing request data", code: "BAD_REQUEST")
@@ -3582,7 +3498,7 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
       } catch {
         req.reject(error.localizedDescription, code: "HANDLER_ERROR")
       }
-    case 115:   // @peartube/cast-resume
+    case 112:   // @peartube/cast-resume
       guard let handler = _handlers["@peartube/cast-resume"] as? (CastResumeRequest) async throws -> CastResumeResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
       guard let rawData = req.data else {
         req.reject("Missing request data", code: "BAD_REQUEST")
@@ -3595,7 +3511,7 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
       } catch {
         req.reject(error.localizedDescription, code: "HANDLER_ERROR")
       }
-    case 116:   // @peartube/cast-stop
+    case 113:   // @peartube/cast-stop
       guard let handler = _handlers["@peartube/cast-stop"] as? (CastStopRequest) async throws -> CastStopResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
       guard let rawData = req.data else {
         req.reject("Missing request data", code: "BAD_REQUEST")
@@ -3608,7 +3524,7 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
       } catch {
         req.reject(error.localizedDescription, code: "HANDLER_ERROR")
       }
-    case 117:   // @peartube/cast-seek
+    case 114:   // @peartube/cast-seek
       guard let handler = _handlers["@peartube/cast-seek"] as? (CastSeekRequest) async throws -> CastSeekResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
       guard let rawData = req.data else {
         req.reject("Missing request data", code: "BAD_REQUEST")
@@ -3621,7 +3537,7 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
       } catch {
         req.reject(error.localizedDescription, code: "HANDLER_ERROR")
       }
-    case 118:   // @peartube/cast-set-volume
+    case 115:   // @peartube/cast-set-volume
       guard let handler = _handlers["@peartube/cast-set-volume"] as? (CastSetVolumeRequest) async throws -> CastSetVolumeResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
       guard let rawData = req.data else {
         req.reject("Missing request data", code: "BAD_REQUEST")
@@ -3634,7 +3550,7 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
       } catch {
         req.reject(error.localizedDescription, code: "HANDLER_ERROR")
       }
-    case 119:   // @peartube/cast-get-state
+    case 116:   // @peartube/cast-get-state
       guard let handler = _handlers["@peartube/cast-get-state"] as? (CastGetStateRequest) async throws -> CastGetStateResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
       guard let rawData = req.data else {
         req.reject("Missing request data", code: "BAD_REQUEST")
@@ -3647,7 +3563,7 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
       } catch {
         req.reject(error.localizedDescription, code: "HANDLER_ERROR")
       }
-    case 120:   // @peartube/cast-is-connected
+    case 117:   // @peartube/cast-is-connected
       guard let handler = _handlers["@peartube/cast-is-connected"] as? (CastIsConnectedRequest) async throws -> CastIsConnectedResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
       guard let rawData = req.data else {
         req.reject("Missing request data", code: "BAD_REQUEST")
@@ -3660,7 +3576,7 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
       } catch {
         req.reject(error.localizedDescription, code: "HANDLER_ERROR")
       }
-    case 125:   // @peartube/search-videos
+    case 122:   // @peartube/search-videos
       guard let handler = _handlers["@peartube/search-videos"] as? (SearchVideosRequest) async throws -> SearchVideosResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
       guard let rawData = req.data else {
         req.reject("Missing request data", code: "BAD_REQUEST")
@@ -3681,7 +3597,7 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
       } catch {
         req.reject(error.localizedDescription, code: "HANDLER_ERROR")
       }
-    case 128:   // @peartube/index-video-vectors
+    case 125:   // @peartube/index-video-vectors
       guard let handler = _handlers["@peartube/index-video-vectors"] as? (IndexVideoVectorsRequest) async throws -> IndexVideoVectorsResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
       guard let rawData = req.data else {
         req.reject("Missing request data", code: "BAD_REQUEST")
@@ -3710,7 +3626,7 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
       } catch {
         req.reject(error.localizedDescription, code: "HANDLER_ERROR")
       }
-    case 129:   // @peartube/update-video-metadata
+    case 126:   // @peartube/update-video-metadata
       guard let handler = _handlers["@peartube/update-video-metadata"] as? (UpdateVideoMetadataRequest) async throws -> UpdateVideoMetadataResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
       guard let rawData = req.data else {
         req.reject("Missing request data", code: "BAD_REQUEST")
@@ -3723,7 +3639,7 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
       } catch {
         req.reject(error.localizedDescription, code: "HANDLER_ERROR")
       }
-    case 130:   // @peartube/get-media-catalog
+    case 127:   // @peartube/get-media-catalog
       guard let handler = _handlers["@peartube/get-media-catalog"] as? (MediaPageRequest) async throws -> GetMediaCatalogResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
       guard let rawData = req.data else {
         req.reject("Missing request data", code: "BAD_REQUEST")
@@ -3736,7 +3652,7 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
       } catch {
         req.reject(error.localizedDescription, code: "HANDLER_ERROR")
       }
-    case 131:   // @peartube/get-media-entity
+    case 128:   // @peartube/get-media-entity
       guard let handler = _handlers["@peartube/get-media-entity"] as? (GetMediaEntityRequest) async throws -> GetMediaEntityResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
       guard let rawData = req.data else {
         req.reject("Missing request data", code: "BAD_REQUEST")
@@ -3749,7 +3665,7 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
       } catch {
         req.reject(error.localizedDescription, code: "HANDLER_ERROR")
       }
-    case 132:   // @peartube/get-media-collection
+    case 129:   // @peartube/get-media-collection
       guard let handler = _handlers["@peartube/get-media-collection"] as? (GetMediaCollectionRequest) async throws -> GetMediaCollectionResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
       guard let rawData = req.data else {
         req.reject("Missing request data", code: "BAD_REQUEST")
@@ -3762,7 +3678,7 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
       } catch {
         req.reject(error.localizedDescription, code: "HANDLER_ERROR")
       }
-    case 133:   // @peartube/get-media-collection-items
+    case 130:   // @peartube/get-media-collection-items
       guard let handler = _handlers["@peartube/get-media-collection-items"] as? (GetMediaCollectionItemsRequest) async throws -> GetMediaCollectionItemsResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
       guard let rawData = req.data else {
         req.reject("Missing request data", code: "BAD_REQUEST")
@@ -3775,7 +3691,7 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
       } catch {
         req.reject(error.localizedDescription, code: "HANDLER_ERROR")
       }
-    case 134:   // @peartube/get-media-agent
+    case 131:   // @peartube/get-media-agent
       guard let handler = _handlers["@peartube/get-media-agent"] as? (GetMediaAgentRequest) async throws -> GetMediaAgentResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
       guard let rawData = req.data else {
         req.reject("Missing request data", code: "BAD_REQUEST")
@@ -3788,7 +3704,7 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
       } catch {
         req.reject(error.localizedDescription, code: "HANDLER_ERROR")
       }
-    case 135:   // @peartube/get-agent-contributions
+    case 132:   // @peartube/get-agent-contributions
       guard let handler = _handlers["@peartube/get-agent-contributions"] as? (GetAgentContributionsRequest) async throws -> GetAgentContributionsResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
       guard let rawData = req.data else {
         req.reject("Missing request data", code: "BAD_REQUEST")
@@ -3801,7 +3717,7 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
       } catch {
         req.reject(error.localizedDescription, code: "HANDLER_ERROR")
       }
-    case 136:   // @peartube/get-publication-sources
+    case 133:   // @peartube/get-publication-sources
       guard let handler = _handlers["@peartube/get-publication-sources"] as? (GetPublicationSourcesRequest) async throws -> GetPublicationSourcesResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
       guard let rawData = req.data else {
         req.reject("Missing request data", code: "BAD_REQUEST")
@@ -3814,7 +3730,7 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
       } catch {
         req.reject(error.localizedDescription, code: "HANDLER_ERROR")
       }
-    case 138:   // @peartube/get-claim-provenance
+    case 135:   // @peartube/get-claim-provenance
       guard let handler = _handlers["@peartube/get-claim-provenance"] as? (GetClaimProvenanceRequest) async throws -> GetClaimProvenanceResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
       guard let rawData = req.data else {
         req.reject("Missing request data", code: "BAD_REQUEST")
@@ -3827,7 +3743,7 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
       } catch {
         req.reject(error.localizedDescription, code: "HANDLER_ERROR")
       }
-    case 139:   // @peartube/set-source-preference
+    case 136:   // @peartube/set-source-preference
       guard let handler = _handlers["@peartube/set-source-preference"] as? (SetSourcePreferenceRequest) async throws -> SetSourcePreferenceResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
       guard let rawData = req.data else {
         req.reject("Missing request data", code: "BAD_REQUEST")
@@ -3840,7 +3756,7 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
       } catch {
         req.reject(error.localizedDescription, code: "HANDLER_ERROR")
       }
-    case 140:   // @peartube/prepare-media-playback
+    case 137:   // @peartube/prepare-media-playback
       guard let handler = _handlers["@peartube/prepare-media-playback"] as? (PrepareMediaPlaybackRequest) async throws -> PrepareMediaPlaybackResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
       guard let rawData = req.data else {
         req.reject("Missing request data", code: "BAD_REQUEST")
@@ -3853,7 +3769,7 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
       } catch {
         req.reject(error.localizedDescription, code: "HANDLER_ERROR")
       }
-    case 141:   // @peartube/desktop-bootstrap
+    case 138:   // @peartube/desktop-bootstrap
       guard let handler = _handlers["@peartube/desktop-bootstrap"] as? (DesktopBootstrapRequest) async throws -> DesktopBootstrapResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
       guard let rawData = req.data else {
         req.reject("Missing request data", code: "BAD_REQUEST")
@@ -3866,7 +3782,7 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
       } catch {
         req.reject(error.localizedDescription, code: "HANDLER_ERROR")
       }
-    case 142:   // @peartube/desktop-shutdown
+    case 139:   // @peartube/desktop-shutdown
       guard let handler = _handlers["@peartube/desktop-shutdown"] as? (DesktopShutdownRequest) async throws -> DesktopShutdownResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
       guard let rawData = req.data else {
         req.reject("Missing request data", code: "BAD_REQUEST")
@@ -3879,7 +3795,7 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
       } catch {
         req.reject(error.localizedDescription, code: "HANDLER_ERROR")
       }
-    case 143:   // @peartube/desktop-refresh-browse
+    case 140:   // @peartube/desktop-refresh-browse
       guard let handler = _handlers["@peartube/desktop-refresh-browse"] as? (DesktopRefreshBrowseRequest) async throws -> DesktopRefreshBrowseResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
       guard let rawData = req.data else {
         req.reject("Missing request data", code: "BAD_REQUEST")
@@ -3892,7 +3808,7 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
       } catch {
         req.reject(error.localizedDescription, code: "HANDLER_ERROR")
       }
-    case 144:   // @peartube/ffmpeg-decode-available
+    case 141:   // @peartube/ffmpeg-decode-available
       guard let handler = _handlers["@peartube/ffmpeg-decode-available"] as? (FfmpegDecodeAvailableRequest) async throws -> FfmpegDecodeAvailableResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
       guard let rawData = req.data else {
         req.reject("Missing request data", code: "BAD_REQUEST")
@@ -3905,7 +3821,7 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
       } catch {
         req.reject(error.localizedDescription, code: "HANDLER_ERROR")
       }
-    case 145:   // @peartube/update-channel-avatar
+    case 142:   // @peartube/update-channel-avatar
       guard let handler = _handlers["@peartube/update-channel-avatar"] as? (UpdateChannelAvatarRequest) async throws -> UpdateChannelAvatarResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
       guard let rawData = req.data else {
         req.reject("Missing request data", code: "BAD_REQUEST")
@@ -3918,7 +3834,7 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
       } catch {
         req.reject(error.localizedDescription, code: "HANDLER_ERROR")
       }
-    case 146:   // @peartube/transcode-start
+    case 143:   // @peartube/transcode-start
       guard let handler = _handlers["@peartube/transcode-start"] as? (TranscodeStartRequest) async throws -> TranscodeStartResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
       guard let rawData = req.data else {
         req.reject("Missing request data", code: "BAD_REQUEST")
@@ -3931,7 +3847,7 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
       } catch {
         req.reject(error.localizedDescription, code: "HANDLER_ERROR")
       }
-    case 147:   // @peartube/transcode-stop
+    case 144:   // @peartube/transcode-stop
       guard let handler = _handlers["@peartube/transcode-stop"] as? (TranscodeStopRequest) async throws -> TranscodeStopResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
       guard let rawData = req.data else {
         req.reject("Missing request data", code: "BAD_REQUEST")
@@ -3944,7 +3860,7 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
       } catch {
         req.reject(error.localizedDescription, code: "HANDLER_ERROR")
       }
-    case 148:   // @peartube/transcode-status
+    case 145:   // @peartube/transcode-status
       guard let handler = _handlers["@peartube/transcode-status"] as? (TranscodeStatusRequest) async throws -> TranscodeStatusResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
       guard let rawData = req.data else {
         req.reject("Missing request data", code: "BAD_REQUEST")
@@ -4009,7 +3925,7 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
       } catch {
         req.reject(error.localizedDescription, code: "HANDLER_ERROR")
       }
-    case 150:   // @peartube/get-participation-status
+    case 147:   // @peartube/get-participation-status
       guard let handler = _handlers["@peartube/get-participation-status"] as? (GetParticipationStatusRequest) async throws -> GetParticipationStatusResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
       guard let rawData = req.data else {
         req.reject("Missing request data", code: "BAD_REQUEST")
@@ -4022,7 +3938,7 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
       } catch {
         req.reject(error.localizedDescription, code: "HANDLER_ERROR")
       }
-    case 151:   // @peartube/set-device-conditions
+    case 148:   // @peartube/set-device-conditions
       guard let handler = _handlers["@peartube/set-device-conditions"] as? (SetDeviceConditionsRequest) async throws -> SetDeviceConditionsResponse else { req.reject("No handler registered", code: "NO_HANDLER"); return }
       guard let rawData = req.data else {
         req.reject("Missing request data", code: "BAD_REQUEST")
@@ -4041,7 +3957,7 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
   }
   private func _dispatchEvent(_ event: IncomingEvent) async {
     switch event.command {
-    case 99:   // @peartube/event-ready
+    case 96:   // @peartube/event-ready
       guard let handler = _handlers["@peartube/event-ready"] as? (EventReady) async -> Void else { return }
       guard let rawData = event.data else { return }
       do {
@@ -4050,7 +3966,7 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
       } catch {
         _outerDelegate?.rpc(_rpc, didFailWith: error)
       }
-    case 100:   // @peartube/event-error
+    case 97:   // @peartube/event-error
       guard let handler = _handlers["@peartube/event-error"] as? (EventError) async -> Void else { return }
       guard let rawData = event.data else { return }
       do {
@@ -4059,7 +3975,7 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
       } catch {
         _outerDelegate?.rpc(_rpc, didFailWith: error)
       }
-    case 101:   // @peartube/event-upload-progress
+    case 98:   // @peartube/event-upload-progress
       guard let handler = _handlers["@peartube/event-upload-progress"] as? (EventUploadProgress) async -> Void else { return }
       guard let rawData = event.data else { return }
       do {
@@ -4068,7 +3984,7 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
       } catch {
         _outerDelegate?.rpc(_rpc, didFailWith: error)
       }
-    case 102:   // @peartube/event-download-progress
+    case 99:   // @peartube/event-download-progress
       guard let handler = _handlers["@peartube/event-download-progress"] as? (EventDownloadProgress) async -> Void else { return }
       guard let rawData = event.data else { return }
       do {
@@ -4077,7 +3993,7 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
       } catch {
         _outerDelegate?.rpc(_rpc, didFailWith: error)
       }
-    case 103:   // @peartube/event-media-graph-update
+    case 100:   // @peartube/event-media-graph-update
       guard let handler = _handlers["@peartube/event-media-graph-update"] as? (EventMediaGraphUpdate) async -> Void else { return }
       guard let rawData = event.data else { return }
       do {
@@ -4086,7 +4002,7 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
       } catch {
         _outerDelegate?.rpc(_rpc, didFailWith: error)
       }
-    case 104:   // @peartube/event-log
+    case 101:   // @peartube/event-log
       guard let handler = _handlers["@peartube/event-log"] as? (EventLog) async -> Void else { return }
       guard let rawData = event.data else { return }
       do {
@@ -4095,7 +4011,7 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
       } catch {
         _outerDelegate?.rpc(_rpc, didFailWith: error)
       }
-    case 105:   // @peartube/event-video-stats
+    case 102:   // @peartube/event-video-stats
       guard let handler = _handlers["@peartube/event-video-stats"] as? (EventVideoStats) async -> Void else { return }
       guard let rawData = event.data else { return }
       do {
@@ -4104,7 +4020,7 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
       } catch {
         _outerDelegate?.rpc(_rpc, didFailWith: error)
       }
-    case 121:   // @peartube/event-cast-device-found
+    case 118:   // @peartube/event-cast-device-found
       guard let handler = _handlers["@peartube/event-cast-device-found"] as? (EventCastDeviceFound) async -> Void else { return }
       guard let rawData = event.data else { return }
       do {
@@ -4113,7 +4029,7 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
       } catch {
         _outerDelegate?.rpc(_rpc, didFailWith: error)
       }
-    case 122:   // @peartube/event-cast-device-lost
+    case 119:   // @peartube/event-cast-device-lost
       guard let handler = _handlers["@peartube/event-cast-device-lost"] as? (EventCastDeviceLost) async -> Void else { return }
       guard let rawData = event.data else { return }
       do {
@@ -4122,7 +4038,7 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
       } catch {
         _outerDelegate?.rpc(_rpc, didFailWith: error)
       }
-    case 123:   // @peartube/event-cast-playback-state
+    case 120:   // @peartube/event-cast-playback-state
       guard let handler = _handlers["@peartube/event-cast-playback-state"] as? (EventCastPlaybackState) async -> Void else { return }
       guard let rawData = event.data else { return }
       do {
@@ -4131,7 +4047,7 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
       } catch {
         _outerDelegate?.rpc(_rpc, didFailWith: error)
       }
-    case 124:   // @peartube/event-cast-time-update
+    case 121:   // @peartube/event-cast-time-update
       guard let handler = _handlers["@peartube/event-cast-time-update"] as? (EventCastTimeUpdate) async -> Void else { return }
       guard let rawData = event.data else { return }
       do {
@@ -4140,7 +4056,7 @@ public class HRPC: RPCDelegate, @unchecked Sendable {
       } catch {
         _outerDelegate?.rpc(_rpc, didFailWith: error)
       }
-    case 149:   // @peartube/event-transcode-progress
+    case 146:   // @peartube/event-transcode-progress
       guard let handler = _handlers["@peartube/event-transcode-progress"] as? (EventTranscodeProgress) async -> Void else { return }
       guard let rawData = event.data else { return }
       do {

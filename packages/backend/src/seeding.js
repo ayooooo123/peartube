@@ -232,16 +232,14 @@ function buildContributionState(uploadAllowed, outboundBytesPerSecond, outboundR
   }
 }
 
-function buildRetentionPolicyState(contributeWatchedMedia, archiveEnabled, contributionBudgetBytes, archiveBudgetBytes, migrationRequired) {
+function buildRetentionPolicyState(contributeWatchedMedia, archiveEnabled, contributionBudgetBytes, archiveBudgetBytes) {
   const contribution = normalizeStorageBytes(contributionBudgetBytes)
   const archive = normalizeStorageBytes(archiveBudgetBytes)
-  const isMigrating = migrationRequired === true
   return {
-    contributeWatchedMedia: contributeWatchedMedia === true && !isMigrating,
-    archiveEnabled: archiveEnabled === true && !isMigrating,
+    contributeWatchedMedia: contributeWatchedMedia === true,
+    archiveEnabled: archiveEnabled === true,
     contributionBudgetBytes: contribution,
-    archiveBudgetBytes: archive,
-    migrationRequired: isMigrating
+    archiveBudgetBytes: archive
   }
 }
 
@@ -316,7 +314,6 @@ export class SeedingManager {
       archiveEnabled: false,
       contributionBudgetBytes: 0,
       archiveBudgetBytes: 0,
-      migrationRequired: true
     };
     console.log('[SeedingManager] Initialized');
   }
@@ -478,7 +475,7 @@ export class SeedingManager {
     const budget = retentionClass === 'archive-pin'
       ? policy.archiveBudgetBytes
       : policy.contributionBudgetBytes
-    if (policy.migrationRequired || !allowed || budget <= 0) {
+    if (!allowed || budget <= 0) {
       throw new SeedingAuthorizationError(`explicit ${retentionClass} permission is required`)
     }
     const usage = this.retentionUsage(existingKey)
@@ -627,7 +624,6 @@ export class SeedingManager {
     archiveEnabled = false,
     contributionBudgetBytes = 0,
     archiveBudgetBytes = 0,
-    migrationRequired = true
   } = {}) {
     const { ceilingProvided, ceiling } = parseDiskCeiling(diskCeilingBytes)
     this.contribution = buildContributionState(uploadAllowed, outboundBytesPerSecond, outboundRateEnforced)
@@ -636,7 +632,6 @@ export class SeedingManager {
       archiveEnabled,
       contributionBudgetBytes,
       archiveBudgetBytes,
-      migrationRequired
     )
 
     const budgetedBytes = this.retentionPolicy.contributionBudgetBytes + this.retentionPolicy.archiveBudgetBytes
@@ -670,7 +665,7 @@ export class SeedingManager {
         return age || left[0].localeCompare(right[0])
       })
     let used = candidates.reduce((total, [, seed]) => total + seedStorageBytes(seed), 0)
-    const allowed = !policy.migrationRequired && policy.contributeWatchedMedia
+    const allowed = policy.contributeWatchedMedia
     let clearedBlob = false
     for (const [key, seed] of candidates) {
       if (allowed && used <= policy.contributionBudgetBytes) break
@@ -691,7 +686,7 @@ export class SeedingManager {
         return age || left[0].localeCompare(right[0])
       })
     let used = candidates.reduce((total, [, seed]) => total + seedStorageBytes(seed), 0)
-    const allowed = !policy.migrationRequired && policy.archiveEnabled
+    const allowed = policy.archiveEnabled
     let clearedBlob = false
     for (const [key, seed] of candidates) {
       if (allowed && used <= policy.archiveBudgetBytes) break
@@ -862,7 +857,7 @@ export class SeedingManager {
     const budget = retentionClass === 'archive-pin' ? policy.archiveBudgetBytes : policy.contributionBudgetBytes
     const usage = this.retentionUsage(key)
     const otherUsed = retentionClass === 'archive-pin' ? usage.archiveUsedBytes : usage.contributionUsedBytes
-    if (policy.migrationRequired || !allowed ||
+    if (!allowed ||
         otherUsed + normalizeStorageBytes(seed.thumbnailBytes) + Math.max(0, Math.round(Number(byteLength) || 0)) > budget) {
       return false
     }

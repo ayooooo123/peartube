@@ -162,7 +162,7 @@ export function createAcquisitionCoordinator ({
   }
 
   function requesterGeneration (coord) {
-    const generation = Number(coord?.requestGeneration ?? coord?.epoch)
+    const generation = Number(coord?.requestGeneration)
     if (!Number.isSafeInteger(generation) || generation < 0) {
       fail('COORDINATION_POLICY_CHANGED', 'requester policy generation is invalid')
     }
@@ -1104,7 +1104,7 @@ export function createAcquisitionCoordinator ({
       deadline: coord.deadline,
       resultHoldUntil: coord.resultHoldUntil,
       policyEpoch: coord.epoch,
-      requestGeneration: coord.requestGeneration ?? (coord.role === 'requester' ? coord.epoch : null),
+      requestGeneration: coord.requestGeneration ?? null,
       publisherId: coord.publisherId,
       publicationIntentDigest: coord.publicationIntentDigest,
       requesterId: coord.requesterId,

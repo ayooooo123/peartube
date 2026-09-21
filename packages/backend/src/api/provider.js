@@ -171,7 +171,6 @@ export function createProviderApi({
     'setPolicy',
     'getAcquisitionPolicy',
     'setAcquisitionPolicy',
-    'migrateLegacyIngest',
   ]) {
     if (typeof providerService[method] !== 'function') throw new TypeError(`providerService.${method} is required`)
   }
@@ -338,6 +337,5 @@ export function createProviderApi({
         revision: acquisitionPolicyRevision ? await acquisitionPolicyRevision.get() : (request?.expectedRevision || 0) + 1,
       }
     }, 'policy'),
-    migrateLegacyIngest: request => providerService.migrateLegacyIngest(request),
   })
 }

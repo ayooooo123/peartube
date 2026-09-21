@@ -1,9 +1,10 @@
 import test from 'brittle'
 import b4a from 'b4a'
-import { annotateTmdbDiscoverItems, buildTmdbNetworkIndex, createArchiveConsole, createArchiveHttpSurface } from '../src/archive-console.js'
+import { annotateTmdbDiscoverItems, buildTmdbNetworkIndex, createArchiveConsole, createArchiveHttpSurface, resolveConsoleAuthorities } from '../src/archive-console.js'
 import { mkdtempSync, mkdirSync, rmSync, readdirSync, statSync, existsSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { request as httpRequest } from 'node:http'
 
 function fakeMetaDb() {
   const map = new Map()
@@ -725,4 +726,242 @@ test('GET /discover/episodes.json returns TMDB episodes for a season', async fun
     t.is(body.episodes[0].title, 'Pilot')
   })
   t.is(service.calls.episodes.season, '1', 'season passed through from the query string')
+})
+
+function recordingArchiveService() {
+  const submissions = []
+  const service = fakeService({
+    async requestLocalFileAcquisition(input) {
+      submissions.push(input)
+      return {
+        acquisitionId: `acq-origin-${submissions.length}`,
+        state: 'queued',
+        title: input.title,
+        errorCode: null,
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+        sourceAccepted: true
+      }
+    }
+  })
+  return { service, submissions }
+}
+
+function archiveUpload(base, headers = {}) {
+  const form = new FormData()
+  form.set('channelName', 'Origin Guard')
+  form.set('title', 'Origin Guard Clip')
+  form.set('publish', 'false')
+  form.set('file', new Blob([Buffer.from('FAKE-MP4-BYTES')], { type: 'video/mp4' }), 'clip.mp4')
+  return fetch(`${base}/archive`, { method: 'POST', body: form, headers, redirect: 'manual' })
+}
+
+async function withUploadConsole(service, fn) {
+  const uploadDir = mkdtempSync(join(tmpdir(), 'pt-console-origin-'))
+  try {
+    return await withConsole(service, fn, { uploadDir })
+  } finally {
+    rmSync(uploadDir, { recursive: true, force: true })
+  }
+}
+
+test('a cross-site form POST to /archive is refused before it enqueues anything', async function (t) {
+  const { service, submissions } = recordingArchiveService()
+  await withUploadConsole(service, async (base) => {
+    const res = await archiveUpload(base, { origin: 'https://evil.example' })
+    t.is(res.status, 403, 'a foreign page cannot drive the console')
+  })
+  t.is(submissions.length, 0, 'enqueueCatalogSubmission was never reached')
+})
+
+test('a same-origin form POST to /archive still enqueues the submission', async function (t) {
+  const { service, submissions } = recordingArchiveService()
+  await withUploadConsole(service, async (base) => {
+    const res = await archiveUpload(base, { origin: base, 'sec-fetch-site': 'same-origin' })
+    t.is(res.status, 303, 'the operator\u2019s own console page is unaffected')
+  })
+  t.is(submissions.length, 1)
+  t.is(submissions[0].title, 'Origin Guard Clip')
+})
+
+test('a POST to /archive with no browser headers at all is still a client the console serves', async function (t) {
+  const { service, submissions } = recordingArchiveService()
+  await withUploadConsole(service, async (base) => {
+    const res = await archiveUpload(base)
+    t.is(res.status, 303, 'curl and scripts keep the access they have always had')
+  })
+  t.is(submissions.length, 1)
+})
+
+test('the cross-site refusal covers every mutating console route, not just /archive', async function (t) {
+  const service = fakeService()
+  await withConsole(service, async (base) => {
+    for (const [path, body] of [
+      ['/creators', { url: 'https://www.youtube.com/@chan', label: 'Chan' }],
+      ['/settings/tmdb', { apiKey: 'stolen', enabled: 'true' }],
+      ['/clients', { key: 'K'.repeat(52), label: 'evil device' }],
+      ['/clients/revoke', { key: 'K'.repeat(52) }],
+      ['/releases/delete', { ids: 'rel-1' }]
+    ]) {
+      const res = await fetch(`${base}${path}`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/x-www-form-urlencoded', origin: 'https://evil.example' },
+        body: new URLSearchParams(body).toString(),
+        redirect: 'manual'
+      })
+      t.is(res.status, 403, path)
+    }
+  })
+  await new Promise((resolve) => setTimeout(resolve, 10))
+  t.is(service.calls.addCreator.length, 0)
+  t.is(service.calls.setTmdb.length, 0)
+  t.is(service.calls.authorize.length, 0)
+  t.is(service.calls.revoke.length, 0)
+})
+
+// fetch() will not let a caller write Host - it is a forbidden header - and
+// Host is exactly what a rebinding attack controls, so these go over raw HTTP.
+function rawConsolePost(port, path, { headers = {}, body = '', contentType = 'application/x-www-form-urlencoded' } = {}) {
+  const payload = Buffer.isBuffer(body) ? body : Buffer.from(body)
+  return new Promise((resolve, reject) => {
+    const req = httpRequest({
+      host: '127.0.0.1',
+      port,
+      path,
+      method: 'POST',
+      headers: { 'content-type': contentType, 'content-length': payload.byteLength, ...headers }
+    }, (res) => {
+      res.resume()
+      res.on('end', () => resolve({ status: res.statusCode }))
+    })
+    req.on('error', reject)
+    req.end(payload)
+  })
+}
+
+async function archiveUploadPayload() {
+  const form = new FormData()
+  form.set('channelName', 'Rebind Guard')
+  form.set('title', 'Rebind Guard Clip')
+  form.set('publish', 'false')
+  form.set('file', new Blob([Buffer.from('FAKE-MP4-BYTES')], { type: 'video/mp4' }), 'clip.mp4')
+  const request = new Request('http://relay.invalid/archive', { method: 'POST', body: form })
+  return { body: Buffer.from(await request.arrayBuffer()), contentType: request.headers.get('content-type') }
+}
+
+function rawArchiveUpload(base, headers, payload) {
+  return rawConsolePost(new URL(base).port, '/archive', { headers, body: payload.body, contentType: payload.contentType })
+}
+
+test('a rebound Host that agrees with its own Origin is still refused and enqueues nothing', async function (t) {
+  const { service, submissions } = recordingArchiveService()
+  const payload = await archiveUploadPayload()
+  await withUploadConsole(service, async (base) => {
+    const res = await rawArchiveUpload(base, {
+      host: `attacker.example:${new URL(base).port}`,
+      origin: `http://attacker.example:${new URL(base).port}`
+    }, payload)
+    t.is(res.status, 403, 'two headers agreeing with each other is not authority')
+  })
+  t.is(submissions.length, 0, 'nothing reached the acquisition service')
+})
+
+test('a rebound Host cannot reach a configuration route either', async function (t) {
+  const service = fakeService()
+  await withConsole(service, async (base) => {
+    const port = new URL(base).port
+    const res = await rawConsolePost(port, '/settings/tmdb', {
+      headers: { host: `attacker.example:${port}`, origin: `http://attacker.example:${port}` },
+      body: new URLSearchParams({ apiKey: 'stolen', enabled: 'true' }).toString()
+    })
+    t.is(res.status, 403)
+  })
+  await new Promise((resolve) => setTimeout(resolve, 10))
+  t.is(service.calls.setTmdb.length, 0)
+  t.is(service.settings.get('tmdbApiKey', ''), '', 'the relay kept its own TMDB configuration')
+  t.is(service.settings.get('tmdbEnabled'), false)
+})
+
+test('the loopback authority the console is bound to still enqueues', async function (t) {
+  const { service, submissions } = recordingArchiveService()
+  const payload = await archiveUploadPayload()
+  await withUploadConsole(service, async (base) => {
+    const port = new URL(base).port
+    const res = await rawArchiveUpload(base, {
+      host: `127.0.0.1:${port}`,
+      origin: `http://127.0.0.1:${port}`
+    }, payload)
+    t.is(res.status, 303)
+  })
+  t.is(submissions.length, 1)
+  t.is(submissions[0].title, 'Rebind Guard Clip')
+})
+
+test('localhost with Sec-Fetch-Site: same-origin still enqueues', async function (t) {
+  const { service, submissions } = recordingArchiveService()
+  const payload = await archiveUploadPayload()
+  await withUploadConsole(service, async (base) => {
+    const res = await rawArchiveUpload(base, {
+      host: `localhost:${new URL(base).port}`,
+      'sec-fetch-site': 'same-origin'
+    }, payload)
+    t.is(res.status, 303)
+  })
+  t.is(submissions.length, 1)
+})
+
+test('a script sending neither Origin nor Sec-Fetch-Site keeps its access', async function (t) {
+  const { service, submissions } = recordingArchiveService()
+  const payload = await archiveUploadPayload()
+  await withUploadConsole(service, async (base) => {
+    const res = await rawArchiveUpload(base, { host: `127.0.0.1:${new URL(base).port}` }, payload)
+    t.is(res.status, 303)
+  })
+  t.is(submissions.length, 1)
+})
+
+test('an operator-declared proxy hostname is accepted', async function (t) {
+  const { service, submissions } = recordingArchiveService()
+  const payload = await archiveUploadPayload()
+  const uploadDir = mkdtempSync(join(tmpdir(), 'pt-console-trusted-'))
+  try {
+    await withConsole(service, async (base) => {
+      const res = await rawArchiveUpload(base, {
+        host: 'relay.example.com',
+        origin: 'https://relay.example.com'
+      }, payload)
+      t.is(res.status, 303, 'the escape hatch lets a proxied relay be driven by its operator')
+
+      const undeclared = await rawArchiveUpload(base, {
+        host: 'other.example.com',
+        origin: 'https://other.example.com'
+      }, payload)
+      t.is(undeclared.status, 403, 'only the declared hostname is trusted')
+    }, { uploadDir, trustedHosts: ['relay.example.com'] })
+  } finally {
+    rmSync(uploadDir, { recursive: true, force: true })
+  }
+  t.is(submissions.length, 1)
+})
+
+test('a wildcard bind trusts this machine, a concrete bind trusts only itself', async function (t) {
+  const interfaces = () => ({
+    lo0: [{ address: '127.0.0.1', internal: true }],
+    en0: [{ address: '192.168.1.40', internal: false }, { address: '2001:db8::5', internal: false }]
+  })
+
+  const wildcard = resolveConsoleAuthorities({ host: '0.0.0.0', port: 8174, interfaces })
+  t.ok(wildcard.has('192.168.1.40:8174'), 'a LAN address a 0.0.0.0 relay answers on is a real authority')
+  t.ok(wildcard.has('[2001:db8::5]:8174'), 'IPv6 addresses are bracketed the way a Host header spells them')
+  t.ok(wildcard.has('localhost:8174') && wildcard.has('127.0.0.1:8174') && wildcard.has('[::1]:8174'))
+  t.absent(wildcard.has('192.168.1.40:9999'), 'only the bound port')
+  t.absent(wildcard.has('attacker.example:8174'))
+
+  const concrete = resolveConsoleAuthorities({ host: '192.168.1.40', port: 8174, interfaces })
+  t.ok(concrete.has('192.168.1.40:8174'))
+  t.absent(concrete.has('2001:db8::5:8174'), 'a concrete bind does not inherit the other interfaces')
+
+  const proxied = resolveConsoleAuthorities({ host: '127.0.0.1', port: 8174, trustedHosts: ['relay.example.com'], interfaces })
+  t.ok(proxied.has('relay.example.com'), 'a portless declaration matches a portless Host')
+  t.absent(proxied.has('relay.example.com:8174'), 'and nothing the operator did not declare')
 })

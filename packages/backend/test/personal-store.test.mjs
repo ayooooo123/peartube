@@ -435,46 +435,6 @@ test('progress: logHistory writes the history event and the canonical progress r
   })
 })
 
-test('progress: legacy resume rows migrate, and the source survives until the record is durable', async (t) => {
-  await withStore({}, async (ps) => {
-    // A pre-progress `log-history` op, exactly as older devices persisted it.
-    await ps._append({
-      type: 'log-history',
-      eventId: 'legacy-event',
-      videoKey: 'legacy-vk',
-      channelKey: 'c'.repeat(64),
-      videoId: 'v1',
-      title: 'Legacy Ep',
-      duration: 120,
-      position: 42,
-      timestamp: 1000
-    })
-    t.is((await ps.getResume('legacy-vk')).position, 42, 'legacy resume row is readable before migration')
-    t.is((await ps.listResume()).length, 1, 'legacy rows appear in continue-watching before migration')
-    t.is((await ps.listProgress()).length, 0, 'no progress record yet')
-
-    // Durability gate: pretend the encrypted record does not read back.
-    const readRecord = ps._readProgressRecord.bind(ps)
-    ps._readProgressRecord = async () => null
-    const failed = await ps.migrateLegacyResume()
-    ps._readProgressRecord = readRecord
-    t.is(failed.migrated, 0, 'nothing is reported as migrated')
-    t.is(failed.retained, 1, 'the legacy row is retained when the record does not read back')
-    t.is((await ps.getResume('legacy-vk')).position, 42, 'legacy watch state is still reachable')
-
-    const ok = await ps.migrateLegacyResume()
-    t.is(ok.migrated, 1, 'the row migrates once the record reads back')
-    t.is(ok.retained, 0, 'the legacy row is dropped only then')
-
-    const record = await ps.getProgress('legacy-vk')
-    t.is(record.positionSec, 42, 'position carried into the progress record')
-    t.is(record.channelKey, 'c'.repeat(64), 'legacy coordinates carried')
-    t.is(record.order.writerKey, ps.localKeyHex, 'migrated record is stamped by this device')
-    t.is((await ps.listResume()).length, 1, 'continue-watching is not duplicated after migration')
-    t.is((await ps.getResume('legacy-vk')).position, 42, 'resume still resolves through the progress record')
-  })
-})
-
 test('device invites: fresh single-use mint, five-minute clamp, replay and expiry rejected', async (t) => {
   await withStore({}, async (ps) => {
     t.is(PERSONAL_INVITE_MAX_TTL_MS, 5 * 60 * 1000, 'invites expire within five minutes')

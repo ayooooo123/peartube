@@ -223,7 +223,7 @@ const mainRunner = createWebRunner({ connectTransport });
 const mainBridge = createPlatformRpcBridge({
   platform: 'desktop',
   runner: mainRunner,
-  entrypoint: 'legacy-desktop',
+  entrypoint: 'desktop',
   getStoragePath() {
     return 'pear-desktop';
   },

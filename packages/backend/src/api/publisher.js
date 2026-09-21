@@ -38,8 +38,8 @@ const PENDING_TRANSITION_TTL_MS = 10 * 60_000
 const MAX_DISPLAY_SUMMARY_BYTES = 4_096
 const CATALOG_MAPPING_PREFIX = 'publisher-catalog:v1:'
 const PENDING_TRANSITIONS_KEY = 'publisher-root-transitions:v1'
-const LEGACY_CATALOG_NAMESPACE = 'peartube-publisher'
-const CATALOG_NAMESPACE_PATTERN = /^peartube-publisher(?:-[0-9a-f]{32})?$/
+const CATALOG_NAMESPACE_PREFIX = 'peartube-publisher'
+const CATALOG_NAMESPACE_PATTERN = /^peartube-publisher-[0-9a-f]{32}$/
 
 class PublisherApiError extends Error {
   constructor(code) {
@@ -183,12 +183,12 @@ function catalogMappingKey(publisherId) {
 }
 
 function decodeCatalogMapping(value, expectedPublisherId) {
-  if (!value || (value.version !== 1 && value.version !== 2) ||
+  if (!value || value.version !== 2 ||
       value.publisherId !== publisherHex(expectedPublisherId) ||
       typeof value.genesisRootKey !== 'string' || !/^[0-9a-f]{64}$/.test(value.genesisRootKey) ||
       typeof value.catalogBootstrapKey !== 'string' || !/^[0-9a-f]{64}$/.test(value.catalogBootstrapKey) ||
-      (value.version === 2 && (typeof value.catalogNamespace !== 'string' ||
-        !CATALOG_NAMESPACE_PATTERN.test(value.catalogNamespace)))) {
+      typeof value.catalogNamespace !== 'string' ||
+      !CATALOG_NAMESPACE_PATTERN.test(value.catalogNamespace)) {
     fail('PUBLISHER_CATALOG_MAPPING_INVALID')
   }
   const genesisRootKey = b4a.from(value.genesisRootKey, 'hex')
@@ -197,7 +197,7 @@ function decodeCatalogMapping(value, expectedPublisherId) {
     publisherId: b4a.from(expectedPublisherId),
     genesisRootKey,
     catalogBootstrapKey: b4a.from(value.catalogBootstrapKey, 'hex'),
-    catalogNamespace: value.version === 2 ? value.catalogNamespace : LEGACY_CATALOG_NAMESPACE
+    catalogNamespace: value.catalogNamespace
   }
 }
 
@@ -354,12 +354,12 @@ export function createPublisherCatalogRegistry(ctx, options = {}) {
         publisherId: b4a.from(publisherId),
         genesisRootKey: b4a.from(genesisRootKey),
         catalogBootstrapKey: requestedKey ? b4a.from(requestedKey) : null,
-        catalogNamespace: `${LEGACY_CATALOG_NAMESPACE}-${publisherHex(crypto.randomBytes(16))}`
+        catalogNamespace: `${CATALOG_NAMESPACE_PREFIX}-${publisherHex(crypto.randomBytes(16))}`
       }
     }
     if (replaceLocalGenesis) {
       mapping.catalogBootstrapKey = null
-      mapping.catalogNamespace = `${LEGACY_CATALOG_NAMESPACE}-${publisherHex(crypto.randomBytes(16))}`
+      mapping.catalogNamespace = `${CATALOG_NAMESPACE_PREFIX}-${publisherHex(crypto.randomBytes(16))}`
     }
     return { mapping, mappingEntry }
   }
@@ -382,7 +382,7 @@ export function createPublisherCatalogRegistry(ctx, options = {}) {
       }
       if (!writable) {
         mapping.catalogBootstrapKey = null
-        mapping.catalogNamespace = `${LEGACY_CATALOG_NAMESPACE}-${publisherHex(crypto.randomBytes(16))}`
+        mapping.catalogNamespace = `${CATALOG_NAMESPACE_PREFIX}-${publisherHex(crypto.randomBytes(16))}`
       }
     } catch {
       // Opening the mapped catalog reports the stable failure.
@@ -390,12 +390,9 @@ export function createPublisherCatalogRegistry(ctx, options = {}) {
   }
 
   async function persistCatalogMappingIfNeeded (publisherId, id, mapping, mappingEntry) {
-    const storedNamespace = mappingEntry?.value?.version === 2
-      ? mappingEntry.value.catalogNamespace
-      : LEGACY_CATALOG_NAMESPACE
     if (!mappingEntry?.value ||
         mappingEntry.value.catalogBootstrapKey !== publisherHex(mapping.catalogBootstrapKey) ||
-        storedNamespace !== mapping.catalogNamespace) {
+        mappingEntry.value.catalogNamespace !== mapping.catalogNamespace) {
       await ctx.metaDb.put(catalogMappingKey(publisherId), {
         version: 2,
         publisherId: id,
@@ -1340,15 +1337,11 @@ export function createPublisherApi(options = {}) {
   }
 
   async function completeAdmissionLifecycle(binding) {
-    const completeMigration = options.ctx?.completePublicationV1Migration
-    if (typeof completeMigration !== 'function') return
     if (typeof binding?.catalog?.waitForWritable !== 'function' ||
         await binding.catalog.waitForWritable() !== true ||
         binding.catalog.writable !== true) {
       fail('PUBLISHER_CATALOG_NOT_WRITABLE')
     }
-    const result = await completeMigration()
-    if (result?.status !== 'complete') fail('PUBLISHER_MIGRATION_PENDING')
   }
 
 

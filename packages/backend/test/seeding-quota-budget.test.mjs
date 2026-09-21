@@ -50,7 +50,6 @@ test('getQuotaBudget counts what is on disk, not only what it tracked', async (t
     archiveEnabled: false,
     contributionBudgetBytes: 5 * GB,
     archiveBudgetBytes: 0,
-    migrationRequired: false
   })
   await manager.addSeed('drive-a', 'videos/a.mp4', 'watched', {
     byteLength: 2 * GB,
@@ -82,7 +81,7 @@ test('tracked usage is the floor when the disk cannot be measured', async (t) =>
   // existing exactly when it is least observable.
   const manager = new SeedingManager({ get: () => ({ async ready() {}, async clear() {} }) }, createMetaDb())
   await manager.setConfig({ maxStorageGB: 5 })
-  await manager.applyNetworkPolicy({ contributeWatchedMedia: true, contributionBudgetBytes: 5 * GB, migrationRequired: false })
+  await manager.applyNetworkPolicy({ contributeWatchedMedia: true, contributionBudgetBytes: 5 * GB })
   await manager.addSeed('drive-a', 'videos/a.mp4', 'watched', {
     byteLength: 4 * GB,
     blobId: '10:4:0:4096',
@@ -157,7 +156,6 @@ test('strong archive seed class survives watched merge and archive budget alone 
     archiveEnabled: true,
     contributionBudgetBytes: 100,
     archiveBudgetBytes: 100,
-    migrationRequired: false
   })
   const blob = {
     byteLength: 40,
@@ -176,7 +174,6 @@ test('strong archive seed class survives watched merge and archive budget alone 
     archiveEnabled: true,
     contributionBudgetBytes: 100,
     archiveBudgetBytes: 0,
-    migrationRequired: false
   })
   status = await manager.getStatus()
   t.is(status.activeArchivePins, 0, 'archive budget reduction evicts archive pins')
@@ -191,7 +188,6 @@ test('generic seed removal cannot release an archive pin', async (t) => {
     archiveEnabled: true,
     contributionBudgetBytes: 0,
     archiveBudgetBytes: 100,
-    migrationRequired: false
   })
   await manager.addSeed('drive-archive', 'video-pin', 'archive', {
     byteLength: 40,
@@ -212,7 +208,6 @@ test('cached video updates include the seed thumbnail in class-budget admission'
     archiveEnabled: true,
     contributionBudgetBytes: 0,
     archiveBudgetBytes: 50,
-    migrationRequired: false
   })
   await manager.addSeed('drive-thumbnail', 'video-pin', 'archive', {
     byteLength: 10,

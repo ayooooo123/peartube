@@ -36,7 +36,6 @@ import {
   PERSONAL_INVITE_MAX_TTL_MS,
   encodePersonalPairingUserData,
 } from './personal-store.js'
-import { migrateDeviceLocalProfile } from './profile-migration.js'
 import { logger } from '../logger.js'
 import { CONSUMER_MODERATION_PROFILE_SETTING_KEY } from '../moderation/profile.js'
 
@@ -52,7 +51,7 @@ function personalNamespace(publicKey) {
   return `peartube-personal:${publicKey}`
 }
 
-/** Epoch 0 keeps the legacy namespace so existing stores reopen unchanged. */
+/** Epoch 0 is the unsuffixed namespace; each rotation appends its epoch. */
 function epochNamespace(publicKey, epoch) {
   return epoch > 0 ? `${personalNamespace(publicKey)}#${epoch}` : personalNamespace(publicKey)
 }
@@ -151,13 +150,6 @@ export function createPersonalManager({ ctx, identityManager, onActiveStoreChang
     }
   }
 
-  async function runStoreMigrations (store) {
-    if (store.writable) {
-      await migrateSubscriptions(store).catch((err) => log.warn(' Subscription migration skipped:', err?.message))
-      await migrateLegacyResume(store).catch((err) => log.warn(' Resume migration skipped:', err?.message))
-    }
-  }
-
   async function openForIdentity(identity) {
     if (!identity?.publicKey) return null
     const pk = identity.publicKey
@@ -183,25 +175,9 @@ export function createPersonalManager({ ctx, identityManager, onActiveStoreChang
 
     await persistStoreKeyIfNeeded(pk, store, identity)
     await setupStorePairing(store)
-    await runStoreMigrations(store)
 
     log.info(' Opened personal store for', pk.slice(0, 16), 'encrypted=', store.encrypted, 'writable=', store.writable)
     return store
-  }
-
-  async function prepareAnonymousProfileMigration(target) {
-    const anonymous = stores.get(DEVICE_LOCAL_PERSONAL_ID)
-    if (!anonymous || anonymous === target || !target?.writable) return null
-    const localState = await anonymous.getSetting(CONSUMER_MODERATION_PROFILE_SETTING_KEY)
-    if (localState === undefined) return null
-    const targetState = await target.getSetting(CONSUMER_MODERATION_PROFILE_SETTING_KEY)
-    await migrateDeviceLocalProfile({
-      source: anonymous,
-      target,
-      sourceId: DEVICE_LOCAL_PERSONAL_ID,
-      targetId: target.keyHex || 'identity-personal-store',
-    })
-    return { anonymous, localState, targetState }
   }
 
   async function restoreProfileSetting(store, value) {
@@ -213,7 +189,7 @@ export function createPersonalManager({ ctx, identityManager, onActiveStoreChang
     }
   }
 
-  async function activateStore(publicKey, store, { migrateAnonymous = false } = {}) {
+  async function activateStore(publicKey, store) {
     if (!store) return { store: null, profileReconciled: false }
     if (ctx.personal === store && activePublicKey === publicKey) {
       return { store, profileReconciled: false }
@@ -226,11 +202,9 @@ export function createPersonalManager({ ctx, identityManager, onActiveStoreChang
     const targetProfile = store.writable
       ? await store.getSetting(CONSUMER_MODERATION_PROFILE_SETTING_KEY)
       : undefined
-    let migration = null
     let profileReconciled = false
 
     try {
-      if (migrateAnonymous) migration = await prepareAnonymousProfileMigration(store)
       // The profile repository resolves through ctx.personal, so expose the
       // candidate store only for the duration of the reconciliation. The
       // externally observable active key is committed after every side effect.
@@ -248,9 +222,6 @@ export function createPersonalManager({ ctx, identityManager, onActiveStoreChang
       return { store, profileReconciled }
     } catch (error) {
       await restoreProfileSetting(store, targetProfile).catch(() => {})
-      if (migration) {
-        await restoreProfileSetting(migration.anonymous, migration.localState).catch(() => {})
-      }
       activePublicKey = previous.publicKey
       ctx.personal = previous.store
       if (onActiveStoreChanged && previous.store) {
@@ -264,45 +235,6 @@ export function createPersonalManager({ ctx, identityManager, onActiveStoreChang
       }
       throw error
     }
-  }
-
-  /**
-   * One-time read-through migration of legacy device-local subscriptions
-   * (metaDb `subscriptions` array) into the synced personal store.
-   */
-  async function migrateSubscriptions(store) {
-    if (!ctx.metaDb) return
-    const flag = await ctx.metaDb.get('personal-subs-migrated').catch(() => null)
-    if (flag?.value) return
-    const existing = await ctx.metaDb.get('subscriptions').catch(() => null)
-    const subs = existing?.value || []
-    for (const sub of subs) {
-      const channelKey = sub.driveKey || sub.channelKey
-      if (!channelKey) continue
-      await store.subscribe(channelKey, { name: sub.name || '' }).catch(() => {})
-    }
-    await ctx.metaDb.put('personal-subs-migrated', true)
-    if (subs.length) log.info(' Migrated', subs.length, 'subscriptions into personal store')
-  }
-
-  /**
-   * One-time migration of the legacy `resume/<videoKey>` rows written before
-   * canonical progress records existed. The store drops each legacy row only
-   * once its replacement reads back, so the once-per-device flag is recorded
-   * only when nothing was left behind: an interrupted migration is retried on
-   * the next open instead of stranding watch state in a shape nothing reads.
-   */
-  async function migrateLegacyResume(store) {
-    if (!ctx.metaDb) return
-    const flag = await ctx.metaDb.get('personal-resume-migrated').catch(() => null)
-    if (flag?.value) return
-    const { migrated, retained } = await store.migrateLegacyResume()
-    if (retained > 0) {
-      log.warn(' Legacy resume migration retained', retained, 'rows; retrying on next open')
-      return
-    }
-    await ctx.metaDb.put('personal-resume-migrated', true)
-    if (migrated) log.info(' Migrated', migrated, 'legacy resume rows into progress records')
   }
 
   function activeIdentityRecord() {
@@ -414,7 +346,7 @@ export function createPersonalManager({ ctx, identityManager, onActiveStoreChang
     if (pk === currentActivePk) {
       const identity = identityManager?.getIdentities?.().find((i) => i.publicKey === pk) || activeIdentityRecord()
       const store = existingStore || await openForIdentity(identity)
-      const activation = await activateStore(pk, store, { migrateAnonymous: true })
+      const activation = await activateStore(pk, store)
       return { store, activation }
     }
 
@@ -479,7 +411,7 @@ export function createPersonalManager({ ctx, identityManager, onActiveStoreChang
         // If a secret was already provisioned this process, open now.
         if (secrets.has(active.publicKey)) {
           const store = await openForIdentity(active)
-          await activateStore(active.publicKey, store, { migrateAnonymous: true })
+          await activateStore(active.publicKey, store)
         }
       })
     },
@@ -772,7 +704,7 @@ export function createPersonalManager({ ctx, identityManager, onActiveStoreChang
           }
           throw unavailablePersonalStoreSecret(publicKey)
         }
-        await activateStore(publicKey, store, { migrateAnonymous: true })
+        await activateStore(publicKey, store)
         return store
       })
     },

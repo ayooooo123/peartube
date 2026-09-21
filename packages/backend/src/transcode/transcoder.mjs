@@ -245,8 +245,8 @@ function handleHttpRequest(req, res) {
   const playlistMatch = url.match(/^\/transcode\/([^/]+)\/stream\.m3u8/)
   const segmentMatch = url.match(/^\/transcode\/([^/]+)\/segment(\d+)\.ts/)
 
-  // Also support legacy single-file URL: /transcode/{sessionId}
-  const legacyMatch = url.match(/^\/transcode\/([^/]+)$/)
+  // The session root URL handed out by startTranscode: /transcode/{sessionId}
+  const sessionRootMatch = url.match(/^\/transcode\/([^/]+)$/)
 
   let sessionId = null
   let requestType = null
@@ -259,9 +259,9 @@ function handleHttpRequest(req, res) {
     sessionId = segmentMatch[1]
     requestType = 'segment'
     segmentIndex = parseInt(segmentMatch[2], 10)
-  } else if (legacyMatch) {
-    // Redirect legacy URL to HLS playlist
-    sessionId = legacyMatch[1]
+  } else if (sessionRootMatch) {
+    // Point the session root at its HLS playlist.
+    sessionId = sessionRootMatch[1]
     res.statusCode = 302
     res.setHeader('Location', `/transcode/${sessionId}/stream.m3u8`)
     res.end()

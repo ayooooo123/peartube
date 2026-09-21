@@ -2,8 +2,8 @@
  * Media upload and publication.
  *
  * Canonical publications use verified static rendition cores, immutable
- * artwork and signed publisher catalogs. Legacy blob upload, playback and
- * rollback remain available for channels without a publisher catalog.
+ * artwork and signed publisher catalogs. Direct hyperblobs upload, playback
+ * and rollback serve channels that have no publisher catalog.
  */
 
 import crypto from 'hypercore-crypto';
@@ -266,7 +266,7 @@ function buildVideoMetadata(metadata, blobResult, channel, fileSize, mimeType) {
     uploadedAt: Date.now(),
     uploadedBy: channel.localWriterKeyHex,
     blobId: blobResult.id,
-    // An immutable publication names its own rendition core; a legacy
+    // An immutable publication names its own rendition core; a direct
     // hyperblobs upload lives in the channel's blob core.
     blobsCoreKey: blobResult.blobsCoreKey || channel.blobsKeyHex,
     availability: playbackSupport.availability,
@@ -375,7 +375,7 @@ async function appendImmutablePublication(catalog, signedOperations) {
 
 // What a failed upload is allowed to undo is exactly what it added.
 //
-// A legacy hyperblobs-backed upload appended blocks to the channel's own blob
+// A direct hyperblobs-backed upload appended blocks to the channel's own blob
 // core, and those blocks belong to it alone, so clearing them is correct.
 //
 // An immutable publication appended nothing: playback points at the rendition

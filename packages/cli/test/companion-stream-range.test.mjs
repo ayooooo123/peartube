@@ -130,7 +130,7 @@ async function startHarness (t, asset, {
         method: 'POST',
         path: openPath,
         body: openBody,
-        headers: signedHeaders(openPath, openBody, `stream-open-${++nonceSequence}`)
+        headers: { ...signedHeaders(openPath, openBody, `stream-open-${++nonceSequence}`), 'content-type': 'application/json' }
       })
   const payload = inProcess ? opened.body : JSON.parse(b4a.toString(opened.body))
   return { state, server, opened: payload }
@@ -641,4 +641,80 @@ test('server close during async asset resolution sends a terminal 499 before hea
   t.ok(response, 'cancellation during asset resolution reached a terminal response')
   t.is(response.statusCode, 499)
   t.is(JSON.parse(b4a.toString(response.body)).error?.code, 'REQUEST_CANCELLED')
+})
+
+test('a cross-site browser media read of a capability stream URL is served, ranges included', async (t) => {
+  const { asset } = streamAsset()
+  const { state, opened } = await startHarness(t, asset, { inProcess: true })
+  const browserHeaders = {
+    origin: 'https://app.example',
+    'sec-fetch-site': 'cross-site',
+    'sec-fetch-mode': 'no-cors',
+    'sec-fetch-dest': 'video'
+  }
+
+  const full = await request({ host: state.host, port: state.port, path: opened.url, headers: browserHeaders })
+  t.is(full.statusCode, 200, 'the capability token authorizes the read, the caller position does not')
+  t.alike(full.body, BODY)
+
+  const ranged = await request({
+    host: state.host,
+    port: state.port,
+    path: opened.url,
+    headers: { ...browserHeaders, range: 'bytes=2-5' }
+  })
+  t.is(ranged.statusCode, 206)
+  t.is(ranged.headers['content-range'], `bytes 2-5/${BODY.byteLength}`)
+  t.alike(ranged.body, BODY.subarray(2, 6))
+
+  const head = await request({ host: state.host, port: state.port, method: 'HEAD', path: opened.url, headers: browserHeaders })
+  t.is(head.statusCode, 200)
+})
+
+test('the stream exemption covers only capability reads: other methods and control routes still refuse a browser', async (t) => {
+  const { asset } = streamAsset()
+  const { state, opened } = await startHarness(t, asset, { inProcess: true })
+
+  const mutating = await request({
+    host: state.host,
+    port: state.port,
+    method: 'POST',
+    path: opened.url,
+    headers: { origin: 'https://evil.example' }
+  })
+  t.is(mutating.statusCode, 403, 'a write verb on the stream path is not a capability read')
+  t.is(JSON.parse(b4a.toString(mutating.body)).error.code, 'FORBIDDEN_ORIGIN')
+
+  const uncapped = await request({
+    host: state.host,
+    port: state.port,
+    path: '/api/v2/stream/pub-1/rend-1',
+    headers: { origin: 'https://evil.example' }
+  })
+  t.is(uncapped.statusCode, 403, 'a stream path without a capability carries no grant to honour')
+  t.is(JSON.parse(b4a.toString(uncapped.body)).error.code, 'FORBIDDEN_ORIGIN')
+
+  const control = await request({
+    host: state.host,
+    port: state.port,
+    path: '/api/v2/status',
+    headers: { origin: 'https://evil.example' }
+  })
+  t.is(control.statusCode, 403, 'control routes are untouched by the stream exemption')
+  t.is(JSON.parse(b4a.toString(control.body)).error.code, 'FORBIDDEN_ORIGIN')
+
+  const acquisitionBody = JSON.stringify({
+    idempotencyKey: 'origin-scope-1',
+    request: { schemaVersion: 1, resolutionRef: REF, publisherId: 'publisher-1', retentionClass: 'archive-pin' }
+  })
+  const acquisition = await request({
+    host: state.host,
+    port: state.port,
+    method: 'POST',
+    path: '/api/v2/acquisitions',
+    body: acquisitionBody,
+    headers: { 'content-type': 'application/json', origin: 'https://evil.example' }
+  })
+  t.is(acquisition.statusCode, 403, 'the mutating machine API is untouched by the stream exemption')
+  t.is(JSON.parse(b4a.toString(acquisition.body)).error.code, 'FORBIDDEN_ORIGIN')
 })

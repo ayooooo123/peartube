@@ -54,7 +54,7 @@ export class VideoStatsTracker {
 
   /**
    * Normalize a video identifier for stats keys.
-   * Accepts id or legacy path variants like /videos/<id>.mp4 or videos/<id>.mp4.
+   * Accepts an id or a path form like /videos/<id>.mp4 or videos/<id>.mp4.
    * @param {string} videoPath
    * @returns {string}
    */

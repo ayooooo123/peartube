@@ -165,7 +165,7 @@ async function createPolicyBinding(ctx, configuredPolicy, now) {
           consent?.granted === true &&
           Object.keys(consent).every(key => key === 'version' || key === 'granted')
         )
-        if ((next.enabled || !next.migrationRequired) && !consentGranted) {
+        if (next.enabled && !consentGranted) {
           throw acquisitionError('ACQUISITION_CONSENT_REQUIRED', 'explicit current-version consent is required', 403)
         }
         const nextRevision = policyRevision + 1

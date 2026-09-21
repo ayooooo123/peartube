@@ -14,9 +14,6 @@ class OperabilityHRPC {
     })
   }
 
-  getMigrationStatus(request) { return this.respond('getMigrationStatus', request) }
-  retryMigration(request) { return this.respond('retryMigration', request) }
-  exportMigrationReport(request) { return this.respond('exportMigrationReport', request) }
   getPublisherDeviceStatus(request) { return this.respond('getPublisherDeviceStatus', request) }
   exportPortableState(request) { return this.respond('exportPortableState', request) }
   restorePortableState(request) { return this.respond('restorePortableState', request) }
@@ -33,9 +30,6 @@ test('host exposes operability methods through grouped namespaces', async (t) =>
   const client = createProtocolClient({ stream: {}, HRPCImpl: OperabilityHRPC })
   const manifestBytes = new Uint8Array([4, 5, 6])
 
-  await client.system.getMigrationStatus({ migrationId: 'publication-v1' })
-  await client.system.retryMigration({ migrationId: 'publication-v1' })
-  await client.system.exportMigrationReport({ migrationId: 'publication-v1' })
   await client.publisher.getPublisherDeviceStatus({ publisherId: 'publisher', devicePublicKey: 'device' })
   await client.publisher.exportPortableState({})
   await client.publisher.restorePortableState({ manifestBytes, manifestDigest: 'digest' })
@@ -43,9 +37,6 @@ test('host exposes operability methods through grouped namespaces', async (t) =>
   await client.transfer.getArchiveOperatorStatus({})
 
   t.alike(OperabilityHRPC.instance.calls, [
-    ['getMigrationStatus', { migrationId: 'publication-v1' }],
-    ['retryMigration', { migrationId: 'publication-v1' }],
-    ['exportMigrationReport', { migrationId: 'publication-v1' }],
     ['getPublisherDeviceStatus', { publisherId: 'publisher', devicePublicKey: 'device' }],
     ['exportPortableState', {}],
     ['restorePortableState', { manifestBytes, manifestDigest: 'digest' }],

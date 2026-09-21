@@ -6,7 +6,6 @@ import {
   createAcquisitionPolicyRuntime,
   createAcquisitionStore,
   createSourceGrantVault,
-  migrateLegacyIngest,
   normalizeAcquisitionJob,
   normalizeAcquisitionRequest
 } from '../src/acquisition/index.js'
@@ -17,7 +16,7 @@ const REF = 'A'.repeat(43)
 const PRINCIPAL = { principalId: 'local-user', isLocal: true, publisherIds: ['publisher-1'] }
 function request (overrides = {}) { return { schemaVersion: 1, resolutionRef: REF, publisherId: 'publisher-1', retentionClass: 'archive-pin', ...overrides } }
 function openPolicy (overrides = {}) {
-  return { ...CLOSED_ACQUISITION_POLICY, migrationRequired: false, enabled: true, allowedPublisherIds: ['publisher-1'], allowedAdapterIds: ['local-adapter'], maxQueuedJobs: 4, maxConcurrentJobs: 2, maxConcurrentPerRequester: 1, maxRequestBytes: 4096, maxAcquireBytesPer24h: 1024 * 1024, maxAcquireBytesPerSecond: 1024 * 1024, maxStagingBytes: 1024 * 1024, minFreeDiskBytes: 1, maxJobRuntimeMs: 60_000, sourceGrantTtlMs: 30_000, publicRequestsPerMinute: 2, maxAttempts: 3, retryBaseMs: 1, retryMaxMs: 10, ...overrides }
+  return { ...CLOSED_ACQUISITION_POLICY, enabled: true, allowedPublisherIds: ['publisher-1'], allowedAdapterIds: ['local-adapter'], maxQueuedJobs: 4, maxConcurrentJobs: 2, maxConcurrentPerRequester: 1, maxRequestBytes: 4096, maxAcquireBytesPer24h: 1024 * 1024, maxAcquireBytesPerSecond: 1024 * 1024, maxStagingBytes: 1024 * 1024, minFreeDiskBytes: 1, maxJobRuntimeMs: 60_000, sourceGrantTtlMs: 30_000, publicRequestsPerMinute: 2, maxAttempts: 3, retryBaseMs: 1, retryMaxMs: 10, ...overrides }
 }
 function fakeBee () {
   const map = new Map(); const clone = value => JSON.parse(JSON.stringify(value))
@@ -53,7 +52,7 @@ test('acquisition request and job contracts are exact and reject source secrets'
 
 test('policy is closed by default and requires consent, allowlists, and limits', async t => {
   const runtime = createAcquisitionPolicyRuntime({ now: () => NOW })
-  await t.exception(runtime.admit({ request: request(), principal: PRINCIPAL, adapterId: 'local-adapter', freeDiskBytes: 10 }), /MIGRATION_REQUIRED/)
+  await t.exception(runtime.admit({ request: request(), principal: PRINCIPAL, adapterId: 'local-adapter', freeDiskBytes: 10 }), /ACQUISITION_DISABLED/)
   await t.exception(runtime.setPolicy(openPolicy()), /CONSENT_REQUIRED/)
   await runtime.setPolicy(openPolicy(), { consent: { version: 1, granted: true } })
   t.is((await runtime.admit({ request: request({ retentionUntil: NOW + 1000 }), principal: PRINCIPAL, adapterId: 'local-adapter', freeDiskBytes: 10 })).principalId, 'local-user')
@@ -235,33 +234,6 @@ test('atomic store enforces idempotency and every public transition', async t =>
   t.is(job.state, 'completed'); t.alike((await store.listEvents(job.acquisitionId)).map(event => event.state), ['queued', 'acquiring', 'acquiring', 'verifying', 'publishing', 'completed'])
   t.is((await store.countByState()).completed, 1)
   await t.exception(store.transition(job.acquisitionId, { expectedVersion: job.version, from: 'completed', to: 'cancelled' }), /TERMINAL/)
-})
-
-test('legacy migration copies only public state and is atomic and idempotent', async t => {
-  const store = createAcquisitionStore({ bee: fakeBee(), now: () => NOW })
-  const legacy = { async listJobs () { return [{ jobId: 'ing_legacy', state: 'acquiring', retentionClass: 'archive-pin', bytesReceived: 4, expectedBytes: 8, createdAt: NOW - 100, updatedAt: NOW, sourceCapability: 'must-not-migrate', spool: { path: '/private' } }] } }
-  t.alike(await migrateLegacyIngest({ legacyStore: legacy, acquisitionStore: store, legacyPrincipalId: 'local-user', legacyPublisherId: 'publisher-1', now: () => NOW }), { migrated: 1, skipped: 0 })
-  const migrated = await store.get('ing_legacy'); t.is(migrated.state, 'failed'); t.is(migrated.errorCode, 'LEGACY_SOURCE_GRANT_REQUIRED'); t.absent(JSON.stringify(migrated).includes('must-not-migrate'))
-  t.alike(await migrateLegacyIngest({ legacyStore: legacy, acquisitionStore: store, legacyPrincipalId: 'local-user', legacyPublisherId: 'publisher-1', now: () => NOW }), { migrated: 0, skipped: 1 })
-})
-
-test('legacy migration carries the work identity and backfills a relay that already migrated', async t => {
-  const store = createAcquisitionStore({ bee: fakeBee(), now: () => NOW })
-  const bare = { jobId: 'ing_episode', state: 'completed', retentionClass: 'contribution-cache', bytesReceived: 8, expectedBytes: 8, createdAt: NOW - 10, updatedAt: NOW, publicationId: 'pub-1', manifestId: 'man-1', renditionId: 'ren-1', assetId: 'asset-1' }
-  // The retired ingest wrote coordinates under archive-manager names and kept
-  // the spool path, so the migration must map one and basename the other.
-  const named = { ...bare, title: 'FUBAR', fileName: '/spool/uploads/Fubar.S02E07.2160p.mkv', mediaContext: { contentKind: 'episode', mediaProvider: 'tmdb', mediaId: '221300', seasonNumber: 2, episodeNumber: 7, sourceUrl: 'https://private.invalid/e7' } }
-
-  t.alike(await migrateLegacyIngest({ legacyStore: { async listJobs () { return [bare] } }, acquisitionStore: store, legacyPrincipalId: 'local-user', legacyPublisherId: 'publisher-1', now: () => NOW }), { migrated: 1, skipped: 0 })
-  t.is((await store.get('ing_episode')).publicationMetadata, null, 'a legacy record with no metadata names no work')
-
-  t.alike(await migrateLegacyIngest({ legacyStore: { async listJobs () { return [named] } }, acquisitionStore: store, legacyPrincipalId: 'local-user', legacyPublisherId: 'publisher-1', now: () => NOW }), { migrated: 0, skipped: 1 })
-  const backfilled = await store.get('ing_episode')
-  t.is(backfilled.publicationMetadata.title, 'FUBAR', 'an already-migrated job gains the name of its work')
-  t.is(backfilled.publicationMetadata.sourceFileName, 'Fubar.S02E07.2160p.mkv', 'the source file name is kept, its spool path is not')
-  t.alike(backfilled.publicationMetadata.mediaContext, { kind: 'episode', namespace: 'tmdb', identifier: '221300', season: 2, episode: 7 })
-  t.absent(JSON.stringify(backfilled).includes('private.invalid'), 'source material never rides in on the backfill')
-  t.is(backfilled.state, 'completed', 'the backfill changes nothing but the work identity')
 })
 
 // Clearing a dead attempt is a durable delete an operator asked for. It has to

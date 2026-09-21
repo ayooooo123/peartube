@@ -1,7 +1,6 @@
 import b4a from 'b4a'
 
 import { createArchiveDiagnostics } from '../archive/diagnostics.js'
-import { createMigrationLifecycle, MIGRATION_LIMITS } from '../migrations/observability.js'
 import { createPortableStateService } from '../portability/service.js'
 import {
   MAX_PORTABLE_MANIFEST_BYTES,
@@ -9,7 +8,6 @@ import {
 } from '../portability/constants.js'
 import { projectPublisherDeviceStatus } from '../publisher/device-status.js'
 
-const MAX_MIGRATION_ID_BYTES = 64
 const MAX_STORAGE_PREVIEW_ARRAY_LENGTH = 32
 const MAX_ARCHIVE_FAILURE_CODES = 64
 const durableServicesByContext = new WeakMap()
@@ -18,44 +16,8 @@ function isObject (value) {
   return value !== null && typeof value === 'object' && !Array.isArray(value)
 }
 
-function utf8Bytes (value) {
-  return typeof value === 'string' ? b4a.byteLength(value) : -1
-}
-
 function hasOnlyFields (request, fields) {
   return isObject(request) && Object.keys(request).every(field => fields.has(field))
-}
-
-function validMigrationId (value) {
-  const bytes = utf8Bytes(value)
-  return bytes > 0 && bytes <= MAX_MIGRATION_ID_BYTES
-}
-
-function emptyMigrationStatus (migrationId, errorCode, joined) {
-  return {
-    success: false,
-    migrationId: typeof migrationId === 'string' ? migrationId : '',
-    state: 'failed',
-    version: 1,
-    processedCount: 0,
-    importedCount: 0,
-    skippedCount: 0,
-    quarantinedCount: 0,
-    unsupportedCount: 0,
-    remainingCount: 0,
-    retryable: false,
-    updatedAt: 0,
-    ...(joined === undefined ? {} : { joined }),
-    errorCode
-  }
-}
-
-function emptyMigrationReport (migrationId, errorCode) {
-  return {
-    success: false,
-    migrationId: typeof migrationId === 'string' ? migrationId : '',
-    errorCode
-  }
 }
 
 function emptyDeviceStatus (reasonCode) {
@@ -139,19 +101,6 @@ function validDigest (value) {
 
 function recordValue (record) {
   return isObject(record) && Object.hasOwn(record, 'value') ? record.value : record
-}
-
-function prefixedStore (db, prefix) {
-  if (!db || typeof db.get !== 'function' || typeof db.put !== 'function') return null
-  return {
-    get: key => db.get(`${prefix}${key}`),
-    put: (key, value) => db.put(`${prefix}${key}`, value)
-  }
-}
-
-function hasMigrationAdapters (migrations) {
-  if (migrations instanceof Map) return migrations.size > 0
-  return isObject(migrations) && Object.keys(migrations).length > 0
 }
 
 function repositoryMethod (repository, names) {
@@ -268,13 +217,11 @@ function resolveOperabilityConfig (options) {
   const ctx = options.ctx || null
   const configured = options.operability || ctx?.operability || {}
   const metaDb = pickCascade(options, configured, ctx, 'metaDb')
-  const migrations = pickCascade(options, configured, ctx, 'migrations')
-  const migrationStore = options.migrationStore || configured.migrationStore || prefixedStore(metaDb, 'operability:')
   const portableRepoInput = pickCascade(options, configured, ctx, 'portableStateRepository')
   const portableRepository = createPortableStateRepositoryAdapter(portableRepoInput)
   const publisherDeviceStatusProvider = pickCascade(options, configured, ctx, 'publisherDeviceStatusProvider')
   const now = options.now || configured.now || Date.now
-  return { ctx, configured, metaDb, migrations, migrationStore, portableRepository, publisherDeviceStatusProvider, now }
+  return { ctx, configured, metaDb, portableRepository, publisherDeviceStatusProvider, now }
 }
 
 async function resolveArchiveDiagnostics ({ options, configured, ctx, metaDb, now }) {
@@ -311,16 +258,11 @@ export async function createDurableOperabilityServices (options = {}) {
     ctx,
     configured,
     metaDb,
-    migrations,
-    migrationStore,
     portableRepository,
     publisherDeviceStatusProvider,
     now
   } = resolveOperabilityConfig(options)
 
-  const migrationLifecycle = migrationStore && hasMigrationAdapters(migrations)
-    ? createMigrationLifecycle({ store: migrationStore, migrations, now })
-    : null
 
   const portabilityService = portableRepository
     ? createPortableStateService({
@@ -334,7 +276,6 @@ export async function createDurableOperabilityServices (options = {}) {
   const archiveDiagnostics = await resolveArchiveDiagnostics({ options, configured, ctx, metaDb, now })
 
   const services = {
-    migrationLifecycle,
     portabilityService,
     portableRepository,
     publisherDeviceStatusProvider,
@@ -374,49 +315,6 @@ export function createOperabilityApi (options = {}) {
   }
 
   return Object.freeze({
-    async getMigrationStatus (request = {}) {
-      if (!hasOnlyFields(request, new Set(['migrationId'])) || !validMigrationId(request.migrationId)) {
-        return emptyMigrationStatus(request?.migrationId, 'MIGRATION_ID_INVALID')
-      }
-      const lifecycle = (await services()).migrationLifecycle
-      if (!lifecycle?.getMigrationStatus) return emptyMigrationStatus(request.migrationId, 'MIGRATION_SERVICE_UNAVAILABLE')
-      try {
-        return await lifecycle.getMigrationStatus(request)
-      } catch {
-        return emptyMigrationStatus(request.migrationId, 'MIGRATION_STATUS_FAILED')
-      }
-    },
-
-    async retryMigration (request = {}) {
-      if (!hasOnlyFields(request, new Set(['migrationId'])) || !validMigrationId(request.migrationId)) {
-        return emptyMigrationStatus(request?.migrationId, 'MIGRATION_ID_INVALID', false)
-      }
-      const lifecycle = (await services()).migrationLifecycle
-      if (!lifecycle?.retryMigration) return emptyMigrationStatus(request.migrationId, 'MIGRATION_SERVICE_UNAVAILABLE', false)
-      try {
-        return await lifecycle.retryMigration(request)
-      } catch {
-        return emptyMigrationStatus(request.migrationId, 'MIGRATION_RETRY_FAILED', false)
-      }
-    },
-
-    async exportMigrationReport (request = {}) {
-      if (!hasOnlyFields(request, new Set(['migrationId'])) || !validMigrationId(request.migrationId)) {
-        return emptyMigrationReport(request?.migrationId, 'MIGRATION_ID_INVALID')
-      }
-      const lifecycle = (await services()).migrationLifecycle
-      if (!lifecycle?.exportMigrationReport) return emptyMigrationReport(request.migrationId, 'MIGRATION_SERVICE_UNAVAILABLE')
-      try {
-        const result = await lifecycle.exportMigrationReport(request)
-        if (result?.reportBytes?.byteLength > MIGRATION_LIMITS.maxReportBytes) {
-          return emptyMigrationReport(request.migrationId, 'MIGRATION_REPORT_TOO_LARGE')
-        }
-        return result
-      } catch {
-        return emptyMigrationReport(request.migrationId, 'MIGRATION_REPORT_FAILED')
-      }
-    },
-
     async getPublisherDeviceStatus (request = {}) {
       if (!hasOnlyFields(request, new Set(['publisherId', 'devicePublicKey'])) ||
           !validOptionalBytes32(request.publisherId) || !validOptionalBytes32(request.devicePublicKey)) {

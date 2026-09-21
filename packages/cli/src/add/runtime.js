@@ -104,8 +104,7 @@ export async function openAddRuntime ({
       if (current) {
         const allowedPublisherIds = [...new Set([...(current.allowedPublisherIds || []), ensuredPublisher.publisherId])].sort()
         const allowedAdapterIds = [...new Set([...(current.allowedAdapterIds || []), 'local-file'])].sort()
-        const needsUpdate = current.migrationRequired === true ||
-          current.enabled !== true ||
+        const needsUpdate = current.enabled !== true ||
           current.requesterMode !== 'local-only' ||
           !allowedPublisherIds.every(id => (current.allowedPublisherIds || []).includes(id)) ||
           !allowedAdapterIds.every(id => (current.allowedAdapterIds || []).includes(id))
@@ -114,7 +113,6 @@ export async function openAddRuntime ({
             policy: {
               policyVersion: 1,
               consentVersion: 1,
-              migrationRequired: false,
               enabled: true,
               acceptPublicRequests: false,
               requesterMode: 'local-only',

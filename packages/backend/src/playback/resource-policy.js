@@ -93,28 +93,6 @@ const PERMISSIVE_THERMAL_STATES = new Set(['nominal', 'fair'])
 /** OS thermal categories that block contribution outright. */
 const BLOCKING_THERMAL_STATES = new Set(['serious', 'critical'])
 
-/**
- * The legacy five-key evaluate() predates categorical device signals. Callers
- * that omit a signal keep their historical behaviour, so the adapter fills the
- * gaps here instead of letting evaluateParticipation see an unknown signal.
- * New code MUST call evaluateParticipation with real OS signals, where an
- * unknown signal is always treated as constrained.
- */
-const LEGACY_SIGNAL_DEFAULTS = Object.freeze({
-  thermalState: 'nominal',
-  metered: false,
-  // The smallest disk that still clears the free-disk floor.
-  freeDiskBytes: PARTICIPATION_HARD_LIMITS.minFreeDiskBytes,
-  totalDiskBytes: PARTICIPATION_HARD_LIMITS.minFreeDiskBytes,
-  // Legacy callers never reported OS background permission, and permission is
-  // never assumed: backgrounded legacy state contributes nothing.
-  backgroundPermitted: false,
-  playbackActive: true,
-  // The five-key shape only ever reported backgrounding explicitly; an omitted
-  // lifecycle kept its historical foreground reading.
-  foreground: true,
-})
-
 function boundedInteger(value, name, fallback) {
   const next = value == null ? fallback : Number(value)
   if (!Number.isSafeInteger(next) || next < 0) throw new Error(`${name} must be a non-negative integer`)
@@ -496,19 +474,18 @@ export function createPlaybackResourcePolicy(options = {}) {
 
   /**
    * The acquisition-role decision: what this host may hold on to, gated by the
-   * two explicit permissions (contribute, archive) and by a pending policy
-   * migration. It is separate from the five-key playback projection below,
-   * because a role change has to invalidate in-flight acquisition, while a
-   * device-signal change only narrows what playback itself may do.
+   * two explicit permissions (contribute, archive). It is separate from the
+   * five-key playback projection below, because a role change has to
+   * invalidate in-flight acquisition, while a device-signal change only
+   * narrows what playback itself may do.
    */
   function evaluateAcquisition(state = {}) {
     const foreground = state.foreground !== false
     const discoveryAllowed = state.userAllowsP2P !== false
     const unconstrained = isAcquisitionUnconstrained(state)
     const powered = state.charging !== false
-    const migrationAllowed = state.migrationRequired !== true
-    const contribute = migrationAllowed && state.permissions?.contribute === true
-    const archive = migrationAllowed && state.permissions?.archive === true
+    const contribute = state.permissions?.contribute === true
+    const archive = state.permissions?.archive === true
 
     const baseEligible = foreground && unconstrained
     const peerDiscovery = discoveryAllowed && baseEligible
@@ -527,45 +504,6 @@ export function createPlaybackResourcePolicy(options = {}) {
   return {
     limits() {
       return { ...limits }
-    },
-    evaluate(state = {}) {
-      const source = state == null ? {} : state
-      // An explicit permission set is theirs to withhold: a watch-only viewer
-      // downloads and discovers, and uploads nothing. Legacy state that never
-      // mentions permissions keeps its historical contribution.
-      const permissions = source.permissions
-      const contributeAllowed = permissions == null
-        ? true
-        : (permissions.contribute === true || permissions.archive === true) &&
-          source.migrationRequired !== true
-      const participation = evaluateParticipation({
-        ...source,
-        thermalState: source.thermalState ?? LEGACY_SIGNAL_DEFAULTS.thermalState,
-        metered: source.metered ?? LEGACY_SIGNAL_DEFAULTS.metered,
-        // Legacy state carried external power as a single boolean, and it gated
-        // upload exactly the way the battery floor does now.
-        batteryPercent: source.batteryPercent ??
-          (source.charging === false ? 0 : PARTICIPATION_HARD_LIMITS.minBatteryPercent),
-        freeDiskBytes: source.freeDiskBytes ?? LEGACY_SIGNAL_DEFAULTS.freeDiskBytes,
-        totalDiskBytes: source.totalDiskBytes ?? LEGACY_SIGNAL_DEFAULTS.totalDiskBytes,
-        backgroundPermitted: source.backgroundPermitted ?? LEGACY_SIGNAL_DEFAULTS.backgroundPermitted,
-        playbackActive: source.playbackActive ?? LEGACY_SIGNAL_DEFAULTS.playbackActive,
-        foreground: source.foreground ?? LEGACY_SIGNAL_DEFAULTS.foreground,
-        // The pledge is never assumed: an archive commitment needs the same
-        // explicit opt-in here as anywhere else, and it is owned by the archive
-        // policy, which reads evaluateParticipation() with the real opt-in.
-        // The archive permission is that same pledge arriving through the
-        // permission set, and a pending migration withdraws it.
-        archiveOptIn: source.archiveOptIn === true ||
-          (permissions?.archive === true && source.migrationRequired !== true),
-      })
-      return {
-        localPlayback: participation.localPlayback,
-        peerDiscovery: participation.peerDiscovery,
-        upload: participation.upload && contributeAllowed,
-        cacheFill: participation.cacheFill,
-        archiving: participation.archiving,
-      }
     },
     transition(state = {}) {
       const decision = evaluateAcquisition(state)

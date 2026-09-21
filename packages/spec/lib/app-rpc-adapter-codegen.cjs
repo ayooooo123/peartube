@@ -13,9 +13,6 @@ const APP_RPC_NAMESPACES = Object.freeze({
     'set-network-policy',
     'get-participation-status',
     'set-device-conditions',
-    'get-migration-status',
-    'retry-migration',
-    'export-migration-report',
     'suspend-network',
     'resume-network',
     'set-playback-active'

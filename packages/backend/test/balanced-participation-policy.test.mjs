@@ -7,7 +7,6 @@ import {
   PARTICIPATION_LIMITS,
   PARTICIPATION_MODES,
   PARTICIPATION_REASON_CODES,
-  createPlaybackResourcePolicy,
   evaluateParticipation,
 } from '../src/playback/resource-policy.js'
 
@@ -507,27 +506,6 @@ test('the decision is pure and tolerates missing or hostile input', (t) => {
   t.is(fractional.uploadedBytesLast24h, 1024)
   t.is(fractional.backgroundRemainingSessionMs, 15 * MINUTE_MS - 10)
   t.is(fractional.backgroundRemainingDailyMs, 60 * MINUTE_MS - 20)
-})
-
-test('the five-key playback policy is derived from the one decision', (t) => {
-  const policy = createPlaybackResourcePolicy()
-  const state = healthyDevice({ archiveOptIn: true })
-  const participation = evaluateParticipation(state)
-  t.alike(policy.evaluate(state), {
-    localPlayback: participation.localPlayback,
-    peerDiscovery: participation.peerDiscovery,
-    upload: participation.upload,
-    cacheFill: participation.cacheFill,
-    archiving: participation.archiving,
-  }, 'the five keys are a projection of evaluateParticipation')
-
-  t.alike(policy.evaluate(healthyDevice({ metered: true })), {
-    localPlayback: true,
-    peerDiscovery: false,
-    upload: false,
-    cacheFill: false,
-    archiving: false,
-  })
 })
 
 test('actively uploading means bytes moved, not that a video is playing', (t) => {

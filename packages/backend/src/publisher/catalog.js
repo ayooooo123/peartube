@@ -16,10 +16,7 @@ import {
   encodePublisherOperationBody,
   requiredPublisherCapability
 } from './canonical.js'
-import {
-  PUBLISHER_CATALOG_LEGACY_COMPATIBILITY,
-  decodePublisherNamespaceDescriptor
-} from './namespace.js'
+import { decodePublisherNamespaceDescriptor } from './namespace.js'
 import { createPublisherKeyProvider } from './key-provider.js'
 import {
   applyPublisherCatalogNodes,
@@ -217,9 +214,7 @@ async function tryMountVerifiedPageView (catalog) {
     return false
   }
 
-  const descriptor = decodePublisherNamespaceDescriptor(descriptorEntry.value, {
-    legacyCompatibility: PUBLISHER_CATALOG_LEGACY_COMPATIBILITY
-  })
+  const descriptor = decodePublisherNamespaceDescriptor(descriptorEntry.value)
   if (!equalBytes(descriptor.publisherId, catalog.options.publisherId)) {
     await pageView.close().catch(() => {})
     invalid('persisted descriptor publisherId does not match expected publisherId')
@@ -266,7 +261,7 @@ async function validateBaseViewDescriptor (base, expectedPublisherId) {
   const journalCountEntry = await raceOpenBudget(base.view.get('meta/journal-count'), 1000).catch(() => null)
   let pinError = null
   if (descriptorEntry?.value) {
-    const descriptor = decodePublisherNamespaceDescriptor(descriptorEntry.value, { legacyCompatibility: PUBLISHER_CATALOG_LEGACY_COMPATIBILITY })
+    const descriptor = decodePublisherNamespaceDescriptor(descriptorEntry.value)
     if (!equalBytes(descriptor.publisherId, expectedPublisherId)) pinError = 'persisted descriptor publisherId does not match expected publisherId'
   } else if (journalCountEntry?.value && b4a.toString(journalCountEntry.value) !== '0') {
     pinError = 'persisted catalog history has no descriptor matching expected publisherId'
@@ -496,7 +491,7 @@ export class PublisherCatalog extends ReadyResource {
     if (!this.options.deviceSigner) invalid('local device signing requires an injected deviceSigner')
     const descriptorEntry = await this.view.get('state/descriptor')
     if (!descriptorEntry) invalid('publisher namespace genesis is not initialized')
-    const descriptor = decodePublisherNamespaceDescriptor(descriptorEntry.value, { legacyCompatibility: PUBLISHER_CATALOG_LEGACY_COMPATIBILITY })
+    const descriptor = decodePublisherNamespaceDescriptor(descriptorEntry.value)
     assertBytes(this.localWriterKey, 32, 'local writer key')
     assertBytes(this.localSignerKey, 32, 'local signer key')
     const prepared = prepareSignedEnvelope({
@@ -535,7 +530,7 @@ export class PublisherCatalog extends ReadyResource {
     await this.update()
     const descriptor = await this.view?.get('state/descriptor')
     return descriptor
-      ? decodePublisherNamespaceDescriptor(descriptor.value, { legacyCompatibility: PUBLISHER_CATALOG_LEGACY_COMPATIBILITY })
+      ? decodePublisherNamespaceDescriptor(descriptor.value)
       : null
   }
 

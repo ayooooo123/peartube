@@ -117,8 +117,8 @@ test('publisher namespace advertises canonical compatibility before catalog proj
     t.is(error.code, PROTOCOL_ERROR_CODES.MAJOR_UNSUPPORTED)
   }
 })
-test('legacy namespace omissions require an explicit compatible protocol declaration', (t) => {
-  const legacy = b4a.from(
+test('a namespace descriptor without the compatibility trailer is rejected', (t) => {
+  const withoutCompatibility = b4a.from(
     '011d6e7d3abf5d809cd3e0f0840c6eaec27a842afac22bac7dd4c5b64473efcc9e' +
     '0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20' +
     '2122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f40' +
@@ -126,22 +126,7 @@ test('legacy namespace omissions require an explicit compatible protocol declara
     '6162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f800100',
     'hex'
   )
-  try {
-    decodePublisherNamespaceDescriptor(legacy)
-    t.fail('legacy descriptor omission must fail closed by default')
-  } catch (error) {
-    t.is(error.code, PROTOCOL_ERROR_CODES.ADVERTISEMENT_REQUIRED)
-  }
-  const decoded = decodePublisherNamespaceDescriptor(legacy, {
-    protocolMajor: 1,
-    legacyCompatibility: {
-      minimumProtocolMajor: 1,
-      protocolMinor: 0,
-      requiredCapabilities: [PUBLISHER_CATALOG_CAPABILITY],
-    },
-  })
-  t.is(decoded.minimumProtocolMajor, 1)
-  t.alike(decoded.requiredCapabilities, [PUBLISHER_CATALOG_CAPABILITY])
+  throws(t, () => decodePublisherNamespaceDescriptor(withoutCompatibility), /truncated minimumProtocolMajor/)
 })
 
 test('genesis descriptors prohibit transition fields and require deterministic recovery policy', (t) => {

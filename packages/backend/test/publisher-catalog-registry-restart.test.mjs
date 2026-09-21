@@ -387,10 +387,11 @@ test('real-core full follower cache still cold-discovers local writable and uplo
   try {
     for (const mapping of followerMappings) {
       await first.metaDb.put(`publisher-catalog:v1:${hex(mapping.publisherId)}`, {
-        version: 1,
+        version: 2,
         publisherId: hex(mapping.publisherId),
         genesisRootKey: hex(mapping.genesisRootKey),
         catalogBootstrapKey: hex(mapping.catalogBootstrapKey),
+        catalogNamespace: `peartube-publisher-${(hex(mapping.publisherId)).slice(0, 32)}`,
       })
     }
 
@@ -458,10 +459,11 @@ test('listBindingPage aborts after ready on the sole streamed mapping and releas
   const pubId = derivePublisherId(rootKey)
   const pubHex = hex(pubId)
   values.set(`publisher-catalog:v1:${pubHex}`, {
-    version: 1,
+    version: 2,
     publisherId: pubHex,
     genesisRootKey: hex(rootKey),
     catalogBootstrapKey: hex(b4a.alloc(32, 17)),
+    catalogNamespace: `peartube-publisher-${(pubHex).slice(0, 32)}`,
   })
 
   let closed = false
@@ -509,10 +511,11 @@ test('getWritableBindings fails closed when discovery page reports errors', asyn
   const pubId = derivePublisherId(rootKey)
   const pubHex = hex(pubId)
   values.set(`publisher-catalog:v1:${pubHex}`, {
-    version: 1,
+    version: 2,
     publisherId: pubHex,
     genesisRootKey: hex(rootKey),
     catalogBootstrapKey: hex(b4a.alloc(32, 18)),
+    catalogNamespace: `peartube-publisher-${(pubHex).slice(0, 32)}`,
   })
 
   const registry = publisherApiModule.createPublisherCatalogRegistry(
@@ -718,10 +721,11 @@ test('acquireWritableBinding lease release and abort do not leak over-cap handle
     const pubHex = hex(pubId)
     const bootKey = b4a.alloc(32, 50 + i)
     values.set(`publisher-catalog:v1:${pubHex}`, {
-      version: 1,
+      version: 2,
       publisherId: pubHex,
       genesisRootKey: hex(rootKey),
       catalogBootstrapKey: hex(bootKey),
+      catalogNamespace: `peartube-publisher-${(pubHex).slice(0, 32)}`,
     })
     pubs.push({ pubId, pubHex, bootKey })
   }
@@ -858,10 +862,11 @@ test('acquireWritableBinding closes the just-created catalog when ready rejects,
   const pubId = derivePublisherId(rootKey)
   const pubHex = hex(pubId)
   values.set(`publisher-catalog:v1:${pubHex}`, {
-    version: 1,
+    version: 2,
     publisherId: pubHex,
     genesisRootKey: hex(rootKey),
     catalogBootstrapKey: hex(b4a.alloc(32, 61)),
+    catalogNamespace: `peartube-publisher-${(pubHex).slice(0, 32)}`,
   })
 
   const readyFailure = new Error('catalog readiness failed')
@@ -908,10 +913,11 @@ test('acquireWritableBinding abort during in-flight ready closes it exactly once
   const pubId = derivePublisherId(rootKey)
   const pubHex = hex(pubId)
   values.set(`publisher-catalog:v1:${pubHex}`, {
-    version: 1,
+    version: 2,
     publisherId: pubHex,
     genesisRootKey: hex(rootKey),
     catalogBootstrapKey: hex(b4a.alloc(32, 62)),
+    catalogNamespace: `peartube-publisher-${(pubHex).slice(0, 32)}`,
   })
 
   const createdCatalogs = []

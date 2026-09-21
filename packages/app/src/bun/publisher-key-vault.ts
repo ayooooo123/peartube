@@ -3,11 +3,6 @@ import { publisherRootSignaturePreimage } from '../../lib/publisher-signer-bridg
 
 export const BUN_PUBLISHER_ROOT_SERVICE = 'peartube.publisher-root.v1'
 export const BUN_PUBLISHER_ROOT_RECORD_VERSION = 1
-const LEGACY_ROOT_MIGRATION_VERSION = 1
-const LEGACY_ROOT_CHALLENGE_DOMAIN = 'peartube:legacy-publisher-root-migration:v1\0'
-const PUBLISHER_PUBLIC_KEY_BYTES = 32
-const PUBLISHER_SECRET_KEY_BYTES = 64
-const MIGRATION_NONCE_BYTES = 32
 
 type PublisherVaultError = Error & { code: string; redacted: true }
 
@@ -55,13 +50,6 @@ type ImportRootInput = {
   publicKey?: BytesLike
   secretKey?: BytesLike
   publisherId?: string
-}
-
-type LegacyRootMigrationInput = {
-  version?: number
-  identityPublicKey?: BytesLike
-  secretKey?: BytesLike
-  challenge?: BytesLike
 }
 
 type SignProtocolRecordInput = {
@@ -141,42 +129,6 @@ function assertKeyContinuity(
   const challenge = b4a.from('peartube/publisher-root-import/v1')
   const signature = crypto.sign(challenge, secretKey)
   if (crypto.verify(challenge, signature, publicKey) !== true) throw new Error('publisher root key mismatch')
-}
-
-function validateLegacyRootMigrationRequest(
-  input: LegacyRootMigrationInput,
-  crypto: PublisherCrypto,
-  b4a: B4aApi,
-): { publicKey: Uint8Array; secretKey: Uint8Array; challenge: Uint8Array } {
-  if (input?.version !== LEGACY_ROOT_MIGRATION_VERSION) throw new Error('unsupported legacy root migration')
-
-  let secretKey: Uint8Array | undefined
-  let challenge: Uint8Array | undefined
-  try {
-    const publicKey = toBuffer(input.identityPublicKey, b4a, 'identityPublicKey')
-    secretKey = toBuffer(input.secretKey, b4a, 'secretKey')
-    challenge = toBuffer(input.challenge, b4a, 'challenge')
-    const domain = b4a.from(LEGACY_ROOT_CHALLENGE_DOMAIN)
-    const expectedChallengeBytes = domain.byteLength + PUBLISHER_PUBLIC_KEY_BYTES + MIGRATION_NONCE_BYTES
-
-    if (publicKey.byteLength !== PUBLISHER_PUBLIC_KEY_BYTES ||
-        secretKey.byteLength !== PUBLISHER_SECRET_KEY_BYTES ||
-        challenge.byteLength !== expectedChallengeBytes ||
-        !b4a.equals(challenge.subarray(0, domain.byteLength), domain) ||
-        !b4a.equals(
-          challenge.subarray(domain.byteLength, domain.byteLength + PUBLISHER_PUBLIC_KEY_BYTES),
-          publicKey,
-        )) {
-      throw new Error('invalid legacy root migration')
-    }
-
-    assertKeyContinuity(publicKey, secretKey, crypto, b4a)
-    return { publicKey, secretKey, challenge }
-  } catch (error) {
-    secretKey?.fill?.(0)
-    challenge?.fill?.(0)
-    throw error
-  }
 }
 
 
@@ -276,37 +228,6 @@ export function createBunPublisherKeyVault(options: BunPublisherKeyVaultOptions 
         throw redactPublisherVaultError(error)
       } finally {
         secretKey?.fill?.(0)
-      }
-    },
-
-    async importLegacyRootMigration(input: LegacyRootMigrationInput = {}) {
-      let secretKey: Uint8Array | undefined
-      let challenge: Uint8Array | undefined
-      try {
-        const [crypto, b4a] = await Promise.all([loadCrypto(options.cryptoLoader), loadB4a(options.b4aLoader)])
-        const validated = validateLegacyRootMigrationRequest(input, crypto, b4a)
-        secretKey = validated.secretKey
-        challenge = validated.challenge
-        const publicKey = validated.publicKey
-        const publisherId = assertPublisherId(undefined, publicKey, b4a)
-        const { root: existing, entry } = await loadRoot()
-        try {
-          if (existing && !b4a.equals(existing.publicKey, publicKey)) throw new Error('active publisher root mismatch')
-          await entry.setPassword(serializeRoot({ publicKey, secretKey, b4a }))
-        } finally {
-          existing?.secretKey?.fill?.(0)
-        }
-        return {
-          version: LEGACY_ROOT_MIGRATION_VERSION,
-          durable: true,
-          publicKey: b4a.from(publicKey),
-          challengeSignature: crypto.sign(challenge, secretKey),
-        }
-      } catch (error) {
-        throw redactPublisherVaultError(error)
-      } finally {
-        secretKey?.fill?.(0)
-        challenge?.fill?.(0)
       }
     },
 

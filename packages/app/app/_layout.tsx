@@ -28,9 +28,10 @@ import { Panel, Button, Eyebrow, Body } from '@/components/primitives'
 import Animated, { useAnimatedStyle, useSharedValue, withRepeat, withTiming } from 'react-native-reanimated'
 import { AppContext, type AppContextType } from '@/lib/AppContext'
 import { buildBundleVersionKey } from '@peartube/platform/native-bundle-cache'
-import { getNativePublisherKeyVault, getNativePublisherSigner } from '@/lib/publisher-shell-signer.native'
+import { getNativePublisherSigner } from '@/lib/publisher-shell-signer.native'
 import { useDeviceConditionsReporter } from '@/hooks/useNetworkPolicy'
 import type { PearUpdateEvent } from '@peartube/platform/rpc'
+import { usePearUpdates } from '@/hooks/usePearUpdates'
 export { useApp } from '@/lib/AppContext'
 
 // Configure Reanimated logger to disable strict mode warnings
@@ -413,9 +414,7 @@ export default function RootLayout() {
   const [backendError, setBackendError] = useState<string | null>(null)
   const [startupStatus, setStartupStatus] = useState<string | null>(null)
   const [androidDiscoveryPermissionStatus, setAndroidDiscoveryPermissionStatus] = useState<AndroidDiscoveryPermissionStatus | null>(null)
-  const [pearUpdate, setPearUpdate] = useState<PearUpdateEvent | null>(null)
-  const [pearUpdateBusy, setPearUpdateBusy] = useState(false)
-  const [pearUpdateError, setPearUpdateError] = useState<string | null>(null)
+
   const statsPollersRef = useRef<Map<string, NodeJS.Timeout>>(new Map())
 const castKeepaliveIntervalRef = useRef<NodeJS.Timeout | null>(null)
 const castSuspendGraceTimerRef = useRef<NodeJS.Timeout | null>(null)
@@ -467,42 +466,7 @@ const FOREGROUND_RESUME_TIMEOUT_MS = 5000
     return () => clearInterval(interval)
   }, [ready])
 
-  // Pear OTA update state. The updater lives in the backend, so this only
-  // arrives once the platform RPC module is loaded; `updates` is absent on
-  // shells without an updater and the subscription is then skipped.
-  useEffect(() => {
-    const updates = platformRPC?.rpc?.updates
-    if (typeof updates?.onEvent !== 'function') return
-
-    return updates.onEvent((event: PearUpdateEvent) => {
-      console.log('[App] Pear update:', event.state, event.version || '', event.minver || '')
-      setPearUpdate(event)
-      setPearUpdateError(null)
-    })
-  }, [ready])
-
-  const applyPearUpdate = useCallback(async () => {
-    const updates = platformRPC?.rpc?.updates
-    if (!updates) return
-
-    setPearUpdateBusy(true)
-    setPearUpdateError(null)
-    try {
-      // apply() has to fully resolve first: it is what swaps the payload onto
-      // disk. Restarting before it settles reloads the old bundle.
-      await updates.apply()
-      await updates.restart()
-    } catch (err: any) {
-      console.error('[App] Pear update failed:', err?.message)
-      setPearUpdateError(String(err?.message || 'Update failed'))
-      setPearUpdateBusy(false)
-    }
-  }, [])
-
-  const dismissPearUpdate = useCallback(() => {
-    setPearUpdate(null)
-    setPearUpdateError(null)
-  }, [])
+  const pearUpdates = usePearUpdates(platformRPC, ready)
 
   const loadInitialData = useCallback(async () => {
     if (!platformRPC) return
@@ -782,8 +746,6 @@ const FOREGROUND_RESUME_TIMEOUT_MS = 5000
       // code (the user keeps seeing the same "Connecting to P2P network"
       // behavior even after a fix shipped).
       const sources = readBundleSources()
-      const publisherKeyVault = await getNativePublisherKeyVault()
-
       await platformRPC.initPlatformRPC({
         backendVersionKey: getNativeBackendVersionKey(
           sources.backendSource,
@@ -795,8 +757,6 @@ const FOREGROUND_RESUME_TIMEOUT_MS = 5000
           __peartubeLaunchOptions: true,
         },
         publisherSigner: await getNativePublisherSigner(),
-        migrateLegacyPublisherRoot: async (request: unknown) =>
-          publisherKeyVault.importLegacyRootMigration(request),
       })
       await ensurePersonalEncryption(platformRPC.rpc)
       startupLog('[Startup] initPlatformRPC returned ms=', Date.now() - t0)
@@ -1452,13 +1412,13 @@ const FOREGROUND_RESUME_TIMEOUT_MS = 5000
                         )}
                       </View>
                       {showConnecting || showUnavailable ? null : <VideoPlayerOverlay />}
-                      {pearUpdate && !showConnecting && !showUnavailable ? (
+                      {pearUpdates.update && !showConnecting && !showUnavailable ? (
                         <PearUpdateBanner
-                          update={pearUpdate}
-                          busy={pearUpdateBusy}
-                          error={pearUpdateError}
-                          onApply={applyPearUpdate}
-                          onDismiss={dismissPearUpdate}
+                          update={pearUpdates.update}
+                          busy={pearUpdates.busy}
+                          error={pearUpdates.error}
+                          onApply={pearUpdates.apply}
+                          onDismiss={pearUpdates.dismiss}
                         />
                       ) : null}
                     </SocialProvider>

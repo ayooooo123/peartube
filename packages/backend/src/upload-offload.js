@@ -1,10 +1,11 @@
 /**
- * Legacy Hypercore peer-range inspection helpers.
+ * Hypercore peer-range inspection helpers.
  *
  * Raw peer availability is useful evidence, but it is never durability proof:
  * viewers disconnect, anonymous Noise identities are cheap, and a configured
  * relay key does not prove an intentional retention commitment. Source deletion
- * is authorized only by the publication-bound archive assessment manager.
+ * is authorized only by the publication-bound archive assessment manager, in
+ * archive/confidence.js.
  */
 
 function toHexKey(value) {
@@ -15,19 +16,6 @@ function toHexKey(value) {
   }
   return null
 }
-
-function normalizeKeySet(keys) {
-  const set = new Set()
-  for (const key of Array.isArray(keys) ? keys : (keys ? [keys] : [])) {
-    const hex = toHexKey(key)
-    if (hex) set.add(hex)
-  }
-  return set
-}
-
-export const DEFAULT_OFFLOAD_POLICY = Object.freeze({
-  minFullCopyPeers: Number.MAX_SAFE_INTEGER,
-})
 
 /**
  * Does this peer hold every block in [blockOffset, blockOffset + blockLength)?
@@ -74,29 +62,3 @@ export function collectFullCopyPeers(peers, range) {
   return { fullCopyKeys, fullCopyAnonymous }
 }
 
-/**
- * Classify connected holders without treating transient or anonymous peers as
- * source-deletion authority. This helper remains for diagnostics and legacy
- * callers; new offload decisions use archive/confidence.js.
- */
-export function assessOffloadEligibility({
-  fullCopyKeys = [],
-  fullCopyAnonymous = 0,
-  relayKeys = [],
-  deviceKeys = [],
-} = {}) {
-  const relaySet = normalizeKeySet(relayKeys)
-  const deviceSet = normalizeKeySet(deviceKeys)
-  const keys = Array.from(new Set((fullCopyKeys || []).map(toHexKey).filter(Boolean)))
-  const relayHasFullCopy = keys.some((key) => relaySet.has(key))
-  const ownDeviceHasFullCopy = keys.some((key) => deviceSet.has(key))
-  const fullCopyPeers = keys.length + Math.max(0, Number(fullCopyAnonymous) || 0)
-  return {
-    eligible: ownDeviceHasFullCopy,
-    fullCopyPeers,
-    relayHasFullCopy,
-    ownDeviceHasFullCopy,
-    minFullCopyPeers: Number.MAX_SAFE_INTEGER,
-    reasons: ownDeviceHasFullCopy ? ['own-device-full-copy'] : [],
-  }
-}

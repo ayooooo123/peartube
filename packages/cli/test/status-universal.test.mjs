@@ -55,7 +55,6 @@ test('relay status exposes the bounded policy-v2 contract without protected runt
     policy: {
       policyVersion: 2,
       consentVersion: 7,
-      migrationRequired: false,
       effectiveRole: 'archive-enabled',
       permissions: { contribute: true, archive: true },
       contributionBudgetBytes: 4096,
@@ -104,7 +103,6 @@ test('relay status exposes the bounded policy-v2 contract without protected runt
   assert.deepEqual(status.effectivePolicy, {
     policyVersion: 2,
     consentVersion: 7,
-    migrationRequired: false,
     effectiveRole: 'archive-enabled',
     permissions: { contribute: true, archive: true }
   })
@@ -167,7 +165,7 @@ test('relay status exposes the bounded policy-v2 contract without protected runt
 
   assert.equal(formatRelayStatus(status), [
     'mode: public',
-    'role: archive-enabled migrationRequired=false consentVersion=7',
+    'role: archive-enabled consentVersion=7',
     'permissions: contribute=true archive=true',
     'contributionBudget: 123/4096 bytes',
     'archiveBudget: 456/8192 bytes',
@@ -191,7 +189,6 @@ test('watch-only status reports stale public work without restoring protected id
       policy: {
         policyVersion: 2,
         consentVersion: 0,
-        migrationRequired: true,
         effectiveRole: 'watch-only',
         permissions: { contribute: false, archive: false },
         selectedIndexerCount: 2

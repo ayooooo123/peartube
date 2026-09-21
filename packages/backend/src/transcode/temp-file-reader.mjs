@@ -61,11 +61,6 @@ const LOG_INTERVAL_BYTES = 10 * 1024 * 1024 // Log every 10MB for better visibil
  */
 export class TempFileReader {
   constructor(url, fileSize, options = {}) {
-    // Support legacy signature: (url, fileSize, tempDir)
-    if (typeof options === 'string') {
-      options = { tempDir: options }
-    }
-    
     this.url = url
     this.fileSize = fileSize
     this.parsedUrl = new URL(url)

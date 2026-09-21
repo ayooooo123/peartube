@@ -396,7 +396,7 @@ test('root-backed rich channels fail closed on missing details and materialize e
     t.alike(ids(await publicBee.listVideos()), [compact.id])
   })
 })
-test('structured direct sync establishes modern format before every compact projection row', async (t) => {
+test('structured direct sync establishes detailed format before every compact projection row', async (t) => {
   await withPublicBee(async (publicBee) => {
     const compact = { id: 'direct-compact', title: 'Compact', uploadedAt: 1 }
     const identityKey = 'youtube:direct-structured'
@@ -422,7 +422,7 @@ test('structured direct sync establishes modern format before every compact proj
       claimWinners: new Map([[identityKey, { identityKey, claimantId, videoId: structured.id }]]),
     })
 
-    t.is(await publicBee.getProjectionFormat(), 'modern')
+    t.is(await publicBee.getProjectionFormat(), 'detailed')
     t.alike(await publicBee.getContentDetails(compact.id), { id: compact.id })
     t.is((await publicBee.getContentDetails(structured.id))?.contentKind, 'episode')
     t.alike(ids(await publicBee.listVideos()), [compact.id, structured.id])
@@ -434,7 +434,7 @@ test('structured direct sync establishes modern format before every compact proj
   })
 })
 
-test('projection format evidence distinguishes legacy compact rows from uncertain partial modern rows', async (t) => {
+test('projection format evidence distinguishes summary compact rows from uncertain partial detailed rows', async (t) => {
   await withPublicBee(async (publicBee) => {
     const compact = { id: 'format-evidence', title: 'Format evidence', uploadedAt: 1 }
     await publicBee.db.insert('@peartubePublic/videos', compact)
@@ -443,32 +443,31 @@ test('projection format evidence distinguishes legacy compact rows from uncertai
     t.alike(
       await publicBee.listVideosWithStatus(),
       { status: 'uncertain', videos: [], filteredCount: 1 },
-      'an unmarked sparse replica cannot masquerade as legacy',
+      'an unmarked sparse replica cannot masquerade as a summary projection',
     )
 
-    await publicBee.setProjectionFormat('legacy')
+    await publicBee.setProjectionFormat('summary')
     t.alike((await publicBee.listVideos()).map((video) => video.id), [compact.id])
 
-    await publicBee.setProjectionFormat('modern')
+    await publicBee.setProjectionFormat('detailed')
     t.alike(
       await publicBee.listVideosWithStatus(),
       { status: 'uncertain', videos: [], filteredCount: 1 },
-      'a durable modern marker fails closed even when profile/root blocks are temporarily absent',
+      'a durable detailed marker fails closed even when profile/root blocks are temporarily absent',
     )
     await t.exception(
-      publicBee.setProjectionFormat('legacy'),
+      publicBee.setProjectionFormat('summary'),
       /cannot downgrade/i,
-      'modern projection evidence is monotonic',
+      'detailed projection evidence is monotonic',
     )
   })
 })
 
-test('syncFromChannel establishes legacy format for pre-durability public rows lacking a projection marker', async (t) => {
+test('syncFromChannel establishes summary format for detail-free public rows lacking a projection marker', async (t) => {
   await withPublicBee(async (publicBee) => {
-    // Public rows written by a pre-durability backend: videos exist but no
-    // projection-format marker and no root descriptor were ever recorded.
-    await publicBee.db.insert('@peartubePublic/videos', { id: 'legacy-1', title: 'Ep 1', uploadedAt: 1 })
-    await publicBee.db.insert('@peartubePublic/videos', { id: 'legacy-2', title: 'Ep 2', uploadedAt: 2 })
+    // Public rows with no projection-format marker and no root descriptor.
+    await publicBee.db.insert('@peartubePublic/videos', { id: 'summary-1', title: 'Ep 1', uploadedAt: 1 })
+    await publicBee.db.insert('@peartubePublic/videos', { id: 'summary-2', title: 'Ep 2', uploadedAt: 2 })
     await publicBee.db.flush()
 
     t.is(await publicBee.getProjectionFormat(), null, 'starts with no projection marker')
@@ -478,15 +477,15 @@ test('syncFromChannel establishes legacy format for pre-durability public rows l
       'unmarked rows fail closed at read time before any authoritative sync',
     )
 
-    // Authoritative source channel exposes the same legacy videos with no
-    // structured content details, no profile canonical revision, and no root.
+    // Authoritative source channel exposes the same videos with no structured
+    // content details, no profile canonical revision, and no root.
     const sourceChannel = {
       keyHex: 'aa'.repeat(32),
-      async getMetadata() { return { name: 'Legacy Show', description: '' } },
+      async getMetadata() { return { name: 'Summary Show', description: '' } },
       async listVideos() {
         return [
-          { id: 'legacy-1', title: 'Ep 1', uploadedAt: 1 },
-          { id: 'legacy-2', title: 'Ep 2', uploadedAt: 2 },
+          { id: 'summary-1', title: 'Ep 1', uploadedAt: 1 },
+          { id: 'summary-2', title: 'Ep 2', uploadedAt: 2 },
         ]
       },
       async getChannelProfile() { return null },
@@ -497,10 +496,10 @@ test('syncFromChannel establishes legacy format for pre-durability public rows l
 
     await publicBee.syncFromChannel(sourceChannel, { throwOnError: true })
 
-    t.is(await publicBee.getProjectionFormat(), 'legacy', 'authoritative legacy sync stamps the format marker')
+    t.is(await publicBee.getProjectionFormat(), 'summary', 'authoritative detail-free sync stamps the format marker')
     const listing = await publicBee.listVideosWithStatus()
-    t.is(listing.status, 'authoritative', 'legacy videos are authoritatively readable after migration')
-    t.alike(listing.videos.map((video) => video.id).sort(), ['legacy-1', 'legacy-2'])
+    t.is(listing.status, 'authoritative', 'summary videos are authoritatively readable once marked')
+    t.alike(listing.videos.map((video) => video.id).sort(), ['summary-1', 'summary-2'])
     t.is(listing.filteredCount, 0)
   })
 })
@@ -1801,7 +1800,7 @@ test('projection marker writes preserve concurrent identity saves and never regr
     await Promise.all([pendingWrite, activeWrite])
     states.get = originalGet
 
-    const storedIdentities = (await ctx.metaDb.get('identities')).value
+    const storedIdentities = (await ctx.metaDb.get('identity-state:v1')).value.identities
     t.is(
       storedIdentities.find((identity) => identity.publicKey === created.publicKey)?.personalKey,
       personalKey,

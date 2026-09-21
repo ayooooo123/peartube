@@ -13,7 +13,7 @@
     "test": "brittle test/*.test.mjs"
   },
   "dependencies": {
-    "hrpc": "^4.3.0",
+    "hrpc": "^4.3.1",
     "hyperschema": "^1.20.1"
   },
   "devDependencies": {

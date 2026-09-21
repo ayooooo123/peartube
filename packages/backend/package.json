@@ -72,7 +72,7 @@
     "@xenova/transformers": "^2.17.2",
     "abort-controller": "^3.0.0",
     "autobase": "^7.28.2",
-    "b4a": "^1.8.0",
+    "b4a": "^1.9.0",
     "bare-buffer": "^3.6.0",
     "bare-channel": "^5.2.3",
     "bare-ffmpeg": "file:../bare-ffmpeg",

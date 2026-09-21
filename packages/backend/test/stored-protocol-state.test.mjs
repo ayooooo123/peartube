@@ -128,12 +128,25 @@ test('malformed and oversized markers fail closed with a stable reason and are n
   }
 })
 
+// The read has to be what fails, so the fs is injected rather than the marker
+// replaced by a directory: a directory stats at 4096 bytes on ext4 and at 64
+// on APFS, so that fixture trips the size check on Linux and the read on
+// macOS, and the reason it asserts depends on the runner.
 test('an unreadable marker fails closed rather than being treated as fresh storage', (t) => {
   const storagePath = makeStorage(t)
-  fs.mkdirSync(markerPath(storagePath))
+  writeMarker(storagePath, { protocolVersion: 4 })
+
+  const unreadable = {
+    ...fs,
+    readFileSync() {
+      const error = new Error('EIO: i/o error, read')
+      error.code = 'EIO'
+      throw error
+    },
+  }
 
   assert.throws(
-    () => prepareStoredProtocolState({ storagePath, expectedVersion: 4, fs, path }),
+    () => prepareStoredProtocolState({ storagePath, expectedVersion: 4, fs: unreadable, path }),
     (error) => {
       assert.equal(error.code, STORED_PROTOCOL_ERROR_CODE)
       assert.equal(error.reason, 'marker-unreadable')
@@ -141,7 +154,21 @@ test('an unreadable marker fails closed rather than being treated as fresh stora
       return true
     },
   )
-  assert.equal(fs.existsSync(markerPath(storagePath)), true)
+  assert.equal(fs.existsSync(markerPath(storagePath)), true, 'a marker that cannot be read is never replaced')
+})
+
+test('a marker larger than the bound fails closed on its size, not its contents', (t) => {
+  const storagePath = makeStorage(t)
+  fs.writeFileSync(markerPath(storagePath), JSON.stringify({ protocolVersion: 4, pad: 'x'.repeat(200) }))
+
+  assert.throws(
+    () => prepareStoredProtocolState({ storagePath, expectedVersion: 4, fs, path }),
+    (error) => {
+      assert.equal(error.code, STORED_PROTOCOL_ERROR_CODE)
+      assert.equal(error.reason, 'marker-size-invalid')
+      return true
+    },
+  )
 })
 
 test('a crash before marker commit remains distinguishable as uninitialized storage', (t) => {

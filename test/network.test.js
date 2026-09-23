@@ -109,3 +109,32 @@ test('a malformed announce from a peer does not break anyone\'s tracker', async 
   assert.equal(a.tracker.closed, false)
   assert.equal(b.tracker.closed, false)
 })
+
+test('relays keep publishing and converging after the founder goes offline', async t => {
+  const testnet = await createTestnet(3)
+  const a = await createNode({ storage: tmp(), bootstrap: testnet.bootstrap })
+  const tracker = a.status().tracker
+  const b = await createNode({ storage: tmp(), bootstrap: testnet.bootstrap, tracker })
+  const c = await createNode({ storage: tmp(), bootstrap: testnet.bootstrap, tracker })
+  t.after(async () => { await b.close(); await c.close(); await testnet.destroy() })
+
+  await a.publish({ id: 'imdb:tt0000010', title: 'Founder' }, Readable.from([randomBytes(100)]))
+  await until(async () => (await b.search('imdb:tt0000010')).length && (await c.search('imdb:tt0000010')).length)
+  await a.close()
+
+  await b.publish({ id: 'imdb:tt0000011', title: 'B one' }, Readable.from([randomBytes(100)]))
+  await b.publish({ id: 'imdb:tt0000012', title: 'B two' }, Readable.from([randomBytes(100)]))
+  await c.publish({ id: 'imdb:tt0000013', title: 'C one' }, Readable.from([randomBytes(100)]))
+
+  const ids = ['imdb:tt0000010', 'imdb:tt0000011', 'imdb:tt0000012', 'imdb:tt0000013']
+  const sees = node => async () => (await Promise.all(ids.map(id => node.search(id)))).every(r => r.length === 1)
+  await until(sees(b))
+  await until(sees(c))
+})
+
+test('a new relay can publish twice before it has synced the tracker', async t => {
+  const { a, b } = await network(t)
+  await b.publish({ id: 'imdb:tt0000021', title: 'First' }, Readable.from([randomBytes(100)]))
+  await b.publish({ id: 'imdb:tt0000022', title: 'Second' }, Readable.from([randomBytes(100)]))
+  await until(async () => (await a.search('imdb:tt0000021')).length && (await a.search('imdb:tt0000022')).length)
+})

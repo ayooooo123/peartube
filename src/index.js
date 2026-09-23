@@ -96,17 +96,22 @@ export async function createNode ({
     return results
   }
 
-  // Store a readable stream as a blob, hash it on the way in, then announce it.
-  // pipelinePromise destroys every stream on failure, which releases the
-  // Hyperblobs write lock; an abandoned writer would hang every later publish.
-  async function publish ({ id, title }, source) {
+  // Store a readable stream as a blob and hash it on the way in. Returns the
+  // announce op without publishing it. pipelinePromise destroys every stream
+  // on failure, which releases the Hyperblobs write lock; an abandoned writer
+  // would hang every later put.
+  async function put ({ id, title }, source) {
     if (!str(id, ID)) throw new Error(`Invalid id ${id}`)
     const hash = createHash('sha256')
     let size = 0
     const hasher = new Transform({ transform (chunk, cb) { hash.update(chunk); size += chunk.length; cb(null, chunk) } })
     const writer = blobs.createWriteStream()
     await pipelinePromise(source, hasher, writer)
-    const op = { type: 'announce', id, title: String(title || id).slice(0, MAX_TITLE), size, sha256: hash.digest('hex'), blobs: blobsKey, blob: writer.id }
+    return { type: 'announce', id, title: String(title || id).slice(0, MAX_TITLE), size, sha256: hash.digest('hex'), blobs: blobsKey, blob: writer.id }
+  }
+
+  async function publish (meta, source) {
+    const op = await put(meta, source)
     await append(op)
     return { ...op, streamUrl: streamUrl(op) }
   }
@@ -115,21 +120,33 @@ export async function createNode ({
     await append({ type: 'remove', key })
   }
 
+  // Resolves once op is in the local oplog. A relay that has not synced the
+  // tracker yet holds optimistic writes in memory only, and a restart would
+  // drop them; this waits until the write is durable (for a joiner, until it
+  // first syncs).
   async function append (op) {
+    const before = tracker.local.length
     await tracker.append(b4a.from(JSON.stringify(op)), { optimistic: !tracker.writable })
     await tracker.updated()
+    while (tracker.local.length <= before) {
+      if (closing) throw new Error('Node closed before the write was durable')
+      await new Promise(resolve => setTimeout(resolve, 500))
+      await tracker.update()
+    }
   }
 
   function status () {
     return { tracker: b4a.toString(tracker.key, 'hex'), writer: b4a.toString(tracker.local.key, 'hex'), blobs: blobsKey, blobBytes: blobsCore.byteLength, peers: swarm.connections.size }
   }
 
+  let closing = false
   async function close () {
+    closing = true
     await swarm.destroy()
     await tracker.close()
     await server.close()
     await store.close()
   }
 
-  return { tracker, swarm, search, publish, remove, status, streamUrl, close }
+  return { tracker, swarm, search, put, append, publish, remove, status, streamUrl, close, get closing () { return closing } }
 }

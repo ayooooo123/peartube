@@ -7,7 +7,7 @@ import { Readable } from 'node:stream'
 export function createAcquirer (node, file) {
   let jobs = []
   try { jobs = JSON.parse(readFileSync(file, 'utf8')) } catch {}
-  for (const job of jobs) if (job.status === 'running') job.status = 'queued'
+  for (const job of jobs) if (job.status === 'running') job.status = job.announce ? 'announcing' : 'queued'
   let running = null
 
   function save () {
@@ -16,31 +16,39 @@ export function createAcquirer (node, file) {
   }
 
   // Public view of a job: never the source.
-  const view = ({ source, ...job }) => job
+  const view = ({ source, announce, ...job }) => job
 
+  // A job is done only once its announce is durable. The stored blob's
+  // announce is saved first, so a restart re-announces instead of re-fetching.
   async function run (job) {
-    job.status = 'running'
+    job.status = job.announce ? 'announcing' : 'running'
     job.error = null
     save()
     const controller = new AbortController()
     running = { job, controller }
     try {
-      const res = await fetch(job.source.url, { headers: job.source.headers || {}, signal: controller.signal })
-      if (!res.ok || !res.body) throw new Error(`Source answered ${res.status}`)
-      const result = await node.publish({ id: job.id, title: job.title }, Readable.fromWeb(res.body))
-      Object.assign(job, { status: 'done', size: result.size, sha256: result.sha256, source: null })
+      if (!job.announce) {
+        const res = await fetch(job.source.url, { headers: job.source.headers || {}, signal: controller.signal })
+        if (!res.ok || !res.body) throw new Error(`Source answered ${res.status}`)
+        const op = await node.put({ id: job.id, title: job.title }, Readable.fromWeb(res.body))
+        if (job.status === 'cancelled') throw new Error('Cancelled')
+        Object.assign(job, { status: 'announcing', announce: op, source: null })
+        save()
+      }
+      await node.append(job.announce)
+      Object.assign(job, { status: 'done', size: job.announce.size, sha256: job.announce.sha256 })
     } catch (err) {
-      job.status = job.status === 'cancelled' ? 'cancelled' : 'failed'
+      if (job.status !== 'cancelled') job.status = job.announce ? 'announcing' : 'failed'
       job.error = err.message
     }
     running = null
     save()
-    next()
+    if (!node.closing) next()
   }
 
   function next () {
     if (running) return
-    const job = jobs.find(j => j.status === 'queued')
+    const job = jobs.find(j => j.status === 'announcing') || jobs.find(j => j.status === 'queued')
     if (job) run(job)
   }
 

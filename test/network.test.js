@@ -95,7 +95,7 @@ test('a source that dies mid-transfer fails its job and does not block the next 
   const broken = acquirer.add({ id: 'imdb:tt0000001', title: 'Broken', source: { url: `${base}/broken` } })
   const next = acquirer.add({ id: 'imdb:tt0000002', title: 'Next', source: { url: `${base}/good` } })
   await until(() => acquirer.get(broken.jobId).status === 'failed')
-  const done = await until(() => acquirer.get(next.jobId).status === 'done' && acquirer.get(next.jobId), 20000)
+  const done = await until(() => acquirer.get(next.jobId).status === 'done' && acquirer.get(next.jobId))
   assert.equal(done.sha256, createHash('sha256').update(good).digest('hex'))
 })
 
@@ -137,4 +137,32 @@ test('a new relay can publish twice before it has synced the tracker', async t =
   await b.publish({ id: 'imdb:tt0000021', title: 'First' }, Readable.from([randomBytes(100)]))
   await b.publish({ id: 'imdb:tt0000022', title: 'Second' }, Readable.from([randomBytes(100)]))
   await until(async () => (await a.search('imdb:tt0000021')).length && (await a.search('imdb:tt0000022')).length)
+})
+
+test('an acquire finished before first sync survives a restart and is announced', async t => {
+  const net = await createTestnet(3)
+  const isolated = await createTestnet(3)
+  const a = await createNode({ storage: tmp(), bootstrap: net.bootstrap })
+  const tracker = a.status().tracker
+  const bytes = randomBytes(200 * 1024)
+  const source = createServer((req, res) => res.end(bytes))
+  await new Promise(resolve => source.listen(0, '127.0.0.1', resolve))
+  const dir = tmp()
+  const jobsFile = join(dir, 'jobs.json')
+
+  // B joins but cannot reach anyone: the file is stored, the announce cannot be durable yet.
+  let b = await createNode({ storage: dir, bootstrap: isolated.bootstrap, tracker })
+  let acquirer = createAcquirer(b, jobsFile)
+  const job = acquirer.add({ id: 'imdb:tt0000031', title: 'Offline', source: { url: `http://127.0.0.1:${source.address().port}/` } })
+  await until(() => acquirer.get(job.jobId).status === 'announcing')
+  assert.notEqual(acquirer.get(job.jobId).status, 'done')
+  await b.close()
+  source.close()
+
+  b = await createNode({ storage: dir, bootstrap: net.bootstrap, tracker })
+  t.after(async () => { await a.close(); await b.close(); await net.destroy(); await isolated.destroy() })
+  acquirer = createAcquirer(b, jobsFile)
+  await until(() => acquirer.get(job.jobId).status === 'done')
+  const [hit] = await until(async () => (await a.search('imdb:tt0000031')).length && a.search('imdb:tt0000031'))
+  assert.equal(hit.sha256, createHash('sha256').update(bytes).digest('hex'))
 })

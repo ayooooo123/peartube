@@ -2,6 +2,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { createServer } from 'node:http'
 import { createHash, randomBytes } from 'node:crypto'
+import { Readable } from 'node:stream'
 import { mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -63,7 +64,7 @@ test('a relay acquires a source; another relay finds it and streams exact bytes'
 
 test('a writer cannot remove another writer\'s entry', async t => {
   const { a, b } = await network(t)
-  await b.publish({ id: 'imdb:tt0068646', title: 'Kept' }, [randomBytes(1000)])
+  await b.publish({ id: 'imdb:tt0068646', title: 'Kept' }, Readable.from([randomBytes(1000)]))
   const [entry] = await until(async () => (await a.search('imdb:tt0068646')).length && a.search('imdb:tt0068646'))
 
   await a.remove(entry.key)
@@ -73,4 +74,38 @@ test('a writer cannot remove another writer\'s entry', async t => {
 
   await b.remove(entry.key)
   await until(async () => (await a.search('imdb:tt0068646')).length === 0)
+})
+
+test('a source that dies mid-transfer fails its job and does not block the next one', async t => {
+  const { b } = await network(t)
+  const good = randomBytes(300 * 1024)
+  const source = createServer((req, res) => {
+    if (req.url === '/broken') {
+      res.writeHead(200, { 'content-length': String(10 * 1024 * 1024) })
+      res.write(randomBytes(64 * 1024), () => res.socket.destroy())
+    } else {
+      res.end(good)
+    }
+  })
+  await new Promise(resolve => source.listen(0, '127.0.0.1', resolve))
+  t.after(() => source.close())
+  const base = `http://127.0.0.1:${source.address().port}`
+
+  const acquirer = createAcquirer(b, join(tmp(), 'jobs.json'))
+  const broken = acquirer.add({ id: 'imdb:tt0000001', title: 'Broken', source: { url: `${base}/broken` } })
+  const next = acquirer.add({ id: 'imdb:tt0000002', title: 'Next', source: { url: `${base}/good` } })
+  await until(() => acquirer.get(broken.jobId).status === 'failed')
+  const done = await until(() => acquirer.get(next.jobId).status === 'done' && acquirer.get(next.jobId), 20000)
+  assert.equal(done.sha256, createHash('sha256').update(good).digest('hex'))
+})
+
+test('a malformed announce from a peer does not break anyone\'s tracker', async t => {
+  const { a, b } = await network(t)
+  const hostile = { type: 'announce', id: { toString: null, valueOf: null }, blobs: { toString: null }, sha256: 'x', title: 't', size: 1, blob: {} }
+  await b.tracker.append(Buffer.from(JSON.stringify(hostile)), { optimistic: true })
+  await a.publish({ id: 'imdb:tt0000003', title: 'After' }, Readable.from([randomBytes(500)]))
+  const [hit] = await until(async () => (await b.search('imdb:tt0000003')).length && b.search('imdb:tt0000003'))
+  assert.equal(hit.title, 'After')
+  assert.equal(a.tracker.closed, false)
+  assert.equal(b.tracker.closed, false)
 })

@@ -20,7 +20,8 @@
     "corestore": "^7.12.6",
     "hyperblobs": "^2.12.1",
     "hypercore-blob-server": "^1.15.0",
-    "hyperswarm": "^4.17.2"
+    "hyperswarm": "^4.17.2",
+    "streamx": "^2.28.0"
   },
   "devDependencies": {
     "hyperdht": "^6.34.0"

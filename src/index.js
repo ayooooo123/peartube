@@ -5,6 +5,7 @@ import Hyperblobs from 'hyperblobs'
 import BlobServer from 'hypercore-blob-server'
 import b4a from 'b4a'
 import { createHash } from 'node:crypto'
+import { pipelinePromise, Transform } from 'streamx'
 import { join } from 'node:path'
 
 const ID = /^[a-z0-9]+:[a-z0-9]+(:s\d{2}e\d{2,3})?$/
@@ -14,21 +15,29 @@ const MAX_TITLE = 300
 // A tracker entry is public and replicated to every relay. apply is the only
 // gate: it keeps well-formed announces and files each under its writer's key,
 // so a writer can add or remove only its own entries.
+// Values here come from any peer, so every check must be total: typeof before regex.
+const str = (v, re) => typeof v === 'string' && re.test(v)
+
 export function decodeOp (value) {
   let op
   try { op = JSON.parse(value) } catch { return null }
-  if (op?.type === 'remove') return typeof op.key === 'string' ? op : null
-  if (op?.type !== 'announce' || !ID.test(op.id) || !HEX64.test(op.blobs) || !HEX64.test(op.sha256)) return null
+  if (op === null || typeof op !== 'object') return null
+  if (op.type === 'remove') return typeof op.key === 'string' ? op : null
+  if (op.type !== 'announce' || !str(op.id, ID) || !str(op.blobs, HEX64) || !str(op.sha256, HEX64)) return null
   if (typeof op.title !== 'string' || op.title.length > MAX_TITLE || !Number.isSafeInteger(op.size) || op.size < 0) return null
   const { blockOffset, blockLength, byteOffset, byteLength } = op.blob || {}
   if (![blockOffset, blockLength, byteOffset, byteLength].every(n => Number.isSafeInteger(n) && n >= 0)) return null
   return op
 }
 
-async function apply (nodes, view) {
+// A relay's first well-formed op arrives optimistically, as a join request.
+// Granting it as a non-indexer writer lets its later ops be ordinary appends;
+// an ungranted optimistic writer cannot append again.
+async function apply (nodes, view, host) {
   for (const node of nodes) {
     const op = decodeOp(node.value)
     if (!op) continue
+    await host.addWriter(node.key, { isIndexer: false })
     const writer = b4a.toString(node.key, 'hex')
     const w = view.write()
     if (op.type === 'remove') {
@@ -88,25 +97,26 @@ export async function createNode ({
   }
 
   // Store a readable stream as a blob, hash it on the way in, then announce it.
+  // pipelinePromise destroys every stream on failure, which releases the
+  // Hyperblobs write lock; an abandoned writer would hang every later publish.
   async function publish ({ id, title }, source) {
-    if (!ID.test(id)) throw new Error(`Invalid id ${id}`)
+    if (!str(id, ID)) throw new Error(`Invalid id ${id}`)
     const hash = createHash('sha256')
-    const writer = blobs.createWriteStream()
     let size = 0
-    for await (const chunk of source) {
-      hash.update(chunk)
-      size += chunk.length
-      if (!writer.write(chunk)) await new Promise(resolve => writer.once('drain', resolve))
-    }
-    await new Promise((resolve, reject) => { writer.once('close', resolve); writer.once('error', reject); writer.end() })
+    const hasher = new Transform({ transform (chunk, cb) { hash.update(chunk); size += chunk.length; cb(null, chunk) } })
+    const writer = blobs.createWriteStream()
+    await pipelinePromise(source, hasher, writer)
     const op = { type: 'announce', id, title: String(title || id).slice(0, MAX_TITLE), size, sha256: hash.digest('hex'), blobs: blobsKey, blob: writer.id }
-    await tracker.append(b4a.from(JSON.stringify(op)), { optimistic: true })
-    await tracker.updated()
+    await append(op)
     return { ...op, streamUrl: streamUrl(op) }
   }
 
   async function remove (key) {
-    await tracker.append(b4a.from(JSON.stringify({ type: 'remove', key })), { optimistic: true })
+    await append({ type: 'remove', key })
+  }
+
+  async function append (op) {
+    await tracker.append(b4a.from(JSON.stringify(op)), { optimistic: !tracker.writable })
     await tracker.updated()
   }
 

@@ -4,23 +4,24 @@ A decentralized CDN and debrid provider built on the Holepunch stack.
 
 Relays share one open tracker, an [Autobee](https://github.com/holepunchto/autobee) multi-writer Hyperbee. A relay that has a file posts an entry for it. Any relay can search the tracker and stream any listed file over HTTP Range. Blocks come from whichever peers have them, and the reading relay keeps them and seeds them from then on.
 
-No one grants write access. Each entry is filed under its writer's key, so a relay can only add or remove its own entries.
+No one grants write access. Each entry is filed under its writer's key, so a relay can only add or remove its own entries. Every relay builds its own view of the tracker by running the same `apply` over everyone's writes; it never adopts a view another peer built.
 
 ## Run a relay
 
 ```sh
 npm install
-PEARTUBE_SECRET=change-me-to-16-chars PEARTUBE_TRACKER=<tracker key> npm start
+PEARTUBE_TRACKER=<tracker key> npm start
 ```
 
 Leave `PEARTUBE_TRACKER` unset to found a new tracker. The relay prints its key.
 
+Open `http://<relay>:8174/` to see acquisitions.
+
 | Variable | Default | Meaning |
 |---|---|---|
-| `PEARTUBE_SECRET` | required | Bearer secret for the API; also derives the stream token |
 | `PEARTUBE_TRACKER` | none (found new) | Tracker key to join |
 | `PEARTUBE_STORAGE` | `./peartube-data` | Data directory |
-| `PEARTUBE_API_PORT` | `8174` | API port |
+| `PEARTUBE_API_PORT` | `8174` | UI and API port |
 | `PEARTUBE_STREAM_HOST` | `127.0.0.1` | Host put in stream URLs; set to a LAN address to serve other machines |
 | `PEARTUBE_STREAM_PORT` | `8175` | Stream port |
 | `PEARTUBE_DHT_PORT` | random | Fixed UDP port, for a port forward |
@@ -32,16 +33,19 @@ Docker: `docker build -t peartube-relay .` then mount `/data`.
 
 HyperDHT cannot holepunch between two randomized NATs (`HOLEPUNCH_DOUBLE_RANDOMIZED_NATS`). If your relay's NAT is randomized, forward a UDP port and set `PEARTUBE_DHT_PORT`, or use a blind relay via `PEARTUBE_RELAY_THROUGH`.
 
-## API
+## UI and API
 
-All routes need `Authorization: Bearer <PEARTUBE_SECRET>`.
+One port serves the acquisitions page at `/` and the `/v1` API. There is no auth for now: run the relay on a trusted network only. Anyone who can reach it can queue a download of any URL.
 
 | Route | Does |
 |---|---|
+| `GET /` | Acquisitions page |
 | `GET /v1/search?id=imdb:tt0944947:s01e02` | Tracker entries for an id, each with a `streamUrl` |
 | `POST /v1/acquire` `{id, title, source: {url, headers}}` | Fetch a source, store it, announce it |
 | `GET /v1/jobs`, `GET /v1/jobs/:jobId`, `DELETE /v1/jobs/:jobId` | Acquire jobs (sources are never returned) |
 | `GET /v1/status` | Tracker, writer and blobs keys, stored bytes, peers |
+
+Job status: `queued` → `running` (fetching; `bytes` of `total`) → `announcing` (stored, being published to the tracker) → `done`; or `failed` / `cancelled`. A job is `done` only once its announce is on disk; after a restart, `announcing` jobs re-announce without re-fetching.
 
 Ids look like `imdb:tt0111161` for movies and `imdb:tt0944947:s01e02` for episodes.
 

@@ -1,17 +1,11 @@
 import { createServer } from 'node:http'
-import { timingSafeEqual } from 'node:crypto'
+import { page } from './ui.js'
 
 const MAX_BODY = 64 * 1024
 
-// Machine API for one trusted client (e.g. MediaStorm) on the LAN.
-// Every route needs `Authorization: Bearer <secret>`.
-export function createApi ({ node, acquirer, secret }) {
-  const expected = Buffer.from(`Bearer ${secret}`)
-  const authorized = header => {
-    const given = Buffer.from(header || '')
-    return given.length === expected.length && timingSafeEqual(given, expected)
-  }
-
+// The relay's one HTTP port: the UI at / and the /v1 machine API. No auth for
+// now, so bind it to a trusted network only.
+export function createApi ({ node, acquirer }) {
   async function body (req) {
     let size = 0
     const chunks = []
@@ -43,16 +37,17 @@ export function createApi ({ node, acquirer, secret }) {
   }
 
   return createServer(async (req, res) => {
+    const url = new URL(req.url, 'http://relay')
+    if (req.method === 'GET' && url.pathname === '/') {
+      res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' })
+      res.end(page)
+      return
+    }
     let status = 200
     let payload
     try {
-      if (!authorized(req.headers.authorization)) {
-        status = 401
-        payload = { error: 'unauthorized' }
-      } else {
-        payload = await route(req, new URL(req.url, 'http://relay'))
-        if (payload === undefined || payload === null) { status = 404; payload = { error: 'not found' } }
-      }
+      payload = await route(req, url)
+      if (payload === undefined || payload === null) { status = 404; payload = { error: 'not found' } }
     } catch (err) {
       status = err.status || 400
       payload = { error: err.message }

@@ -30,7 +30,9 @@ export function createAcquirer (node, file) {
       if (!job.announce) {
         const res = await fetch(job.source.url, { headers: job.source.headers || {}, signal: controller.signal })
         if (!res.ok || !res.body) throw new Error(`Source answered ${res.status}`)
-        const op = await node.put({ id: job.id, title: job.title }, Readable.fromWeb(res.body))
+        job.total = Number(res.headers.get('content-length')) || null
+        job.bytes = 0
+        const op = await node.put({ id: job.id, title: job.title }, Readable.fromWeb(res.body), bytes => { job.bytes = bytes })
         if (job.status === 'cancelled') throw new Error('Cancelled')
         Object.assign(job, { status: 'announcing', announce: op, source: null })
         save()

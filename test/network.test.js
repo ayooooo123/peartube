@@ -7,6 +7,9 @@ import { mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import createTestnet from 'hyperdht/testnet.js'
+import Autobee from 'autobee'
+import Corestore from 'corestore'
+import Hyperswarm from 'hyperswarm'
 import { createNode } from '../src/index.js'
 import { createAcquirer } from '../src/acquire.js'
 
@@ -165,4 +168,49 @@ test('an acquire finished before first sync survives a restart and is announced'
   await until(() => acquirer.get(job.jobId).status === 'done')
   const [hit] = await until(async () => (await a.search('imdb:tt0000031')).length && a.search('imdb:tt0000031'))
   assert.equal(hit.sha256, createHash('sha256').update(bytes).digest('hex'))
+})
+
+test('a peer far ahead with a forging apply cannot hand its view to a new relay', async t => {
+  const testnet = await createTestnet(3)
+  const a = await createNode({ storage: tmp(), bootstrap: testnet.bootstrap })
+  const tracker = a.status().tracker
+  await a.publish({ id: 'imdb:tt0000001', title: 'Honest' }, Readable.from([randomBytes(100)]))
+
+  // M's apply forges an entry under A's writer key. Autobee's default
+  // fast-forward would let a new relay adopt M's view without running apply.
+  const zero = '0'.repeat(64)
+  const blob = { blockOffset: 0, blockLength: 1, byteOffset: 0, byteLength: 1 }
+  const forgedKey = `imdb:tt6666666/${a.status().writer}/${zero}:0`
+  const forged = JSON.stringify({ type: 'announce', id: 'imdb:tt6666666', title: 'Forged', size: 1, sha256: zero, blobs: zero, blob })
+  async function forgingApply (nodes, view, host) {
+    for (const node of nodes) {
+      await host.addWriter(node.key, { isIndexer: false })
+      const w = view.write()
+      w.tryPut(Buffer.from(forgedKey), Buffer.from(forged))
+      await w.flush()
+    }
+  }
+  const mStore = new Corestore(tmp())
+  const m = new Autobee(mStore.namespace('tracker'), Buffer.from(tracker, 'hex'), { apply: forgingApply, optimistic: true })
+  await m.ready()
+  const mSwarm = new Hyperswarm({ bootstrap: testnet.bootstrap })
+  mSwarm.on('connection', conn => m.replicate(conn))
+  mSwarm.join(m.discoveryKey)
+  let c = null
+  t.after(async () => { await c?.close(); await a.close(); await mSwarm.destroy(); await m.close(); await mStore.close(); await testnet.destroy() })
+
+  // Well past Autobee's 32-flush fast-forward distance, each write durable.
+  for (let i = 0; i <= 40; i++) {
+    const before = m.local.length
+    await m.append(Buffer.from(JSON.stringify({ type: 'announce', id: `imdb:tt${5000000 + i}`, title: 'M', size: 1, sha256: zero, blobs: zero, blob })), { optimistic: !m.writable })
+    while (m.local.length <= before) { await new Promise(resolve => setTimeout(resolve, 300)); await m.update() }
+  }
+  assert.ok(await m.view.get(Buffer.from(forgedKey)), 'the forging peer built the forged view')
+
+  c = await createNode({ storage: tmp(), bootstrap: testnet.bootstrap, tracker })
+  const forgedOn = async node => (await node.search('imdb:tt6666666')).length
+  await until(async () => (await c.search('imdb:tt0000001')).length || await forgedOn(c), 120000)
+  assert.equal(await forgedOn(c), 0, 'the new relay adopted a view with a forged entry')
+  await until(async () => (await c.search('imdb:tt5000040')).length, 120000)
+  assert.equal(await forgedOn(c), 0)
 })

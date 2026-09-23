@@ -54,13 +54,16 @@ export async function createNode ({
   tracker: trackerKey = null,
   streamHost = '127.0.0.1',
   streamPort = 0,
-  streamToken = null,
   bootstrap,
   dhtPort,
   relayThrough = null
 }) {
   const store = new Corestore(join(storage, 'corestore'))
-  const tracker = new Autobee(store.namespace('tracker'), trackerKey && b4a.from(trackerKey, 'hex'), { apply, optimistic: true })
+  // fastForward: false - Autobee's default lets a peer that is far enough
+  // ahead hand over its built view, skipping our apply. On an open tracker any
+  // relay could then forge entries under other writers' keys; every node must
+  // build its own view with apply.
+  const tracker = new Autobee(store.namespace('tracker'), trackerKey && b4a.from(trackerKey, 'hex'), { apply, optimistic: true, fastForward: false })
   await tracker.ready()
   // A fresh tracker ignores everyone's writes until its founder writes once.
   if (!trackerKey && tracker.local.length === 0) {
@@ -78,7 +81,8 @@ export async function createNode ({
   swarm.on('connection', conn => tracker.replicate(conn))
   swarm.join(tracker.discoveryKey)
 
-  const server = new BlobServer(store, { host: streamHost, port: streamPort, token: streamToken })
+  // No stream token for now: stream URLs are open, like the API.
+  const server = new BlobServer(store, { host: streamHost, port: streamPort, token: null })
   await server.listen()
 
   function streamUrl (entry) {
@@ -100,11 +104,11 @@ export async function createNode ({
   // announce op without publishing it. pipelinePromise destroys every stream
   // on failure, which releases the Hyperblobs write lock; an abandoned writer
   // would hang every later put.
-  async function put ({ id, title }, source) {
+  async function put ({ id, title }, source, onData = null) {
     if (!str(id, ID)) throw new Error(`Invalid id ${id}`)
     const hash = createHash('sha256')
     let size = 0
-    const hasher = new Transform({ transform (chunk, cb) { hash.update(chunk); size += chunk.length; cb(null, chunk) } })
+    const hasher = new Transform({ transform (chunk, cb) { hash.update(chunk); size += chunk.length; if (onData) onData(size); cb(null, chunk) } })
     const writer = blobs.createWriteStream()
     await pipelinePromise(source, hasher, writer)
     return { type: 'announce', id, title: String(title || id).slice(0, MAX_TITLE), size, sha256: hash.digest('hex'), blobs: blobsKey, blob: writer.id }

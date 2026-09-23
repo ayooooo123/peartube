@@ -1,9 +1,0 @@
-{
-  "platforms": ["android", "ios"],
-  "android": {
-    "modules": ["to.holepunch.modules.downloadssave.DownloadsSaveModule"]
-  },
-  "ios": {
-    "modules": ["DownloadsSaveModule"]
-  }
-}

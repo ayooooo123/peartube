@@ -1,94 +1,54 @@
 # PearTube
 
-PearTube is a pre-alpha, permissionless media CDN, decentralized acquisition provider, and consumer streaming client built on the Hypercore stack. Mobile, Electrobun desktop, relay, and third-party clients use one universal backend contract. The authenticated machine API exposes the same `search -> resolve -> acquire -> verify -> stream -> retain` flow without naming or privileging a client or source adapter.
+A decentralized CDN and debrid provider built on the Holepunch stack.
 
-![PearTube architecture](docs/architecture.png)
+Relays share one open tracker, an [Autobee](https://github.com/holepunchto/autobee) multi-writer Hyperbee. A relay that has a file posts an entry for it. Any relay can search the tracker and stream any listed file over HTTP Range. Blocks come from whichever peers have them, and the reading relay keeps them and seeds them from then on.
 
-<sub>Source: [`docs/architecture.html`](docs/architecture.html) — self-contained, opens offline.</sub>
+No one grants write access. Each entry is filed under its writer's key, so a relay can only add or remove its own entries.
 
-## Current State
+## Run a relay
 
-| Surface | Status | Primary command |
-| --- | --- | --- |
-| iOS | Active development, Expo + BareKit | `npm run ios` |
-| Android | Active development, Expo + BareKit | `npm run android` |
-| Electrobun desktop | Main desktop shell, Expo web export + embedded `pear-runtime` worker | `npm run desktop` |
-| Relay | CLI/container for provider search, acquisition, seeding, archive UI, and local mirror workflows | `docker compose -f docker-compose.relay.yml up -d` |
-
-Pear OTA desktop release automation is not wired yet. Use the Electrobun build/release workflows in this repo; do not reintroduce `pear run` or claim OTA support without a dedicated release-flow change.
-
-## Product Vision
-
-- One moderated consumer catalog assembled from signed publisher records and bounded index feeds.
-- Immutable rendition cores transferred and verified over purpose-scoped P2P sessions; no HTTP media-origin fallback.
-- Client applications own ranking and source choice. PearTube owns bounded provider resolution, acquisition consent, exact verification, publisher-authorized publication, P2P delivery, retention, and archival evidence.
-- Relays are voluntary discovery, acquisition, seed, and archive peers. They gain no global catalog, moderation, source credential, or publisher authority.
-- Acquisition follows explicit local policy and uses separate `acquisition-discovery` and per-assignment `acquisition` scopes. Archive custody remains a later, separate action.
-- Participation is explicit policy: watch-only, balanced contribution, or archive-enabled, with metered, battery, thermal, storage, and upload limits.
-- Watch history, library state, and recommendations remain local. PearTube sends no viewer analytics.
-- Cloud block offload has one supported path: S3-compatible object storage. No second cloud offload provider is part of the contract.
-
-## Architecture
-
-Every client boots or connects to the same backend contract:
-
-```text
-Client shell
-  -> platform runner
-  -> @peartube/host
-  -> @peartube/backend
-  -> Corestore / Autobase / Hyperbee / Hyperblobs / Hyperswarm
+```sh
+npm install
+PEARTUBE_SECRET=change-me-to-16-chars PEARTUBE_TRACKER=<tracker key> npm start
 ```
 
-| Client | UI shell | Backend runner | RPC |
-| --- | --- | --- | --- |
-| iOS / Android | Expo + React Native | BareKit worklet | HRPC over BareKit IPC |
-| Electrobun desktop | Expo web export | embedded `pear-runtime` worker | HRPC over worker pipe |
-| Relay | CLI / container | direct backend runtime | local process API |
+Leave `PEARTUBE_TRACKER` unset to found a new tracker. The relay prints its key.
 
-## Packages
+| Variable | Default | Meaning |
+|---|---|---|
+| `PEARTUBE_SECRET` | required | Bearer secret for the API; also derives the stream token |
+| `PEARTUBE_TRACKER` | none (found new) | Tracker key to join |
+| `PEARTUBE_STORAGE` | `./peartube-data` | Data directory |
+| `PEARTUBE_API_PORT` | `8174` | API port |
+| `PEARTUBE_STREAM_HOST` | `127.0.0.1` | Host put in stream URLs; set to a LAN address to serve other machines |
+| `PEARTUBE_STREAM_PORT` | `8175` | Stream port |
+| `PEARTUBE_DHT_PORT` | random | Fixed UDP port, for a port forward |
+| `PEARTUBE_RELAY_THROUGH` | none | Comma-separated blind relay keys |
 
-| Package | Responsibility |
-| --- | --- |
-| `packages/app` | Expo app, mobile routes, Electrobun export, mobile BareKit backend bundle, desktop worker bundle |
-| `packages/core` | Shared app components, hooks, stores, and types |
-| `packages/platform` | App-side runner selection and RPC facade |
-| `packages/host` | Backend lifecycle wrapper, host errors, shared `PROTOCOL_VERSION`, and the universal protocol client (readiness normalization, event map, grouped namespaces) |
-| `packages/backend` | Provider service, acquisition state and policy, signed publisher catalogs, local/federated indexes, immutable assets, scoped networking, playback, S3 block offload, and diagnostics |
-| `packages/spec` | HRPC schema source and JS code generation |
-| `packages/cli` | Relay CLI/container, authenticated provider machine API, archive UI, acquisition jobs, and local mirror support |
-| `packages/bare-*` | Vendored/native Bare runtime support, including `bare-ffmpeg` |
+Docker: `docker build -t peartube-relay .` then mount `/data`.
 
-## Getting Started
+### Reachability
 
-```bash
-git clone <repo-url> && cd peartube
-nvm use
-git submodule update --init --recursive
-npm run install:all
-```
+HyperDHT cannot holepunch between two randomized NATs (`HOLEPUNCH_DOUBLE_RANDOMIZED_NATS`). If your relay's NAT is randomized, forward a UDP port and set `PEARTUBE_DHT_PORT`, or use a blind relay via `PEARTUBE_RELAY_THROUGH`.
 
-`npm run install:all` is the repository install contract and is what CI uses.
+## API
 
-From there, [SETUP.md](./SETUP.md) covers the iOS, Android, Electrobun desktop
-and relay toolchains plus troubleshooting, and [DEVELOPMENT.md](./DEVELOPMENT.md)
-covers the day-to-day commands, the schema workflow, and what to verify before
-handing off a change. Those two are the only places those instructions live.
+All routes need `Authorization: Bearer <PEARTUBE_SECRET>`.
 
-## Development Docs
+| Route | Does |
+|---|---|
+| `GET /v1/search?id=imdb:tt0944947:s01e02` | Tracker entries for an id, each with a `streamUrl` |
+| `POST /v1/acquire` `{id, title, source: {url, headers}}` | Fetch a source, store it, announce it |
+| `GET /v1/jobs`, `GET /v1/jobs/:jobId`, `DELETE /v1/jobs/:jobId` | Acquire jobs (sources are never returned) |
+| `GET /v1/status` | Tracker, writer and blobs keys, stored bytes, peers |
 
-- [SETUP.md](./SETUP.md) - platform-specific setup and troubleshooting.
-- [DEVELOPMENT.md](./DEVELOPMENT.md) - daily commands and generated-artifact workflow.
-- [ARCHITECTURE.md](./ARCHITECTURE.md) - live architecture overview.
-- [docs/diagrams/](./docs/diagrams/) - code-traced backend diagrams.
+Ids look like `imdb:tt0111161` for movies and `imdb:tt0944947:s01e02` for episodes.
 
-Project history, design decisions, open correctness findings, and platform
-knowledge live on the PearTube page in the Obsidian vault, not in this tree.
+## Privacy rule
 
-## Storage
+Replication serves any stored core a peer can name, so the Corestore holds only public data: the tracker and the blobs. Acquire jobs, with their source URLs and headers, live in `jobs.json` in the data directory and are never replicated.
 
-Clients resolve storage paths through `@peartube/platform` and the active runner.
+## History
 
-## License
-
-Apache-2.0
+The previous platform (apps, channels, HRPC, transcoding, custody proofs) is tagged `archive/v0.3.0-platform`. Restore anything with `git checkout archive/v0.3.0-platform -- <path>`.

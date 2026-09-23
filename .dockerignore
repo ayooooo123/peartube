@@ -1,13 +1,5 @@
-.git
-.github
 node_modules
-packages/*/node_modules
-packages/app
-packages/core
-packages/platform
-packages/app/ios
-packages/app/android
-packages/app/pear
-packages/app/.pear-build
-docs
-*.log
+packages
+peartube-data
+test
+.git

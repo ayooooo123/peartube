@@ -95,3 +95,6 @@ packages/app/android/app/debug.keystore
 
 # Local isolated agent worktrees
 .worktrees/
+
+# relay data
+peartube-data/

@@ -1,79 +1,29 @@
 {
-  "name": "peartube-monorepo",
-  "version": "0.1.185",
-  "private": true,
-  "description": "PearTube monorepo - P2P video streaming for desktop and mobile",
+  "name": "peartube",
+  "version": "0.4.0",
+  "description": "Decentralized CDN and debrid provider on the Holepunch stack",
+  "type": "module",
+  "main": "src/index.js",
+  "bin": {
+    "peartube-relay": "bin/relay.js"
+  },
   "scripts": {
-    "start": "npm start --prefix packages/app",
-    "ios": "npm run ios --prefix packages/app",
-    "android": "npm run android --prefix packages/app",
-    "desktop": "npm run desktop:dev --prefix packages/app",
-    "desktop:build": "npm run desktop:build --prefix packages/app",
-    "desktop:start": "npm run desktop:start --prefix packages/app",
-    "desktop:package": "npm run desktop:build && npm run desktop:ebuild --prefix packages/app",
-    "desktop:stage": "echo 'desktop:stage is not implemented. The desktop pear link is not the blocker: it is the \"upgrade\" field of packages/app/desktop.pear.json, and it must never be swapped with the mobile link in packages/app/package.json. What is missing:' >&2; echo '  1. no script produces a release-channel desktop artifact. desktop:ebuild runs `electrobun build`, which defaults to the dev channel: build/dev-macos-arm64/PearTube-dev.app, hash \"dev\", no codesign and no compressed artifact. The filename is load-bearing, not just the directory: the launcher passes the Bare worker name = basename of the running app bundle, and the updater mirrors and swaps /by-arch/<host>/app/<that name>, so a payload built from PearTube-dev.app can never match a release PearTube.app. Staging needs `electrobun build --env=stable`.' >&2; echo '  2. nothing assembles by-arch/<platform>-<arch>/app/<distributable> plus the root package.json and pear.json out of that artifact, and the pear CLI is not a dependency of this repo, so there is no `pear stage` to run.' >&2; echo 'Working desktop build today: npm run desktop:package. Mobile OTA payloads: npm run ota.' >&2; exit 1",
-    "desktop:release": "echo 'desktop:release is not implemented: it needs desktop:stage first, which is itself blocked (run npm run desktop:stage for the exact reasons). Beyond staging, releasing also needs a seeded drive and release keys for packages/app/desktop.pear.json, neither of which is configured in this repo.' >&2; exit 1",
-    "schema": "npm run gen:schema --prefix packages/spec",
-    "schema:full": "npm run schema",
-    "prepare:mobile-backend": "npm run schema && npm run bundle:backend",
-    "bundle:backend": "npm run bundle:backend --prefix packages/app",
-    "bundle:ota": "npm run bundle:ota --prefix packages/app",
-    "build:ota": "npm run build:ota --prefix packages/app",
-    "ota": "npm run ota --prefix packages/app",
-    "build:ios": "npm run build:ios --prefix packages/app",
-    "build:ios:device": "npm run build:ios:device --prefix packages/app",
-    "build:android": "npm run build:android --prefix packages/app",
-    "build:android:apk": "npm run build:android:apk --prefix packages/app",
-    "build:android:apk:arm64": "npm run build:android:apk:arm64 --prefix packages/app",
-    "build:android:apk:armv7": "npm run build:android:apk:armv7 --prefix packages/app",
-    "build:android:apk:x86_64": "npm run build:android:apk:x86_64 --prefix packages/app",
-    "build:android:aab": "npm run build:android:aab --prefix packages/app",
-    "build:eas:ios": "npm run build:eas:ios --prefix packages/app",
-    "build:eas:android": "npm run build:eas:android --prefix packages/app",
-    "build:eas:all": "npm run build:eas:all --prefix packages/app",
-    "typecheck": "npm run typecheck --prefix packages/platform && npm run typecheck:app",
-    "typecheck:app": "cd packages/app && ./node_modules/.bin/tsc --noEmit -p tsconfig.json",
-    "test": "npm test --prefix packages/spec && npm test --prefix packages/backend && npm test --prefix packages/host && npm test --prefix packages/platform && npm test --prefix packages/cli && npm run test:app",
-    "test:app": "cd packages/app && node --test --test-concurrency=4 tests/*.test.mjs",
-    "test:watch": "npm run test:watch --prefix packages/backend",
-    "lint": "npm run lint:contracts && npm run lint:oxlint && npm run lint:ast:test && npm run lint:ast && npm run lint:eslint",
-    "lint:contracts": "node packages/host/scripts/generate-contracts.mjs --check",
-    "lint:eslint": "eslint . --ext .js,.jsx,.ts,.tsx,.cjs --max-warnings 836",
-    "lint:oxlint": "oxlint -c .oxlintrc.json --max-warnings 1 packages/backend/src packages/cli/src packages/cli/bin.js packages/app/app packages/app/components packages/app/lib packages/app/backend packages/host/src packages/platform/src scripts packages/spec/schema.cjs",
-    "lint:ast": "ast-grep scan",
-    "lint:ast:test": "ast-grep test --skip-snapshot-tests && node scripts/test-architecture-rules.mjs",
-    "lint:changed": "npm run lint:contracts && npm run lint:ast:test && npm run lint:ast && node scripts/lint-changed.mjs",
-    "lint:fix": "npm run lint -- --fix",
-    "install:all": "npm ci && npm ci --prefix packages/spec && npm ci --prefix packages/backend && npm ci --prefix packages/cli && npm ci --prefix packages/host && npm ci --prefix packages/platform && npm ci --prefix packages/app --legacy-peer-deps"
-  },
-  "devDependencies": {
-    "@ast-grep/cli": "^0.45.3",
-    "@typescript-eslint/eslint-plugin": "^8.41.0",
-    "@typescript-eslint/parser": "^8.41.0",
-    "eslint": "^8.57.0",
-    "eslint-plugin-jsx-a11y": "^6.10.0",
-    "eslint-plugin-react": "^7.37.0",
-    "eslint-plugin-react-hooks": "^4.6.2",
-    "hypercore-blob-server": "^1.15.0",
-    "oxlint": "^1.80.0",
-    "typescript": "~6.0.3"
-  },
-  "overrides": {
-    "bare-module-lexer": ">=1.5.2",
-    "eslint-plugin-react-hooks": "^4.6.2",
-    "@peartube/spec": "file:packages/spec"
+    "start": "node bin/relay.js",
+    "test": "node --test test/*.test.js"
   },
   "engines": {
-    "node": ">=18.0.0 <23"
+    "node": ">=22"
   },
   "dependencies": {
-    "bare-build": "^0.5.3",
-    "bare-ffmpeg": "file:packages/bare-ffmpeg",
-    "bare-runtime": "^1.28.4",
-    "bare-worker": "^4.1.6",
-    "expo": "~56.0.4",
-    "hrpc": "^4.3.0",
-    "react": "19.2.3",
-    "react-native": "0.85.3"
-  }
+    "autobee": "2.10.1",
+    "b4a": "^1.8.0",
+    "corestore": "^7.12.6",
+    "hyperblobs": "^2.12.1",
+    "hypercore-blob-server": "^1.15.0",
+    "hyperswarm": "^4.17.2"
+  },
+  "devDependencies": {
+    "hyperdht": "^6.34.0"
+  },
+  "private": true
 }

@@ -1,3 +1,0 @@
-[submodule "packages/bare-ffmpeg"]
-	path = packages/bare-ffmpeg
-	url = https://github.com/ayooooo123/bare-ffmpeg.git

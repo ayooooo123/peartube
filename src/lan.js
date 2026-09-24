@@ -21,7 +21,11 @@ export function selfAddressAdapter (host, inner = new HyperDHTmDNS.BonjourAdapte
 }
 
 // LAN discovery without the internet or a port forward: an isolated,
-// bootstrap-free HyperDHT that finds peers over mDNS.
-export function createLan ({ host, port = 49799, keyPair }) {
-  return new HyperDHTmDNS({ host, port, keyPair, adapter: selfAddressAdapter(host) })
+// bootstrap-free HyperDHT that finds peers over mDNS. Discovery errors are
+// reported, never thrown: an unhandled 'error' would kill the whole relay.
+export function createLan ({ host, port = 49799, keyPair, adapter = selfAddressAdapter(host) }) {
+  const lan = new HyperDHTmDNS({ host, port, keyPair, adapter })
+  lan.on('error', err => console.error(JSON.stringify({ msg: 'lan discovery error', error: err?.message || String(err) })))
+  lan.on('warning', () => {})
+  return lan
 }

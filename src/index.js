@@ -93,7 +93,6 @@ export async function createNode ({
       conn.once('close', () => lanPeers.delete(conn))
       tracker.replicate(conn)
     })
-    lan.on('warning', () => {})
     await lan.ready()
     lan.join(tracker.discoveryKey)
   }

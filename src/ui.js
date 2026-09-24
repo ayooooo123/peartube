@@ -65,7 +65,7 @@ function job (j) {
 async function refresh () {
   try {
     const [status, list] = await Promise.all([fetch('/v1/status').then(r => r.json()), fetch('/v1/jobs').then(r => r.json())])
-    $('facts').replaceChildren(fact('peers', status.peers), fact('stored', size(status.blobBytes)), fact('tracker', status.tracker.slice(0, 12) + '\\u2026'))
+    $('facts').replaceChildren(fact('peers', status.peers), fact('LAN peers', status.lanPeers ?? 0), fact('stored', size(status.blobBytes)), fact('tracker', status.tracker.slice(0, 12) + '\\u2026'))
     const jobs = list.jobs.slice().sort((a, b) => b.created - a.created)
     $('jobs').replaceChildren(...(jobs.length ? jobs.map(job) : [el('div', 'empty', 'No acquisitions yet.')]))
   } catch (err) {

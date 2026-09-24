@@ -16,6 +16,7 @@ Builds, installs, and deploy commands may be run when explicitly requested.
 |`src/ui.js`|The acquisitions page, one HTML string|
 |`src/lan.js`|Optional LAN discovery: `@p2plabs/hyperdht-mdns` with an adapter that dials each peer's advertised address, not the mDNS reflector|
 |`bin/relay.js`|Relay process, configured by env|
+|`android/`|Android client (not part of the core line budget): lists `/v1/entries` from one relay, plays `streamUrl` with libVLC. Kotlin, no AppCompat|
 |`test/network.test.js`|Relays on a local HyperDHT testnet, including adversarial peers|
 |`test/lan.test.js`|LAN adapter and error handling in isolation; no E2E test runs LAN discovery|
 

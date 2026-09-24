@@ -43,6 +43,7 @@ One port serves the acquisitions page at `/` and the `/v1` API. There is no auth
 |---|---|
 | `GET /` | Acquisitions page |
 | `GET /v1/search?id=imdb:tt0944947:s01e02` | Tracker entries for an id, each with a `streamUrl` |
+| `GET /v1/entries` | Every tracker entry, same shape as search |
 | `POST /v1/acquire` `{id, title, source: {url, headers}}` | Fetch a source, store it, announce it |
 | `GET /v1/jobs`, `GET /v1/jobs/:jobId`, `DELETE /v1/jobs/:jobId` | Acquire jobs (sources are never returned) |
 | `GET /v1/status` | Tracker, writer and blobs keys, stored bytes, peers |
@@ -54,6 +55,16 @@ Ids look like `imdb:tt0111161` for movies and `imdb:tt0944947:s01e02` for episod
 ## Privacy rule
 
 Replication serves any stored core a peer can name, so the Corestore holds only public data: the tracker and the blobs. Acquire jobs, with their source URLs and headers, live in `jobs.json` in the data directory and are never replicated.
+
+## Android app
+
+`android/` is a small client for one relay: it lists every tracker entry, grouped by title, and plays a tapped one from its `streamUrl` with libVLC, which handles the DivX/Xvid AVIs that Android's own decoders cannot. Set the relay URL from the menu; the default is `http://10.0.40.100:8174`. The phone must reach the relay's API and stream ports, so set `PEARTUBE_STREAM_HOST` to an address the phone can reach. The build makes one APK per ABI (`arm64-v8a`, `armeabi-v7a`, `x86_64`).
+
+```sh
+cd android && ./gradlew assembleRelease
+```
+
+Release signing reads `peartube.keystore`, `peartube.keystorePassword`, `peartube.keyAlias` and `peartube.keyPassword` from `~/.gradle/gradle.properties`. The app version comes from the root `package.json`.
 
 ## History
 

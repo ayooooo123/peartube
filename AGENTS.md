@@ -17,6 +17,7 @@ Builds, installs, and deploy commands may be run when explicitly requested.
 |`src/lan.js`|Optional LAN discovery: `@p2plabs/hyperdht-mdns` with an adapter that dials each peer's advertised address, not the mDNS reflector|
 |`bin/relay.js`|Relay process, configured by env|
 |`test/network.test.js`|Relays on a local HyperDHT testnet, including adversarial peers|
+|`test/lan.test.js`|LAN adapter and error handling in isolation; no E2E test runs LAN discovery|
 
 ## Rules
 
@@ -29,6 +30,12 @@ Builds, installs, and deploy commands may be run when explicitly requested.
 - Pin `autobee` exactly; it is experimental.
 - Don't add a machine API field without updating every client in the same change. MediaStorm is the proof client.
 - Prefer deleting code to adding it. Old platform code is at tag `archive/v0.3.0-platform`.
+
+## Testing
+
+- Never write unit tests after you write code.
+- Highly prefer E2E tests as the sole testing mechanism. Use them to verify complex features work. At the end of E2E tests, produce a verifiable and repeatable artifact.
+- If you must test a system in isolation, first write down all the ways it could fail, then write the code.
 
 ## Commands
 

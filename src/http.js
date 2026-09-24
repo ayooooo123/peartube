@@ -25,6 +25,7 @@ export function createApi ({ node, acquirer }) {
       if (!id) throw Object.assign(new Error('id is required'), { status: 400 })
       return { results: await node.search(id) }
     }
+    if (req.method === 'GET' && path === '/v1/entries') return { results: await node.search() }
     if (req.method === 'POST' && path === '/v1/acquire') {
       const { id, title, source } = await body(req)
       return acquirer.add({ id, title, source })

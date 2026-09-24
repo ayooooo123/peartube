@@ -12,6 +12,7 @@ import Corestore from 'corestore'
 import Hyperswarm from 'hyperswarm'
 import { createNode } from '../src/index.js'
 import { createAcquirer } from '../src/acquire.js'
+import { createApi } from '../src/http.js'
 
 const tmp = () => mkdtempSync(join(tmpdir(), 'peartube-test-'))
 
@@ -57,6 +58,12 @@ test('a relay acquires a source; another relay finds it and streams exact bytes'
   const [hit] = await until(async () => (await a.search('imdb:tt0111161')).length && a.search('imdb:tt0111161'))
   assert.equal(hit.local, false)
   assert.equal(hit.sha256, done.sha256)
+
+  const api = createApi({ node: a, acquirer: null })
+  await new Promise(resolve => api.listen(0, '127.0.0.1', resolve))
+  t.after(() => api.close())
+  const listed = await (await fetch(`http://127.0.0.1:${api.address().port}/v1/entries`)).json()
+  assert.deepEqual(listed.results, [hit], 'the whole tracker lists the entry')
 
   const res = await fetch(hit.streamUrl, { headers: { Range: 'bytes=1000000-1065535' } })
   assert.equal(res.status, 206)

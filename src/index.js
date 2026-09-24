@@ -105,10 +105,11 @@ export async function createNode ({
     return server.getLink(b4a.from(entry.blobs, 'hex'), { blob: entry.blob })
   }
 
-  async function search (id) {
+  // Every tracker entry for id, or every entry in the tracker without one.
+  async function search (id = null) {
     await tracker.update()
     const results = []
-    const range = { gte: b4a.from(`${id}/`), lt: b4a.from(`${id}/\xff`) }
+    const range = id ? { gte: b4a.from(`${id}/`), lt: b4a.from(`${id}/\xff`) } : {}
     for await (const node of tracker.view.createReadStream(range)) {
       const entry = JSON.parse(node.value)
       results.push({ key: b4a.toString(node.key), id: entry.id, title: entry.title, size: entry.size, sha256: entry.sha256, local: entry.blobs === blobsKey, streamUrl: streamUrl(entry) })

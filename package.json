@@ -15,6 +15,7 @@
     "node": ">=22"
   },
   "dependencies": {
+    "@p2plabs/hyperdht-mdns": "1.2.0",
     "autobee": "2.10.1",
     "b4a": "^1.8.0",
     "corestore": "^7.12.6",

@@ -14,6 +14,7 @@ Builds, installs, and deploy commands may be run when explicitly requested.
 |`src/acquire.js`|Private job queue: fetch a source, `put` it, save the announce, `append` it durably. Stored in `jobs.json`, never in the Corestore|
 |`src/http.js`|One port: the UI at `/` and the `/v1` API (no auth for now)|
 |`src/ui.js`|The acquisitions page, one HTML string|
+|`src/lan.js`|Optional LAN discovery: `@p2plabs/hyperdht-mdns` with an adapter that dials each peer's advertised address, not the mDNS reflector|
 |`bin/relay.js`|Relay process, configured by env|
 |`test/network.test.js`|Relays on a local HyperDHT testnet, including adversarial peers|
 

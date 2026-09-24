@@ -26,12 +26,14 @@ Open `http://<relay>:8174/` to see acquisitions.
 | `PEARTUBE_STREAM_PORT` | `8175` | Stream port |
 | `PEARTUBE_DHT_PORT` | random | Fixed UDP port, for a port forward |
 | `PEARTUBE_RELAY_THROUGH` | none | Comma-separated blind relay keys |
+| `PEARTUBE_LAN_HOST` | off | This machine's LAN IPv4; turns on mDNS discovery of relays on the local network |
+| `PEARTUBE_LAN_PORT` | `49799` | UDP port of the LAN DHT |
 
 Docker: `docker build -t peartube-relay .` then mount `/data`.
 
 ### Reachability
 
-HyperDHT cannot holepunch between two randomized NATs (`HOLEPUNCH_DOUBLE_RANDOMIZED_NATS`). If your relay's NAT is randomized, forward a UDP port and set `PEARTUBE_DHT_PORT`, or use a blind relay via `PEARTUBE_RELAY_THROUGH`.
+HyperDHT cannot holepunch between two randomized NATs (it aborts the holepunch). Relays on the same network can still find each other: set `PEARTUBE_LAN_HOST` on each, and they discover one another over mDNS and connect directly on `PEARTUBE_LAN_PORT`, with no internet path or port forward. This works across subnets when the router reflects mDNS and routes UDP between them. For relays on different networks, forward a UDP port and set `PEARTUBE_DHT_PORT`, or use a blind relay via `PEARTUBE_RELAY_THROUGH`.
 
 ## UI and API
 

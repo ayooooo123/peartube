@@ -7,6 +7,7 @@ import b4a from 'b4a'
 import { createHash } from 'node:crypto'
 import { pipelinePromise, Transform } from 'streamx'
 import { join } from 'node:path'
+import { createLan } from './lan.js'
 
 const ID = /^[a-z0-9]+:[a-z0-9]+(:s\d{2}e\d{2,3})?$/
 const HEX64 = /^[0-9a-f]{64}$/
@@ -56,7 +57,8 @@ export async function createNode ({
   streamPort = 0,
   bootstrap,
   dhtPort,
-  relayThrough = null
+  relayThrough = null,
+  lan: lanOptions = null
 }) {
   const store = new Corestore(join(storage, 'corestore'))
   // fastForward: false - Autobee's default lets a peer that is far enough
@@ -80,6 +82,21 @@ export async function createNode ({
   const swarm = new Hyperswarm({ bootstrap, port: dhtPort, relayThrough: relayThrough && (force => force ? relayThrough.map(k => b4a.from(k, 'hex')) : null) })
   swarm.on('connection', conn => tracker.replicate(conn))
   swarm.join(tracker.discoveryKey)
+
+  // Optional LAN path (mDNS + isolated DHT) for peers the public DHT cannot
+  // connect, e.g. two randomized NATs on one network. Same key pair as the swarm.
+  const lanPeers = new Set()
+  const lan = lanOptions && createLan({ ...lanOptions, keyPair: swarm.keyPair })
+  if (lan) {
+    lan.on('connection', conn => {
+      lanPeers.add(conn)
+      conn.once('close', () => lanPeers.delete(conn))
+      tracker.replicate(conn)
+    })
+    lan.on('warning', () => {})
+    await lan.ready()
+    lan.join(tracker.discoveryKey)
+  }
 
   // No stream token for now: stream URLs are open, like the API.
   const server = new BlobServer(store, { host: streamHost, port: streamPort, token: null })
@@ -140,12 +157,13 @@ export async function createNode ({
   }
 
   function status () {
-    return { tracker: b4a.toString(tracker.key, 'hex'), writer: b4a.toString(tracker.local.key, 'hex'), blobs: blobsKey, blobBytes: blobsCore.byteLength, peers: swarm.connections.size }
+    return { tracker: b4a.toString(tracker.key, 'hex'), writer: b4a.toString(tracker.local.key, 'hex'), blobs: blobsKey, blobBytes: blobsCore.byteLength, peers: swarm.connections.size, lanPeers: lanPeers.size }
   }
 
   let closing = false
   async function close () {
     closing = true
+    await lan?.destroy()
     await swarm.destroy()
     await tracker.close()
     await server.close()

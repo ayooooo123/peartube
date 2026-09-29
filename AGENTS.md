@@ -20,6 +20,7 @@ Builds, installs, and deploy commands may be run when explicitly requested.
 |`mobile/`|Dioxus app for Android, iOS and macOS (not part of the core line budget). It runs the core itself as a peer, in a Bare worklet (bare-kit), and plays stream URLs in the webview, or on macOS through VLC.app's libVLC|
 |`mobile/worker.js`|The worklet: newline-delimited JSON over `BareKit.IPC` to `createNode`. `mobile/build.rs` packs it with bare-pack (`mobile/imports.json` maps Node builtins to `bare-*`) and links its native addons with bare-link|
 |`mobile/src/vlc.rs`|macOS player: loads libVLC from VLC.app with dlopen and draws the video in a native view that `main.rs` keeps over a slot in the page|
+|`.github/workflows/android-app.yml`|CI: builds the Dioxus app's arm64 debug APK on pushes that touch `mobile/` or the core, and keeps it as the run's artifact|
 |`test/network.test.js`|Relays on a local HyperDHT testnet, including adversarial peers|
 |`test/lan.test.js`|LAN adapter and error handling in isolation; no E2E test runs LAN discovery|
 |`test/mobile.e2e.js`|The app's worklet, driven from Rust, joins a relay on a testnet, streams exact bytes, sees a later publish and removal without reopening, and still lists the tracker when a peer announces a malformed title. Writes `mobile/target/e2e/result.json`|

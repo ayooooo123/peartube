@@ -84,6 +84,8 @@ npm run test:mobile    # E2E on macOS: the worklet joins a testnet relay, stream
 
 `mobile/build.rs` packs `mobile/worker.js` with bare-pack for the target and links the native addons it needs (sodium, udx, rocksdb, …) with bare-link. dx puts the Android libraries in the APK; `mobile/ios.sh` embeds BareKit and the addon frameworks, which dx leaves out, and re-signs the app.
 
+CI (`.github/workflows/android-app.yml`) builds the arm64 debug APK on every push that touches the app or the core. Download it from the run's `PearTube-debug-arm64` artifact.
+
 ## History
 
 The previous platform (apps, channels, HRPC, transcoding, custody proofs) is tagged `archive/v0.3.0-platform`. Restore anything with `git checkout archive/v0.3.0-platform -- <path>`.

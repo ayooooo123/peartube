@@ -7,7 +7,6 @@ import b4a from 'b4a'
 import { createHash } from 'node:crypto'
 import { pipelinePromise, Transform } from 'streamx'
 import { join } from 'node:path'
-import { createLan } from './lan.js'
 
 const ID = /^[a-z0-9]+:[a-z0-9]+(:s\d{2}e\d{2,3})?$/
 const HEX64 = /^[0-9a-f]{64}$/
@@ -50,6 +49,10 @@ async function apply (nodes, view, host) {
   }
 }
 
+// lan: optional keyPair => HyperDHT-like LAN discovery (see src/lan.js). The
+// relay passes it in so this module stays free of Node-only imports and also
+// runs in the mobile app's Bare worklet.
+// onchange: optional, called after the tracker's view changes.
 export async function createNode ({
   storage,
   tracker: trackerKey = null,
@@ -58,14 +61,19 @@ export async function createNode ({
   bootstrap,
   dhtPort,
   relayThrough = null,
-  lan: lanOptions = null
+  lan: createLan = null,
+  onchange = null
 }) {
   const store = new Corestore(join(storage, 'corestore'))
+  // Autobee reports view changes only through its update handler (its 'update'
+  // event fires on interrupts). The handler runs inside the update loop, where
+  // a throw would close the tracker, so onchange is queued instead of called.
+  const update = onchange && (() => queueMicrotask(onchange))
   // fastForward: false - Autobee's default lets a peer that is far enough
   // ahead hand over its built view, skipping our apply. On an open tracker any
   // relay could then forge entries under other writers' keys; every node must
   // build its own view with apply.
-  const tracker = new Autobee(store.namespace('tracker'), trackerKey && b4a.from(trackerKey, 'hex'), { apply, optimistic: true, fastForward: false })
+  const tracker = new Autobee(store.namespace('tracker'), trackerKey && b4a.from(trackerKey, 'hex'), { apply, update, optimistic: true, fastForward: false })
   await tracker.ready()
   // A fresh tracker ignores everyone's writes until its founder writes once.
   if (!trackerKey && tracker.local.length === 0) {
@@ -86,7 +94,7 @@ export async function createNode ({
   // Optional LAN path (mDNS + isolated DHT) for peers the public DHT cannot
   // connect, e.g. two randomized NATs on one network. Same key pair as the swarm.
   const lanPeers = new Set()
-  const lan = lanOptions && createLan({ ...lanOptions, keyPair: swarm.keyPair })
+  const lan = createLan && createLan(swarm.keyPair)
   if (lan) {
     lan.on('connection', conn => {
       lanPeers.add(conn)
@@ -128,7 +136,7 @@ export async function createNode ({
     const hasher = new Transform({ transform (chunk, cb) { hash.update(chunk); size += chunk.length; if (onData) onData(size); cb(null, chunk) } })
     const writer = blobs.createWriteStream()
     await pipelinePromise(source, hasher, writer)
-    return { type: 'announce', id, title: String(title || id).slice(0, MAX_TITLE), size, sha256: hash.digest('hex'), blobs: blobsKey, blob: writer.id }
+    return { type: 'announce', id, title: String(title || id).slice(0, MAX_TITLE).toWellFormed(), size, sha256: hash.digest('hex'), blobs: blobsKey, blob: writer.id }
   }
 
   async function publish (meta, source) {

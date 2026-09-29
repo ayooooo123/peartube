@@ -2,6 +2,7 @@
 import { mkdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { createNode } from '../src/index.js'
+import { createLan } from '../src/lan.js'
 import { createAcquirer } from '../src/acquire.js'
 import { createApi } from '../src/http.js'
 
@@ -16,7 +17,7 @@ const node = await createNode({
   streamPort: Number(env.PEARTUBE_STREAM_PORT || 8175),
   dhtPort: env.PEARTUBE_DHT_PORT ? Number(env.PEARTUBE_DHT_PORT) : undefined,
   relayThrough: env.PEARTUBE_RELAY_THROUGH ? env.PEARTUBE_RELAY_THROUGH.split(',') : null,
-  lan: env.PEARTUBE_LAN_HOST ? { host: env.PEARTUBE_LAN_HOST, port: Number(env.PEARTUBE_LAN_PORT || 49799) } : null
+  lan: env.PEARTUBE_LAN_HOST ? keyPair => createLan({ host: env.PEARTUBE_LAN_HOST, port: Number(env.PEARTUBE_LAN_PORT || 49799), keyPair }) : null
 })
 const acquirer = createAcquirer(node, join(storage, 'jobs.json'))
 const api = createApi({ node, acquirer })

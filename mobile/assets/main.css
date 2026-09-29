@@ -1,0 +1,369 @@
+:root {
+  --bg: #0f1115;
+  --card: #171a21;
+  --line: #262b36;
+  --text: #e6e8ee;
+  --dim: #8a91a3;
+  --brand: #9147FF;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
+  background: var(--bg);
+  color: var(--text);
+  font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  font-size: 15px;
+  line-height: 1.4;
+  -webkit-font-smoothing: antialiased;
+}
+
+button {
+  font-family: inherit;
+  font-size: 15px;
+}
+
+/* Header */
+.header {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  background: var(--bg);
+  border-bottom: 1px solid var(--line);
+  padding: 12px 16px 10px 16px;
+}
+
+.header-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.header-title {
+  margin: 0;
+  font-size: 20px;
+  font-weight: 700;
+  color: var(--text);
+}
+
+.icon-btn {
+  min-height: 44px;
+  min-width: 44px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: none;
+  color: var(--text);
+  font-size: 20px;
+  cursor: pointer;
+  padding: 0;
+}
+
+.facts {
+  margin: 4px 0 0 0;
+  font-size: 13px;
+  color: var(--dim);
+}
+
+/* Search */
+.search-input {
+  width: 100%;
+  margin-top: 10px;
+  padding: 10px 12px;
+  min-height: 44px;
+  font-size: 16px;
+  font-family: inherit;
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: var(--text);
+}
+
+.search-input:focus,
+.text-input:focus {
+  outline: none;
+  border-color: var(--brand);
+}
+
+/* Error banner */
+.error-banner {
+  margin: 12px 16px;
+  padding: 8px 12px;
+  background: #3b181b;
+  border: 1px solid #7f1d1d;
+  border-radius: 8px;
+  color: #fca5a5;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  font-size: 14px;
+}
+
+.dismiss-btn {
+  min-height: 44px;
+  min-width: 44px;
+  background: transparent;
+  border: none;
+  color: #fca5a5;
+  font-size: 20px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* Entry list */
+.list-content {
+  padding: 8px 16px 24px 16px;
+}
+
+.group-title {
+  margin: 16px 0 8px 4px;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--dim);
+}
+
+.card-group {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  overflow: hidden;
+}
+
+.row {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  min-height: 44px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--line);
+  cursor: pointer;
+  background: transparent;
+  border-left: none;
+  border-right: none;
+  border-top: none;
+  width: 100%;
+  text-align: left;
+}
+
+.row:last-child {
+  border-bottom: none;
+}
+
+.row:active {
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.row-main {
+  font-size: 15px;
+  font-weight: 500;
+  color: var(--text);
+}
+
+.row-sub {
+  font-size: 13px;
+  color: var(--dim);
+  margin-top: 2px;
+}
+
+.empty-state {
+  text-align: center;
+  color: var(--dim);
+  padding: 48px 20px;
+  font-size: 15px;
+  line-height: 1.5;
+}
+
+/* Play screen */
+.play-screen {
+  display: flex;
+  flex-direction: column;
+}
+
+.play-header {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  background: var(--bg);
+  border-bottom: 1px solid var(--line);
+  padding: 12px 16px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.play-title {
+  margin: 0;
+  font-size: 17px;
+  font-weight: 600;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.video-player {
+  width: 100%;
+  max-height: 60vh;
+  background: #000;
+  display: block;
+}
+
+.video-error-box {
+  margin: 16px;
+  padding: 14px;
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: var(--text);
+  font-size: 14px;
+}
+
+.stream-url {
+  display: block;
+  margin-top: 8px;
+  padding: 10px;
+  background: var(--bg);
+  border-radius: 6px;
+  font-family: monospace;
+  font-size: 13px;
+  color: var(--brand);
+  word-break: break-all;
+  user-select: all;
+  -webkit-user-select: all;
+}
+
+/* VLC draws a native view over this slot. */
+.video-slot {
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  max-height: 60vh;
+  background: #000;
+}
+
+.player-controls {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 16px 0;
+}
+
+.seek {
+  flex: 1;
+  accent-color: var(--brand);
+}
+
+.clock {
+  font-size: 13px;
+  color: var(--dim);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.player-error {
+  margin: 8px 16px 0;
+}
+
+.play-meta {
+  padding: 14px 16px;
+  font-size: 13px;
+  color: var(--dim);
+}
+
+/* Settings screen */
+.settings-header {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  background: var(--bg);
+  border-bottom: 1px solid var(--line);
+  padding: 12px 16px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.cancel-btn {
+  min-height: 44px;
+  min-width: 44px;
+  background: transparent;
+  border: none;
+  color: var(--dim);
+  font-size: 15px;
+  cursor: pointer;
+  padding: 0 8px;
+}
+
+.settings-form {
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.field-group {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.field-label {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.field-hint {
+  font-size: 12px;
+  color: var(--dim);
+}
+
+.text-input {
+  width: 100%;
+  padding: 10px 12px;
+  min-height: 44px;
+  font-size: 16px;
+  font-family: inherit;
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: var(--text);
+}
+
+.text-area {
+  min-height: 72px;
+  resize: vertical;
+}
+
+.inline-error {
+  padding: 8px 12px;
+  background: #3b181b;
+  border: 1px solid #7f1d1d;
+  border-radius: 6px;
+  color: #fca5a5;
+  font-size: 13px;
+}
+
+.save-btn {
+  width: 100%;
+  min-height: 48px;
+  margin-top: 8px;
+  background: var(--brand);
+  color: #ffffff;
+  font-size: 16px;
+  font-weight: 600;
+  border: none;
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.save-btn:active {
+  opacity: 0.9;
+}

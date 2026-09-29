@@ -14,11 +14,15 @@ Builds, installs, and deploy commands may be run when explicitly requested.
 |`src/acquire.js`|Private job queue: fetch a source, `put` it, save the announce, `append` it durably. Stored in `jobs.json`, never in the Corestore|
 |`src/http.js`|One port: the UI at `/` and the `/v1` API (no auth for now)|
 |`src/ui.js`|The acquisitions page, one HTML string|
-|`src/lan.js`|Optional LAN discovery: `@p2plabs/hyperdht-mdns` with an adapter that dials each peer's advertised address, not the mDNS reflector|
+|`src/lan.js`|Optional LAN discovery: `@p2plabs/hyperdht-mdns` with an adapter that dials each peer's advertised address, not the mDNS reflector. `bin/relay.js` passes it to `createNode` as a factory|
 |`bin/relay.js`|Relay process, configured by env|
 |`android/`|Android client (not part of the core line budget): lists `/v1/entries` from one relay, plays `streamUrl` with libVLC. Kotlin, no AppCompat|
+|`mobile/`|Dioxus app for Android, iOS and macOS (not part of the core line budget). It runs the core itself as a peer, in a Bare worklet (bare-kit), and plays stream URLs in the webview, or on macOS through VLC.app's libVLC|
+|`mobile/worker.js`|The worklet: newline-delimited JSON over `BareKit.IPC` to `createNode`. `mobile/build.rs` packs it with bare-pack (`mobile/imports.json` maps Node builtins to `bare-*`) and links its native addons with bare-link|
+|`mobile/src/vlc.rs`|macOS player: loads libVLC from VLC.app with dlopen and draws the video in a native view that `main.rs` keeps over a slot in the page|
 |`test/network.test.js`|Relays on a local HyperDHT testnet, including adversarial peers|
 |`test/lan.test.js`|LAN adapter and error handling in isolation; no E2E test runs LAN discovery|
+|`test/mobile.e2e.js`|The app's worklet, driven from Rust, joins a relay on a testnet, streams exact bytes, sees a later publish and removal without reopening, and still lists the tracker when a peer announces a malformed title. Writes `mobile/target/e2e/result.json`|
 
 ## Rules
 
@@ -29,8 +33,10 @@ Builds, installs, and deploy commands may be run when explicitly requested.
 - Connect peers with `tracker.replicate(conn)`, not `store.replicate(conn)`; only the former attaches Autobee's wakeup protocol.
 - Give Autobee a namespaced store, and have a new tracker's founder append once before relying on others' optimistic writes.
 - Pin `autobee` exactly; it is experimental.
+- Autobee emits `'update'` only on an interrupt. To hear about view changes, pass `onchange` to `createNode`, which runs from Autobee's `update` handler.
 - Don't add a machine API field without updating every client in the same change. MediaStorm is the proof client.
 - Prefer deleting code to adding it. Old platform code is at tag `archive/v0.3.0-platform`.
+- `src/index.js` also runs under Bare, in the mobile worklet: no Node-only imports there. Map `node:` builtins to `bare-*` in `package.json` `imports`.
 
 ## Testing
 
@@ -44,8 +50,17 @@ Builds, installs, and deploy commands may be run when explicitly requested.
 npm install
 npm test
 npm start
+
+# Mobile app (cargo, dx 0.7.10, Android SDK + NDK or Xcode)
+sh mobile/setup.sh          # once: bare-kit prebuilds into mobile/vendor
+npm run app                 # macOS desktop app from source; needs VLC.app to play
+npm run test:mobile         # E2E through the worklet on macOS
+cd mobile && dx build --android --target aarch64-linux-android
+sh mobile/ios.sh            # simulator build, installed on the booted simulator
 ```
 
 ## Troubleshooting
 
 No peers: check both NATs. HyperDHT aborts with `HOLEPUNCH_DOUBLE_RANDOMIZED_NATS` when both sides are randomized; forward a UDP port (`PEARTUBE_DHT_PORT`) or use `PEARTUBE_RELAY_THROUGH`.
+
+Slow first connection on a local testnet: every peer is on 127.0.0.1, which HyperDHT will not holepunch, so two peers connect only once one of them passes dht-rpc's NAT check and reports itself open. That check can take minutes after a failed first try; a fresh testnet usually connects in about 25 seconds, which is why the E2E tests wait up to 60–120 seconds.

@@ -1,0 +1,8 @@
+{
+  "buffer": "bare-buffer",
+  "crypto": "bare-crypto",
+  "dgram": "bare-dgram",
+  "events": "bare-events",
+  "net": "bare-net",
+  "os": "bare-os"
+}

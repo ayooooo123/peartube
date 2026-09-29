@@ -1,0 +1,19 @@
+[application]
+
+[bundle]
+identifier = "com.peartube.app"
+publisher = "PearTube"
+
+[android]
+# bare-kit's floor. dx's network security config already allows cleartext to
+# 127.0.0.1, where the worklet serves streams.
+min_sdk = 29
+
+[ios]
+deployment_target = "16.0"
+
+[ios.plist]
+NSLocalNetworkUsageDescription = "PearTube connects directly to peers on your network."
+
+[ios.plist.NSAppTransportSecurity]
+NSAllowsLocalNetworking = true

@@ -38,9 +38,12 @@ fn main() {
         target => panic!("PearTube mobile does not build for {target:?}"),
     };
     // imports.json maps the Node builtins that LAN discovery's mDNS dependencies
-    // require (dgram, os, ...) to their bare-* modules.
+    // require (dgram, os, ...) to their bare-* modules. Bare starts from its
+    // launcher script: bare, bare-runtime and its platform package all claim
+    // the `bare` bin, and npm 10 then links none of them.
     let bundle = out.join("worker.bundle");
-    run(Command::new(root.join("node_modules/.bin/bare"))
+    run(Command::new("node")
+        .arg(root.join("node_modules/bare/bin/bare"))
         .arg(manifest.join("pack.cjs"))
         .args(["--linked", "--host", host, "--imports"])
         .arg(manifest.join("imports.json"))

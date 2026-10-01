@@ -1,6 +1,8 @@
 use dioxus::prelude::*;
 use futures_channel::mpsc::UnboundedReceiver;
 use futures_util::StreamExt;
+#[cfg(target_os = "android")]
+use peartube::android_vlc;
 use peartube::settings::Settings;
 #[cfg(target_os = "macos")]
 use peartube::vlc;
@@ -264,18 +266,40 @@ fn PlayScreen(entry: Entry) -> Element {
     }
 }
 
-/// On macOS VLC plays everything when it is installed. Otherwise the webview
-/// plays what it can: MP4 and WebM.
+/// On macOS VLC plays everything when it is installed, and on Android the app's
+/// own libVLC does. Otherwise the webview plays what it can: MP4 and WebM.
 #[cfg(target_os = "macos")]
 fn player(url: String) -> Element {
     if vlc::installed() { rsx! { VlcPlayer { key: "{url}", url } } } else { rsx! { WebPlayer { url } } }
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(target_os = "android")]
+fn player(url: String) -> Element {
+    rsx! { AndroidPlayer { key: "{url}", url } }
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "android")))]
 fn player(url: String) -> Element {
     rsx! { WebPlayer { url } }
 }
 
+/// Opens the player over the page, which is left showing this screen; leaving
+/// the screen (back, or the end of the video) closes it.
+#[cfg(target_os = "android")]
+#[component]
+fn AndroidPlayer(url: String) -> Element {
+    let opened = use_hook(|| android_vlc::play(&url));
+    use_drop(|| {
+        let _ = android_vlc::close();
+    });
+    rsx! {
+        if let Err(err) = opened {
+            div { class: "inline-error player-error", "{err}" }
+        }
+    }
+}
+
+#[cfg(not(target_os = "android"))]
 #[component]
 fn WebPlayer(url: String) -> Element {
     let mut failed = use_signal(|| false);

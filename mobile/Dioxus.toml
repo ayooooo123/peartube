@@ -1,4 +1,6 @@
 [application]
+# dx's MainActivity plus the libVLC player.
+android_main_activity = "android/MainActivity.kt"
 
 [bundle]
 identifier = "com.peartube.app"
@@ -8,6 +10,9 @@ publisher = "PearTube"
 # bare-kit's floor. dx's network security config already allows cleartext to
 # 127.0.0.1, where the worklet serves streams.
 min_sdk = 29
+# 3.7.3 and later pull in kotlin-stdlib 2.2; dx builds with Kotlin 2.0.
+gradle_dependencies = ["org.videolan.android:libvlc-all:3.7.2"]
+proguard_rules = ["android/libvlc.pro"]
 
 [ios]
 deployment_target = "16.0"

@@ -68,7 +68,7 @@ Release signing reads `peartube.keystore`, `peartube.keystorePassword`, `peartub
 
 ## Mobile app
 
-`mobile/` is a Dioxus app for Android, iOS and macOS that is a peer itself, not a client of one relay. It runs the same core as a relay (`src/index.js`) inside a Bare worklet from [bare-kit](https://github.com/holepunchto/bare-kit): it joins a tracker, lists its entries grouped by title, and plays a tapped one from the worklet's own blob server on `127.0.0.1`, pulling blocks from whichever peers have them and seeding them afterwards. It only reads: it never publishes or acquires. On macOS it plays everything (AVI, MKV, MP4) through the libVLC inside VLC.app, so install [VLC](https://www.videolan.org/vlc/). On Android and iOS its webview plays MP4 and WebM; the `android/` client remains the player for AVIs.
+`mobile/` is a Dioxus app for Android, iOS and macOS that is a peer itself, not a client of one relay. It runs the same core as a relay (`src/index.js`) inside a Bare worklet from [bare-kit](https://github.com/holepunchto/bare-kit): it joins a tracker, lists its entries grouped by title, and plays a tapped one from the worklet's own blob server on `127.0.0.1`, pulling blocks from whichever peers have them and seeding them afterwards. It only reads: it never publishes or acquires. On Android it plays everything (AVI, MKV, MP4, and the AC-3, E-AC-3, TrueHD and DTS audio the webview cannot decode) through the libVLC bundled in the APK, full screen. On macOS it does the same through the libVLC inside VLC.app, so install [VLC](https://www.videolan.org/vlc/). On iOS its webview plays MP4 and WebM.
 
 On first launch it asks for a tracker key (a relay's `GET /v1/status` shows it), and optionally blind relay keys, a DHT bootstrap list for a private network, and a LAN address. The LAN address is this device's IPv4 (macOS so far): with it, the app finds relays on the local network that run with `PEARTUBE_LAN_HOST` over mDNS, which works where the public DHT cannot connect two randomized NATs. macOS asks once whether the app may accept incoming connections; allow it, or LAN peers cannot connect. Settings live in the app's data directory. Each tracker's Corestore holds only what peers can serve again, so it lives outside backups: `Library/Caches` on iOS and macOS, the no-backup files directory on Android.
 
@@ -78,13 +78,14 @@ Build needs Rust, [dx 0.7.10](https://github.com/DioxusLabs/dioxus/releases/tag/
 sh mobile/setup.sh     # once: fetch the bare-kit v2.5.5 prebuilds (420 MB download, cached)
 npm run app            # macOS: build and run the desktop app from source
 cd mobile && dx build --android --target aarch64-linux-android   # APK under target/dx/PearTube/debug/android
+sh mobile/release.sh   # signed arm64 release APK in mobile/target/release-apk
 sh mobile/ios.sh       # iOS simulator build, installed and launched on the booted simulator
 npm run test:mobile    # E2E on macOS: the worklet joins a testnet relay, streams exact bytes, and sees later publishes and removals live
 ```
 
 `mobile/build.rs` packs `mobile/worker.js` with bare-pack for the target and links the native addons it needs (sodium, udx, rocksdb, …) with bare-link. dx puts the Android libraries in the APK; `mobile/ios.sh` embeds BareKit and the addon frameworks, which dx leaves out, and re-signs the app.
 
-CI (`.github/workflows/android-app.yml`) builds the arm64 debug APK on every push that touches the app or the core. Download it from the run's `PearTube-debug-arm64` artifact.
+CI (`.github/workflows/android-app.yml`) builds the arm64 debug APK on every push that touches the app or the core. Download it from the run's `PearTube-debug-arm64` artifact. Releases carry the signed APK from `mobile/release.sh`, which signs with the same key as `android/` (see above). Android will not install it over the debug APK, which has another key: uninstall the debug app first.
 
 ## History
 

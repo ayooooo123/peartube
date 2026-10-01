@@ -1,11 +1,10 @@
 // dx's MainActivity plus a libVLC player. The webview plays no AVI, and plays
 // MKVs silent: it decodes none of the AC-3, E-AC-3, TrueHD and DTS audio most
-// of them carry. libVLC plays both. Its view goes over the webview in this
-// activity, not in an activity of its own: the worklet serving the stream
+// of them carry. libVLC plays both. Its view sits over a slot in the page, in
+// this activity rather than one of its own: the worklet serving the stream
 // suspends whenever this activity pauses.
 package dev.dioxus.main
 
-import android.content.pm.ActivityInfo
 import android.graphics.Color
 import android.net.Uri
 import android.os.Handler
@@ -20,9 +19,6 @@ import android.widget.ImageButton
 import android.widget.LinearLayout
 import android.widget.SeekBar
 import android.widget.TextView
-import androidx.core.view.WindowCompat
-import androidx.core.view.WindowInsetsCompat
-import androidx.core.view.WindowInsetsControllerCompat
 import org.videolan.libvlc.LibVLC
 import org.videolan.libvlc.Media
 import org.videolan.libvlc.MediaPlayer
@@ -39,11 +35,26 @@ class MainActivity : WryActivity() {
         this.webView = webView
     }
 
-    /** From Rust, on any thread: plays url full screen over the page. */
+    /** From Rust, on any thread: plays url in a view that setPlayerFrame places. */
     fun play(url: String) = runOnUiThread {
         player?.release()
         val lib = vlc ?: LibVLC(this, arrayListOf("--network-caching=3000")).also { vlc = it }
         player = Player(this, lib, url)
+    }
+
+    /** From Rust, on any thread: moves the player over a rect of the page, in CSS pixels. */
+    fun setPlayerFrame(left: Float, top: Float, width: Float, height: Float) = runOnUiThread {
+        val page = webView ?: return@runOnUiThread
+        val content = findViewById<ViewGroup>(android.R.id.content)
+        val at = IntArray(2).also { page.getLocationInWindow(it) }
+        val origin = IntArray(2).also { content.getLocationInWindow(it) }
+        val scale = resources.displayMetrics.density
+        player?.place(
+            at[0] - origin[0] + (left * scale).toInt(),
+            at[1] - origin[1] + (top * scale).toInt(),
+            (width * scale).toInt(),
+            (height * scale).toInt(),
+        )
     }
 
     /** From Rust, on any thread: takes the player down. */
@@ -85,8 +96,6 @@ private class Player(private val activity: MainActivity, vlc: LibVLC, url: Strin
     private val player = MediaPlayer(vlc)
     private val handler = Handler(Looper.getMainLooper())
     private val hideControls = Runnable { controls.visibility = View.GONE }
-    private val orientation = activity.requestedOrientation
-    private val bars = WindowCompat.getInsetsController(activity.window, activity.window.decorView)
     private val toggle = ImageButton(activity)
     private val seek = SeekBar(activity)
     private val time = TextView(activity)
@@ -101,7 +110,7 @@ private class Player(private val activity: MainActivity, vlc: LibVLC, url: Strin
         toggle.setImageResource(android.R.drawable.ic_media_pause)
         toggle.setOnClickListener { if (player.isPlaying) player.pause() else player.play(); showControls() }
         time.setTextColor(Color.WHITE)
-        time.setPadding(dp(8), 0, dp(16), 0)
+        time.setPadding(dp(8), 0, dp(8), 0)
         seek.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
             override fun onProgressChanged(bar: SeekBar, progress: Int, fromUser: Boolean) = showTime(progress)
             override fun onStartTrackingTouch(bar: SeekBar) { seeking = true; handler.removeCallbacks(hideControls) }
@@ -113,7 +122,7 @@ private class Player(private val activity: MainActivity, vlc: LibVLC, url: Strin
         })
         controls.gravity = Gravity.CENTER_VERTICAL
         controls.setBackgroundColor(0x99000000.toInt())
-        controls.setPadding(dp(8), dp(8), dp(8), dp(24))
+        controls.setPadding(dp(4), 0, dp(4), 0)
         controls.addView(toggle)
         controls.addView(seek, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
         controls.addView(time)
@@ -127,10 +136,9 @@ private class Player(private val activity: MainActivity, vlc: LibVLC, url: Strin
         // Clickable, so taps stop here instead of reaching the page below.
         root.setOnClickListener { if (controls.visibility == View.VISIBLE) hideControls.run() else showControls() }
         root.keepScreenOn = true
-        activity.addContentView(root, ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
-        activity.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
-        bars.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
-        bars.hide(WindowInsetsCompat.Type.systemBars())
+        // Hidden until the page reports where its slot is.
+        root.visibility = View.INVISIBLE
+        activity.addContentView(root, FrameLayout.LayoutParams(0, 0))
 
         player.attachViews(video, null, false, false)
         player.setEventListener { event ->
@@ -152,6 +160,14 @@ private class Player(private val activity: MainActivity, vlc: LibVLC, url: Strin
         media.release()
         player.play()
         showControls()
+    }
+
+    fun place(left: Int, top: Int, width: Int, height: Int) {
+        root.layoutParams = FrameLayout.LayoutParams(width, height).apply {
+            leftMargin = left
+            topMargin = top
+        }
+        root.visibility = View.VISIBLE
     }
 
     fun pause() = player.pause()
@@ -176,8 +192,6 @@ private class Player(private val activity: MainActivity, vlc: LibVLC, url: Strin
         player.detachViews()
         player.release()
         (root.parent as? ViewGroup)?.removeView(root)
-        bars.show(WindowInsetsCompat.Type.systemBars())
-        activity.requestedOrientation = orientation
     }
 
     private fun showControls() {

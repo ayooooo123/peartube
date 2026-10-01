@@ -4,5 +4,6 @@
 # Rust calls these through JNI.
 -keep class dev.dioxus.main.MainActivity {
   public void play(java.lang.String);
+  public void setPlayerFrame(float, float, float, float);
   public void closePlayer();
 }

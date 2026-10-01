@@ -20,7 +20,7 @@ Builds, installs, and deploy commands may be run when explicitly requested.
 |`mobile/`|Dioxus app for Android, iOS and macOS (not part of the core line budget). It runs the core itself as a peer, in a Bare worklet (bare-kit), and plays stream URLs through libVLC on Android and macOS, in the webview on iOS|
 |`mobile/worker.js`|The worklet: newline-delimited JSON over `BareKit.IPC` to `createNode`. `mobile/build.rs` packs it with bare-pack (`mobile/imports.json` maps Node builtins to `bare-*`) and links its native addons with bare-link|
 |`mobile/src/vlc.rs`|macOS player: loads libVLC from VLC.app with dlopen and draws the video in a native view that `main.rs` keeps over a slot in the page|
-|`mobile/android/MainActivity.kt`|Android player: dx's MainActivity plus libVLC (`libvlc-all`, pinned in `Dioxus.toml`) in a full-screen view over the webview. `mobile/src/android_vlc.rs` opens and closes it through JNI. It stays in the one activity because the worklet suspends whenever that activity pauses|
+|`mobile/android/MainActivity.kt`|Android player: dx's MainActivity plus libVLC (`libvlc-all`, pinned in `Dioxus.toml`) in a native view kept over a slot in the page, as on macOS. `mobile/src/android_vlc.rs` opens, places and closes it through JNI. It stays in the one activity because the worklet suspends whenever that activity pauses|
 |`mobile/release.sh`|Builds the signed arm64 release APK with `android/`'s release key from `~/.gradle/gradle.properties`|
 |`.github/workflows/android-app.yml`|CI: builds the Dioxus app's arm64 debug APK on pushes that touch `mobile/` or the core, and keeps it as the run's artifact|
 |`test/network.test.js`|Relays on a local HyperDHT testnet, including adversarial peers|

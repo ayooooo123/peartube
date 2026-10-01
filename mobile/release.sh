@@ -42,5 +42,7 @@ zip -q -d "$out.unsigned" 'lib/armeabi-v7a/*' 'lib/x86/*' 'lib/x86_64/*'
   --ks-pass env:PEARTUBE_KS_PASS --key-pass env:PEARTUBE_KEY_PASS \
   --out "$out" "$out.aligned"
 rm -f "$out.unsigned" "$out.aligned" "$out.idsig"
-"$tools/apksigner" verify --print-certs "$out" 2>/dev/null | sed -n 's/^.*Signer.* certificate SHA-256 digest: /signer sha256: /p'
+# An assignment, so set -e stops the script when verification fails.
+certs=$("$tools/apksigner" verify --print-certs "$out" 2>/dev/null)
+printf '%s\n' "$certs" | sed -n 's/^.*Signer.* certificate SHA-256 digest: /signer sha256: /p'
 echo "$out"

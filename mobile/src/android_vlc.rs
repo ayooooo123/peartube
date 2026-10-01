@@ -1,15 +1,25 @@
 //! In-app video on Android: libVLC in a view that MainActivity
-//! (android/MainActivity.kt) keeps over the page. These calls reach it
-//! through JNI.
+//! (android/MainActivity.kt) keeps over a slot in the page. These calls reach
+//! it through JNI.
 
 use jni::objects::{JObject, JValue};
 use jni::{JNIEnv, JavaVM};
 
-/// Plays url full screen over the page.
+/// Plays url in a view that stays hidden until set_frame places it.
 pub fn play(url: &str) -> Result<(), String> {
     with_activity(|env, activity| {
         let url = env.new_string(url)?;
         env.call_method(activity, "play", "(Ljava/lang/String;)V", &[JValue::Object(&url)])?;
+        Ok(())
+    })
+}
+
+/// Moves the player over a rect of the page: [left, top, width, height] in
+/// CSS pixels from the webview's top left.
+pub fn set_frame(rect: [f64; 4]) -> Result<(), String> {
+    with_activity(|env, activity| {
+        let [left, top, width, height] = rect.map(|v| JValue::Float(v as f32));
+        env.call_method(activity, "setPlayerFrame", "(FFFF)V", &[left, top, width, height])?;
         Ok(())
     })
 }

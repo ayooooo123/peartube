@@ -283,8 +283,9 @@ fn player(url: String) -> Element {
     rsx! { WebPlayer { url } }
 }
 
-/// Opens the player over the page, which is left showing this screen; leaving
-/// the screen (back, or the end of the video) closes it.
+/// Plays through the app's libVLC, in a native view that MainActivity keeps
+/// over a slot in the page, as the macOS player does. Leaving the screen
+/// (back, or the end of the video) closes it.
 #[cfg(target_os = "android")]
 #[component]
 fn AndroidPlayer(url: String) -> Element {
@@ -293,6 +294,18 @@ fn AndroidPlayer(url: String) -> Element {
         let _ = android_vlc::close();
     });
     rsx! {
+        div {
+            id: "video-slot",
+            class: "video-slot",
+            onmounted: move |_| {
+                spawn(async move {
+                    let mut slot = document::eval(TRACK_SLOT);
+                    while let Ok(rect) = slot.recv::<[f64; 4]>().await {
+                        let _ = android_vlc::set_frame(rect);
+                    }
+                });
+            },
+        }
         if let Err(err) = opened {
             div { class: "inline-error player-error", "{err}" }
         }
@@ -324,7 +337,7 @@ fn WebPlayer(url: String) -> Element {
 
 /// Sends the video slot's rect, [left, top, width, height] in CSS pixels,
 /// whenever it changes, until the slot leaves the page.
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "android"))]
 const TRACK_SLOT: &str = r#"
 const slot = document.getElementById('video-slot')
 let last = ''

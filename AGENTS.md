@@ -14,7 +14,7 @@ Builds, installs, and deploy commands may be run when explicitly requested.
 |`src/acquire.js`|Private job queue: fetch a source, `put` it, save the announce, `append` it durably. Stored in `jobs.json`, never in the Corestore|
 |`src/http.js`|One port: the UI at `/` and the `/v1` API (no auth for now)|
 |`src/ui.js`|The acquisitions page, one HTML string|
-|`src/lan.js`|Optional LAN discovery: `@p2plabs/hyperdht-mdns` with an adapter that dials each peer's advertised address, not the mDNS reflector. `bin/relay.js` passes it to `createNode` as a factory. For the app, `lanAddress` picks the device's Wi-Fi or Ethernet IPv4 and `interfaceAdapter` keeps mDNS on that interface|
+|`src/lan.js`|Optional LAN discovery: `@p2plabs/hyperdht-mdns` with an adapter that dials each peer's advertised address, not the mDNS reflector, and starts its mDNS browse over every 10 s, because one lost answer on Wi-Fi would otherwise leave a peer unfound. `bin/relay.js` passes it to `createNode` as a factory. For the app, `lanAddress` picks the device's Wi-Fi or Ethernet IPv4 and `interfaceAdapter` keeps mDNS on that interface|
 |`bin/relay.js`|Relay process, configured by env|
 |`android/`|Android client (not part of the core line budget): lists `/v1/entries` from one relay, plays `streamUrl` with libVLC. Kotlin, no AppCompat|
 |`mobile/`|Dioxus app for Android, iOS and macOS (not part of the core line budget). It runs the core itself as a peer, in a Bare worklet (bare-kit), and plays stream URLs through libVLC on Android and macOS, in the webview on iOS|
@@ -24,7 +24,7 @@ Builds, installs, and deploy commands may be run when explicitly requested.
 |`mobile/release.sh`|Builds the signed arm64 release APK with `android/`'s release key from `~/.gradle/gradle.properties`|
 |`.github/workflows/android-app.yml`|CI: builds the Dioxus app's arm64 debug APK on pushes that touch `mobile/` or the core, and keeps it as the run's artifact|
 |`test/network.test.js`|Relays on a local HyperDHT testnet, including adversarial peers|
-|`test/lan.test.js`|LAN adapter and error handling in isolation|
+|`test/lan.test.js`|LAN adapter in isolation: the advertised address wins, a lost mDNS answer is asked for again, and discovery errors are reported, not fatal|
 |`test/mobile.e2e.js`|The app's worklet, driven from Rust, joins a relay on a testnet, streams exact bytes, sees a later publish and removal without reopening, and still lists the tracker when a peer announces a malformed title. A second run finds the relay over LAN discovery alone, with no DHT reachable. Writes `mobile/target/e2e/result.json` and `lan-result.json`|
 
 ## Rules

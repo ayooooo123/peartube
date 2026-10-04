@@ -23,7 +23,14 @@ export function lanAddress (interfaces) {
 // reflector (a router bridging subnets) that is the router, not the peer. Each
 // peer therefore advertises the address its LAN DHT is bound to (TXT `h`),
 // and that address wins over the packet's sender.
-export function selfAddressAdapter (host, inner = new HyperDHTmDNS.BonjourAdapter()) {
+//
+// A browse asks only once, when it starts, and a peer announces itself only in
+// the first half hour after it starts. Wi-Fi does not resend multicast to a
+// phone, so one lost answer would leave a peer unfound for good. The browse
+// therefore starts over every `rebrowse` ms, which asks again; hyperdht-mdns
+// skips services it has just seen. Each new browse starts before the last one
+// stops, so the shared mDNS socket stays open in between.
+export function selfAddressAdapter (host, inner = new HyperDHTmDNS.BonjourAdapter(), { rebrowse = 10_000 } = {}) {
   return {
     advertise (record, handlers) {
       return inner.advertise({ ...record, txt: { ...record.txt, h: host } }, handlers)
@@ -33,7 +40,24 @@ export function selfAddressAdapter (host, inner = new HyperDHTmDNS.BonjourAdapte
         const h = String(service?.txt?.h || '')
         handlers.onService(isIPv4(h) ? { ...service, referer: null, addresses: [h] } : service)
       }
-      return inner.browse(query, { ...handlers, onService })
+      const wrapped = { ...handlers, onService }
+      let current = inner.browse(query, wrapped)
+      const timer = setInterval(async () => {
+        try {
+          const previous = current
+          current = inner.browse(query, wrapped)
+          await (await previous).stop()
+        } catch (err) {
+          handlers.onError?.(err)
+        }
+      }, rebrowse)
+      timer.unref?.()
+      return {
+        async stop () {
+          clearInterval(timer)
+          await (await current).stop()
+        }
+      }
     }
   }
 }

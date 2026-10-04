@@ -65,6 +65,7 @@ test('the mobile worklet finds a relay on the LAN and streams from it', async t 
   verify(stages, relay, published, bytes, secondKey)
   assert.equal(stages.streamed.relay.peers, 0, 'no DHT connection')
   assert.ok(stages.streamed.relay.lanPeers >= 1, 'the app reached the relay over LAN discovery')
+  assert.equal(stages.streamed.lan, `on ${host}`, 'the status line names the address LAN discovery uses')
   save('lan-result.json', { test: 'mobile worklet finds a relay on the LAN and streams from it', host, published, relay, stages })
 })
 

@@ -2,8 +2,9 @@
 // The Rust app talks to it over BareKit.IPC in newline-delimited JSON:
 //   app -> worker  {id, method, params}   start | status | search | stop
 //   worker -> app  {id, result} | {id, error} | {event: 'update'} | {event: 'fatal', error}
-// 'update' means the tracker or the peer set changed. Stream URLs point at the
-// core's blob server on 127.0.0.1, which the app plays.
+// 'update' means the tracker, the peer set or LAN discovery changed. start and
+// status return the core's status plus `lan` (see lanNote). Stream URLs point
+// at the core's blob server on 127.0.0.1, which the app plays.
 // Some of LAN discovery's dependencies use the global `process`, which Bare
 // only has once bare-process/global has run. Imports load in order.
 import 'bare-process/global'
@@ -35,6 +36,8 @@ async function close () {
   const open = node
   node = null
   lanHost = null
+  lanError = null
+  lanNote = null
   if (!open) return
   open.swarm.off('update', update)
   await open.close()
@@ -44,24 +47,59 @@ async function close () {
 // which changes as the device moves between networks. moveLan rebinds it to
 // the current address, or stops it when there is none, when it is off, or
 // while the app is in the background. It runs on start, on resume and every
-// few seconds, inside serial. A failure shows once per address; the node
-// carries on without LAN discovery.
+// few seconds, inside serial. lanNote tells the status line what it is doing:
+// on <address>, paused, failed on <address>, or found no Wi-Fi address (with
+// the addresses it did see). It is null while LAN discovery is off.
 const LAN_PORT = 49798 // one below the relay's default, so both fit on one machine
 let lanWanted = false
 let lanHost = null
+let lanError = null
+let lanNote = null
 let suspended = false
 
 async function moveLan () {
-  const host = node && lanWanted && !suspended ? lanAddress(os.networkInterfaces()) : null
-  if (host === lanHost) return
-  lanHost = host
-  try {
-    await node.setLan(host && (keyPair => createLan({ host, port: LAN_PORT, keyPair, adapter: interfaceAdapter(host) })))
-  } catch (err) {
-    send({ event: 'fatal', error: `LAN discovery on ${host}: ${err.message}` })
+  let host = null
+  let seen = ''
+  if (node && lanWanted && !suspended) {
+    try {
+      const interfaces = os.networkInterfaces()
+      host = lanAddress(interfaces)
+      seen = ipv4s(interfaces)
+    } catch (err) {
+      seen = `cannot list interfaces (${err.message})`
+    }
   }
-  update()
+  if (host !== lanHost) {
+    lanHost = host
+    lanError = null
+    try {
+      await node.setLan(host && (keyPair => createLan({ host, port: LAN_PORT, keyPair, adapter: interfaceAdapter(host) })))
+    } catch (err) {
+      lanError = err.message
+    }
+  }
+  const note = noteFor(seen)
+  if (note !== lanNote) {
+    lanNote = note
+    update()
+  }
 }
+
+function noteFor (seen) {
+  if (!node || !lanWanted) return null
+  if (suspended) return 'paused'
+  if (!lanHost) return `found no Wi-Fi address; this device has ${seen || 'no IPv4 address'}`
+  return lanError ? `failed on ${lanHost}: ${lanError}` : `on ${lanHost}`
+}
+
+// Every interface's own IPv4 addresses, as "wlan0 10.0.0.5, rmnet0 100.64.0.2".
+function ipv4s (interfaces) {
+  return Object.entries(interfaces)
+    .flatMap(([name, entries]) => entries.filter(e => (e.family === 'IPv4' || e.family === 4) && !e.internal).map(e => `${name} ${e.address}`))
+    .join(', ')
+}
+
+const report = () => ({ ...node.status(), lan: lanNote })
 
 // Reads wait for a queued start or stop, so they never see the node being replaced.
 async function current () {
@@ -89,9 +127,9 @@ const methods = {
     node.swarm.on('update', update)
     lanWanted = lan
     await moveLan()
-    return node.status()
+    return report()
   }),
-  status: async () => (await current()).status(),
+  status: async () => { await current(); return report() },
   search: async ({ id = null }) => (await current()).search(id),
   stop: () => serial(close)
 }
@@ -129,6 +167,8 @@ Bare.on('uncaughtException', fatal).on('unhandledRejection', fatal)
 // the device is on by then.
 let suspending = null
 Bare.on('suspend', linger => {
+  // A second suspend before the resume must not leave the first timer behind.
+  clearTimeout(suspending)
   suspending = setTimeout(() => {
     suspended = true
     node?.swarm.suspend().catch(fatal)

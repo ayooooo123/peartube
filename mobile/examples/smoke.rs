@@ -51,6 +51,7 @@ fn main() {
             "stage": "streamed",
             "tracker": status.tracker,
             "writer": status.writer,
+            "lan": status.lan,
             "entry": { "key": entry.key, "title": entry.title, "size": entry.size, "sha256": entry.sha256, "local": entry.local },
             "foundMs": found_ms,
             "rangeStatus": range_status,

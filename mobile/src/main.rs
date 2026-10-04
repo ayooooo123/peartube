@@ -177,6 +177,7 @@ fn ListScreen(
     let tracker = status.read().as_ref().map(|s| s.tracker.clone()).unwrap_or_else(|| settings.read().tracker.clone());
     let t_short = if tracker.len() >= 8 { format!("{}…", &tracker[..8]) } else { tracker };
     let facts = format!("{peers} peers · {} · {t_short}", format_bytes(bytes));
+    let lan = status.read().as_ref().and_then(|s| s.lan.clone());
 
     let q = query.read().to_lowercase();
     let all = entries.read();
@@ -198,6 +199,9 @@ fn ListScreen(
                 }, "⚙" }
             }
             p { class: "facts", "{facts}" }
+            if let Some(lan) = lan {
+                p { class: "facts", "LAN {lan}" }
+            }
             input {
                 class: "search-input",
                 r#type: "search",

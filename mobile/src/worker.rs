@@ -28,6 +28,9 @@ pub struct Status {
     pub peers: u64,
     /// Peers connected over LAN discovery.
     pub lan_peers: u64,
+    /// What LAN discovery is doing, for the status line: "on 10.0.0.5",
+    /// "paused", "failed on …" or "found no Wi-Fi address; …". None while off.
+    pub lan: Option<String>,
 }
 
 /// One tracker entry, the same shape as the relay's `/v1/search` results.

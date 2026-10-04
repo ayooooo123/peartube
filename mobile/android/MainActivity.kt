@@ -7,6 +7,7 @@ package dev.dioxus.main
 
 import android.graphics.Color
 import android.net.Uri
+import android.net.wifi.WifiManager
 import android.os.Handler
 import android.os.Looper
 import android.text.format.DateUtils
@@ -30,6 +31,15 @@ class MainActivity : WryActivity() {
     private var webView: WebView? = null
     private var vlc: LibVLC? = null
     private var player: Player? = null
+
+    // Android drops multicast on Wi-Fi unless an app holds this lock, and LAN
+    // discovery finds relays over mDNS. Held while the app is in front; the
+    // worklet suspends behind it anyway.
+    private val multicastLock by lazy {
+        applicationContext.getSystemService(WifiManager::class.java)
+            .createMulticastLock("PearTube LAN discovery")
+            .apply { setReferenceCounted(false) }
+    }
 
     override fun onWebViewCreate(webView: WebView) {
         this.webView = webView
@@ -75,11 +85,13 @@ class MainActivity : WryActivity() {
 
     override fun onStart() {
         super.onStart()
+        multicastLock.acquire()
         player?.showVideo()
     }
 
     override fun onStop() {
         super.onStop()
+        multicastLock.release()
         player?.hideVideo()
     }
 

@@ -1,6 +1,6 @@
 {
   "name": "peartube",
-  "version": "0.4.1",
+  "version": "0.4.2",
   "description": "Decentralized CDN and debrid provider on the Holepunch stack",
   "type": "module",
   "main": "src/index.js",
@@ -34,6 +34,7 @@
     "@p2plabs/hyperdht-mdns": "1.2.0",
     "autobee": "2.10.1",
     "b4a": "^1.8.0",
+    "bonjour-service": "^1.4.4",
     "corestore": "^7.12.6",
     "hyperblobs": "^2.12.1",
     "hypercore-blob-server": "^1.15.0",
@@ -46,6 +47,7 @@
     "bare-dgram": "1.1.1",
     "bare-link": "3.3.1",
     "bare-net": "2.3.3",
+    "bare-os": "3.9.1",
     "bare-pack": "2.2.2",
     "bare-process": "4.5.1",
     "hyperdht": "^6.34.0"

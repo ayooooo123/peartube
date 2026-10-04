@@ -153,7 +153,7 @@ impl Worker {
             "tracker": settings.tracker,
             "relayThrough": non_empty(&settings.relay_through),
             "bootstrap": non_empty(&settings.bootstrap),
-            "lan": (!settings.lan.is_empty()).then_some(&settings.lan),
+            "lan": settings.lan_discovery,
         });
         parse(self.call("start", params).await?)
     }

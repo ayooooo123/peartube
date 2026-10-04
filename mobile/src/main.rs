@@ -458,10 +458,10 @@ fn SettingsScreen(
     let mut tracker = use_signal(|| settings.read().tracker.clone());
     let mut relays = use_signal(|| settings.read().relay_through.join(", "));
     let mut bootstrap = use_signal(|| settings.read().bootstrap.join(", "));
-    let mut lan = use_signal(|| settings.read().lan.clone());
+    let mut lan = use_signal(|| settings.read().lan_discovery);
     let mut inline_error = use_signal(|| None::<String>);
 
-    let on_save = move |_| match Settings::parse(&tracker.read(), &relays.read(), &bootstrap.read(), &lan.read()) {
+    let on_save = move |_| match Settings::parse(&tracker.read(), &relays.read(), &bootstrap.read(), lan()) {
         Err(err) => inline_error.set(Some(err)),
         Ok(new) => {
             if let Err(err) = new.save() { inline_error.set(Some(err)); return; }
@@ -505,9 +505,11 @@ fn SettingsScreen(
                     textarea { class: "text-input text-area", initial_value: "{bootstrap}", autocapitalize: "off", spellcheck: "false", oninput: move |e| bootstrap.set(e.value()) }
                 }
                 div { class: "field-group",
-                    label { class: "field-label", "LAN address" }
-                    div { class: "field-hint", "Optional. This device's LAN IPv4, to find relays on the local network that run with PEARTUBE_LAN_HOST (macOS so far)." }
-                    input { class: "text-input", initial_value: "{lan}", autocapitalize: "off", spellcheck: "false", placeholder: "10.0.0.5", oninput: move |e| lan.set(e.value()) }
+                    label { class: "toggle",
+                        input { r#type: "checkbox", checked: lan(), onchange: move |e| lan.set(e.checked()) }
+                        "Find relays on this network"
+                    }
+                    div { class: "field-hint", "Over mDNS, on this device's Wi-Fi or Ethernet, for relays that run with PEARTUBE_LAN_HOST. Turn it on where peers on one network cannot reach each other through the internet." }
                 }
                 button { class: "save-btn", onclick: on_save, "Save" }
             }

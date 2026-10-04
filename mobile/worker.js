@@ -8,8 +8,9 @@
 // only has once bare-process/global has run. Imports load in order.
 import 'bare-process/global'
 import b4a from 'b4a'
+import os from 'bare-os'
 import { createNode } from '../src/index.js'
-import { createLan } from '../src/lan.js'
+import { createLan, interfaceAdapter, lanAddress } from '../src/lan.js'
 
 const ipc = BareKit.IPC
 let node = null
@@ -20,8 +21,8 @@ const wellFormed = (key, value) => typeof value === 'string' ? value.toWellForme
 const send = msg => ipc.write(JSON.stringify(msg, wellFormed) + '\n')
 const update = () => send({ event: 'update' })
 
-// start and stop run one at a time, so a quick settings change cannot leave
-// two nodes open on the same storage.
+// start, stop and LAN moves run one at a time, so a quick settings change
+// cannot leave two nodes open on the same storage.
 function serial (fn) {
   const next = lifecycle.then(fn)
   lifecycle = next.catch(() => {})
@@ -33,9 +34,33 @@ function serial (fn) {
 async function close () {
   const open = node
   node = null
+  lanHost = null
   if (!open) return
   open.swarm.off('update', update)
   await open.close()
+}
+
+// LAN discovery (src/lan.js) binds to this device's Wi-Fi or Ethernet address,
+// which changes as the device moves between networks. moveLan rebinds it to
+// the current address, or stops it when there is none, when it is off, or
+// while the app is in the background. It runs on start, on resume and every
+// few seconds, inside serial. A failure shows once per address; the node
+// carries on without LAN discovery.
+const LAN_PORT = 49798 // one below the relay's default, so both fit on one machine
+let lanWanted = false
+let lanHost = null
+let suspended = false
+
+async function moveLan () {
+  const host = node && lanWanted && !suspended ? lanAddress(os.networkInterfaces()) : null
+  if (host === lanHost) return
+  lanHost = host
+  try {
+    await node.setLan(host && (keyPair => createLan({ host, port: LAN_PORT, keyPair, adapter: interfaceAdapter(host) })))
+  } catch (err) {
+    send({ event: 'fatal', error: `LAN discovery on ${host}: ${err.message}` })
+  }
+  update()
 }
 
 // Reads wait for a queued start or stop, so they never see the node being replaced.
@@ -51,19 +76,19 @@ function hostPort (address) {
 }
 
 const methods = {
-  // lan: this device's LAN address as ip:port, for the mDNS discovery relays
-  // use on one network (src/lan.js); null leaves it off.
-  start: ({ storage, tracker, relayThrough = null, bootstrap = null, lan = null }) => serial(async () => {
+  // lan: whether to find relays on this device's network over mDNS.
+  start: ({ storage, tracker, relayThrough = null, bootstrap = null, lan = false }) => serial(async () => {
     await close()
     node = await createNode({
       storage,
       tracker,
       relayThrough,
       bootstrap: bootstrap ? bootstrap.map(hostPort) : undefined,
-      lan: lan ? keyPair => createLan({ ...hostPort(lan), keyPair }) : null,
       onchange: update
     })
     node.swarm.on('update', update)
+    lanWanted = lan
+    await moveLan()
     return node.status()
   }),
   status: async () => (await current()).status(),
@@ -100,11 +125,22 @@ Bare.on('uncaughtException', fatal).on('unhandledRejection', fatal)
 // The app suspends the worklet in the background, and the OS grants `linger` ms
 // before Bare stops. iOS also reports every brief loss of focus (notification
 // shade, app switcher) as a suspend, so peers are dropped only if it lasts.
+// LAN discovery stops with them; back in front it binds to whatever network
+// the device is on by then.
 let suspending = null
 Bare.on('suspend', linger => {
-  suspending = setTimeout(() => node?.swarm.suspend().catch(fatal), Math.min(linger, 5000))
+  suspending = setTimeout(() => {
+    suspended = true
+    node?.swarm.suspend().catch(fatal)
+    serial(moveLan).catch(fatal)
+  }, Math.min(linger, 5000))
 })
 Bare.on('resume', () => {
   clearTimeout(suspending)
+  suspended = false
   node?.swarm.resume().catch(fatal)
+  serial(moveLan).catch(fatal)
 })
+
+// Joining or leaving a network does not suspend the app.
+setInterval(() => serial(moveLan).catch(fatal), 10_000)

@@ -1,6 +1,6 @@
 //! What the app joins: a tracker, optional blind relays, an optional DHT
-//! bootstrap for a private network, and optional LAN discovery. Kept in
-//! settings.json in the data dir.
+//! bootstrap for a private network, and whether to look for relays on the
+//! local network. Kept in settings.json in the data dir.
 
 use serde::{Deserialize, Serialize};
 
@@ -15,9 +15,9 @@ pub struct Settings {
     pub relay_through: Vec<String>,
     /// DHT bootstrap nodes as host:port; empty means the public DHT.
     pub bootstrap: Vec<String>,
-    /// This device's LAN address as IPv4:port, for finding relays on the local
-    /// network over mDNS (relays run it with PEARTUBE_LAN_HOST). Empty is off.
-    pub lan: String,
+    /// Find relays on the local network over mDNS (relays run it with
+    /// PEARTUBE_LAN_HOST), on this device's Wi-Fi or Ethernet address.
+    pub lan_discovery: bool,
 }
 
 impl Settings {
@@ -36,8 +36,8 @@ impl Settings {
         std::fs::rename(&tmp, &file).map_err(|err| err.to_string())
     }
 
-    /// Settings from the form's text fields. Lists split on commas or whitespace.
-    pub fn parse(tracker: &str, relay_through: &str, bootstrap: &str, lan: &str) -> Result<Settings, String> {
+    /// Settings from the form's fields. Lists split on commas or whitespace.
+    pub fn parse(tracker: &str, relay_through: &str, bootstrap: &str, lan_discovery: bool) -> Result<Settings, String> {
         let tracker = tracker.trim().to_lowercase();
         if !is_key(&tracker) {
             return Err("The tracker key is 64 hex characters.".into());
@@ -50,16 +50,7 @@ impl Settings {
         if let Some(bad) = bootstrap.iter().find(|node| !is_host_port(node)) {
             return Err(format!("Bootstrap node {bad} is not host:port."));
         }
-        let lan = lan.trim();
-        // One below the relay default, so a relay and the app can share a machine.
-        let lan = if lan.is_empty() || lan.contains(':') { lan.to_string() } else { format!("{lan}:49798") };
-        let valid = lan.rsplit_once(':').is_some_and(|(host, port)| {
-            host.parse::<std::net::Ipv4Addr>().is_ok() && port.parse::<u16>().is_ok_and(|p| p > 0)
-        });
-        if !lan.is_empty() && !valid {
-            return Err(format!("LAN address {lan} is not an IPv4 address with an optional port."));
-        }
-        Ok(Settings { tracker, relay_through, bootstrap, lan })
+        Ok(Settings { tracker, relay_through, bootstrap, lan_discovery })
     }
 }
 

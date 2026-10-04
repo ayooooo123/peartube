@@ -92,18 +92,37 @@ export async function createNode ({
   swarm.join(tracker.discoveryKey)
 
   // Optional LAN path (mDNS + isolated DHT) for peers the public DHT cannot
-  // connect, e.g. two randomized NATs on one network. Same key pair as the swarm.
+  // connect, e.g. two randomized NATs on one network. Same key pair as the
+  // swarm. setLan replaces it, so the app can follow its device from network
+  // to network; calls must not overlap.
   const lanPeers = new Set()
-  const lan = createLan && createLan(swarm.keyPair)
-  if (lan) {
-    lan.on('connection', conn => {
+  let lan = null
+  let closing = false
+  async function setLan (factory) {
+    const previous = lan
+    lan = null
+    await previous?.destroy()
+    if (!factory || closing) return
+    const next = factory(swarm.keyPair)
+    next.on('connection', conn => {
       lanPeers.add(conn)
       conn.once('close', () => lanPeers.delete(conn))
       tracker.replicate(conn)
     })
-    await lan.ready()
-    lan.join(tracker.discoveryKey)
+    try {
+      await next.ready()
+    } catch (err) {
+      await next.destroy()
+      throw err
+    }
+    if (closing) {
+      await next.destroy()
+      return
+    }
+    next.join(tracker.discoveryKey)
+    lan = next
   }
+  await setLan(createLan)
 
   // No stream token for now: stream URLs are open, like the API.
   const server = new BlobServer(store, { host: streamHost, port: streamPort, token: null })
@@ -168,7 +187,6 @@ export async function createNode ({
     return { tracker: b4a.toString(tracker.key, 'hex'), writer: b4a.toString(tracker.local.key, 'hex'), blobs: blobsKey, blobBytes: blobsCore.byteLength, peers: swarm.connections.size, lanPeers: lanPeers.size }
   }
 
-  let closing = false
   async function close () {
     closing = true
     await lan?.destroy()
@@ -178,5 +196,5 @@ export async function createNode ({
     await store.close()
   }
 
-  return { tracker, swarm, search, put, append, publish, remove, status, streamUrl, close, get closing () { return closing } }
+  return { tracker, swarm, search, put, append, publish, remove, status, streamUrl, setLan, close, get closing () { return closing } }
 }

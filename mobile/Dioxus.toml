@@ -14,6 +14,10 @@ min_sdk = 29
 gradle_dependencies = ["org.videolan.android:libvlc-all:3.7.2"]
 proguard_rules = ["android/libvlc.pro"]
 
+[android.raw]
+# The Wi-Fi multicast lock that LAN discovery needs (android/MainActivity.kt).
+manifest = '<uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE" />'
+
 [ios]
 deployment_target = "16.0"
 

@@ -325,6 +325,23 @@ button {
   color: var(--dim);
 }
 
+.toggle {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 44px;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.toggle input {
+  width: 22px;
+  height: 22px;
+  margin: 0;
+  accent-color: var(--brand);
+}
+
 .text-input {
   width: 100%;
   padding: 10px 12px;

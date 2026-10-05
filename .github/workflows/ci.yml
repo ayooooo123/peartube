@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: [core, main]
+    branches: [main]
   pull_request:
 
 permissions:
@@ -22,7 +22,7 @@ jobs:
       - run: npm test
 
   image:
-    # Publishes :core and :sha-<commit> only. :latest moves at the live relay cutover.
+    # Publishes :main and :sha-<commit> only. :latest moves at the live relay cutover.
     if: github.event_name == 'push'
     needs: test
     runs-on: ubuntu-latest

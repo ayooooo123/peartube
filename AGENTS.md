@@ -14,7 +14,7 @@ Builds, installs, and deploy commands may be run when explicitly requested.
 |`src/acquire.js`|Private job queue: fetch a source, `put` it, save the announce, `append` it durably. Stored in `jobs.json`, never in the Corestore|
 |`src/http.js`|One port: the UI at `/` and the `/v1` API (no auth for now)|
 |`src/ui.js`|The acquisitions page, one HTML string|
-|`src/lan.js`|Optional LAN discovery: `@p2plabs/hyperdht-mdns` with an adapter that dials each peer's advertised address, not the mDNS reflector, and starts its mDNS browse over every 10 s, because one lost answer on Wi-Fi would otherwise leave a peer unfound. `bin/relay.js` passes it to `createNode` as a factory. For the app, `lanAddress` picks the device's Wi-Fi or Ethernet IPv4 and `interfaceAdapter` keeps mDNS on that interface|
+|`src/lan.js`|Optional LAN discovery: `@p2plabs/hyperdht-mdns` with an adapter that dials each peer's advertised address, not the mDNS reflector, and starts its mDNS browse over every 10 s, so an answer missed on Wi-Fi is asked for again instead of waiting for another host's query. `bin/relay.js` passes it to `createNode` as a factory. For the app, `lanAddress` picks the device's Wi-Fi or Ethernet IPv4 and `interfaceAdapter` keeps mDNS on that interface|
 |`bin/relay.js`|Relay process, configured by env|
 |`android/`|Android client (not part of the core line budget): lists `/v1/entries` from one relay, plays `streamUrl` with libVLC. Kotlin, no AppCompat|
 |`mobile/`|Dioxus app for Android, iOS and macOS (not part of the core line budget). It runs the core itself as a peer, in a Bare worklet (bare-kit), and plays stream URLs through libVLC on Android and macOS, in the webview on iOS|

@@ -24,12 +24,14 @@ export function lanAddress (interfaces) {
 // peer therefore advertises the address its LAN DHT is bound to (TXT `h`),
 // and that address wins over the packet's sender.
 //
-// A browse asks only once, when it starts, and a peer announces itself only in
-// the first half hour after it starts. Wi-Fi does not resend multicast to a
-// phone, so one lost answer would leave a peer unfound for good. The browse
-// therefore starts over every `rebrowse` ms, which asks again; hyperdht-mdns
-// skips services it has just seen. Each new browse starts before the last one
-// stops, so the shared mDNS socket stays open in between.
+// A browse asks only once, when it starts. A peer announces itself on its own
+// only for about its first 55 minutes: bonjour-service sends at 0, 3, 12 and
+// 39 s and so on, each wait three times the last, the final one at 3279 s.
+// After that it only answers queries. Wi-Fi does not resend a lost multicast
+// frame, so a phone that misses an answer can wait until some other host asks.
+// The browse therefore starts over every `rebrowse` ms, which asks again;
+// hyperdht-mdns skips services it has just seen. Each new browse starts before
+// the last one stops, so the shared mDNS socket stays open in between.
 export function selfAddressAdapter (host, inner = new HyperDHTmDNS.BonjourAdapter(), { rebrowse = 10_000 } = {}) {
   return {
     advertise (record, handlers) {

@@ -28,9 +28,9 @@ test('LAN discovery dials the advertised address, not the mDNS reflector', async
   await browse.stop()
 })
 
-// A browse asks once. On Wi-Fi a phone can miss the one answer, and peers stop
-// announcing themselves after their first half hour, so the browse must start
-// over to ask again. Ways that could fail: it never asks again; it stops the
+// A browse asks once. On Wi-Fi a phone can miss the one answer, and a peer
+// stops announcing itself about 55 minutes after it starts, so the browse must
+// start over to ask again. Ways that could fail: it never asks again; it stops the
 // old browse before starting the new one, which closes the shared mDNS socket;
 // old browses pile up; it keeps browsing after stop; or a failing browse throws
 // out of the timer and takes the relay down.

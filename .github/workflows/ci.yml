@@ -22,7 +22,8 @@ jobs:
       - run: npm test
 
   image:
-    # Publishes :main and :sha-<commit> only. :latest moves at the live relay cutover.
+    # Publishes :main, :latest and :sha-<commit>. The live relay now runs the
+    # core, so :latest follows main.
     if: github.event_name == 'push'
     needs: test
     runs-on: ubuntu-latest
@@ -45,4 +46,5 @@ jobs:
           platforms: linux/amd64,linux/arm64
           tags: |
             ${{ steps.meta.outputs.image }}:${{ github.ref_name }}
+            ${{ steps.meta.outputs.image }}:latest
             ${{ steps.meta.outputs.image }}:sha-${{ github.sha }}

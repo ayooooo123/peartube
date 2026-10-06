@@ -1,6 +1,6 @@
 [package]
 name = "peartube"
-version = "0.4.4"
+version = "0.4.5"
 edition = "2024"
 publish = false
 

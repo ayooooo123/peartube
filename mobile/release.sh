@@ -1,6 +1,6 @@
 #!/bin/sh
 # Builds the signed arm64 release APK into target/release-apk/.
-# The key is android/'s release key, read from ~/.gradle/gradle.properties:
+# The release key is read from ~/.gradle/gradle.properties:
 # peartube.keystore, peartube.keystorePassword, peartube.keyAlias and
 # peartube.keyPassword. dx signs only with passwords written into Dioxus.toml,
 # so this script assembles and signs the release itself.

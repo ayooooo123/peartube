@@ -99,11 +99,6 @@ packages/app/android/app/debug.keystore
 # relay data
 peartube-data/
 
-# Android app
-android/.gradle/
-android/.kotlin/
-android/local.properties
-
 # Mobile app (Dioxus): cargo/dx output and bare-kit fetched by mobile/setup.sh
 mobile/target/
 mobile/vendor/

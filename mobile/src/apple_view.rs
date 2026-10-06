@@ -25,6 +25,8 @@ use objc2_ui_kit::UIView as View;
 pub struct AppleView {
     backend: Arc<AppleBackend>,
     view: Retained<View>,
+    /// AppKit views may count y from the bottom; UIKit always from the top.
+    #[cfg(target_os = "macos")]
     parent: Retained<View>,
 }
 
@@ -39,7 +41,12 @@ impl AppleView {
         let backend = AppleBackend::new();
         // SAFETY: `view` is a live view of the right class, kept alive by self.
         unsafe { backend.attach(Retained::as_ptr(&view) as *mut std::ffi::c_void) };
-        Ok(AppleView { backend, view, parent })
+        Ok(AppleView {
+            backend,
+            view,
+            #[cfg(target_os = "macos")]
+            parent,
+        })
     }
 
     pub fn backend(&self) -> Arc<dyn Backend> {

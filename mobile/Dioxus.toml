@@ -10,6 +10,7 @@ publisher = "PearTube"
 # bare-kit's floor. dx's network security config already allows cleartext to
 # 127.0.0.1, where the worklet serves streams.
 min_sdk = 29
+proguard_rules = ["android/jni.pro"]
 
 [android.raw]
 # The Wi-Fi multicast lock that LAN discovery needs (android/MainActivity.kt).

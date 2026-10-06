@@ -3,14 +3,16 @@
 // the UI drives it, joins the tracker, finds the entry and streams it back.
 // Once connected, the relay publishes a second entry under the same id and then
 // removes it; the app must see both changes through update events alone, as
-// the UI does. The first test meets over a local testnet DHT, the second over
-// LAN discovery alone. Needs cargo and `sh mobile/setup.sh`. Leaves its
-// evidence in mobile/target/e2e/.
+// the UI does. The first test meets over a local testnet DHT and also plays
+// the entry through the app's player (peartube-media), over the worklet's
+// stream: every frame and every audio sample must equal FFmpeg's decode of the
+// file. The second test meets over LAN discovery alone. Needs cargo, ffmpeg
+// and `sh mobile/setup.sh`. Leaves its evidence in mobile/target/e2e/.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { spawn } from 'node:child_process'
+import { execFileSync, spawn } from 'node:child_process'
 import { createHash, randomBytes } from 'node:crypto'
-import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { networkInterfaces, tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createInterface } from 'node:readline'
@@ -31,12 +33,13 @@ test('the mobile worklet streams a relay entry and follows the tracker live', as
   // synced by the time the app sees the real entry.
   const hostile = await relay.put({ id: 'imdb:tt0000666' }, Readable.from([randomBytes(10)]))
   await relay.append({ ...hostile, title: 'Hostile \ud83d' })
-  const bytes = randomBytes(3 * 1024 * 1024 + 7)
+  const bytes = media(tmp('media'))
   const published = await relay.publish({ id: 'imdb:tt0111161', title: 'Mobile E2E' }, Readable.from([bytes]))
 
   const bootstrap = testnet.bootstrap.map(node => `${node.host}:${node.port}`)
-  const { stages, secondKey } = await drive(t, relay, published, { bootstrap })
+  const { stages, secondKey } = await drive(t, relay, published, { bootstrap }, { PEARTUBE_PLAY: '1' })
   verify(stages, relay, published, bytes, secondKey)
+  verifyPlayed(stages.streamed.played, bytes)
   assert.deepEqual(stages.streamed.titles.toSorted(), ['Hostile \ufffd', 'Mobile E2E'], 'the whole tracker lists, the bad title repaired')
   save('result.json', { test: 'mobile worklet streams a relay entry and follows the tracker live', published, relay, stages })
 })
@@ -72,11 +75,11 @@ test('the mobile worklet finds a relay on the LAN and streams from it', async t 
 // Runs the app's P2P stack against relay with these settings. When the app has
 // streamed the entry, the relay publishes a second one under the same id; when
 // the app lists that, the relay removes it. Returns every stage the app reported.
-async function drive (t, relay, published, settings) {
+async function drive (t, relay, published, settings, env = {}) {
   const storage = tmp('app')
   writeFileSync(join(storage, 'settings.json'), JSON.stringify({ tracker: relay.status().tracker, ...settings }))
   const cargo = ['run', '--quiet', '--manifest-path', 'mobile/Cargo.toml', '--no-default-features', '--features', 'desktop', '--example', 'smoke', '--', published.id]
-  const smoke = spawn('cargo', cargo, { env: { ...process.env, PEARTUBE_STORAGE: storage }, stdio: ['ignore', 'pipe', 'inherit'] })
+  const smoke = spawn('cargo', cargo, { env: { ...process.env, ...env, PEARTUBE_STORAGE: storage }, stdio: ['ignore', 'pipe', 'inherit'] })
   t.after(() => smoke.kill())
 
   const stages = {}
@@ -110,6 +113,32 @@ function verify (stages, relay, published, bytes, secondKey) {
   assert.equal(app.fullSha256, sha256(bytes))
   assert.deepEqual(stages.second.keys.toSorted(), [app.entry.key, secondKey].toSorted(), 'a later entry with the same id is listed next to the first')
   assert.deepEqual(stages.removed.keys, [app.entry.key], 'a removed entry leaves the list')
+}
+
+// 8 s of H.264 (x264, 640x360) and FLAC in Matroska: a common video codec and
+// a lossless audio one, so the player's output can be compared exactly.
+function media (dir) {
+  const file = join(dir, 'e2e.mkv')
+  execFileSync('ffmpeg', ['-v', 'error', '-f', 'lavfi', '-i', 'testsrc2=size=640x360:rate=25', '-f', 'lavfi', '-i', 'sine=frequency=440:sample_rate=48000',
+    '-t', '8', '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '20', '-pix_fmt', 'yuv420p', '-c:a', 'flac', '-y', file])
+  return readFileSync(file)
+}
+
+function verifyPlayed (played, bytes) {
+  assert.ok(played, 'the app played the entry')
+  assert.equal(played.error, null, `playback error: ${played.error}`)
+  assert.equal(played.ended, true, 'playback reached the end')
+  const file = join(tmp('reference'), 'e2e.mkv')
+  writeFileSync(file, bytes)
+  const ffmpeg = args => execFileSync('ffmpeg', ['-v', 'error', '-i', file, ...args], { maxBuffer: 1 << 30 })
+  const frames = ffmpeg(['-map', '0:v:0', '-fps_mode', 'passthrough', '-pix_fmt', 'yuv420p', '-f', 'framemd5', '-']).toString()
+    .split('\n').filter(line => line && !line.startsWith('#')).map(line => line.split(',').at(-1).trim())
+  assert.equal(played.video.codec, 'h264')
+  assert.equal(played.video.frameMd5.length, frames.length, 'every frame reached the video sink')
+  assert.deepEqual(played.video.frameMd5, frames, 'every frame equals FFmpeg\'s')
+  const pcm = ffmpeg(['-map', '0:a:0', '-c:a', 'pcm_f32le', '-f', 'f32le', '-'])
+  assert.equal(played.audio.samples, pcm.length / 4, 'every audio sample reached the audio sink')
+  assert.equal(played.audio.pcmSha256, sha256(pcm), 'the audio equals FFmpeg\'s')
 }
 
 function save (file, { test, host, published, relay, stages }) {

@@ -34,9 +34,6 @@ app=target/dx/PearTube/release/android/app
 mkdir -p target/release-apk
 out="target/release-apk/PearTube-$version-arm64.apk"
 cp "$app/app/build/outputs/apk/release/app-release-unsigned.apk" "$out.unsigned"
-# libVLC ships four ABIs; the app's own libraries are arm64 only. With other
-# ABIs present, an x86_64 or armv7 device would install the app and crash.
-zip -q -d "$out.unsigned" 'lib/armeabi-v7a/*' 'lib/x86/*' 'lib/x86_64/*'
 "$tools/zipalign" -f -P 16 4 "$out.unsigned" "$out.aligned"
 "$tools/apksigner" sign --ks "$keystore" --ks-key-alias "$alias" \
   --ks-pass env:PEARTUBE_KS_PASS --key-pass env:PEARTUBE_KEY_PASS \

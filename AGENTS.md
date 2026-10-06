@@ -17,15 +17,17 @@ Builds, installs, and deploy commands may be run when explicitly requested.
 |`src/lan.js`|Optional LAN discovery: `@p2plabs/hyperdht-mdns` with an adapter that dials each peer's advertised address, not the mDNS reflector, and starts its mDNS browse over every 10 s, so an answer missed on Wi-Fi is asked for again instead of waiting for another host's query. `bin/relay.js` passes it to `createNode` as a factory. For the app, `lanAddress` picks the device's Wi-Fi or Ethernet IPv4 and `interfaceAdapter` keeps mDNS on that interface|
 |`bin/relay.js`|Relay process, configured by env|
 |`android/`|Android client (not part of the core line budget): lists `/v1/entries` from one relay, plays `streamUrl` with libVLC. Kotlin, no AppCompat|
-|`mobile/`|Dioxus app for Android, iOS and macOS (not part of the core line budget). It runs the core itself as a peer, in a Bare worklet (bare-kit), and plays stream URLs through libVLC on Android and macOS, in the webview on iOS|
+|`mobile/`|Dioxus app for Android, iOS and macOS (not part of the core line budget). It runs the core itself as a peer, in a Bare worklet (bare-kit), and plays stream URLs with the Rust player from [peartube-media](https://github.com/ayooooo123/peartube-media): OxideAV and ported decoders for every format VLC plays, plus the platform's video decoders|
 |`mobile/worker.js`|The worklet: newline-delimited JSON over `BareKit.IPC` to `createNode`. LAN discovery follows the device's address: checked on start, on resume and every 10 s, and stopped in the background. Its state goes out as `lan` in `start` and `status`, and the list shows it under the peer count. `mobile/build.rs` packs it with bare-pack (`mobile/imports.json` maps Node builtins to `bare-*`) and links its native addons with bare-link|
-|`mobile/src/vlc.rs`|macOS player: loads libVLC from VLC.app with dlopen and draws the video in a native view that `main.rs` keeps over a slot in the page|
-|`mobile/android/MainActivity.kt`|Android player: dx's MainActivity plus libVLC (`libvlc-all`, pinned in `Dioxus.toml`) in a native view kept over a slot in the page, as on macOS. `mobile/src/android_vlc.rs` opens, places and closes it through JNI. It stays in the one activity because the worklet suspends whenever that activity pauses. It also holds the Wi-Fi multicast lock LAN discovery needs while the app is in front (permission in `Dioxus.toml` `[android.raw]`)|
+|`mobile/src/player.rs`|The play screen's `VideoPlayer`: opens peartube-media's `Player` on the stream URL, keeps its native picture over a slot in the page, and draws the controls (play/pause, seek, audio and subtitle tracks) in the page. Suspends and resumes with the app|
+|`mobile/src/apple_view.rs`|macOS and iOS: a native view inside the webview, kept over the slot, that peartube-media's `AppleBackend` draws into (AVSampleBufferDisplayLayer + audio renderer)|
+|`mobile/src/android_player.rs`, `mobile/android/MainActivity.kt`|Android: MainActivity keeps two SurfaceViews (video, subtitles above it) over the slot and hands their surfaces to `AndroidBackend` through JNI (MediaCodec onto the surface, AAudio). They stay in the one activity because the worklet suspends whenever that activity pauses. MainActivity also holds the Wi-Fi multicast lock LAN discovery needs while the app is in front (permission in `Dioxus.toml` `[android.raw]`)|
+|`mobile/sync-player.py`|Pins the app to a peartube-media commit: the `player`/`codecs` git rev and a copy of its `[patch.crates-io]` OxideAV pins (Cargo applies patches only from the top-level manifest)|
 |`mobile/release.sh`|Builds the signed arm64 release APK with `android/`'s release key from `~/.gradle/gradle.properties`|
 |`.github/workflows/android-app.yml`|CI: builds the Dioxus app's arm64 debug APK on pushes that touch `mobile/` or the core, and keeps it as the run's artifact|
 |`test/network.test.js`|Relays on a local HyperDHT testnet, including adversarial peers|
 |`test/lan.test.js`|LAN adapter in isolation: the advertised address wins, a lost mDNS answer is asked for again, and discovery errors are reported, not fatal|
-|`test/mobile.e2e.js`|The app's worklet, driven from Rust, joins a relay on a testnet, streams exact bytes, sees a later publish and removal without reopening, and still lists the tracker when a peer announces a malformed title. A second run finds the relay over LAN discovery alone, with no DHT reachable. Writes `mobile/target/e2e/result.json` and `lan-result.json`|
+|`test/mobile.e2e.js`|The app's worklet, driven from Rust, joins a relay on a testnet, streams exact bytes, plays the entry through the app's player (every frame and audio sample equal to FFmpeg's decode), sees a later publish and removal without reopening, and still lists the tracker when a peer announces a malformed title. A second run finds the relay over LAN discovery alone, with no DHT reachable. Needs ffmpeg. Writes `mobile/target/e2e/result.json` and `lan-result.json`|
 
 ## Rules
 
@@ -56,10 +58,11 @@ npm start
 
 # Mobile app (cargo, dx 0.7.10, Android SDK + NDK or Xcode)
 sh mobile/setup.sh          # once: bare-kit prebuilds into mobile/vendor
-npm run app                 # macOS desktop app from source; needs VLC.app to play
+npm run app                 # macOS desktop app from source
 npm run test:mobile         # E2E through the worklet on macOS
 cd mobile && dx build --android --target aarch64-linux-android
-sh mobile/release.sh        # signed arm64 release APK in mobile/target/release-apk
+sh mobile/release.sh        # signed arm64 release APK in mobile/target/release-apk (needs JDK 17: Android lint fails on 25)
+python3 mobile/sync-player.py  # after pushing peartube-media: pin the app to its HEAD
 sh mobile/ios.sh            # simulator build, installed on the booted simulator
 ```
 

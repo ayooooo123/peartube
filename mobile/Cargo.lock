@@ -9,6 +9,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "320119579fcad9c21884f5c4861d16174d0e06250625266f50fe6898340abefa"
 
 [[package]]
+name = "aes"
+version = "0.8.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b169f7a6d4742236a0a00c541b845991d0ac43e546831af1249753ab4c3aa3a0"
+dependencies = [
+ "cfg-if",
+ "cipher",
+ "cpufeatures",
+]
+
+[[package]]
 name = "aho-corasick"
 version = "1.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -214,6 +225,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "block-padding"
+version = "0.3.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a8894febbff9f758034a5b8e12d87918f56dfc64a8e1fe757d65e29041538d93"
+dependencies = [
+ "generic-array",
+]
+
+[[package]]
 name = "block2"
 version = "0.6.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -287,6 +307,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "cbc"
+version = "0.1.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "26b52a9543ae338f279b96b0b9fed9c8093744685043739079ce85cd58f289a6"
+dependencies = [
+ "cipher",
+]
+
+[[package]]
 name = "cc"
 version = "1.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -332,6 +361,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4e7648175b45a9a48536d676f68d918270699102aa8dab5496df06904c914600"
 
 [[package]]
+name = "cipher"
+version = "0.4.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "773f3b9af64447d2ce9850330c473515014aa235e6a783b02db81ff39e4a3dad"
+dependencies = [
+ "crypto-common",
+ "inout",
+]
+
+[[package]]
 name = "cocoa"
 version = "0.26.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -361,6 +400,87 @@ dependencies = [
 ]
 
 [[package]]
+name = "codec-dca"
+version = "0.1.0"
+source = "git+https://github.com/ayooooo123/peartube-media?rev=efc3ef40603780ffb5fdf5a059a0b5e6adfc92cb#efc3ef40603780ffb5fdf5a059a0b5e6adfc92cb"
+dependencies = [
+ "oxideav-core",
+]
+
+[[package]]
+name = "codec-mlp"
+version = "0.1.0"
+source = "git+https://github.com/ayooooo123/peartube-media?rev=efc3ef40603780ffb5fdf5a059a0b5e6adfc92cb#efc3ef40603780ffb5fdf5a059a0b5e6adfc92cb"
+dependencies = [
+ "oxideav-core",
+]
+
+[[package]]
+name = "codecs"
+version = "0.1.0"
+source = "git+https://github.com/ayooooo123/peartube-media?rev=efc3ef40603780ffb5fdf5a059a0b5e6adfc92cb#efc3ef40603780ffb5fdf5a059a0b5e6adfc92cb"
+dependencies = [
+ "codec-dca",
+ "codec-mlp",
+ "demux-asf",
+ "demux-misc",
+ "demux-rm",
+ "oxideav-aac",
+ "oxideav-ac3",
+ "oxideav-adpcm",
+ "oxideav-ape",
+ "oxideav-ass",
+ "oxideav-av1",
+ "oxideav-avi",
+ "oxideav-basic",
+ "oxideav-cinepak",
+ "oxideav-cook",
+ "oxideav-core",
+ "oxideav-dirac",
+ "oxideav-dts",
+ "oxideav-dvd",
+ "oxideav-flac",
+ "oxideav-flv",
+ "oxideav-g711",
+ "oxideav-h261",
+ "oxideav-h263",
+ "oxideav-h264",
+ "oxideav-h265",
+ "oxideav-iff",
+ "oxideav-indeo",
+ "oxideav-midi",
+ "oxideav-mjpeg",
+ "oxideav-mkv",
+ "oxideav-mod",
+ "oxideav-mov",
+ "oxideav-mp1",
+ "oxideav-mp2",
+ "oxideav-mp3",
+ "oxideav-mp4",
+ "oxideav-mpeg12video",
+ "oxideav-mpeg4video",
+ "oxideav-mpegts",
+ "oxideav-msmpeg4",
+ "oxideav-musepack",
+ "oxideav-ogg",
+ "oxideav-opus",
+ "oxideav-s3m",
+ "oxideav-speex",
+ "oxideav-sub-image",
+ "oxideav-subtitle",
+ "oxideav-svq",
+ "oxideav-theora",
+ "oxideav-tta",
+ "oxideav-vc2",
+ "oxideav-vorbis",
+ "oxideav-vp6",
+ "oxideav-vp8",
+ "oxideav-vp9",
+ "oxideav-wavpack",
+ "oxideav-wma",
+]
+
+[[package]]
 name = "color_quant"
 version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -375,6 +495,12 @@ dependencies = [
  "bytes",
  "memchr",
 ]
+
+[[package]]
+name = "compcol"
+version = "0.6.11"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f6f29da98742f258743e8bb44b09f0cc1cbca2591e709b1bb85ccd6e9111f431"
 
 [[package]]
 name = "const-serialize"
@@ -613,6 +739,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "ctr"
+version = "0.9.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0369ee1ad671834580515889b80f2ea915f23b8be8d0daa4bbaf2ac5c7590835"
+dependencies = [
+ "cipher",
+]
+
+[[package]]
 name = "darling"
 version = "0.21.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -651,6 +786,30 @@ name = "data-encoding"
 version = "2.11.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4583a4551df46e2792f82ceeac45e850d2e2d5debba0b91f102385cda5b11f06"
+
+[[package]]
+name = "demux-asf"
+version = "0.1.0"
+source = "git+https://github.com/ayooooo123/peartube-media?rev=efc3ef40603780ffb5fdf5a059a0b5e6adfc92cb#efc3ef40603780ffb5fdf5a059a0b5e6adfc92cb"
+dependencies = [
+ "oxideav-core",
+]
+
+[[package]]
+name = "demux-misc"
+version = "0.1.0"
+source = "git+https://github.com/ayooooo123/peartube-media?rev=efc3ef40603780ffb5fdf5a059a0b5e6adfc92cb#efc3ef40603780ffb5fdf5a059a0b5e6adfc92cb"
+dependencies = [
+ "oxideav-core",
+]
+
+[[package]]
+name = "demux-rm"
+version = "0.1.0"
+source = "git+https://github.com/ayooooo123/peartube-media?rev=efc3ef40603780ffb5fdf5a059a0b5e6adfc92cb#efc3ef40603780ffb5fdf5a059a0b5e6adfc92cb"
+dependencies = [
+ "oxideav-core",
+]
 
 [[package]]
 name = "deranged"
@@ -2027,6 +2186,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "inout"
+version = "0.1.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "879f10e63c20629ecabbb64a8010319738c66a5cd0c29b02d63d272b03751d01"
+dependencies = [
+ "block-padding",
+ "generic-array",
+]
+
+[[package]]
 name = "interpolate_name"
 version = "0.2.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2036,6 +2205,12 @@ dependencies = [
  "quote",
  "syn 2.0.119",
 ]
+
+[[package]]
+name = "intl"
+version = "0.4.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f5bfae726bb3f672d4f4b1f29cee6c74898a35230a4c794d8292c21129107f21"
 
 [[package]]
 name = "itertools"
@@ -2483,6 +2658,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "md5"
+version = "0.7.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "490cc448043f947bae3cbee9c203358d62dbee0db12107a74be5c30ccfd09771"
+
+[[package]]
 name = "memchr"
 version = "2.8.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2764,8 +2945,92 @@ checksum = "d49e936b501e5c5bf01fda3a9452ff86dc3ea98ad5f283e1455153142d97518c"
 dependencies = [
  "bitflags 2.13.2",
  "block2",
+ "libc",
  "objc2",
+ "objc2-cloud-kit",
+ "objc2-core-data",
  "objc2-core-foundation",
+ "objc2-core-graphics",
+ "objc2-core-image",
+ "objc2-core-text",
+ "objc2-core-video",
+ "objc2-foundation",
+ "objc2-quartz-core",
+]
+
+[[package]]
+name = "objc2-av-foundation"
+version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "478ae33fcac9df0a18db8302387c666b8ef08a3e2d62b510ca4fc278a384b6c0"
+dependencies = [
+ "bitflags 2.13.2",
+ "block2",
+ "dispatch2",
+ "objc2",
+ "objc2-avf-audio",
+ "objc2-core-audio-types",
+ "objc2-core-foundation",
+ "objc2-core-graphics",
+ "objc2-core-image",
+ "objc2-core-video",
+ "objc2-foundation",
+ "objc2-image-io",
+ "objc2-media-toolbox",
+ "objc2-quartz-core",
+]
+
+[[package]]
+name = "objc2-avf-audio"
+version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "13a380031deed8e99db00065c45937da434ca987c034e13b87e4441f9e4090be"
+dependencies = [
+ "objc2",
+ "objc2-foundation",
+]
+
+[[package]]
+name = "objc2-cloud-kit"
+version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "73ad74d880bb43877038da939b7427bba67e9dd42004a18b809ba7d87cee241c"
+dependencies = [
+ "bitflags 2.13.2",
+ "objc2",
+ "objc2-foundation",
+]
+
+[[package]]
+name = "objc2-core-audio"
+version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e1eebcea8b0dbff5f7c8504f3107c68fc061a3eb44932051c8cf8a68d969c3b2"
+dependencies = [
+ "dispatch2",
+ "objc2",
+ "objc2-core-audio-types",
+ "objc2-core-foundation",
+]
+
+[[package]]
+name = "objc2-core-audio-types"
+version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5a89f2ec274a0cf4a32642b2991e8b351a404d290da87bb6a9a9d8632490bd1c"
+dependencies = [
+ "bitflags 2.13.2",
+ "objc2",
+]
+
+[[package]]
+name = "objc2-core-data"
+version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0b402a653efbb5e82ce4df10683b6b28027616a2715e90009947d50b8dd298fa"
+dependencies = [
+ "bitflags 2.13.2",
+ "objc2",
  "objc2-foundation",
 ]
 
@@ -2776,7 +3041,9 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2a180dd8642fa45cdb7dd721cd4c11b1cadd4929ce112ebd8b9f5803cc79d536"
 dependencies = [
  "bitflags 2.13.2",
+ "block2",
  "dispatch2",
+ "libc",
  "objc2",
 ]
 
@@ -2787,7 +3054,76 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e022c9d066895efa1345f8e33e584b9f958da2fd4cd116792e15e07e4720a807"
 dependencies = [
  "bitflags 2.13.2",
+ "block2",
+ "dispatch2",
+ "libc",
+ "objc2",
  "objc2-core-foundation",
+ "objc2-io-surface",
+ "objc2-metal",
+]
+
+[[package]]
+name = "objc2-core-image"
+version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e5d563b38d2b97209f8e861173de434bd0214cf020e3423a52624cd1d989f006"
+dependencies = [
+ "objc2",
+ "objc2-foundation",
+]
+
+[[package]]
+name = "objc2-core-location"
+version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ca347214e24bc973fc025fd0d36ebb179ff30536ed1f80252706db19ee452009"
+dependencies = [
+ "objc2",
+ "objc2-foundation",
+]
+
+[[package]]
+name = "objc2-core-media"
+version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "05ec576860167a15dd9fce7fbee7512beb4e31f532159d3482d1f9c6caedf31d"
+dependencies = [
+ "bitflags 2.13.2",
+ "block2",
+ "dispatch2",
+ "objc2",
+ "objc2-core-audio",
+ "objc2-core-audio-types",
+ "objc2-core-foundation",
+ "objc2-core-video",
+]
+
+[[package]]
+name = "objc2-core-text"
+version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0cde0dfb48d25d2b4862161a4d5fcc0e3c24367869ad306b0c9ec0073bfed92d"
+dependencies = [
+ "bitflags 2.13.2",
+ "objc2",
+ "objc2-core-foundation",
+ "objc2-core-graphics",
+]
+
+[[package]]
+name = "objc2-core-video"
+version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d425caf1df73233f29fd8a5c3e5edbc30d2d4307870f802d18f00d83dc5141a6"
+dependencies = [
+ "bitflags 2.13.2",
+ "block2",
+ "objc2",
+ "objc2-core-foundation",
+ "objc2-core-graphics",
+ "objc2-io-surface",
+ "objc2-metal",
 ]
 
 [[package]]
@@ -2813,8 +3149,71 @@ checksum = "e3e0adef53c21f888deb4fa59fc59f7eb17404926ee8a6f59f5df0fd7f9f3272"
 dependencies = [
  "bitflags 2.13.2",
  "block2",
+ "libc",
  "objc2",
  "objc2-core-foundation",
+]
+
+[[package]]
+name = "objc2-image-io"
+version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "32b0446e98cf4a784cc7a0177715ff317eeaa8463841c616cfc78aa4f953c4ea"
+dependencies = [
+ "objc2",
+ "objc2-core-foundation",
+ "objc2-core-graphics",
+]
+
+[[package]]
+name = "objc2-io-surface"
+version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "180788110936d59bab6bd83b6060ffdfffb3b922ba1396b312ae795e1de9d81d"
+dependencies = [
+ "bitflags 2.13.2",
+ "objc2",
+ "objc2-core-foundation",
+]
+
+[[package]]
+name = "objc2-media-toolbox"
+version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "edd9fdde720df3da7046bb9097811000c1e7ab5cd579fa89d96b27d56781fb30"
+dependencies = [
+ "objc2",
+ "objc2-core-audio-types",
+ "objc2-core-foundation",
+ "objc2-core-media",
+]
+
+[[package]]
+name = "objc2-metal"
+version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a0125f776a10d00af4152d74616409f0d4a2053a6f57fa5b7d6aa2854ac04794"
+dependencies = [
+ "bitflags 2.13.2",
+ "objc2",
+ "objc2-foundation",
+]
+
+[[package]]
+name = "objc2-quartz-core"
+version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "96c1358452b371bf9f104e21ec536d37a650eb10f7ee379fff67d2e08d537f1f"
+dependencies = [
+ "bitflags 2.13.2",
+ "block2",
+ "libc",
+ "objc2",
+ "objc2-core-foundation",
+ "objc2-core-graphics",
+ "objc2-core-video",
+ "objc2-foundation",
+ "objc2-metal",
 ]
 
 [[package]]
@@ -2824,8 +3223,27 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d87d638e33c06f577498cbcc50491496a3ed4246998a7fbba7ccb98b1e7eab22"
 dependencies = [
  "bitflags 2.13.2",
+ "block2",
  "objc2",
+ "objc2-cloud-kit",
+ "objc2-core-data",
  "objc2-core-foundation",
+ "objc2-core-graphics",
+ "objc2-core-image",
+ "objc2-core-location",
+ "objc2-core-text",
+ "objc2-foundation",
+ "objc2-quartz-core",
+ "objc2-user-notifications",
+]
+
+[[package]]
+name = "objc2-user-notifications"
+version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9df9128cbbfef73cda168416ccf7f837b62737d748333bfe9ab71c245d76613e"
+dependencies = [
+ "objc2",
  "objc2-foundation",
 ]
 
@@ -2908,6 +3326,538 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "04744f49eae99ab78e0d5c0b603ab218f515ea8cfe5a456d7629ad883a3b6e7d"
 
 [[package]]
+name = "oxideav-aac"
+version = "0.1.7"
+source = "git+https://github.com/OxideAV/oxideav-aac?rev=fe8e4986fc748004d14e634428a9b2495ce6ed26#fe8e4986fc748004d14e634428a9b2495ce6ed26"
+dependencies = [
+ "oxideav-core",
+]
+
+[[package]]
+name = "oxideav-ac3"
+version = "0.0.11"
+source = "git+https://github.com/OxideAV/oxideav-ac3?rev=99228831d2b29a35fe2b2035118a18f8cb0cae59#99228831d2b29a35fe2b2035118a18f8cb0cae59"
+dependencies = [
+ "oxideav-core",
+]
+
+[[package]]
+name = "oxideav-adpcm"
+version = "0.0.7"
+source = "git+https://github.com/OxideAV/oxideav-adpcm?rev=0802fb34c6c57bfa8913670fe78882547416fd16#0802fb34c6c57bfa8913670fe78882547416fd16"
+dependencies = [
+ "oxideav-core",
+]
+
+[[package]]
+name = "oxideav-ape"
+version = "0.0.4"
+source = "git+https://github.com/OxideAV/oxideav-ape?rev=ea6e8ca2848b18716a49ca6de0fe4d8d26d4893a#ea6e8ca2848b18716a49ca6de0fe4d8d26d4893a"
+dependencies = [
+ "oxideav-core",
+]
+
+[[package]]
+name = "oxideav-ass"
+version = "0.0.9"
+source = "git+https://github.com/OxideAV/oxideav-ass?rev=e89607612ef19285c60b84f51ce5d34c72a493b1#e89607612ef19285c60b84f51ce5d34c72a493b1"
+dependencies = [
+ "oxideav-core",
+ "oxideav-image-filter",
+ "oxideav-raster",
+ "oxideav-scribe",
+ "oxideav-subtitle",
+]
+
+[[package]]
+name = "oxideav-av1"
+version = "0.1.20"
+source = "git+https://github.com/OxideAV/oxideav-av1?rev=461e63a5bd634fe47a59c7a69cca153af1577c62#461e63a5bd634fe47a59c7a69cca153af1577c62"
+dependencies = [
+ "oxideav-core",
+]
+
+[[package]]
+name = "oxideav-avi"
+version = "0.0.10"
+source = "git+https://github.com/OxideAV/oxideav-avi?rev=2a5aa9fc78381d4d8db1d066849bc35ce6ad9442#2a5aa9fc78381d4d8db1d066849bc35ce6ad9442"
+dependencies = [
+ "oxideav-core",
+]
+
+[[package]]
+name = "oxideav-basic"
+version = "0.0.10"
+source = "git+https://github.com/OxideAV/oxideav-basic?rev=c44bb55f9f94e18ede7e9267493b0b6776a8e1c4#c44bb55f9f94e18ede7e9267493b0b6776a8e1c4"
+dependencies = [
+ "oxideav-core",
+]
+
+[[package]]
+name = "oxideav-cinepak"
+version = "0.0.3"
+source = "git+https://github.com/OxideAV/oxideav-cinepak?rev=4dae215ff7509dfd7e2e7d1bae72128630ccce7d#4dae215ff7509dfd7e2e7d1bae72128630ccce7d"
+dependencies = [
+ "oxideav-core",
+]
+
+[[package]]
+name = "oxideav-cook"
+version = "0.0.2"
+source = "git+https://github.com/OxideAV/oxideav-cook?rev=f8584e427c6f87de24e2f2de124e0242824f7006#f8584e427c6f87de24e2f2de124e0242824f7006"
+dependencies = [
+ "oxideav-core",
+]
+
+[[package]]
+name = "oxideav-core"
+version = "0.1.37"
+source = "git+https://github.com/ayooooo123/oxideav-core?rev=80948860b817c416ca405430e890a8f8cda9d6a3#80948860b817c416ca405430e890a8f8cda9d6a3"
+dependencies = [
+ "bytemuck",
+ "serde_json",
+ "thiserror 2.0.21",
+]
+
+[[package]]
+name = "oxideav-dirac"
+version = "0.0.9"
+source = "git+https://github.com/OxideAV/oxideav-dirac?rev=1315f66f5f222dcafa5594bee401c797e5f5a769#1315f66f5f222dcafa5594bee401c797e5f5a769"
+dependencies = [
+ "oxideav-core",
+]
+
+[[package]]
+name = "oxideav-dts"
+version = "0.0.1"
+source = "git+https://github.com/OxideAV/oxideav-dts?rev=9a7c128366aa4914331825e3b5d40a3d3304c090#9a7c128366aa4914331825e3b5d40a3d3304c090"
+dependencies = [
+ "oxideav-core",
+]
+
+[[package]]
+name = "oxideav-dvd"
+version = "0.0.4"
+source = "git+https://github.com/OxideAV/oxideav-dvd?rev=f237f8c05fb3a70d0d9c7e7c99c56110c570d849#f237f8c05fb3a70d0d9c7e7c99c56110c570d849"
+dependencies = [
+ "oxideav-core",
+]
+
+[[package]]
+name = "oxideav-flac"
+version = "0.0.11"
+source = "git+https://github.com/OxideAV/oxideav-flac?rev=cfcc7c4359d1f97d39c228dfd95ed46e9246b458#cfcc7c4359d1f97d39c228dfd95ed46e9246b458"
+dependencies = [
+ "oxideav-core",
+ "oxideav-id3",
+]
+
+[[package]]
+name = "oxideav-flv"
+version = "0.0.5"
+source = "git+https://github.com/OxideAV/oxideav-flv?rev=02e9158a20786a214a707da2f4ae7650146f3b3e#02e9158a20786a214a707da2f4ae7650146f3b3e"
+dependencies = [
+ "oxideav-core",
+]
+
+[[package]]
+name = "oxideav-g711"
+version = "0.0.8"
+source = "git+https://github.com/OxideAV/oxideav-g711?rev=72af018b7c04e8c3aacc6c0b7628cd6e43cde37a#72af018b7c04e8c3aacc6c0b7628cd6e43cde37a"
+dependencies = [
+ "oxideav-core",
+]
+
+[[package]]
+name = "oxideav-h261"
+version = "0.0.7"
+source = "git+https://github.com/OxideAV/oxideav-h261?rev=bba9abb79f6e54cefa189ea92997a91dd46e1e56#bba9abb79f6e54cefa189ea92997a91dd46e1e56"
+dependencies = [
+ "oxideav-core",
+ "oxideav-pixfmt",
+]
+
+[[package]]
+name = "oxideav-h263"
+version = "0.0.10"
+source = "git+https://github.com/OxideAV/oxideav-h263?rev=25bf0a12102969034d57ab96f29e686d8d61ddc3#25bf0a12102969034d57ab96f29e686d8d61ddc3"
+dependencies = [
+ "oxideav-core",
+]
+
+[[package]]
+name = "oxideav-h264"
+version = "0.1.8"
+source = "git+https://github.com/OxideAV/oxideav-h264?rev=9392f7330f2bccafdc3cd175e16f568abbed9430#9392f7330f2bccafdc3cd175e16f568abbed9430"
+dependencies = [
+ "oxideav-core",
+ "thiserror 2.0.21",
+]
+
+[[package]]
+name = "oxideav-h265"
+version = "0.0.14"
+source = "git+https://github.com/OxideAV/oxideav-h265?rev=66097811d122959efcc9e07e20810d46ee18e3e2#66097811d122959efcc9e07e20810d46ee18e3e2"
+dependencies = [
+ "oxideav-core",
+]
+
+[[package]]
+name = "oxideav-http"
+version = "0.0.8"
+source = "git+https://github.com/OxideAV/oxideav-http?rev=f54f106e1e131300387d1df1a71d2686690ccdca#f54f106e1e131300387d1df1a71d2686690ccdca"
+dependencies = [
+ "oxideav-core",
+ "oxideav-source",
+ "ureq",
+]
+
+[[package]]
+name = "oxideav-id3"
+version = "0.0.6"
+source = "git+https://github.com/OxideAV/oxideav-id3?rev=d1b462e3da204f2010844648cf1a6bbc65f10dd0#d1b462e3da204f2010844648cf1a6bbc65f10dd0"
+dependencies = [
+ "compcol",
+ "oxideav-core",
+]
+
+[[package]]
+name = "oxideav-iff"
+version = "0.0.11"
+source = "git+https://github.com/OxideAV/oxideav-iff?rev=5a4bdb43c14007975137543ecf1aa8fa6e4a476c#5a4bdb43c14007975137543ecf1aa8fa6e4a476c"
+dependencies = [
+ "oxideav-core",
+]
+
+[[package]]
+name = "oxideav-image-filter"
+version = "0.1.2"
+source = "git+https://github.com/OxideAV/oxideav-image-filter?rev=601f4fe832e31fdd9dc3f2bf171389cc09f0dd68#601f4fe832e31fdd9dc3f2bf171389cc09f0dd68"
+dependencies = [
+ "oxideav-core",
+ "serde_json",
+]
+
+[[package]]
+name = "oxideav-indeo"
+version = "0.0.1"
+source = "git+https://github.com/OxideAV/oxideav-indeo?rev=c5352660dd42d5d16d50cba0388b21b4fbeb037a#c5352660dd42d5d16d50cba0388b21b4fbeb037a"
+dependencies = [
+ "oxideav-core",
+]
+
+[[package]]
+name = "oxideav-midi"
+version = "0.0.5"
+source = "git+https://github.com/OxideAV/oxideav-midi?rev=cf1b26b7b44b3427e78378c2b74e80e695c12e58#cf1b26b7b44b3427e78378c2b74e80e695c12e58"
+dependencies = [
+ "oxideav-core",
+]
+
+[[package]]
+name = "oxideav-mjpeg"
+version = "0.1.11"
+source = "git+https://github.com/OxideAV/oxideav-mjpeg?rev=3e8f65f5c36d1dddbc481512487c6e8cd86e6f03#3e8f65f5c36d1dddbc481512487c6e8cd86e6f03"
+dependencies = [
+ "oxideav-core",
+]
+
+[[package]]
+name = "oxideav-mkv"
+version = "0.0.11"
+source = "git+https://github.com/OxideAV/oxideav-mkv?rev=c0966a663803e7e3506f4e6330f6d89fa2410966#c0966a663803e7e3506f4e6330f6d89fa2410966"
+dependencies = [
+ "oxideav-core",
+]
+
+[[package]]
+name = "oxideav-mod"
+version = "0.0.10"
+source = "git+https://github.com/OxideAV/oxideav-mod?rev=f509819bc977ac4d499fb95f1156bc536a9a964f#f509819bc977ac4d499fb95f1156bc536a9a964f"
+dependencies = [
+ "oxideav-core",
+]
+
+[[package]]
+name = "oxideav-mov"
+version = "0.0.6"
+source = "git+https://github.com/OxideAV/oxideav-mov?rev=deccbd8c6c728d9ab2bda6c70ffec22967884dc8#deccbd8c6c728d9ab2bda6c70ffec22967884dc8"
+dependencies = [
+ "compcol",
+ "oxideav-core",
+]
+
+[[package]]
+name = "oxideav-mp1"
+version = "0.0.7"
+source = "git+https://github.com/OxideAV/oxideav-mp1?rev=e01e2d0dfa651f39d5ba05ee3129b7144282dceb#e01e2d0dfa651f39d5ba05ee3129b7144282dceb"
+dependencies = [
+ "oxideav-core",
+]
+
+[[package]]
+name = "oxideav-mp2"
+version = "0.0.10"
+source = "git+https://github.com/OxideAV/oxideav-mp2?rev=701c9e6b7b3bce9c72e56453633b53429c387180#701c9e6b7b3bce9c72e56453633b53429c387180"
+dependencies = [
+ "oxideav-core",
+]
+
+[[package]]
+name = "oxideav-mp3"
+version = "0.1.3"
+source = "git+https://github.com/OxideAV/oxideav-mp3?rev=eef86cb33fe7f334c2b9ec64ec8342ddbd595d08#eef86cb33fe7f334c2b9ec64ec8342ddbd595d08"
+dependencies = [
+ "oxideav-core",
+]
+
+[[package]]
+name = "oxideav-mp4"
+version = "0.0.10"
+source = "git+https://github.com/OxideAV/oxideav-mp4?rev=2bcca725fb8d450fc4aad60cb3528a981878af41#2bcca725fb8d450fc4aad60cb3528a981878af41"
+dependencies = [
+ "aes",
+ "cbc",
+ "ctr",
+ "oxideav-core",
+]
+
+[[package]]
+name = "oxideav-mpeg12video"
+version = "0.0.13"
+source = "git+https://github.com/OxideAV/oxideav-mpeg12video?rev=aac677c54865e6fce01f576876cf564b327c09bf#aac677c54865e6fce01f576876cf564b327c09bf"
+dependencies = [
+ "oxideav-core",
+]
+
+[[package]]
+name = "oxideav-mpeg4video"
+version = "0.1.8"
+source = "git+https://github.com/ayooooo123/oxideav-mpeg4video?rev=ac636cd9e44744a17088cb6a4b02ed02ba232a49#ac636cd9e44744a17088cb6a4b02ed02ba232a49"
+dependencies = [
+ "oxideav-core",
+]
+
+[[package]]
+name = "oxideav-mpegts"
+version = "0.0.3"
+source = "git+https://github.com/OxideAV/oxideav-mpegts?rev=0162e6db4e7b60d2c10ba52c1339a6f65c7ce9a3#0162e6db4e7b60d2c10ba52c1339a6f65c7ce9a3"
+dependencies = [
+ "oxideav-core",
+ "thiserror 2.0.21",
+]
+
+[[package]]
+name = "oxideav-msmpeg4"
+version = "0.0.10"
+source = "git+https://github.com/OxideAV/oxideav-msmpeg4?rev=f0de9a8c24ca29c79ee453a39f8c4a052334c8a9#f0de9a8c24ca29c79ee453a39f8c4a052334c8a9"
+dependencies = [
+ "oxideav-core",
+]
+
+[[package]]
+name = "oxideav-musepack"
+version = "0.0.4"
+source = "git+https://github.com/OxideAV/oxideav-musepack?rev=c60b07708683e0e25c6e0007bffbb887e03876f7#c60b07708683e0e25c6e0007bffbb887e03876f7"
+dependencies = [
+ "oxideav-core",
+]
+
+[[package]]
+name = "oxideav-ogg"
+version = "0.1.9"
+source = "git+https://github.com/OxideAV/oxideav-ogg?rev=0ad414f1f3db6dd28a658e63d4c83ffcb6ea4745#0ad414f1f3db6dd28a658e63d4c83ffcb6ea4745"
+dependencies = [
+ "oxideav-core",
+]
+
+[[package]]
+name = "oxideav-opus"
+version = "0.0.14"
+source = "git+https://github.com/OxideAV/oxideav-opus?rev=fd97e6110860d21a69c76ba4d051984486fea9fb#fd97e6110860d21a69c76ba4d051984486fea9fb"
+dependencies = [
+ "oxideav-core",
+]
+
+[[package]]
+name = "oxideav-otf"
+version = "0.1.5"
+source = "git+https://github.com/OxideAV/oxideav-otf?rev=554299a740ce7236bf2c5e751bb7df5befd52dd0#554299a740ce7236bf2c5e751bb7df5befd52dd0"
+dependencies = [
+ "oxideav-core",
+]
+
+[[package]]
+name = "oxideav-pixfmt"
+version = "0.1.9"
+source = "git+https://github.com/OxideAV/oxideav-pixfmt?rev=82b63ba210c097fc62bea63d98412ed88823fd77#82b63ba210c097fc62bea63d98412ed88823fd77"
+dependencies = [
+ "oxideav-core",
+]
+
+[[package]]
+name = "oxideav-png"
+version = "0.1.11"
+source = "git+https://github.com/OxideAV/oxideav-png?rev=39bdba2cfd11545056934f12482afd56be3b7628#39bdba2cfd11545056934f12482afd56be3b7628"
+dependencies = [
+ "compcol",
+ "oxideav-core",
+]
+
+[[package]]
+name = "oxideav-raster"
+version = "0.1.3"
+source = "git+https://github.com/OxideAV/oxideav-raster?rev=e601465cb38e4ac77b384265bf51d3e9b7e29d8e#e601465cb38e4ac77b384265bf51d3e9b7e29d8e"
+dependencies = [
+ "oxideav-core",
+ "oxideav-pixfmt",
+]
+
+[[package]]
+name = "oxideav-s3m"
+version = "0.0.9"
+source = "git+https://github.com/OxideAV/oxideav-s3m?rev=6da2027ae868a37a2aab6aa3fcc57143f01113c8#6da2027ae868a37a2aab6aa3fcc57143f01113c8"
+dependencies = [
+ "oxideav-core",
+]
+
+[[package]]
+name = "oxideav-scribe"
+version = "0.1.10"
+source = "git+https://github.com/OxideAV/oxideav-scribe?rev=bc27a9820c2abca73cb04f5e9e1a2e989ca302aa#bc27a9820c2abca73cb04f5e9e1a2e989ca302aa"
+dependencies = [
+ "intl",
+ "oxideav-core",
+ "oxideav-otf",
+ "oxideav-png",
+ "oxideav-ttf",
+]
+
+[[package]]
+name = "oxideav-source"
+version = "0.1.5"
+source = "git+https://github.com/OxideAV/oxideav-source?rev=7577057231b8e650d0690b762cf189eca16f1ed7#7577057231b8e650d0690b762cf189eca16f1ed7"
+dependencies = [
+ "oxideav-core",
+]
+
+[[package]]
+name = "oxideav-speex"
+version = "0.0.10"
+source = "git+https://github.com/OxideAV/oxideav-speex?rev=8886c67204b1464a5ed1bd32c29f5501dd3cae91#8886c67204b1464a5ed1bd32c29f5501dd3cae91"
+dependencies = [
+ "oxideav-core",
+]
+
+[[package]]
+name = "oxideav-sub-image"
+version = "0.0.7"
+source = "git+https://github.com/OxideAV/oxideav-sub-image?rev=18a79e94675bf5acab88b3e06b82d117b53659c0#18a79e94675bf5acab88b3e06b82d117b53659c0"
+dependencies = [
+ "oxideav-core",
+]
+
+[[package]]
+name = "oxideav-subtitle"
+version = "0.1.2"
+source = "git+https://github.com/OxideAV/oxideav-subtitle?rev=03f3aa41d2ea8d8baaadaef8030061c66c2338c9#03f3aa41d2ea8d8baaadaef8030061c66c2338c9"
+dependencies = [
+ "oxideav-core",
+ "oxideav-pixfmt",
+ "oxideav-raster",
+ "oxideav-scribe",
+]
+
+[[package]]
+name = "oxideav-svq"
+version = "0.0.3"
+source = "git+https://github.com/OxideAV/oxideav-svq?rev=afb738670f7c73735142d7ef49d529918bce84fe#afb738670f7c73735142d7ef49d529918bce84fe"
+dependencies = [
+ "oxideav-core",
+]
+
+[[package]]
+name = "oxideav-theora"
+version = "0.0.12"
+source = "git+https://github.com/OxideAV/oxideav-theora?rev=bd07b92ecfe0781de8fb1278fbf26e642e2311ad#bd07b92ecfe0781de8fb1278fbf26e642e2311ad"
+dependencies = [
+ "oxideav-core",
+]
+
+[[package]]
+name = "oxideav-tta"
+version = "0.0.4"
+source = "git+https://github.com/OxideAV/oxideav-tta?rev=53432dc2b2de77f0b6de6e55f7e742fbdd11b04f#53432dc2b2de77f0b6de6e55f7e742fbdd11b04f"
+dependencies = [
+ "oxideav-core",
+]
+
+[[package]]
+name = "oxideav-ttf"
+version = "0.1.8"
+source = "git+https://github.com/OxideAV/oxideav-ttf?rev=ecea11566de6c72439c0b3bbdef85926db892cc9#ecea11566de6c72439c0b3bbdef85926db892cc9"
+dependencies = [
+ "oxideav-core",
+]
+
+[[package]]
+name = "oxideav-vc2"
+version = "0.0.2"
+source = "git+https://github.com/OxideAV/oxideav-vc2?rev=030172fe33153c5072116146d299568f7b0b3db5#030172fe33153c5072116146d299568f7b0b3db5"
+dependencies = [
+ "oxideav-core",
+]
+
+[[package]]
+name = "oxideav-vorbis"
+version = "0.0.12"
+source = "git+https://github.com/OxideAV/oxideav-vorbis?rev=6cb1c5c58f2987459e0f2441c0a4d9e9decb89bf#6cb1c5c58f2987459e0f2441c0a4d9e9decb89bf"
+dependencies = [
+ "oxideav-core",
+ "oxideav-ogg",
+]
+
+[[package]]
+name = "oxideav-vp6"
+version = "0.0.9"
+source = "git+https://github.com/OxideAV/oxideav-vp6?rev=580fb6b7f25facf1b3d409c16aeac7be725f33f7#580fb6b7f25facf1b3d409c16aeac7be725f33f7"
+dependencies = [
+ "oxideav-core",
+]
+
+[[package]]
+name = "oxideav-vp8"
+version = "0.2.7"
+source = "git+https://github.com/OxideAV/oxideav-vp8?rev=fb852a4896dd48f1d5d1a05c471ada8a0208b029#fb852a4896dd48f1d5d1a05c471ada8a0208b029"
+dependencies = [
+ "oxideav-core",
+]
+
+[[package]]
+name = "oxideav-vp9"
+version = "0.0.13"
+source = "git+https://github.com/OxideAV/oxideav-vp9?rev=68e069a4903491474508d76222e8243686b2e9e2#68e069a4903491474508d76222e8243686b2e9e2"
+dependencies = [
+ "oxideav-core",
+]
+
+[[package]]
+name = "oxideav-wavpack"
+version = "0.0.3"
+source = "git+https://github.com/OxideAV/oxideav-wavpack?rev=148aed0f4a5403738a963915019082accfdfab44#148aed0f4a5403738a963915019082accfdfab44"
+dependencies = [
+ "oxideav-core",
+]
+
+[[package]]
+name = "oxideav-wma"
+version = "0.0.4"
+source = "git+https://github.com/OxideAV/oxideav-wma?rev=ab1eeb2acb51388d5da21e735723ac05bd7226fe#ab1eeb2acb51388d5da21e735723ac05bd7226fe"
+dependencies = [
+ "oxideav-core",
+]
+
+[[package]]
 name = "pango"
 version = "0.18.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2971,17 +3921,23 @@ checksum = "35fb2e5f958ec131621fdd531e9fc186ed768cbe395337403ae56c17a74c68ec"
 name = "peartube"
 version = "0.4.4"
 dependencies = [
+ "codecs",
  "dioxus",
  "futures-channel",
  "futures-executor",
  "futures-util",
  "jni 0.21.1",
  "libc",
+ "ndk",
  "ndk-context",
  "objc2",
  "objc2-app-kit",
+ "objc2-core-foundation",
  "objc2-foundation",
+ "objc2-ui-kit",
+ "oxideav-core",
  "parking_lot",
+ "player",
  "serde",
  "serde_json",
  "sha2",
@@ -3145,6 +4101,36 @@ name = "pkg-config"
 version = "0.3.34"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f6b464fbc74e149a392436b17d523f769e057cb6877f6a5c4618bc6f11800548"
+
+[[package]]
+name = "player"
+version = "0.1.0"
+source = "git+https://github.com/ayooooo123/peartube-media?rev=efc3ef40603780ffb5fdf5a059a0b5e6adfc92cb#efc3ef40603780ffb5fdf5a059a0b5e6adfc92cb"
+dependencies = [
+ "block2",
+ "dispatch2",
+ "libc",
+ "md5",
+ "ndk",
+ "objc2",
+ "objc2-app-kit",
+ "objc2-av-foundation",
+ "objc2-core-audio-types",
+ "objc2-core-foundation",
+ "objc2-core-graphics",
+ "objc2-core-media",
+ "objc2-core-video",
+ "objc2-foundation",
+ "objc2-quartz-core",
+ "objc2-ui-kit",
+ "oxideav-ass",
+ "oxideav-core",
+ "oxideav-http",
+ "oxideav-pixfmt",
+ "oxideav-subtitle",
+ "parking_lot",
+ "thiserror 2.0.21",
+]
 
 [[package]]
 name = "png"
@@ -3699,7 +4685,9 @@ version = "0.23.45"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0d41d731c7d2f962d1ccc364cec258de3c0e93b38c2fb3ba97ac74513048d634"
 dependencies = [
+ "log",
  "once_cell",
+ "ring",
  "rustls-pki-types",
  "rustls-webpki",
  "subtle",
@@ -4611,8 +5599,11 @@ dependencies = [
  "base64 0.23.1",
  "log",
  "percent-encoding",
+ "rustls",
+ "rustls-pki-types",
  "ureq-proto",
  "utf8-zero",
+ "webpki-roots",
 ]
 
 [[package]]
@@ -4886,6 +5877,15 @@ dependencies = [
  "pkg-config",
  "soup3-sys",
  "system-deps",
+]
+
+[[package]]
+name = "webpki-roots"
+version = "1.0.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7dcd9d09a39985f5344844e66b0c530a33843579125f23e21e9f0f220850f22a"
+dependencies = [
+ "rustls-pki-types",
 ]
 
 [[package]]

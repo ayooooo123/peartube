@@ -1,14 +1,9 @@
 use dioxus::prelude::*;
 use futures_channel::mpsc::UnboundedReceiver;
 use futures_util::StreamExt;
-#[cfg(target_os = "android")]
-use peartube::android_vlc;
+use peartube::player::VideoPlayer;
 use peartube::settings::Settings;
-#[cfg(target_os = "macos")]
-use peartube::vlc;
 use peartube::worker::{Entry, Event, Status, Worker, worker};
-#[cfg(target_os = "macos")]
-use std::rc::Rc;
 
 #[cfg(feature = "mobile")]
 use dioxus::mobile as native;
@@ -18,9 +13,6 @@ use dioxus::desktop as native;
 const CSS: Asset = asset!("/assets/main.css");
 
 fn main() {
-    // Before dioxus::launch starts the app's threads.
-    #[cfg(target_os = "macos")]
-    vlc::init();
     dioxus::launch(App);
 }
 
@@ -264,188 +256,8 @@ fn PlayScreen(entry: Entry) -> Element {
                 button { class: "icon-btn", onclick: move |_| { let _ = document::eval("history.back()"); }, "←" }
                 h2 { class: "play-title", "{entry.title} ({label(&entry.id)})" }
             }
-            {player(entry.stream_url.clone())}
+            VideoPlayer { key: "{entry.stream_url}", url: entry.stream_url.clone() }
             div { class: "play-meta", "{format_bytes(entry.size)} · {sha16} · {origin}" }
-        }
-    }
-}
-
-/// On macOS VLC plays everything when it is installed, and on Android the app's
-/// own libVLC does. Otherwise the webview plays what it can: MP4 and WebM.
-#[cfg(target_os = "macos")]
-fn player(url: String) -> Element {
-    if vlc::installed() { rsx! { VlcPlayer { key: "{url}", url } } } else { rsx! { WebPlayer { url } } }
-}
-
-#[cfg(target_os = "android")]
-fn player(url: String) -> Element {
-    rsx! { AndroidPlayer { key: "{url}", url } }
-}
-
-#[cfg(not(any(target_os = "macos", target_os = "android")))]
-fn player(url: String) -> Element {
-    rsx! { WebPlayer { url } }
-}
-
-/// Plays through the app's libVLC, in a native view that MainActivity keeps
-/// over a slot in the page, as the macOS player does. Leaving the screen
-/// (back, or the end of the video) closes it.
-#[cfg(target_os = "android")]
-#[component]
-fn AndroidPlayer(url: String) -> Element {
-    let opened = use_hook(|| android_vlc::play(&url));
-    use_drop(|| {
-        let _ = android_vlc::close();
-    });
-    rsx! {
-        div {
-            id: "video-slot",
-            class: "video-slot",
-            onmounted: move |_| {
-                spawn(async move {
-                    let mut slot = document::eval(TRACK_SLOT);
-                    while let Ok(rect) = slot.recv::<[f64; 4]>().await {
-                        let _ = android_vlc::set_frame(rect);
-                    }
-                });
-            },
-        }
-        if let Err(err) = opened {
-            div { class: "inline-error player-error", "{err}" }
-        }
-    }
-}
-
-#[cfg(not(target_os = "android"))]
-#[component]
-fn WebPlayer(url: String) -> Element {
-    let mut failed = use_signal(|| false);
-    let hint = if cfg!(target_os = "macos") { " Install VLC to play the rest here." } else { "" };
-    rsx! {
-        video {
-            class: "video-player",
-            src: "{url}",
-            controls: true,
-            autoplay: true,
-            playsinline: true,
-            onerror: move |_| failed.set(true),
-        }
-        if failed() {
-            div { class: "video-error-box",
-                p { "This file cannot play in the built-in player (it plays MP4 and WebM).{hint} Stream URL:" }
-                code { class: "stream-url", "{url}" }
-            }
-        }
-    }
-}
-
-/// Sends the video slot's rect, [left, top, width, height] in CSS pixels,
-/// whenever it changes, until the slot leaves the page.
-#[cfg(any(target_os = "macos", target_os = "android"))]
-const TRACK_SLOT: &str = r#"
-const slot = document.getElementById('video-slot')
-let last = ''
-const tick = () => {
-  if (!slot.isConnected) return
-  const r = slot.getBoundingClientRect()
-  const rect = [r.left, r.top, r.width, r.height]
-  if (rect.join() !== last) { last = rect.join(); dioxus.send(rect) }
-  requestAnimationFrame(tick)
-}
-tick()
-await new Promise(() => {})
-"#;
-
-#[cfg(target_os = "macos")]
-fn clock(ms: i64) -> String {
-    let s = ms / 1000;
-    if s >= 3600 { format!("{}:{:02}:{:02}", s / 3600, s / 60 % 60, s % 60) } else { format!("{}:{:02}", s / 60, s % 60) }
-}
-
-/// Plays through libVLC. Its video is a native view over the page, so the page
-/// lays out an empty slot for it and puts the controls below.
-#[cfg(target_os = "macos")]
-#[component]
-fn VlcPlayer(url: String) -> Element {
-    use native::wry::WebViewExtMacOS;
-
-    let mut player = use_signal(|| None::<Rc<vlc::Player>>);
-    let mut state = use_signal(vlc::State::default);
-    let mut failure = use_signal(|| None::<String>);
-    let mut frame = use_signal(|| None::<[f64; 4]>);
-    // The seek bar's position while it is dragged.
-    let mut dragging = use_signal(|| None::<i64>);
-
-    use_future(move || {
-        let url = url.clone();
-        async move {
-            let (changed, mut changes) = futures_channel::mpsc::unbounded();
-            let webview = native::window().webview.webview();
-            let p = match vlc::Player::new(&url, &webview, changed) {
-                Ok(p) => Rc::new(p),
-                Err(err) => return failure.set(Some(err)),
-            };
-            player.set(Some(p.clone()));
-            // A burst of events costs one read.
-            while changes.next().await.is_some() {
-                while changes.try_recv().is_ok() {}
-                state.set(p.state());
-            }
-        }
-    });
-
-    use_effect(move || {
-        if let (Some(p), Some(rect)) = (player.read().as_ref(), *frame.read()) {
-            p.set_frame(rect);
-        }
-    });
-
-    let st = *state.read();
-    let shown = dragging().unwrap_or(st.time);
-    let clock_text = if st.length > 0 { format!("{} / {}", clock(shown), clock(st.length)) } else { "Loading…".to_string() };
-    rsx! {
-        div {
-            id: "video-slot",
-            class: "video-slot",
-            onmounted: move |_| {
-                spawn(async move {
-                    let mut slot = document::eval(TRACK_SLOT);
-                    while let Ok(rect) = slot.recv::<[f64; 4]>().await {
-                        frame.set(Some(rect));
-                    }
-                });
-            },
-        }
-        div { class: "player-controls",
-            button {
-                class: "icon-btn",
-                disabled: player.read().is_none(),
-                onclick: move |_| if let Some(p) = player.read().as_ref() { p.toggle() },
-                if st.playing { "⏸" } else { "▶" }
-            }
-            input {
-                class: "seek",
-                r#type: "range",
-                min: "0",
-                max: "{st.length}",
-                value: "{shown}",
-                disabled: st.length == 0,
-                oninput: move |e| dragging.set(e.value().parse().ok()),
-                onchange: move |e| {
-                    if let (Some(p), Ok(ms)) = (player.read().as_ref(), e.value().parse()) {
-                        p.seek(ms);
-                        // Paused, VLC reports no time until it plays again.
-                        state.write().time = ms;
-                    }
-                    dragging.set(None);
-                },
-            }
-            span { class: "clock", "{clock_text}" }
-        }
-        if let Some(err) = failure.read().as_ref() {
-            div { class: "inline-error player-error", "{err}" }
-        } else if st.failed {
-            div { class: "inline-error player-error", "VLC could not play this stream." }
         }
     }
 }

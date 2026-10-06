@@ -61,8 +61,8 @@ class MainActivity : WryActivity() {
         player = null
     }
 
-    /** The page's own back: Rust leaves the play screen when a video ends. */
-    fun back() {
+    /** From Rust, on any thread: the page's own back, when a video ends. */
+    fun back() = runOnUiThread {
         webView?.evaluateJavascript("history.back()", null)
     }
 

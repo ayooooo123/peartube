@@ -19,8 +19,8 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 # The video player: peartube-media's engine, OxideAV codecs and the
 # platform video decoders. See [patch.crates-io] below.
-player = { git = "https://github.com/ayooooo123/peartube-media", rev = "37ad542740c760f2b72f0a3357990b8d9b1c1ae5" }
-codecs = { git = "https://github.com/ayooooo123/peartube-media", rev = "37ad542740c760f2b72f0a3357990b8d9b1c1ae5" }
+player = { git = "https://github.com/ayooooo123/peartube-media", rev = "c31659966423e1def206c180640de6e1aed1b617" }
+codecs = { git = "https://github.com/ayooooo123/peartube-media", rev = "c31659966423e1def206c180640de6e1aed1b617" }
 oxideav-core = "*"
 
 [target.'cfg(target_os = "android")'.dependencies]
@@ -68,7 +68,7 @@ opt-level = 3
 
 # BEGIN pin-oxideav
 [patch.crates-io]
-oxideav-aac = { git = "https://github.com/ayooooo123/oxideav-aac", rev = "45b5e0c0647549242ca470084417163eb9eeff21" }
+oxideav-aac = { git = "https://github.com/ayooooo123/oxideav-aac", rev = "b0ad51fa7b1839911b3e7c0843b89e5225d8791f" }
 oxideav-ac3 = { git = "https://github.com/OxideAV/oxideav-ac3", rev = "99228831d2b29a35fe2b2035118a18f8cb0cae59" }
 oxideav-adpcm = { git = "https://github.com/OxideAV/oxideav-adpcm", rev = "0802fb34c6c57bfa8913670fe78882547416fd16" }
 oxideav-ape = { git = "https://github.com/OxideAV/oxideav-ape", rev = "ea6e8ca2848b18716a49ca6de0fe4d8d26d4893a" }
@@ -96,7 +96,7 @@ oxideav-image-filter = { git = "https://github.com/OxideAV/oxideav-image-filter"
 oxideav-indeo = { git = "https://github.com/OxideAV/oxideav-indeo", rev = "c5352660dd42d5d16d50cba0388b21b4fbeb037a" }
 oxideav-midi = { git = "https://github.com/OxideAV/oxideav-midi", rev = "cf1b26b7b44b3427e78378c2b74e80e695c12e58" }
 oxideav-mjpeg = { git = "https://github.com/OxideAV/oxideav-mjpeg", rev = "3e8f65f5c36d1dddbc481512487c6e8cd86e6f03" }
-oxideav-mkv = { git = "https://github.com/OxideAV/oxideav-mkv", rev = "c0966a663803e7e3506f4e6330f6d89fa2410966" }
+oxideav-mkv = { git = "https://github.com/ayooooo123/oxideav-mkv", rev = "f07b1a79317f53d31385715e6969b479219d10a1" }
 oxideav-mod = { git = "https://github.com/OxideAV/oxideav-mod", rev = "f509819bc977ac4d499fb95f1156bc536a9a964f" }
 oxideav-mov = { git = "https://github.com/OxideAV/oxideav-mov", rev = "deccbd8c6c728d9ab2bda6c70ffec22967884dc8" }
 oxideav-mp1 = { git = "https://github.com/OxideAV/oxideav-mp1", rev = "e01e2d0dfa651f39d5ba05ee3129b7144282dceb" }

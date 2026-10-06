@@ -42,6 +42,7 @@ Builds, installs, and deploy commands may be run when explicitly requested.
 - Prefer deleting code to adding it. Old platform code is at tag `archive/v0.3.0-platform`.
 - `src/index.js` also runs under Bare, in the mobile worklet: no Node-only imports there. Map `node:` builtins to `bare-*` in `package.json` `imports`.
 - The Android and macOS worklet runs on QuickJS: no `Intl`, and guard V8-only APIs such as `Error.captureStackTrace`. Keep `mobile/patches/libqjs-function-source.patch` until libqjs ends its CommonJS wrapper on a new line; without it the worklet dies loading bonjour-service, which `test/mobile.e2e.js` catches.
+- Keep `mobile/patches/libqjs-deferred-release.patch`. QuickJS frees an object as soon as its last reference goes, but addons built for V8 release a reference and then touch memory that object owned (jstl's `js_persistent_t::reset()`). Without the patch, udx-native's DNS lookup crashes the worklet whenever HyperDHT resolves a bootstrap host by name. `test/mobile.e2e.js` names its bootstrap nodes `localhost:<port>` to catch it.
 - Keep `Dioxus.toml` `[application] android_min_sdk_version` at `[android] min_sdk`: dx links the native code at the former, and the QuickJS bare-kit calls `timespec_get`, new in API 29.
 
 ## Testing

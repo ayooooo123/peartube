@@ -82,7 +82,9 @@ sources() {
   for patch in "$work/src/libqjs/patches/"*.patch; do
     git -C "$work/src/quickjs" apply "$patch"
   done
-  git -C "$work/src/libqjs" apply "$here/patches/libqjs-function-source.patch"
+  for patch in function-source deferred-release; do
+    git -C "$work/src/libqjs" apply "$here/patches/libqjs-$patch.patch"
+  done
   touch "$work/src/ready"
 }
 

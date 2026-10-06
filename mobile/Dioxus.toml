@@ -1,6 +1,9 @@
 [application]
 # dx's MainActivity plus the libVLC player.
 android_main_activity = "android/MainActivity.kt"
+# The API level dx links the native code against (its default is 28). Keep it
+# at [android] min_sdk: the QuickJS bare-kit calls timespec_get, new in 29.
+android_min_sdk_version = 29
 
 [bundle]
 identifier = "com.peartube.app"

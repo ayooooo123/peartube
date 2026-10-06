@@ -1,5 +1,7 @@
 //! Packs mobile/worker.js for the target and links bare-kit, which runs it.
-//! Needs `npm ci` at the repo root and `sh mobile/setup.sh` once.
+//! Needs `npm ci` at the repo root and `sh mobile/setup.sh` once. bare-kit
+//! is built on QuickJS for Android and macOS (mobile/bare-kit.sh); iOS links
+//! bare-kit's V8 prebuild.
 //!
 //! bare-kit only loads linked addons, so the worker's native addons are
 //! linked with bare-link into target/bare-addons/<host>, and the bundle loads
@@ -60,9 +62,12 @@ fn main() {
     }
     match os.as_str() {
         "android" => {
-            let jni = kit.join("android/bare-kit/jni").join(abi);
-            link_arg(&jni.join("libbare-kit.so"));
-            link_arg(&jni.join("libc++_shared.so"));
+            let lib = kit.join("android").join(abi);
+            if !lib.join("libbare-kit.so").exists() {
+                panic!("bare-kit is not built for {abi}: run `sh mobile/bare-kit.sh {abi}`");
+            }
+            link_arg(&lib.join("libbare-kit.so"));
+            link_arg(&lib.join("libc++_shared.so"));
             for so in std::fs::read_dir(addons.join(abi)).unwrap() {
                 link_arg(&so.unwrap().path());
             }
@@ -73,7 +78,10 @@ fn main() {
             println!("cargo:rustc-link-arg=-Wl,-rpath,@executable_path/Frameworks");
         }
         _ => {
-            let dir = kit.join("darwin/BareKit.xcframework/macos-arm64_x86_64");
+            let dir = kit.join("darwin");
+            if !dir.join("BareKit.framework").exists() {
+                panic!("bare-kit is not built for macOS: run `sh mobile/bare-kit.sh darwin`");
+            }
             link_framework(&dir);
             println!("cargo:rustc-link-arg=-Wl,-rpath,{}", dir.display());
             println!("cargo:rustc-link-arg=-Wl,-rpath,{}", addons.display());

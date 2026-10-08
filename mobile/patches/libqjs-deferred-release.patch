@@ -1,0 +1,161 @@
+libqjs frees an object the moment its last reference goes. Native code built
+against libjs does not expect that: jstl's js_persistent_t::reset() unrefs a
+reference, then rereads its own pointer and clears it, and the persistent
+often lives in a buffer that the referenced object keeps alive. udx-native's
+DNS lookup callback does exactly that, so the worklet crashed in
+js_delete_reference(NULL) whenever HyperDHT resolved a bootstrap host. V8
+frees only at a later collection. This holds values released by a native
+reference until the loop's prepare or check phase, when no native frame is on
+the stack. Apply in libqjs, after libqjs-function-source.patch.
+
+diff --git a/src/js.c b/src/js.c
+index e13e6de..51a952d 100644
+--- a/src/js.c
++++ b/src/js.c
+@@ -104,6 +104,12 @@ struct js_env_s {
+   intrusive_list_t deferreds;
+   intrusive_list_t finalizers;
+ 
++  // Values a native reference let go of, freed once control is back in the
++  // event loop. See js__release_later().
++  JSValue *released;
++  size_t released_len;
++  size_t released_capacity;
++
+   bool destroying;
+ 
+   js_promise_rejection_t *promise_rejections;
+@@ -664,19 +670,69 @@ js__run_microtasks(js_env_t *env) {
+   env->depth--;
+ }
+ 
++// Native code built against libjs may release a reference to the object that
++// owns its own memory and then keep using that memory: jstl's
++// js_persistent_t::reset() unrefs, rereads its pointer and clears it, and the
++// persistent often lives in a buffer that the referenced object keeps alive.
++// V8 never frees an object when its last reference goes, only at a later
++// collection, so that is safe there. QuickJS frees on the spot, so the release
++// is held here until control is back in the event loop, with no native frame
++// on the stack.
++static void
++js__release_later(js_env_t *env, JSValue value) {
++  if (!JS_VALUE_HAS_REF_COUNT(value)) return;
++
++  if (env->released_len == env->released_capacity) {
++    size_t capacity = env->released_capacity ? env->released_capacity * 2 : 64;
++
++    JSValue *released = realloc(env->released, capacity * sizeof(JSValue));
++
++    if (released == NULL) {
++      JS_FreeValue(env->context, value);
++
++      return;
++    }
++
++    env->released = released;
++    env->released_capacity = capacity;
++  }
++
++  env->released[env->released_len++] = value;
++}
++
++static void
++js__drain_released(js_env_t *env) {
++  if (env->released_len == 0) return;
++
++  int err;
++
++  js_handle_scope_t *scope;
++  err = js_open_handle_scope(env, &scope);
++  assert(err == 0);
++
++  // Freeing a value can run finalizers that release more, so drain until empty.
++  while (env->released_len > 0) {
++    JSValue value = env->released[--env->released_len];
++
++    JS_FreeValue(env->context, value);
++  }
++
++  err = js_close_handle_scope(env, scope);
++  assert(err == 0);
++}
++
+ static void
+ js__on_prepare(uv_prepare_t *handle) {
+-  // Nothing is queued on the loop's behalf, so there is nothing to run before
+-  // it blocks.
++  js_env_t *env = (js_env_t *) handle->data;
++
++  js__drain_released(env);
+ }
+ 
+ static void
+ js__on_check(uv_check_t *handle) {
+-  // Nothing is queued on the loop's behalf, so there is nothing to settle once
+-  // it has polled. Were a macrotask queue ever added, its liveness would have
+-  // to be held as work is queued rather than settled from here: the loop runs
+-  // timers after the check phase, so what their callbacks queue cannot be
+-  // observed from a check callback.
++  js_env_t *env = (js_env_t *) handle->data;
++
++  js__drain_released(env);
+ }
+ 
+ static inline size_t
+@@ -860,8 +916,13 @@ js__run_finalizer(js_env_t *env, js_finalizer_t *finalizer) {
+ static void
+ js__close_env(js_env_t *env) {
+   // The callback of a finalizer may release what keeps another alive, so the
+-  // list is drained from the head rather than iterated.
+-  while (!intrusive_list_empty(&env->finalizers)) {
++  // list is drained from the head rather than iterated, and released values
++  // are freed before each one.
++  for (;;) {
++    js__drain_released(env);
++
++    if (intrusive_list_empty(&env->finalizers)) break;
++
+     js__run_finalizer(env, intrusive_entry(env->finalizers.head, js_finalizer_t, list));
+   }
+ 
+@@ -880,6 +941,11 @@ js__close_env(js_env_t *env) {
+   JS_FreeAtom(env->context, env->function_id_key);
+   JS_FreeAtom(env->context, env->function_bytecode_key);
+   JS_FreeValue(env->context, env->bindings);
++
++  js__drain_released(env);
++
++  free(env->released);
++
+   JS_FreeContext(env->context);
+   JS_FreeRuntime(env->runtime);
+ 
+@@ -954,6 +1020,10 @@ js_create_env(uv_loop_t *loop, js_platform_t *platform, const js_env_options_t *
+   env->loop = loop;
+   env->active_handles = 3;
+ 
++  env->released = NULL;
++  env->released_len = 0;
++  env->released_capacity = 0;
++
+   env->platform = platform;
+   env->scope = NULL;
+ 
+@@ -2062,7 +2132,7 @@ js__set_weak_reference(js_env_t *env, js_ref_t *reference) {
+ 
+     JS_FreeAtom(env->context, atom);
+ 
+-    JS_FreeValue(env->context, reference->value);
++    js__release_later(env, reference->value);
+   }
+ }
+ 
+@@ -2120,7 +2190,7 @@ js_delete_reference(js_env_t *env, js_ref_t *reference) {
+ 
+   if (reference->count == 0) js__clear_weak_reference(env, reference);
+ 
+-  JS_FreeValue(env->context, reference->value);
++  js__release_later(env, reference->value);
+ 
+   free(reference);
+ 

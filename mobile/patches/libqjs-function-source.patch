@@ -1,0 +1,28 @@
+libqjs compiles a CommonJS module as "(args) => {\n" + source + "}\n", so a
+module that ends in a line comment without a newline comments out the closing
+brace. bonjour-service (LAN discovery) ends every file in a sourceMappingURL
+comment, and the worklet died with "SyntaxError: unexpected token in
+expression: ''". Put a newline before the brace. Apply in libqjs.
+
+diff --git a/src/js.c b/src/js.c
+index e517aad..e13e6de 100644
+--- a/src/js.c
++++ b/src/js.c
+@@ -3295,7 +3295,7 @@ js__function_source(js_env_t *env, const char *name, size_t name_len, js_value_t
+   buf_len += strlen(str);
+   JS_FreeCString(env->context, str);
+ 
+-  buf_len += strlen("}\n");
++  buf_len += strlen("\n}\n");
+ 
+   if (name) {
+     if (name_len == (size_t) -1) buf_len += strlen(name);
+@@ -3333,7 +3333,7 @@ js__function_source(js_env_t *env, const char *name, size_t name_len, js_value_t
+   strcat(buf, str);
+   JS_FreeCString(env->context, str);
+ 
+-  strcat(buf, "}\n");
++  strcat(buf, "\n}\n");
+ 
+   if (name) {
+     if (name_len == (size_t) -1) strcat(buf, name);

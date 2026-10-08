@@ -23,6 +23,7 @@ Builds, installs, and deploy commands may be run when explicitly requested.
 |`mobile/src/android_player.rs`, `mobile/android/MainActivity.kt`|Android: MainActivity keeps two SurfaceViews (video, subtitles above it) over the slot and hands their surfaces to `AndroidBackend` through JNI (MediaCodec onto the surface, AAudio). They stay in the one activity because the worklet suspends whenever that activity pauses. MainActivity also holds the Wi-Fi multicast lock LAN discovery needs while the app is in front (permission in `Dioxus.toml` `[android.raw]`)|
 |`mobile/sync-player.py`|Pins the app to a peartube-media commit: the `player`/`codecs` git rev and a copy of its `[patch.crates-io]` OxideAV pins (Cargo applies patches only from the top-level manifest)|
 |`mobile/release.sh`|Builds the signed arm64 release APK with the release key named in `~/.gradle/gradle.properties`|
+|`mobile/bare-kit.sh`|Builds bare-kit with QuickJS (libqjs) instead of V8 for Android and macOS, from pinned sources plus `mobile/patches/`, into `mobile/vendor`, cached by its inputs: libbare-kit.so is 3.9 MB instead of 65.5 MB. `mobile/setup.sh` runs it and adds bare-kit's V8 prebuild for iOS|
 |`.github/workflows/android-app.yml`|CI: builds the Dioxus app's arm64 debug APK on pushes that touch `mobile/` or the core, and keeps it as the run's artifact|
 |`test/network.test.js`|Relays on a local HyperDHT testnet, including adversarial peers|
 |`test/lan.test.js`|LAN adapter in isolation: the advertised address wins, a lost mDNS answer is asked for again, and discovery errors are reported, not fatal|
@@ -41,6 +42,9 @@ Builds, installs, and deploy commands may be run when explicitly requested.
 - Don't add a machine API field without updating every client in the same change. MediaStorm is the proof client.
 - Prefer deleting code to adding it. Old platform code is at tag `archive/v0.3.0-platform`.
 - `src/index.js` also runs under Bare, in the mobile worklet: no Node-only imports there. Map `node:` builtins to `bare-*` in `package.json` `imports`.
+- The Android and macOS worklet runs on QuickJS: no `Intl`, and guard V8-only APIs such as `Error.captureStackTrace`. Keep `mobile/patches/libqjs-function-source.patch` until libqjs ends its CommonJS wrapper on a new line; without it the worklet dies loading bonjour-service, which `test/mobile.e2e.js` catches.
+- Keep `mobile/patches/libqjs-deferred-release.patch`. QuickJS frees an object as soon as its last reference goes, but addons built for V8 release a reference and then touch memory that object owned (jstl's `js_persistent_t::reset()`). Without the patch, udx-native's DNS lookup crashes the worklet whenever HyperDHT resolves a bootstrap host by name. `test/mobile.e2e.js` names its bootstrap nodes `localhost:<port>` to catch it.
+- Keep `Dioxus.toml` `[application] android_min_sdk_version` at `[android] min_sdk`: dx links the native code at the former, and the QuickJS bare-kit calls `timespec_get`, new in API 29.
 
 ## Testing
 
@@ -56,7 +60,8 @@ npm test
 npm start
 
 # Mobile app (cargo, dx 0.7.10, Android SDK + NDK or Xcode)
-sh mobile/setup.sh          # once: bare-kit prebuilds into mobile/vendor
+sh mobile/setup.sh          # once: bare-kit on QuickJS into mobile/vendor (cmake 4+, ninja, node 22.21+/24.9+), for Android if the NDK is found and macOS on a Mac
+sh mobile/setup.sh darwin   # the same with Xcode alone, no Android SDK
 npm run app                 # macOS desktop app from source
 npm run test:mobile         # E2E through the worklet on macOS
 cd mobile && dx build --android --target aarch64-linux-android

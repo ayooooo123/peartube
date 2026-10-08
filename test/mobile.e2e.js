@@ -36,7 +36,10 @@ test('the mobile worklet streams a relay entry and follows the tracker live', as
   const bytes = media(tmp('media'))
   const published = await relay.publish({ id: 'imdb:tt0111161', title: 'Mobile E2E' }, Readable.from([bytes]))
 
-  const bootstrap = testnet.bootstrap.map(node => `${node.host}:${node.port}`)
+  // By name, so the worklet resolves each bootstrap node through udx-native's
+  // DNS lookup, as it does for the public DHT whenever the nodes' listed IPs
+  // do not answer. On QuickJS that lookup once freed its own request mid-call.
+  const bootstrap = testnet.bootstrap.map(node => `localhost:${node.port}`)
   const { stages, secondKey } = await drive(t, relay, published, { bootstrap }, { PEARTUBE_PLAY: '1' })
   verify(stages, relay, published, bytes, secondKey)
   verifyPlayed(stages.streamed.played, bytes)

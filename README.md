@@ -62,10 +62,11 @@ Replication serves any stored core a peer can name, so the Corestore holds only 
 
 On first launch it asks for a tracker key (a relay's `GET /v1/status` shows it), and optionally blind relay keys, a DHT bootstrap list for a private network, and whether to find relays on this network. With that on, the app finds relays on the local network that run with `PEARTUBE_LAN_HOST` over mDNS, which works where the public DHT cannot connect two randomized NATs. It uses the device's Wi-Fi or Ethernet address and follows it from network to network. A line under the peer count shows what it is doing: the address it uses, or why it has none. Android drops Wi-Fi multicast unless an app holds a multicast lock, so the app holds one while it is open. macOS asks once whether the app may accept incoming connections; allow it, or LAN peers cannot connect. On iOS, mDNS sockets need Apple's multicast networking entitlement, which the app does not have yet, so it finds nothing there. Settings live in the app's data directory. Each tracker's Corestore holds only what peers can serve again, so it lives outside backups: `Library/Caches` on iOS and macOS, the no-backup files directory on Android.
 
-Build needs Rust, [dx 0.7.10](https://github.com/DioxusLabs/dioxus/releases/tag/v0.7.10), `npm install` at the repo root, and the Android SDK + NDK or Xcode:
+Build needs Rust, [dx 0.7.10](https://github.com/DioxusLabs/dioxus/releases/tag/v0.7.10), `npm install` at the repo root, the Android SDK + NDK or Xcode, and for `mobile/setup.sh` cmake 4+, ninja and Node 22.21+ or 24.9+:
 
 ```sh
-sh mobile/setup.sh     # once: fetch the bare-kit v2.5.5 prebuilds (420 MB download, cached)
+sh mobile/setup.sh     # once: build bare-kit on QuickJS (cached) for Android if the NDK is found and macOS on a Mac, plus bare-kit's iOS prebuild on a Mac
+sh mobile/setup.sh darwin   # the same with Xcode alone, no Android SDK
 npm run app            # macOS: build and run the desktop app from source
 cd mobile && dx build --android --target aarch64-linux-android   # APK under target/dx/PearTube/debug/android
 sh mobile/release.sh   # signed arm64 release APK in mobile/target/release-apk
@@ -74,6 +75,8 @@ npm run test:mobile    # E2E on macOS: the worklet finds a relay over a testnet 
 ```
 
 `mobile/build.rs` packs `mobile/worker.js` with bare-pack for the target and links the native addons it needs (sodium, udx, rocksdb, …) with bare-link. dx puts the Android libraries in the APK; `mobile/ios.sh` embeds BareKit and the addon frameworks, which dx leaves out, and re-signs the app.
+
+On Android and macOS the worklet runs on QuickJS, not V8: `mobile/bare-kit.sh` builds bare-kit with [libqjs](https://github.com/holepunchto/libqjs), Holepunch's QuickJS backend for the same engine ABI, so bare and the addons are unchanged. That makes `libbare-kit.so` 3.9 MB instead of 65.5 MB, and the APK 16.7 MB smaller. iOS still uses bare-kit's V8 prebuild.
 
 CI (`.github/workflows/android-app.yml`) builds the arm64 debug APK on every push that touches the app or the core. Download it from the run's `PearTube-debug-arm64` artifact. Releases carry the signed APK from `mobile/release.sh`, which reads `peartube.keystore`, `peartube.keystorePassword`, `peartube.keyAlias` and `peartube.keyPassword` from `~/.gradle/gradle.properties`. Android will not install it over the debug APK, which has another key: uninstall the debug app first.
 

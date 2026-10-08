@@ -53,13 +53,56 @@ default = ["mobile"]
 desktop = ["dioxus/desktop"]
 mobile = ["dioxus/mobile"]
 
-# libmain.so shipped with debug info: 25.8 MB unpacked, 16.7 MB stripped.
-# LTO drops the codec code the player never calls (OxideAV crates carry
-# encoders too). Unwinding stays on: the player catches decoder panics.
+# Stripped, fat LTO, one codegen unit. LTO drops code nothing references;
+# peartube-media's `codecs` turns on oxideav-core's `decode-only` feature so
+# OxideAV's encoders and muxers are unreferenced too. Unwinding stays on: the
+# player catches decoder panics.
 [profile.release]
 strip = true
 lto = "fat"
 codegen-units = 1
+
+# Dependencies build for size; the code that must keep its speed builds at 3:
+# the decoders that play HD video or sit near PerfAudit's real-time floors,
+# oxideav-core's bit readers, the RGBA conversion of software frames and the
+# engine. This crate stays at 3 too: fat LTO optimises the whole program at
+# the final crate's level, and at "s" rustc turns off loop and SLP
+# vectorization for all of it. peartube-media's root Cargo.toml carries the
+# same lists; keep the two in step.
+[profile.release.package."*"]
+opt-level = "s"
+[profile.release.package.oxideav-core]
+opt-level = 3
+[profile.release.package.oxideav-pixfmt]
+opt-level = 3
+[profile.release.package.player]
+opt-level = 3
+[profile.release.package.oxideav-h264]
+opt-level = 3
+[profile.release.package.oxideav-h265]
+opt-level = 3
+[profile.release.package.oxideav-av1]
+opt-level = 3
+[profile.release.package.oxideav-vp8]
+opt-level = 3
+[profile.release.package.oxideav-vp9]
+opt-level = 3
+[profile.release.package.oxideav-mpeg12video]
+opt-level = 3
+[profile.release.package.oxideav-mpeg4video]
+opt-level = 3
+[profile.release.package.codec-wmv]
+opt-level = 3
+[profile.release.package.oxideav-aac]
+opt-level = 3
+[profile.release.package.oxideav-opus]
+opt-level = 3
+[profile.release.package.oxideav-mp3]
+opt-level = 3
+[profile.release.package.oxideav-ac3]
+opt-level = 3
+[profile.release.package.codec-dca]
+opt-level = 3
 
 # Video decoding unoptimized is too slow to watch; keep the app's own code
 # quick to rebuild.

@@ -95,13 +95,13 @@ opt-level = 3
 opt-level = 3
 [profile.release.package.oxideav-aac]
 opt-level = 3
-[profile.release.package.oxideav-opus]
-opt-level = 3
 [profile.release.package.oxideav-mp3]
 opt-level = 3
-[profile.release.package.oxideav-ac3]
-opt-level = 3
 [profile.release.package.codec-dca]
+opt-level = 3
+# DV at "s" decodes DVCPRO HD 1080 at the 2x HD floor; at 3 it has margin.
+# The Opus and AC-3 ports stay "s": 50x real time or more there.
+[profile.release.package.codec-dv]
 opt-level = 3
 # The Ogg demuxer runs per packet; at "s" it slows Opus in Ogg.
 [profile.release.package.oxideav-ogg]

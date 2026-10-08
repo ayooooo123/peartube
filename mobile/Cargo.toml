@@ -103,6 +103,9 @@ opt-level = 3
 opt-level = 3
 [profile.release.package.codec-dca]
 opt-level = 3
+# The Ogg demuxer runs per packet; at "s" it slows Opus in Ogg.
+[profile.release.package.oxideav-ogg]
+opt-level = 3
 
 # Video decoding unoptimized is too slow to watch; keep the app's own code
 # quick to rebuild.

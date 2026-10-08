@@ -19,8 +19,8 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 # The video player: peartube-media's engine, OxideAV codecs and the
 # platform video decoders. See [patch.crates-io] below.
-player = { git = "https://github.com/ayooooo123/peartube-media", rev = "e043ad1fc10833da31ded7eda5a7b05c0b117967" }
-codecs = { git = "https://github.com/ayooooo123/peartube-media", rev = "e043ad1fc10833da31ded7eda5a7b05c0b117967" }
+player = { git = "https://github.com/ayooooo123/peartube-media", rev = "41e21234587ffe4a02583c4ccde324845fdfd289" }
+codecs = { git = "https://github.com/ayooooo123/peartube-media", rev = "41e21234587ffe4a02583c4ccde324845fdfd289" }
 oxideav-core = "*"
 
 [target.'cfg(target_os = "android")'.dependencies]
@@ -112,33 +112,33 @@ opt-level = 3
 # BEGIN pin-oxideav
 [patch.crates-io]
 oxideav-aac = { git = "https://github.com/ayooooo123/oxideav-aac", rev = "d9f6d8eb2a62b19518e957868702d57eb0123124" }
-oxideav-ac3 = { git = "https://github.com/OxideAV/oxideav-ac3", rev = "99228831d2b29a35fe2b2035118a18f8cb0cae59" }
+oxideav-ac3 = { git = "https://github.com/ayooooo123/oxideav-ac3", rev = "239a59825b733a522cf4818c93e7cb3c35e5ce3a" }
 oxideav-adpcm = { git = "https://github.com/OxideAV/oxideav-adpcm", rev = "0802fb34c6c57bfa8913670fe78882547416fd16" }
 oxideav-ape = { git = "https://github.com/OxideAV/oxideav-ape", rev = "ea6e8ca2848b18716a49ca6de0fe4d8d26d4893a" }
 oxideav-ass = { git = "https://github.com/OxideAV/oxideav-ass", rev = "e89607612ef19285c60b84f51ce5d34c72a493b1" }
-oxideav-av1 = { git = "https://github.com/OxideAV/oxideav-av1", rev = "461e63a5bd634fe47a59c7a69cca153af1577c62" }
+oxideav-av1 = { git = "https://github.com/ayooooo123/oxideav-av1", rev = "cab66b04918136a7533019122da1677c7b2a42b3" }
 oxideav-avi = { git = "https://github.com/ayooooo123/oxideav-avi", rev = "b919db191b3bc6f5da0fe250e660b37c231d1c26" }
-oxideav-basic = { git = "https://github.com/OxideAV/oxideav-basic", rev = "c44bb55f9f94e18ede7e9267493b0b6776a8e1c4" }
-oxideav-cinepak = { git = "https://github.com/OxideAV/oxideav-cinepak", rev = "4dae215ff7509dfd7e2e7d1bae72128630ccce7d" }
+oxideav-basic = { git = "https://github.com/ayooooo123/oxideav-basic", rev = "33120ba15b5cf1aa91061662dbf43826153a3fd3" }
+oxideav-cinepak = { git = "https://github.com/ayooooo123/oxideav-cinepak", rev = "6e632ae20703b531c5c5755dadcc67fa32479828" }
 oxideav-cook = { git = "https://github.com/OxideAV/oxideav-cook", rev = "f8584e427c6f87de24e2f2de124e0242824f7006" }
 oxideav-core = { git = "https://github.com/ayooooo123/oxideav-core", rev = "96094a916d8b9f2695f70bb0d53e5956b8a79847" }
-oxideav-dirac = { git = "https://github.com/OxideAV/oxideav-dirac", rev = "1315f66f5f222dcafa5594bee401c797e5f5a769" }
+oxideav-dirac = { git = "https://github.com/ayooooo123/oxideav-dirac", rev = "051c87ed060476839493b4368d81fb6dc8294bd6" }
 oxideav-dts = { git = "https://github.com/OxideAV/oxideav-dts", rev = "9a7c128366aa4914331825e3b5d40a3d3304c090" }
 oxideav-dvd = { git = "https://github.com/OxideAV/oxideav-dvd", rev = "f237f8c05fb3a70d0d9c7e7c99c56110c570d849" }
 oxideav-flac = { git = "https://github.com/OxideAV/oxideav-flac", rev = "cfcc7c4359d1f97d39c228dfd95ed46e9246b458" }
 oxideav-flv = { git = "https://github.com/OxideAV/oxideav-flv", rev = "02e9158a20786a214a707da2f4ae7650146f3b3e" }
 oxideav-g711 = { git = "https://github.com/OxideAV/oxideav-g711", rev = "72af018b7c04e8c3aacc6c0b7628cd6e43cde37a" }
-oxideav-h261 = { git = "https://github.com/OxideAV/oxideav-h261", rev = "bba9abb79f6e54cefa189ea92997a91dd46e1e56" }
-oxideav-h263 = { git = "https://github.com/OxideAV/oxideav-h263", rev = "25bf0a12102969034d57ab96f29e686d8d61ddc3" }
+oxideav-h261 = { git = "https://github.com/ayooooo123/oxideav-h261", rev = "0803bf4eb603c9766c01ba89f150259c84c3af7b" }
+oxideav-h263 = { git = "https://github.com/ayooooo123/oxideav-h263", rev = "e922942e0f65386943599badce62d2c74c5ef767" }
 oxideav-h264 = { git = "https://github.com/ayooooo123/oxideav-h264", rev = "103743224259f2b8663dc882fa60a18cd95c134a" }
-oxideav-h265 = { git = "https://github.com/ayooooo123/oxideav-h265", rev = "29cf54638f58ee3393474a172831c9c32582b7ad" }
+oxideav-h265 = { git = "https://github.com/ayooooo123/oxideav-h265", rev = "279ecc3f27dc6f4145c5478a0f2388180661e1d1" }
 oxideav-http = { git = "https://github.com/OxideAV/oxideav-http", rev = "f54f106e1e131300387d1df1a71d2686690ccdca" }
 oxideav-id3 = { git = "https://github.com/OxideAV/oxideav-id3", rev = "d1b462e3da204f2010844648cf1a6bbc65f10dd0" }
-oxideav-iff = { git = "https://github.com/OxideAV/oxideav-iff", rev = "5a4bdb43c14007975137543ecf1aa8fa6e4a476c" }
+oxideav-iff = { git = "https://github.com/ayooooo123/oxideav-iff", rev = "c054ff2d42a347be36b2c2ba4b0d9490932c210f" }
 oxideav-image-filter = { git = "https://github.com/OxideAV/oxideav-image-filter", rev = "601f4fe832e31fdd9dc3f2bf171389cc09f0dd68" }
-oxideav-indeo = { git = "https://github.com/OxideAV/oxideav-indeo", rev = "c5352660dd42d5d16d50cba0388b21b4fbeb037a" }
+oxideav-indeo = { git = "https://github.com/ayooooo123/oxideav-indeo", rev = "fafc8fa7bb089f743b841cb0d1229c0763612d93" }
 oxideav-midi = { git = "https://github.com/OxideAV/oxideav-midi", rev = "cf1b26b7b44b3427e78378c2b74e80e695c12e58" }
-oxideav-mjpeg = { git = "https://github.com/OxideAV/oxideav-mjpeg", rev = "3e8f65f5c36d1dddbc481512487c6e8cd86e6f03" }
+oxideav-mjpeg = { git = "https://github.com/ayooooo123/oxideav-mjpeg", rev = "559c08f7ec06e67b09c125cd1f5af33b81eb63f5" }
 oxideav-mkv = { git = "https://github.com/ayooooo123/oxideav-mkv", rev = "5f9ac53c713d1265be26d21704e0bba77d3d1462" }
 oxideav-mod = { git = "https://github.com/OxideAV/oxideav-mod", rev = "f509819bc977ac4d499fb95f1156bc536a9a964f" }
 oxideav-mov = { git = "https://github.com/OxideAV/oxideav-mov", rev = "deccbd8c6c728d9ab2bda6c70ffec22967884dc8" }
@@ -147,9 +147,9 @@ oxideav-mp2 = { git = "https://github.com/ayooooo123/oxideav-mp2", rev = "1f335d
 oxideav-mp3 = { git = "https://github.com/ayooooo123/oxideav-mp3", rev = "ba94ce70a7e6ddb37f02713b3ca34ed5b39f7cf0" }
 oxideav-mp4 = { git = "https://github.com/ayooooo123/oxideav-mp4", rev = "4fd2bca2f78a6f67238f9503d89f553588a59de3" }
 oxideav-mpeg12video = { git = "https://github.com/ayooooo123/oxideav-mpeg12video", rev = "9c4c24c2d336ffde2e23f29d55812e75c40d780a" }
-oxideav-mpeg4video = { git = "https://github.com/ayooooo123/oxideav-mpeg4video", rev = "ac636cd9e44744a17088cb6a4b02ed02ba232a49" }
-oxideav-mpegts = { git = "https://github.com/ayooooo123/oxideav-mpegts", rev = "3fcd78e3b86e90d7edca97356b3d7195dba22711" }
-oxideav-msmpeg4 = { git = "https://github.com/OxideAV/oxideav-msmpeg4", rev = "f0de9a8c24ca29c79ee453a39f8c4a052334c8a9" }
+oxideav-mpeg4video = { git = "https://github.com/ayooooo123/oxideav-mpeg4video", rev = "a759321b87caef26a340186f04a86c8f4060ec15" }
+oxideav-mpegts = { git = "https://github.com/ayooooo123/oxideav-mpegts", rev = "cae69e3c911a830b07e8e35b1b88e26f2e842b62" }
+oxideav-msmpeg4 = { git = "https://github.com/ayooooo123/oxideav-msmpeg4", rev = "def8962c09aa5d339dada2d2308c61186a67e074" }
 oxideav-musepack = { git = "https://github.com/OxideAV/oxideav-musepack", rev = "c60b07708683e0e25c6e0007bffbb887e03876f7" }
 oxideav-ogg = { git = "https://github.com/ayooooo123/oxideav-ogg", rev = "83f566862e1f765517344264b36057d26e54528e" }
 oxideav-opus = { git = "https://github.com/OxideAV/oxideav-opus", rev = "fd97e6110860d21a69c76ba4d051984486fea9fb" }
@@ -163,15 +163,15 @@ oxideav-source = { git = "https://github.com/OxideAV/oxideav-source", rev = "757
 oxideav-speex = { git = "https://github.com/OxideAV/oxideav-speex", rev = "8886c67204b1464a5ed1bd32c29f5501dd3cae91" }
 oxideav-sub-image = { git = "https://github.com/OxideAV/oxideav-sub-image", rev = "18a79e94675bf5acab88b3e06b82d117b53659c0" }
 oxideav-subtitle = { git = "https://github.com/ayooooo123/oxideav-subtitle", rev = "53df836f596bb4ce8391bb821b2100d3e7f94f1b" }
-oxideav-svq = { git = "https://github.com/OxideAV/oxideav-svq", rev = "afb738670f7c73735142d7ef49d529918bce84fe" }
-oxideav-theora = { git = "https://github.com/OxideAV/oxideav-theora", rev = "bd07b92ecfe0781de8fb1278fbf26e642e2311ad" }
+oxideav-svq = { git = "https://github.com/ayooooo123/oxideav-svq", rev = "660bce1f0d49208e9e9e77225d0c8e89a98c26fc" }
+oxideav-theora = { git = "https://github.com/ayooooo123/oxideav-theora", rev = "a7674665c76370f2a6bbc4e72af5f31256cae8b0" }
 oxideav-tta = { git = "https://github.com/OxideAV/oxideav-tta", rev = "53432dc2b2de77f0b6de6e55f7e742fbdd11b04f" }
 oxideav-ttf = { git = "https://github.com/OxideAV/oxideav-ttf", rev = "ecea11566de6c72439c0b3bbdef85926db892cc9" }
-oxideav-vc2 = { git = "https://github.com/OxideAV/oxideav-vc2", rev = "030172fe33153c5072116146d299568f7b0b3db5" }
+oxideav-vc2 = { git = "https://github.com/ayooooo123/oxideav-vc2", rev = "364ebdb0073bf1c57c3d830ffbf057dbd8f53d59" }
 oxideav-vorbis = { git = "https://github.com/OxideAV/oxideav-vorbis", rev = "6cb1c5c58f2987459e0f2441c0a4d9e9decb89bf" }
-oxideav-vp6 = { git = "https://github.com/OxideAV/oxideav-vp6", rev = "580fb6b7f25facf1b3d409c16aeac7be725f33f7" }
-oxideav-vp8 = { git = "https://github.com/OxideAV/oxideav-vp8", rev = "fb852a4896dd48f1d5d1a05c471ada8a0208b029" }
-oxideav-vp9 = { git = "https://github.com/OxideAV/oxideav-vp9", rev = "68e069a4903491474508d76222e8243686b2e9e2" }
+oxideav-vp6 = { git = "https://github.com/ayooooo123/oxideav-vp6", rev = "4a2ff51bc5e139b1833f3bf08dd1f167e6225c29" }
+oxideav-vp8 = { git = "https://github.com/ayooooo123/oxideav-vp8", rev = "5aad171851320a741981f3d331c1e3cfdb48c044" }
+oxideav-vp9 = { git = "https://github.com/ayooooo123/oxideav-vp9", rev = "35a7c43234e04c2d8d12e1cd6a2fda41be5e411e" }
 oxideav-wavpack = { git = "https://github.com/OxideAV/oxideav-wavpack", rev = "148aed0f4a5403738a963915019082accfdfab44" }
 oxideav-wma = { git = "https://github.com/OxideAV/oxideav-wma", rev = "ab1eeb2acb51388d5da21e735723ac05bd7226fe" }
 # END pin-oxideav

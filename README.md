@@ -85,6 +85,11 @@ Physical-device checks cover hardware H.264, paused backward seek/resume,
 background/surface recreation, repeated close/reopen and EOS. These are scoped
 lifecycle checks, not full codec compatibility or A/V timing certification.
 
+Version 0.4.8 preserves surround dialogue on Android speakers by explicitly
+mixing multichannel PCM to stereo, including the center channel in both outputs.
+Mono and stereo stay unchanged. Channel layouts survive decoder output and
+audio reopen/trim paths; bounded partial writes preserve sample timing.
+
 Build needs Rust, [dx 0.7.10](https://github.com/DioxusLabs/dioxus/releases/tag/v0.7.10), `npm install` at the repo root, the Android SDK + NDK or Xcode, and for `mobile/setup.sh` cmake 4+, ninja and Node 22.21+ or 24.9+:
 
 ```sh

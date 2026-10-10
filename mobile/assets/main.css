@@ -209,38 +209,8 @@ button {
   white-space: nowrap;
 }
 
-.video-player {
-  width: 100%;
-  max-height: 60vh;
-  background: #000;
-  display: block;
-}
 
-.video-error-box {
-  margin: 16px;
-  padding: 14px;
-  background: var(--card);
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  color: var(--text);
-  font-size: 14px;
-}
-
-.stream-url {
-  display: block;
-  margin-top: 8px;
-  padding: 10px;
-  background: var(--bg);
-  border-radius: 6px;
-  font-family: monospace;
-  font-size: 13px;
-  color: var(--brand);
-  word-break: break-all;
-  user-select: all;
-  -webkit-user-select: all;
-}
-
-/* VLC draws a native view over this slot. */
+/* The player draws a native view over this slot. */
 .video-slot {
   width: 100%;
   aspect-ratio: 16 / 9;
@@ -265,6 +235,24 @@ button {
   color: var(--dim);
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
+}
+
+.player-tracks {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 8px 16px 0;
+}
+
+.track-select {
+  flex: 1;
+  min-width: 0;
+  padding: 6px 8px;
+  background: var(--card);
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  font-size: 13px;
 }
 
 .player-error {

@@ -15,6 +15,9 @@ use std::env;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+/// `min_sdk` in Dioxus.toml.
+const MIN_SDK: u32 = 29;
+
 fn main() {
     let manifest = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap());
     let root = manifest.parent().unwrap();
@@ -71,6 +74,15 @@ fn main() {
             for so in std::fs::read_dir(addons.join(abi)).unwrap() {
                 link_arg(&so.unwrap().path());
             }
+            // dx links through its API 28 clang wrapper, but the app needs
+            // min_sdk 29 and the player calls NDK media functions added in
+            // 29. clang takes the last --target, so this one picks the API 29
+            // stub libraries.
+            let clang_arch = if arch == "arm" { "armv7a-linux-androideabi".to_string() } else { format!("{arch}-linux-android") };
+            println!("cargo:rustc-link-arg=--target={clang_arch}{MIN_SDK}");
+            // NDK r27 defaults to 4 KiB; Android 16 KiB devices need aligned
+            // ELF load segments as well as the APK's zip alignment.
+            println!("cargo:rustc-link-arg=-Wl,-z,max-page-size=16384");
         }
         "ios" => {
             let slice = if simulator { "ios-arm64_x86_64-simulator" } else { "ios-arm64" };

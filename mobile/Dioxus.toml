@@ -1,5 +1,5 @@
 [application]
-# dx's MainActivity plus the libVLC player.
+# dx's MainActivity plus the surfaces the player draws on.
 android_main_activity = "android/MainActivity.kt"
 # The API level dx links the native code against (its default is 28). Keep it
 # at [android] min_sdk: the QuickJS bare-kit calls timespec_get, new in 29.
@@ -13,9 +13,7 @@ publisher = "PearTube"
 # bare-kit's floor. dx's network security config already allows cleartext to
 # 127.0.0.1, where the worklet serves streams.
 min_sdk = 29
-# 3.7.3 and later pull in kotlin-stdlib 2.2; dx builds with Kotlin 2.0.
-gradle_dependencies = ["org.videolan.android:libvlc-all:3.7.2"]
-proguard_rules = ["android/libvlc.pro"]
+proguard_rules = ["android/jni.pro"]
 
 [android.raw]
 # The Wi-Fi multicast lock that LAN discovery needs (android/MainActivity.kt).

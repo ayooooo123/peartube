@@ -1,0 +1,29 @@
+[application]
+# dx's MainActivity plus the surfaces the player draws on.
+android_main_activity = "android/MainActivity.kt"
+# The API level dx links the native code against (its default is 28). Keep it
+# at [android] min_sdk: the QuickJS bare-kit calls timespec_get, new in 29.
+android_min_sdk_version = 29
+
+[bundle]
+identifier = "com.peartube.app"
+publisher = "PearTube"
+
+[android]
+# bare-kit's floor. dx's network security config already allows cleartext to
+# 127.0.0.1, where the worklet serves streams.
+min_sdk = 29
+proguard_rules = ["android/jni.pro"]
+
+[android.raw]
+# The Wi-Fi multicast lock that LAN discovery needs (android/MainActivity.kt).
+manifest = '<uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE" />'
+
+[ios]
+deployment_target = "16.0"
+
+[ios.plist]
+NSLocalNetworkUsageDescription = "PearTube connects directly to peers on your network."
+
+[ios.plist.NSAppTransportSecurity]
+NSAllowsLocalNetworking = true

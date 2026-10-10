@@ -1,0 +1,76 @@
+name: Android app
+
+# Builds the Dioxus app's debug APK (arm64) and keeps it as a run artifact.
+on:
+  push:
+    paths:
+      - mobile/**
+      - src/**
+      - package.json
+      - package-lock.json
+      - .github/workflows/android-app.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: android-app-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  apk:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      DX_VERSION: 0.7.10
+      DX_SHA256: 4363e4ed2a3f1eb7f4d38d2d59aed59ce43271c44c16b425e92c89a64761fbe7
+      NDK_VERSION: 29.0.14206865
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.x
+          cache: npm
+      # bare, bare-pack and bare-link, which pack the worklet.
+      - run: npm ci
+      - uses: actions/setup-java@v4
+        with:
+          distribution: zulu
+          java-version: 17
+      - name: Android NDK
+        run: |
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --install "ndk;$NDK_VERSION" | tail -n 1
+          echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/$NDK_VERSION" >> "$GITHUB_ENV"
+      - run: rustup target add aarch64-linux-android
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: mobile
+      - name: dx
+        run: |
+          curl -fsSL -o dx.tar.gz "https://github.com/DioxusLabs/dioxus/releases/download/v$DX_VERSION/dx-x86_64-unknown-linux-gnu.tar.gz"
+          echo "$DX_SHA256  dx.tar.gz" | sha256sum -c -
+          mkdir -p "$HOME/.local/bin"
+          tar -xzf dx.tar.gz -C "$HOME/.local/bin" dx
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+      # bare-kit built on QuickJS (mobile/bare-kit.sh), cached by its inputs.
+      - run: npm install --global cmake-runtime@4.3.1 ninja-runtime@1.13.2
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/peartube
+          key: bare-kit-qjs-${{ hashFiles('mobile/bare-kit.sh', 'mobile/patches/*') }}
+      - run: sh mobile/setup.sh arm64-v8a
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: gradle-${{ runner.os }}-dx-${{ env.DX_VERSION }}
+      - name: Build the APK
+        working-directory: mobile
+        run: dx build --android --target aarch64-linux-android
+      - uses: actions/upload-artifact@v4
+        with:
+          name: PearTube-debug-arm64
+          path: mobile/target/dx/PearTube/debug/android/app/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error

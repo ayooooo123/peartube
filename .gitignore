@@ -1,0 +1,104 @@
+# Dependencies
+**/node_modules/
+**/node_modules
+pnpm-lock.yaml
+bun.lock
+
+# Build output
+build/
+dist/
+*.bundle.js
+
+# Generated HRPC schema (regenerate with `npm run schema`)
+spec/hrpc/
+spec/schema/
+packages/app/pear/
+packages/app/packages/app/pear/
+packages/app/.pear-build/
+packages/app/desktop-build/
+packages/app/.desktop-export/
+
+# Expo
+.expo/
+apps/mobile/.expo/
+apps/mobile/dist/
+
+# iOS/Android
+apps/mobile/ios/Pods/
+apps/mobile/ios/build/
+apps/mobile/android/.gradle/
+apps/mobile/android/app/build/
+packages/app/ios/Pods/
+packages/app/ios/build/
+
+# Storage (P2P data)
+storage/
+packages/.peartube/
+
+# Environment
+.env
+.env.local
+.claude
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+npm-debug.log*
+
+# Testing
+coverage/
+
+# Config
+.mcp.json
+peartube-src.zip
+packages/desktop/_expo/
+packages/desktop/*.html
+packages/desktop/(tabs)/
+packages/desktop/video/
+*.tgz
+
+# Build caches
+**/.cache/
+.gradle-user-home/
+
+# Android native build artifacts (externalNativeBuild / CMake)
+**/android/.cxx/
+
+# Local logs
+logfile
+
+# Agent state
+.codex
+.codex/
+.sisyphus/
+.superpowers/
+.omo/
+.omp/agents/peartube-oxlint-*.md
+.tmp-device-crashes/
+.evidence/
+.trash-peartube-cleanup/
+
+# Artifacts
+**/.artifacts/
+
+# Local native debug signing material
+packages/app/android/app/debug.keystore
+
+# Local isolated agent worktrees
+.worktrees/
+
+# relay data
+peartube-data/
+
+# Mobile app (Dioxus): cargo/dx output and bare-kit fetched by mobile/setup.sh
+mobile/target/
+mobile/vendor/

@@ -90,6 +90,13 @@ mixing multichannel PCM to stereo, including the center channel in both outputs.
 Mono and stereo stay unchanged. Channel layouts survive decoder output and
 audio reopen/trim paths; bounded partial writes preserve sample timing.
 
+Version 0.4.9 fixes an Android background-return race: delayed output
+notifications no longer invalidate a decoder that has already restarted.
+Native Player/AAudio/MediaCodec checks cover Surface recreation and an
+intentionally delayed resume notification through EOS. The five-second
+active recovery deadline is unchanged; the 0.4.8 dialogue fix is retained.
+The separately reported subtitle-selection failure remains under investigation.
+
 Build needs Rust, [dx 0.7.10](https://github.com/DioxusLabs/dioxus/releases/tag/v0.7.10), `npm install` at the repo root, the Android SDK + NDK or Xcode, and for `mobile/setup.sh` cmake 4+, ninja and Node 22.21+ or 24.9+:
 
 ```sh

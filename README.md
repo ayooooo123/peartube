@@ -104,6 +104,14 @@ host pixels and timing; Android overlay and actual-show confirmation remain
 pending while the test phone is disconnected. The dialogue and background
 resume corrections above are retained.
 
+Version 0.4.11 fixes playback stopping for good about a minute after a seek
+or the start of a long video. The player's 32 MiB read-ahead stopped refilling
+once full, so a movie froze when playback reached the end of that window, and
+later seeks or a return to the app could fail with "no presentable picture".
+It also hid subtitles: in the tested movie the first English cue comes after
+playback had already stopped. On the phone, the same movie now plays past the
+old stop point with its PGS captions on screen.
+
 Build needs Rust, [dx 0.7.10](https://github.com/DioxusLabs/dioxus/releases/tag/v0.7.10), `npm install` at the repo root, the Android SDK + NDK or Xcode, and for `mobile/setup.sh` cmake 4+, ninja and Node 22.21+ or 24.9+:
 
 ```sh

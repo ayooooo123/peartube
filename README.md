@@ -95,7 +95,14 @@ notifications no longer invalidate a decoder that has already restarted.
 Native Player/AAudio/MediaCodec checks cover Surface recreation and an
 intentionally delayed resume notification through EOS. The five-second
 active recovery deadline is unchanged; the 0.4.8 dialogue fix is retained.
-The separately reported subtitle-selection failure remains under investigation.
+
+Version 0.4.10 moves first-use subtitle font discovery into cue decoding,
+ahead of timed presentation. This corrects a reproduced cold-start case where
+a selected SubRip cue was drawn only after expiry, then immediately cleared.
+Embedded SubRip/ASS selection and a standalone Player caption smoke cover
+host pixels and timing; Android overlay and actual-show confirmation remain
+pending while the test phone is disconnected. The dialogue and background
+resume corrections above are retained.
 
 Build needs Rust, [dx 0.7.10](https://github.com/DioxusLabs/dioxus/releases/tag/v0.7.10), `npm install` at the repo root, the Android SDK + NDK or Xcode, and for `mobile/setup.sh` cmake 4+, ninja and Node 22.21+ or 24.9+:
 

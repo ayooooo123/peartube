@@ -6,28 +6,94 @@ export const page = `<!doctype html>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>PearTube</title>
 <style>
-  :root { color-scheme: dark; --bg: #0f1115; --card: #171a21; --line: #262b36; --text: #e6e8ee; --dim: #8a91a3; --brand: #4c8dff; }
+  :root { color-scheme: dark; --bg: #0c0e12; --panel: #12151a; --card: #191d24; --hover: #222731; --line: #252a34; --text: #eceef3; --dim: #8d95a6; --brand: #9fd356; --brand-ink: #11160a; }
   * { box-sizing: border-box; }
-  body { margin: 0; font: 14px/1.4 system-ui, -apple-system, sans-serif; background: var(--bg); color: var(--text); }
-  main { max-width: 960px; margin: 0 auto; padding: 24px 16px; }
-  h1 { font-size: 18px; margin: 0 0 6px; display: flex; justify-content: space-between; align-items: center; }
-  h2 { font-size: 13px; color: var(--dim); text-transform: uppercase; letter-spacing: .04em; margin: 20px 0 8px; }
-  .facts { color: var(--dim); margin-bottom: 14px; display: flex; gap: 14px; flex-wrap: wrap; align-items: center; }
-  .facts b { color: var(--text); font-weight: 600; }
-  .card { background: var(--card); border: 1px solid var(--line); border-radius: 8px; padding: 10px 14px; margin-bottom: 8px; }
+  body { margin: 0; font: 14px/1.45 system-ui, -apple-system, 'Segoe UI', sans-serif; background: var(--bg); color: var(--text); }
+  a { color: inherit; }
+  svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; flex: none; }
+  .top { position: fixed; inset: 0 0 auto 0; height: 60px; z-index: 20; display: flex; align-items: center; gap: 16px; padding: 0 16px; background: var(--panel); border-bottom: 1px solid var(--line); }
+  .logo { display: flex; align-items: center; gap: 8px; font-weight: 700; font-size: 18px; text-decoration: none; letter-spacing: -.01em; }
+  .logo .mark { width: 30px; height: 30px; border-radius: 9px; background: var(--brand); color: var(--brand-ink); display: grid; place-items: center; }
+  .logo .mark svg { width: 18px; height: 18px; stroke-width: 2.4; }
+  .search { flex: 1; max-width: 560px; margin: 0 auto; position: relative; }
+  .search input { width: 100%; height: 38px; border-radius: 99px; padding: 0 16px 0 40px; background: var(--bg); }
+  .search svg { position: absolute; left: 13px; top: 9px; color: var(--dim); }
+  .menu { display: none; }
+  .side { position: fixed; top: 60px; bottom: 0; left: 0; width: 230px; z-index: 15; overflow-y: auto; padding: 12px 10px; background: var(--panel); border-right: 1px solid var(--line); display: flex; flex-direction: column; gap: 2px; }
+  .nav { display: flex; align-items: center; gap: 14px; padding: 9px 12px; border-radius: 8px; text-decoration: none; color: var(--dim); font-weight: 500; }
+  .nav:hover { background: var(--hover); color: var(--text); }
+  .nav.on { background: var(--hover); color: var(--text); }
+  .nav.on svg { color: var(--brand); }
+  .side h3 { font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--dim); margin: 16px 12px 6px; font-weight: 600; }
+  .side .nav .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .stats { margin-top: auto; padding: 12px; color: var(--dim); font-size: 12px; border-top: 1px solid var(--line); display: grid; gap: 4px; }
+  .stats b { color: var(--text); font-weight: 600; }
+  .stats .links { display: flex; gap: 6px; margin-top: 6px; flex-wrap: wrap; }
+  main { margin: 60px 0 0 230px; padding: 24px 28px 48px; min-height: calc(100vh - 60px); }
+  h1 { font-size: 20px; margin: 0 0 16px; }
+  h2 { font-size: 16px; margin: 28px 0 12px; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 22px 16px; }
+  .vcard { cursor: pointer; min-width: 0; }
+  .thumb { position: relative; aspect-ratio: 16 / 9; border-radius: 10px; overflow: hidden; display: grid; place-items: center; transition: transform .15s; }
+  .vcard:hover .thumb { transform: translateY(-2px); box-shadow: 0 8px 24px rgba(0, 0, 0, .45); }
+  .thumb .big { font-size: clamp(20px, 2.1vw, 30px); overflow-wrap: anywhere; font-weight: 800; color: rgba(255, 255, 255, .88); letter-spacing: -.02em; text-shadow: 0 2px 12px rgba(0, 0, 0, .35); padding: 0 16px; text-align: center; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; line-height: 1.1; }
+  .thumb .play { position: absolute; width: 52px; height: 52px; border-radius: 50%; background: rgba(0, 0, 0, .55); display: grid; place-items: center; opacity: 0; transition: opacity .15s; }
+  .thumb .play svg { width: 24px; height: 24px; fill: #fff; stroke: none; margin-left: 3px; }
+  .vcard:hover .play { opacity: 1; }
+  .thumb .tag { position: absolute; font-size: 11px; font-weight: 600; padding: 2px 6px; border-radius: 4px; background: rgba(0, 0, 0, .75); }
+  .thumb .tl { top: 8px; left: 8px; } .thumb .br { bottom: 8px; right: 8px; }
+  .thumb .tag.local { background: var(--brand); color: var(--brand-ink); }
+  .thumb .copy { position: absolute; top: 6px; right: 6px; opacity: 0; }
+  .vcard:hover .copy { opacity: 1; }
+  .vinfo { display: flex; gap: 10px; margin-top: 10px; }
+  .vtitle { font-weight: 600; line-height: 1.3; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+  .vmeta { color: var(--dim); font-size: 12.5px; margin-top: 3px; }
+  .vmeta a { text-decoration: none; } .vmeta a:hover { color: var(--text); }
+  .avatar { width: 36px; height: 36px; border-radius: 50%; display: grid; place-items: center; font-weight: 700; color: #fff; flex: none; font-size: 15px; }
+  .avatar.sm { width: 26px; height: 26px; font-size: 12px; }
+  .avatar.lg { width: 84px; height: 84px; font-size: 34px; border: 4px solid var(--bg); }
+  .banner { height: 150px; border-radius: 12px; }
+  .chead { display: flex; align-items: flex-end; gap: 16px; margin: -42px 0 24px 24px; flex-wrap: wrap; }
+  .chead .who { flex: 1; min-width: 200px; padding-bottom: 6px; }
+  .chead .who h1 { margin: 0; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; margin-bottom: 8px; }
   .row { display: flex; justify-content: space-between; gap: 10px; align-items: center; flex-wrap: wrap; }
+  .grow { flex: 1; min-width: 0; display: flex; gap: 12px; align-items: center; }
   .title { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .meta { color: var(--dim); font-size: 12px; margin-top: 3px; }
   .badge { font-size: 11px; padding: 2px 8px; border-radius: 99px; background: #2a2f3a; white-space: nowrap; }
-  .running, .announcing { background: #1d3b66; } .done, .seeder { background: #1b4d32; } .failed { background: #5c1f24; }
+  .running, .announcing, .queued { background: #1d3b66; } .done, .seeder { background: #24481d; } .failed { background: #5c1f24; }
   .bar { height: 4px; background: var(--line); border-radius: 2px; margin-top: 8px; overflow: hidden; }
   .bar > div { height: 100%; background: var(--brand); }
-  .error { color: #ff8a8a; font-size: 12px; margin-top: 4px; }
-  .empty { color: var(--dim); padding: 12px 0; }
-  input, select { background: var(--card); color: var(--text); border: 1px solid var(--line); border-radius: 6px; padding: 6px 10px; font: inherit; }
-  button, a.btn { background: #262b36; color: var(--text); border: 1px solid #363d4d; border-radius: 6px; padding: 4px 10px; font: inherit; font-size: 12px; cursor: pointer; text-decoration: none; }
-  button.primary { background: #22498a; border-color: var(--brand); color: #fff; }
+  .error { color: #ff8a8a; font-size: 13px; margin: 6px 0; }
+  .empty { color: var(--dim); padding: 40px 0; text-align: center; }
+  .empty svg { width: 44px; height: 44px; display: block; margin: 0 auto 10px; stroke-width: 1.5; }
+  input, select { background: var(--card); color: var(--text); border: 1px solid var(--line); border-radius: 8px; padding: 8px 12px; font: inherit; outline: none; }
+  input:focus, select:focus { border-color: var(--brand); }
+  label { display: grid; gap: 6px; font-size: 13px; color: var(--dim); }
+  button, a.btn { display: inline-flex; align-items: center; gap: 6px; background: #262b36; color: var(--text); border: 1px solid #363d4d; border-radius: 8px; padding: 6px 12px; font: inherit; font-size: 13px; font-weight: 500; cursor: pointer; text-decoration: none; white-space: nowrap; }
+  button.primary, a.btn.primary { background: var(--brand); border-color: var(--brand); color: var(--brand-ink); font-weight: 600; }
+  button.ghost { background: transparent; border-color: transparent; }
   button:hover:not(:disabled), a.btn:hover { background: #323947; }
+  button.primary:hover:not(:disabled) { background: #b2e06e; }
+  button.ghost:hover:not(:disabled) { background: var(--hover); }
+  button:disabled { opacity: .45; cursor: default; }
+  button svg, a.btn svg { width: 16px; height: 16px; }
+  .sheet { position: fixed; inset: 0; z-index: 50; background: rgba(5, 6, 9, .72); display: none; align-items: center; justify-content: center; padding: 16px; }
+  .sheet.open { display: flex; }
+  .sheet form { width: 100%; max-width: 480px; background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 22px; display: grid; gap: 14px; }
+  .sheet h1 { margin: 0; }
+  .sheet .hint { color: var(--dim); font-size: 12.5px; margin: -6px 0 0; }
+  .check { display: flex; gap: 8px; align-items: center; color: var(--text); }
+  .check input { width: auto; }
+  @media (max-width: 820px) {
+    .menu { display: inline-flex; }
+    .side { transform: translateX(-100%); transition: transform .2s; box-shadow: 0 0 40px rgba(0, 0, 0, .6); }
+    body.nav-open .side { transform: none; }
+    main { margin-left: 0; padding: 20px 16px 40px; }
+    .logo .word, .top .up-label { display: none; }
+    .grid { grid-template-columns: repeat(auto-fill, minmax(min(100%, 220px), 1fr)); }
+  }
   button.primary:hover:not(:disabled) { background: #2d5cb0; }
   button:disabled { opacity: .45; cursor: default; }
   #playerModal { position: fixed; inset: 0; background: rgba(7, 9, 13, .95); z-index: 100; display: none; flex-direction: column; }
@@ -44,25 +110,35 @@ export const page = `<!doctype html>
 </style>
 </head>
 <body>
-<main>
-  <h1><span>PearTube</span><span><a class="btn" href="/manifest.json" target="_blank">Stremio Manifest</a> <a class="btn" href="/v1/playlist.m3u">M3U Playlist</a></span></h1>
-  <div class="facts" id="facts"></div>
-  <form class="row" id="addForm" style="margin-bottom:14px">
-    <input id="uriInput" style="flex:1;min-width:220px" placeholder="Paste 64-hex key or peartube://channel/... or peartube://watch/..." required>
-    <select id="kindSelect"><option value="channel">Channel</option><option value="tracker">Open Tracker</option></select>
-    <input id="aliasInput" style="width:140px" placeholder="Optional name">
-    <button type="submit">Add / Open</button>
+<header class="top">
+  <button class="ghost menu" id="menuBtn" title="Menu"><svg viewBox="0 0 24 24"><path d="M3 6h18M3 12h18M3 18h18"/></svg></button>
+  <a class="logo" href="#/"><span class="mark"><svg viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg></span><span class="word">PearTube</span></a>
+  <div class="search"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg><input id="q" type="search" placeholder="Search videos and channels" autocomplete="off"></div>
+  <button class="primary" id="upBtn"><svg viewBox="0 0 24 24"><path d="M12 16V4M6 10l6-6 6 6M4 20h16"/></svg><span class="up-label">Upload</span></button>
+</header>
+<nav class="side" id="side">
+  <a class="nav" href="#/" data-v="home"><svg viewBox="0 0 24 24"><path d="M3 11 12 4l9 7v9h-6v-6H9v6H3z"/></svg>Home</a>
+  <a class="nav" href="#/following" data-v="following"><svg viewBox="0 0 24 24"><path d="M12 21s-7-4.5-9.5-9A5.5 5.5 0 0 1 12 6a5.5 5.5 0 0 1 9.5 6c-2.5 4.5-9.5 9-9.5 9z"/></svg>Following</a>
+  <a class="nav" href="#/discover" data-v="discover"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="m15.5 8.5-2 5-5 2 2-5z"/></svg>Discover</a>
+  <a class="nav" href="#/uploads" data-v="uploads"><svg viewBox="0 0 24 24"><path d="M4 4h16v16H4zM4 9h16M9 4v5"/></svg>Uploads</a>
+  <a class="nav" href="#/settings" data-v="settings"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>Settings</a>
+  <h3>Channels</h3>
+  <div id="sideChannels"></div>
+  <div class="stats" id="stats"></div>
+</nav>
+<main id="view"></main>
+<div class="sheet" id="upSheet">
+  <form id="upForm">
+    <h1>Upload a video</h1>
+    <p class="hint">Give the relay a direct link to a video file. It downloads it, splits it into pieces and shares it with peers.</p>
+    <label>Video file URL<input id="upUrl" type="url" placeholder="https://example.com/video.mp4" required></label>
+    <label>Title<input id="upTitle" maxlength="300" placeholder="My video" required></label>
+    <label>ID (optional)<input id="upId" placeholder="clip:myvideo or imdb:tt0111161"></label>
+    <label class="check"><input id="upChannel" type="checkbox" checked>Publish to my channel</label>
+    <div class="error" id="upErr"></div>
+    <div class="row"><span></span><span class="row"><button type="button" id="upCancel">Cancel</button><button class="primary" type="submit">Upload</button></span></div>
   </form>
-  <div id="err" class="error"></div>
-  <h2>Channels & Trackers</h2>
-  <div id="sources"></div>
-  <div id="discoveredWrap" style="display:none"><h2>Discovered via Gossip</h2><div id="discovered"></div></div>
-  <h2>Catalog</h2>
-  <div id="entries"></div>
-  <div id="pluginsWrap" style="display:none"><h2>Mirror Plugins</h2><div id="plugins"></div></div>
-  <h2>Acquisitions</h2>
-  <div id="jobs"></div>
-</main>
+</div>
 <div id="playerModal">
   <div class="p-top">
     <div class="row" style="min-width:0;flex:1">
@@ -159,17 +235,233 @@ for (const evName of ['pointerup', 'pointercancel', 'blur']) {
   })
 }
 
-$('addForm').onsubmit = async ev => {
-  ev.preventDefault()
-  $('err').textContent = ''
-  const val = $('uriInput').value.trim()
-  const body = val.startsWith('peartube:') ? { uri: val } : { key: val, kind: $('kindSelect').value, alias: $('aliasInput').value.trim() }
-  const ep = val.startsWith('peartube://watch/') || val.startsWith('peartube:watch/') ? '/v1/open' : '/v1/sources'
-  const r = await fetch(ep, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }).then(x => x.json())
-  if (r.error) $('err').textContent = r.error
-  else { $('uriInput').value = ''; $('aliasInput').value = ''; refresh() }
+// Video-site shell: hash routes (#/, #/following, #/discover, #/uploads, #/settings, #/channel/<key>) over the same /v1 API.
+const data = { st: {}, src: {}, entries: [], jobs: [], plugins: [], ok: false }
+const icon = d => { const s = document.createElementNS('http://www.w3.org/2000/svg', 'svg'); s.setAttribute('viewBox', '0 0 24 24'); s.innerHTML = '<path d="' + d + '"/>'; return s }
+const ICON = { play: 'M8 5v14l11-7z', film: 'M4 4h16v16H4zM8 4v16M16 4v16M4 9h4M4 15h4M16 9h4M16 15h4', heart: 'M12 21s-7-4.5-9.5-9A5.5 5.5 0 0 1 12 6a5.5 5.5 0 0 1 9.5 6c-2.5 4.5-9.5 9-9.5 9z', box: 'M4 4h16v16H4zM4 9h16M9 4v5' }
+const hue = s => { let h = 7; for (const c of String(s)) h = (h * 31 + c.codePointAt(0)) >>> 0; return h % 360 }
+const tint = seed => { const h = hue(seed); return 'background:linear-gradient(135deg,hsl(' + h + ' 55% 34%),hsl(' + ((h + 55) % 360) + ' 60% 16%))' }
+function avatar (name, seed, cls) {
+  const a = el('span', 'avatar' + (cls ? ' ' + cls : ''), (String(name || '?').trim().charAt(0) || '?').toUpperCase())
+  a.style.cssText = tint(seed)
+  return a
+}
+const myKeys = () => new Set([data.st.channel, data.st.tracker, data.st.writer].filter(Boolean))
+function channelName (key) {
+  const s = (data.src.sources || []).find(x => x.key === key)
+  if (s?.alias) return s.alias
+  if (myKeys().has(key) || s?.primary || s?.writable) return 'My channel'
+  return key && key !== 'direct' ? key.slice(0, 8) + '…' : 'Direct link'
+}
+const route = () => { const p = location.hash.replace(/^#[/]?/, '').split('/'); return { view: p[0] || 'home', arg: p[1] || '' } }
+const query = () => $('q').value.trim().toLowerCase()
+const matches = e => { const q = query(); return !q || (e.title || '').toLowerCase().includes(q) || e.id.includes(q) || channelName(e.source).toLowerCase().includes(q) }
+const epLabel = id => { const m = id.match(/:s([0-9]{2})e([0-9]{2,3})$/); return m ? 'S' + m[1] + 'E' + m[2] : '' }
+
+function videoCard (e) {
+  const c = el('div', 'vcard')
+  const th = el('div', 'thumb')
+  th.style.cssText = tint(e.id + e.title)
+  th.append(el('div', 'big', e.title || e.id))
+  const pl = el('span', 'play'); pl.append(icon(ICON.play)); th.append(pl)
+  if (e.local) th.append(el('span', 'tag tl local', 'ON THIS RELAY'))
+  else if (e.cachedBytes) th.append(el('span', 'tag tl', 'CACHED ' + Math.min(100, Math.round(100 * e.cachedBytes / (e.size || 1))) + '%'))
+  th.append(el('span', 'tag br', [epLabel(e.id), size(e.size)].filter(Boolean).join(' · ')))
+  if (e.magnetUrl) { const cp = copyBtn('Copy link', e.magnetUrl); cp.classList.add('copy'); cp.addEventListener('click', ev => ev.stopPropagation()); th.append(cp) }
+  const info = el('div', 'vinfo')
+  const who = channelName(e.source)
+  info.append(avatar(who, e.source, 'sm'))
+  const txt = el('div')
+  txt.style.minWidth = '0'
+  const meta = el('div', 'vmeta')
+  const a = el('a', null, who)
+  a.href = '#/channel/' + e.source
+  a.onclick = ev => ev.stopPropagation()
+  meta.append(a)
+  txt.append(el('div', 'vtitle', e.title || e.id), meta)
+  info.append(txt)
+  c.append(th, info)
+  c.onclick = () => openPlayer(e)
+  return c
+}
+function videoGrid (list, emptyText) {
+  const shown = list.filter(matches)
+  if (!shown.length) {
+    const d = el('div', 'empty')
+    d.append(icon(ICON.film), el('div', null, query() ? 'No videos match "' + $('q').value.trim() + '".' : emptyText))
+    return d
+  }
+  const g = el('div', 'grid')
+  g.append(...shown.map(videoCard))
+  return g
+}
+const sortVideos = list => list.slice().sort((a, b) => (Number(Boolean(b.local)) - Number(Boolean(a.local))) || ((b.cachedBytes || 0) - (a.cachedBytes || 0)) || String(a.title).localeCompare(String(b.title)))
+const post = (url, body, method = 'POST') => fetch(url, { method, headers: { 'content-type': 'application/json' }, body: body ? JSON.stringify(body) : undefined }).then(r => r.json())
+
+function homeView () {
+  const out = [el('h1', null, query() ? 'Search results' : 'Latest videos')]
+  out.push(videoGrid(sortVideos(data.entries), 'No videos yet. Upload one, or follow a channel to see its videos here.'))
+  return out
+}
+function channelRow (s, pubSet) {
+  const c = el('div', 'card row')
+  const g = el('a', 'grow')
+  g.href = '#/channel/' + s.key
+  g.style.textDecoration = 'none'
+  const name = channelName(s.key)
+  const t = el('div')
+  t.style.minWidth = '0'
+  const count = data.entries.filter(e => e.source === s.key).length
+  t.append(el('div', 'title', name), el('div', 'meta', [s.kind === 'tracker' ? 'Shared tracker' : 'Channel', count + ' video' + (count === 1 ? '' : 's'), s.key.slice(0, 12) + '…'].join(' · ')))
+  g.append(avatar(name, s.key), t)
+  if (pubSet.has(s.key)) g.append(el('span', 'badge seeder', 'in directory'))
+  const act = el('span', 'row')
+  act.append(copyBtn('Copy link', 'peartube://' + s.kind + '/' + s.key + (s.alias ? '?name=' + encodeURIComponent(s.alias) : '')))
+  if (!s.primary) {
+    const listed = pubSet.has(s.key)
+    const b = el('button', null, listed ? 'Unlist' : 'List in directory')
+    b.onclick = () => (listed
+      ? fetch('/v1/channel/sources/' + s.key, { method: 'DELETE' })
+      : post('/v1/channel/publish', { type: 'source', sourceKey: s.key, kind: s.kind, title: s.alias || s.key.slice(0, 12), target: 'both' })).then(refresh)
+    act.append(b)
+  }
+  if (!s.primary && !s.writable) {
+    const rm = el('button', null, 'Unfollow')
+    rm.onclick = () => fetch('/v1/sources/' + s.key, { method: 'DELETE' }).then(() => { location.hash = '#/following'; refresh() })
+    act.append(rm)
+  }
+  c.append(g, act)
+  return c
+}
+function followView () {
+  const f = el('form', 'row')
+  f.style.marginBottom = '18px'
+  const uri = el('input'); uri.placeholder = 'Paste a peartube://channel/… link, a watch link, or a 64-character key'; uri.required = true; uri.style.cssText = 'flex:1;min-width:240px'
+  const kind = el('select'); kind.innerHTML = '<option value="channel">Channel</option><option value="tracker">Shared tracker</option>'
+  const alias = el('input'); alias.placeholder = 'Name (optional)'; alias.style.width = '150px'
+  const go = el('button', 'primary', 'Follow'); go.type = 'submit'
+  const err = el('div', 'error')
+  f.append(uri, kind, alias, go)
+  f.onsubmit = async ev => {
+    ev.preventDefault()
+    const val = uri.value.trim()
+    const watch = val.startsWith('peartube://watch/') || val.startsWith('peartube:watch/')
+    const r = await post(watch ? '/v1/open' : '/v1/sources', val.startsWith('peartube:') ? { uri: val } : { key: val, kind: kind.value, alias: alias.value.trim() }).catch(e => ({ error: e.message }))
+    if (r.error) { err.textContent = r.error; return }
+    if (watch && r.entry) openPlayer(r.entry)
+    uri.value = ''; alias.value = ''; refresh()
+  }
+  const pubSet = new Set((data.src.published || []).map(p => p.key))
+  const list = (data.src.sources || []).filter(s => !query() || channelName(s.key).toLowerCase().includes(query()))
+  return [el('h1', null, 'Following'), f, err, ...(list.length ? list.map(s => channelRow(s, pubSet)) : [el('div', 'empty', 'Not following any channels yet.')])]
+}
+function discoverView () {
+  const disc = data.src.discovered || []
+  const out = [el('h1', null, 'Discover channels')]
+  if (!disc.length) { out.push(el('div', 'empty', 'No channels discovered yet. Channels that peers list in their directories show up here.')); return out }
+  out.push(...disc.map(d => {
+    const c = el('div', 'card row')
+    const g = el('div', 'grow')
+    const t = el('div'); t.style.minWidth = '0'
+    t.append(el('div', 'title', d.title || d.key.slice(0, 12)), el('div', 'meta', (d.kind === 'tracker' ? 'Shared tracker' : 'Channel') + ' · ' + d.key.slice(0, 12) + '…'))
+    g.append(avatar(d.title, d.key), t)
+    const join = el('button', 'primary', 'Follow')
+    join.onclick = () => post('/v1/sources', { key: d.key, kind: d.kind, alias: d.title }).then(refresh)
+    c.append(g, join)
+    return c
+  }))
+  return out
+}
+function channelView (key) {
+  const name = channelName(key)
+  const banner = el('div', 'banner'); banner.style.cssText = tint(key + 'banner')
+  const head = el('div', 'chead')
+  const who = el('div', 'who')
+  const vids = data.entries.filter(e => e.source === key)
+  const s = (data.src.sources || []).find(x => x.key === key)
+  who.append(el('h1', null, name), el('div', 'meta', [s?.kind === 'tracker' ? 'Shared tracker' : 'Channel', vids.length + ' video' + (vids.length === 1 ? '' : 's'), key.slice(0, 16) + '…'].join(' · ')))
+  const act = el('span', 'row')
+  act.append(copyBtn('Copy channel link', 'peartube://' + (s?.kind || 'channel') + '/' + key + (s?.alias ? '?name=' + encodeURIComponent(s.alias) : '')))
+  if (s && !s.primary && !s.writable) {
+    const rm = el('button', null, 'Unfollow')
+    rm.onclick = () => fetch('/v1/sources/' + key, { method: 'DELETE' }).then(() => { location.hash = '#/following'; refresh() })
+    act.append(rm)
+  }
+  head.append(avatar(name, key, 'lg'), who, act)
+  return [banner, head, videoGrid(sortVideos(vids), 'This channel has no videos yet.')]
+}
+function uploadsView () {
+  const top = el('div', 'row')
+  const b = el('button', 'primary', 'Upload a video'); b.onclick = openUpload
+  top.append(el('h1', null, 'Uploads'), b)
+  const jobs = (data.jobs || []).slice().sort((a, b) => b.created - a.created)
+  const out = [top]
+  if (!jobs.length) { out.push(el('div', 'empty', 'Nothing uploaded yet.')); return out }
+  out.push(...jobs.map(j => {
+    const c = el('div', 'card')
+    const r = el('div', 'row'); r.append(el('div', 'title', j.title || j.id), el('span', 'badge ' + j.status, j.status))
+    c.append(r, el('div', 'meta', [j.id, j.total ? size(j.bytes || 0) + ' of ' + size(j.total) : (j.size ? size(j.size) : '')].filter(Boolean).join(' · ')))
+    if (j.status === 'running' && j.total) { const bar = el('div', 'bar'); const fill = el('div'); fill.style.width = Math.min(100, 100 * (j.bytes || 0) / j.total) + '%'; bar.append(fill); c.append(bar) }
+    if (j.error && j.status !== 'done') c.append(el('div', 'error', j.error))
+    return c
+  }))
+  return out
+}
+function settingsView () {
+  const st = data.st
+  const rec = st.reciprocity || {}
+  const out = [el('h1', null, 'Settings')]
+  const me = el('div', 'card')
+  me.append(el('div', 'title', 'This relay'), el('div', 'meta', ['peers ' + (st.peers || 0) + (st.lanPeers ? ' (+' + st.lanPeers + ' LAN)' : ''), 'stored ' + size(st.blobBytes || 0), 'cached ' + size(st.cachedBytes || 0), (rec.tier || 'peer') + ' tier'].join(' · ')))
+  const act = el('div', 'row'); act.style.cssText = 'justify-content:flex-start;margin-top:10px'
+  act.append(copyBtn('Copy my channel link', st.channel ? 'peartube://channel/' + st.channel : ''), copyBtn('Copy tracker link', st.tracker ? 'peartube://tracker/' + st.tracker : ''))
+  if ((st.cachedBytes || 0) > 0) { const clr = el('button', null, 'Clear cache'); clr.onclick = () => post('/v1/cache/clear', {}).then(refresh); act.append(clr) }
+  me.append(act)
+  out.push(me, el('h2', null, 'Plugins'))
+  out.push(...(data.plugins.length ? data.plugins.map(p => {
+    const c = el('div', 'card row')
+    const info = el('div'); info.style.minWidth = '0'
+    const summary = p.lastResult ? JSON.stringify(p.lastResult) : (p.description || '')
+    info.append(el('div', 'title', p.name), el('div', 'meta', [p.runs ? p.runs + ' runs' : 'idle', summary].filter(Boolean).join(' · ')))
+    if (p.lastError) info.append(el('div', 'error', p.lastError))
+    const run = el('button', null, 'Run now')
+    run.onclick = () => post('/v1/plugins/' + encodeURIComponent(p.name) + '/run', {}).then(refresh)
+    c.append(info, run)
+    return c
+  }) : [el('div', 'empty', 'No plugins on this node.')]))
+  return out
 }
 
+function renderSide () {
+  const { view, arg } = route()
+  for (const a of document.querySelectorAll('.nav[data-v]')) a.classList.toggle('on', a.dataset.v === view)
+  $('sideChannels').replaceChildren(...(data.src.sources || []).map(s => {
+    const a = el('a', 'nav' + (view === 'channel' && arg === s.key ? ' on' : ''))
+    a.href = '#/channel/' + s.key
+    const name = channelName(s.key)
+    a.append(avatar(name, s.key, 'sm'), el('span', 'name', name))
+    return a
+  }))
+  const st = data.st
+  const links = el('div', 'links')
+  const m = el('a', 'btn', 'Stremio'); m.href = '/manifest.json'; m.target = '_blank'
+  const p = el('a', 'btn', 'M3U'); p.href = '/v1/playlist.m3u'
+  links.append(m, p)
+  const line = (k, v) => { const d = el('div', null, k + ' '); d.append(el('b', null, v)); return d }
+  $('stats').replaceChildren(line('Peers', String(st.peers || 0) + (st.lanPeers ? ' (+' + st.lanPeers + ' LAN)' : '')), line('Down', size(st.downBps || 0) + '/s'), line('Up', size(st.upBps || 0) + '/s'), line('Stored', size(st.blobBytes || 0)), links)
+}
+function render () {
+  if (pressing || player) { refreshQueued = true; return }
+  const { view, arg } = route()
+  renderSide()
+  // Don't wipe a form someone is typing in; the next refresh after they leave it catches up.
+  const f = document.activeElement
+  if (f && $('view').contains(f) && (f.tagName === 'INPUT' || f.tagName === 'SELECT')) return
+  const views = { home: homeView, following: followView, discover: discoverView, uploads: uploadsView, settings: settingsView, channel: () => channelView(arg) }
+  const err = el('div', 'error'); err.id = 'err'
+  if (!data.ok && data.error) err.textContent = data.error
+  $('view').replaceChildren(err, ...(views[view] || homeView)())
+}
 async function refresh () {
   if (pressing || player) { refreshQueued = true; return }
   try {
@@ -180,100 +472,31 @@ async function refresh () {
       fetch('/v1/jobs').then(r => r.json()),
       fetch('/v1/plugins').then(r => r.json()).catch(() => ({ plugins: [] }))
     ])
-    if (pressing || player) { refreshQueued = true; return }
-    const rec = st.reciprocity || {}
-    const sources = src.sources || []
-    const trackerKey = sources.length ? (sources.find(s => s.primary && s.kind === 'tracker')?.key || sources.find(s => s.kind === 'tracker')?.key || '') : (st.tracker || '')
-    const facts = [
-      fact('peers', st.peers + (st.lanPeers ? ' (+' + st.lanPeers + ' LAN)' : '')),
-      fact('stored', size(st.blobBytes)),
-      fact('cached', size(st.cachedBytes || 0)),
-      fact('P2P', '\\u2193 ' + size(st.downBps || 0) + '/s \\u00b7 \\u2191 ' + size(st.upBps || 0) + '/s'),
-      el('span', 'badge ' + (rec.tier || ''), (rec.tier || 'peer') + ' (' + (rec.inflightMax || 128) + ' win)'),
-      copyBtn('Copy Tracker URI', trackerKey ? 'peartube://tracker/' + trackerKey : ''),
-      copyBtn('Copy My Channel URI', st.channel ? 'peartube://channel/' + st.channel : '')
-    ]
-    if ((st.cachedBytes || 0) > 0) {
-      const clr = el('button', null, 'clear cache')
-      clr.onclick = () => fetch('/v1/cache/clear', { method: 'POST', body: '{}' }).then(refresh)
-      facts.push(clr)
-    }
-    $('facts').replaceChildren(...facts)
-    const pubSet = new Set((src.published || []).map(p => p.key))
-    $('sources').replaceChildren(...(src.sources || []).map(s => {
-      const c = el('div', 'card row')
-      const titleWrap = el('span', 'row')
-      titleWrap.append(el('span', 'title', (s.alias || s.key.slice(0, 12) + '\\u2026') + ' (' + s.kind + (s.writable ? ', local' : '') + ')'))
-      if (pubSet.has(s.key)) titleWrap.append(el('span', 'badge seeder', 'in directory'))
-      c.append(titleWrap)
-      const act = el('span', 'row')
-      act.append(copyBtn('Copy URI', 'peartube://' + s.kind + '/' + s.key + (s.alias ? '?name=' + encodeURIComponent(s.alias) : '')))
-      if (!s.primary) {
-        if (pubSet.has(s.key)) {
-          const unpub = el('button', null, 'Unlist')
-          unpub.onclick = () => fetch('/v1/channel/sources/' + s.key, { method: 'DELETE' }).then(refresh)
-          act.append(unpub)
-        } else {
-          const pub = el('button', null, 'List in Directory')
-          pub.onclick = () => fetch('/v1/channel/publish', {
-            method: 'POST',
-            headers: { 'content-type': 'application/json' },
-            body: JSON.stringify({ type: 'source', sourceKey: s.key, kind: s.kind, title: s.alias || s.key.slice(0, 12), target: 'both' })
-          }).then(refresh)
-          act.append(pub)
-        }
-      }
-      if (!s.primary && !s.writable) {
-        const rm = el('button', null, 'Remove')
-        rm.onclick = () => fetch('/v1/sources/' + s.key, { method: 'DELETE' }).then(refresh)
-        act.append(rm)
-      }
-      c.append(act)
-      return c
-    }))
-    const disc = src.discovered || []
-    $('discoveredWrap').style.display = disc.length ? '' : 'none'
-    $('discovered').replaceChildren(...disc.map(d => {
-      const c = el('div', 'card row')
-      const join = el('button', null, '+ Subscribe')
-      join.onclick = () => fetch('/v1/sources', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ key: d.key, kind: d.kind, alias: d.title }) }).then(refresh)
-      c.append(el('span', 'title', d.title + ' (' + d.kind + ' \\u00b7 ' + d.key.slice(0, 10) + '\\u2026)'), join)
-      return c
-    }))
-    const sortedEntries = (ent.results || []).slice().sort((a, b) => (Number(Boolean(b.local)) - Number(Boolean(a.local))) || ((b.cachedBytes || 0) - (a.cachedBytes || 0)))
-    $('entries').replaceChildren(...(sortedEntries.length ? sortedEntries.map(e => {
-      const c = el('div', 'card row')
-      const info = el('div')
-      const locTag = e.local ? 'local' : (e.cachedBytes ? 'cached ' + size(e.cachedBytes) : 'remote')
-      info.append(el('div', 'title', e.title), el('div', 'meta', [e.id, size(e.size), locTag, e.sourceKind + ':' + e.source.slice(0, 8)].join(' \\u00b7 ')))
-      const act = el('span', 'row')
-      const play = el('button', 'primary', 'Stream')
-      play.onclick = () => openPlayer(e)
-      act.append(play, copyBtn('Copy Magnet', e.magnetUrl))
-      c.append(info, act)
-      return c
-    }) : [el('div', 'empty', 'No entries synced yet.')]))
-    const plugs = pl.plugins || []
-    $('pluginsWrap').style.display = plugs.length ? '' : 'none'
-    $('plugins').replaceChildren(...plugs.map(p => {
-      const c = el('div', 'card row')
-      const info = el('div')
-      const summary = p.lastResult ? JSON.stringify(p.lastResult) : (p.description || '')
-      info.append(el('div', 'title', p.name), el('div', 'meta', [p.runs ? p.runs + ' runs' : 'idle', summary].filter(Boolean).join(' \\u00b7 ')))
-      if (p.lastError) info.append(el('div', 'error', p.lastError))
-      const runBtn = el('button', null, 'Run Now')
-      runBtn.onclick = () => fetch('/v1/plugins/' + encodeURIComponent(p.name) + '/run', { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' }).then(refresh)
-      c.append(info, runBtn)
-      return c
-    }))
-    $('jobs').replaceChildren(...((jb.jobs || []).length ? jb.jobs.slice().sort((a, b) => b.created - a.created).map(j => {
-      const c = el('div', 'card')
-      const r = el('div', 'row'); r.append(el('div', 'title', j.title || j.id), el('span', 'badge ' + j.status, j.status))
-      c.append(r, el('div', 'meta', [j.id, j.plugin || '', j.size ? size(j.size) : ''].filter(Boolean).join(' \\u00b7 ')))
-      if (j.error && j.status !== 'done') c.append(el('div', 'error', j.error))
-      return c
-    }) : [el('div', 'empty', 'No acquisitions yet.')]))
-  } catch (err) { $('err').textContent = 'Node unreachable: ' + err.message }
+    Object.assign(data, { st, src, entries: ent.results || [], jobs: jb.jobs || [], plugins: pl.plugins || [], ok: true, error: '' })
+  } catch (err) { Object.assign(data, { ok: false, error: 'Node unreachable: ' + err.message }) }
+  render()
+}
+addEventListener('hashchange', () => { document.body.classList.remove('nav-open'); scrollTo(0, 0); render() })
+$('q').oninput = render
+$('q').onkeydown = ev => { if (ev.key === 'Enter' && !['home', 'channel', 'following'].includes(route().view)) location.hash = '#/' }
+$('menuBtn').onclick = () => document.body.classList.toggle('nav-open')
+
+function openUpload () { $('upErr').textContent = ''; $('upSheet').classList.add('open'); $('upUrl').focus() }
+const closeUpload = () => $('upSheet').classList.remove('open')
+$('upBtn').onclick = openUpload
+$('upCancel').onclick = closeUpload
+$('upSheet').onclick = ev => { if (ev.target === $('upSheet')) closeUpload() }
+$('upForm').onsubmit = async ev => {
+  ev.preventDefault()
+  const title = $('upTitle').value.trim()
+  const slug = title.toLowerCase().replace(/[^a-z0-9]+/g, '').slice(0, 40) || 'video'
+  const id = $('upId').value.trim().toLowerCase() || 'clip:' + slug + Date.now().toString(36)
+  const r = await post('/v1/acquire', { id, title, source: { url: $('upUrl').value.trim() }, channel: $('upChannel').checked }).catch(e => ({ error: e.message }))
+  if (r.error) { $('upErr').textContent = r.error; return }
+  $('upForm').reset(); $('upChannel').checked = true
+  closeUpload()
+  location.hash = '#/uploads'
+  refresh()
 }
 refresh()
 const ev = new EventSource('/v1/events')

@@ -71,7 +71,8 @@ export function createApi (state) {
     const path = url.pathname
     if (state.cast && req.method === 'POST' && path === '/v1/cast/web-register') return state.cast.registerWebReceiver(await body(req))
     if (state.cast && req.method === 'POST' && path === '/v1/cast/web-state') return state.cast.updateWebReceiverState(await body(req))
-    if (state.apiToken && (req.method === 'POST' || req.method === 'DELETE')) {
+    // GET /v1/resolve adds sources and pairs receivers like POST /v1/open, so it needs the token too.
+    if (state.apiToken && (req.method === 'POST' || req.method === 'DELETE' || path === '/v1/resolve')) {
       if (req.headers.authorization !== `Bearer ${state.apiToken}`) {
         throw Object.assign(new Error('Unauthorized'), { status: 401 })
       }

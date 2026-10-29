@@ -634,7 +634,8 @@ export function createHiverelaySeeder ({
       return { skipped: true, reason: node.privateRouting ? 'private_routing_enabled' : 'closed' }
     }
     if (extraRelays) {
-      const added = parseHiverelayConfig(extraRelays, apiKey, false)
+      // Relays named at run time come from the API caller: only an explicit `url=key` gets a key, never the operator's.
+      const added = parseHiverelayConfig(extraRelays, null, false)
       for (const t of added.targets) {
         if (!targets.some(existing => existing.url === t.url)) targets.push(t)
       }

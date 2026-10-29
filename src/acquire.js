@@ -36,7 +36,12 @@ export function createAcquirer (node, file, {
       const req = fn(parsed, { headers }, res => {
         if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location && redirects < 5) {
           res.resume?.()
-          resolve(openSource(new URL(res.headers.location, parsed).href, headers, controller, redirects + 1))
+          const target = new URL(res.headers.location, parsed)
+          // Like fetch: credentials never follow a redirect to another origin.
+          const next = target.origin === parsed.origin
+            ? headers
+            : Object.fromEntries(Object.entries(headers).filter(([k]) => !/^(authorization|cookie|proxy-authorization)$/i.test(k)))
+          resolve(openSource(target.href, next, controller, redirects + 1))
           return
         }
         if (res.statusCode < 200 || res.statusCode >= 300) {
@@ -46,8 +51,10 @@ export function createAcquirer (node, file, {
         }
         resolve(res)
       })
-      controller.onabort = () => req.destroy(new Error('Cancelled'))
-      req.once('close', () => { controller.onabort = null })
+      const abort = () => req.destroy(new Error('Cancelled'))
+      controller.onabort = abort
+      // After a redirect the next request owns onabort; don't clear it from here.
+      req.once('close', () => { if (controller.onabort === abort) controller.onabort = null })
       req.once('error', reject)
       req.end()
     })

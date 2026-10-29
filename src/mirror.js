@@ -16,6 +16,11 @@ import { parseUri } from './index.js'
 import { createHiverelaySeeder } from './hiverelay.js'
 
 const VALID_ID = /^[a-z0-9]+:[a-z0-9]+(:s\d{2}e\d{2,3})?$/
+const CREDENTIAL_HEADER = /^(authorization|cookie|proxy-authorization)$/i
+// Like fetch: credentials never follow a URL to another origin.
+const headersFor = (headers, from, to) => from.origin === to.origin
+  ? headers
+  : Object.fromEntries(Object.entries(headers).filter(([k]) => !CREDENTIAL_HEADER.test(k)))
 const MEDIA_EXT = new Set(['.mp4', '.mkv', '.webm', '.avi', '.mov', '.m4v', '.ts', '.m2ts', '.mpg', '.mpeg', '.ogv', '.ogg', '.flac', '.mp3', '.opus', '.wav', '.aac'])
 
 function fetchJson (url, headers = {}, redirects = 0) {
@@ -25,7 +30,8 @@ function fetchJson (url, headers = {}, redirects = 0) {
     const req = fn(parsed, { headers: { accept: 'application/json', ...headers } }, res => {
       if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location && redirects < 5) {
         res.resume?.()
-        resolveJson(fetchJson(new URL(res.headers.location, parsed).href, headers, redirects + 1))
+        const target = new URL(res.headers.location, parsed)
+        resolveJson(fetchJson(target.href, headersFor(headers, parsed, target), redirects + 1))
         return
       }
       if (res.statusCode < 200 || res.statusCode >= 300) {
@@ -35,6 +41,8 @@ function fetchJson (url, headers = {}, redirects = 0) {
       }
       const chunks = []
       let total = 0
+      // A body cut short, or destroyed at the size cap below, errors here; unheard, it would crash the relay.
+      res.once('error', reject)
       res.on('data', chunk => {
         const buf = typeof chunk === 'string' ? b4a.from(chunk) : chunk
         total += buf.length
@@ -288,7 +296,9 @@ export async function createMirrorHost ({
 
   // 4. Built-in plugin: JSON manifest & remote PearTube relay `/v1/entries` mirror.
   const configuredFeeds = [...feeds]
-  async function mirrorFeedItems (items, headers, ctx) {
+  // feedUrl is set when the items came from a fetched feed: its headers are that feed's credentials, so they go only to
+  // item URLs on the feed's own origin, never to every host the feed lists.
+  async function mirrorFeedItems (items, headers, ctx, feedUrl = null) {
     let enqueued = 0
     let skipped = 0
     const jobs = []
@@ -300,10 +310,12 @@ export async function createMirrorHost ({
       if (await ctx.has({ id, sha256 })) { skipped++; continue }
       const url = item.source?.url || item.url || item.streamUrl
       if (typeof url !== 'string' || !/^https?:\/\//.test(url)) { skipped++; continue }
+      let itemUrl
+      try { itemUrl = new URL(url) } catch { skipped++; continue }
       const job = ctx.enqueue({
         id,
         title: item.title || id,
-        source: { url, headers: { ...headers, ...(item.source?.headers || item.headers || {}) } },
+        source: { url, headers: { ...(feedUrl ? headersFor(headers, new URL(feedUrl), itemUrl) : headers), ...(item.source?.headers || item.headers || {}) } },
         channel: mirrorChannel
       })
       enqueued++
@@ -323,7 +335,7 @@ export async function createMirrorHost ({
       for (const u of targetUrls) {
         const data = await fetchJson(u, payload?.headers || {})
         const list = Array.isArray(data) ? data : (Array.isArray(data?.items) ? data.items : (Array.isArray(data?.results) ? data.results : []))
-        const res = await mirrorFeedItems(list, payload?.headers || {}, ctx)
+        const res = await mirrorFeedItems(list, payload?.headers || {}, ctx, u)
         enqueued += res.enqueued
         skipped += res.skipped
       }

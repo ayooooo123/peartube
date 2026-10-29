@@ -296,7 +296,9 @@ export async function createMirrorHost ({
 
   // 4. Built-in plugin: JSON manifest & remote PearTube relay `/v1/entries` mirror.
   const configuredFeeds = [...feeds]
-  async function mirrorFeedItems (items, headers, ctx) {
+  // feedUrl is set when the items came from a fetched feed: its headers are that feed's credentials, so they go only to
+  // item URLs on the feed's own origin, never to every host the feed lists.
+  async function mirrorFeedItems (items, headers, ctx, feedUrl = null) {
     let enqueued = 0
     let skipped = 0
     const jobs = []
@@ -308,10 +310,12 @@ export async function createMirrorHost ({
       if (await ctx.has({ id, sha256 })) { skipped++; continue }
       const url = item.source?.url || item.url || item.streamUrl
       if (typeof url !== 'string' || !/^https?:\/\//.test(url)) { skipped++; continue }
+      let itemUrl
+      try { itemUrl = new URL(url) } catch { skipped++; continue }
       const job = ctx.enqueue({
         id,
         title: item.title || id,
-        source: { url, headers: { ...headers, ...(item.source?.headers || item.headers || {}) } },
+        source: { url, headers: { ...(feedUrl ? headersFor(headers, new URL(feedUrl), itemUrl) : headers), ...(item.source?.headers || item.headers || {}) } },
         channel: mirrorChannel
       })
       enqueued++
@@ -331,7 +335,7 @@ export async function createMirrorHost ({
       for (const u of targetUrls) {
         const data = await fetchJson(u, payload?.headers || {})
         const list = Array.isArray(data) ? data : (Array.isArray(data?.items) ? data.items : (Array.isArray(data?.results) ? data.results : []))
-        const res = await mirrorFeedItems(list, payload?.headers || {}, ctx)
+        const res = await mirrorFeedItems(list, payload?.headers || {}, ctx, u)
         enqueued += res.enqueued
         skipped += res.skipped
       }

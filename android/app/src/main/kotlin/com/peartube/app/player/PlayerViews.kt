@@ -3,6 +3,7 @@ package com.peartube.app.player
 import android.app.Activity
 import android.app.UiModeManager
 import android.content.res.Configuration
+import android.graphics.Bitmap
 import android.graphics.Color
 import android.graphics.PixelFormat
 import android.os.Build
@@ -12,6 +13,8 @@ import android.os.SystemClock
 import android.util.Log
 import android.view.Display
 import android.view.Gravity
+import android.view.PixelCopy
+import android.view.RoundedCorner
 import android.view.Surface
 import android.view.SurfaceHolder
 import android.view.SurfaceView
@@ -25,14 +28,17 @@ import kotlin.math.roundToInt
 /** The longest surfaceDestroyed waits for the native side to let go of its Surface. */
 private const val RELEASE_WAIT_MS = 1_000L
 
+/** Read-backs of the shown frame are this many pixels square: bars are found to 1/256th. */
+private const val SAMPLE = 256
+
 /**
  * The surfaces the player draws on: video, and subtitles above it. They sit behind the
  * Compose UI, in the activity's content view rather than inside Compose, under the play
  * screen's slot, which the screen leaves clear and draws its controls over. Old views stay
  * attached until the native side proves it has let go of their surfaces, which can outlast
  * the screen; other screens cover them. The video view takes the picture's shape inside the
- * slot (black bars around it); the subtitle view covers the whole slot. Ported from the
- * Dioxus app's MainActivity. UI thread only.
+ * slot (black bars around it), less any bars encoded into the frame ([Letterbox]); the
+ * subtitle view covers the whole slot. Ported from the Dioxus app's MainActivity. UI thread only.
  */
 class PlayerHost(private val activity: Activity) {
     private val handler = Handler(Looper.getMainLooper())
@@ -47,6 +53,14 @@ class PlayerHost(private val activity: Activity) {
     private var closeStarted = 0L
     private var closeReported = false
     private val retirementPoll = Runnable { advance() }
+    private val letterbox = Letterbox()
+    private var crop: Crop? = null
+    private var sample: Bitmap? = null
+    private var samplePixels = IntArray(0)
+    private var reading = false
+    private var readPosition = Long.MIN_VALUE
+    // Bumped whenever the picture changes, so a read-back of the last one is dropped.
+    private var generation = 0
 
     /** Requests fresh views; old ones stay attached until native retirement is proved. */
     fun open() {
@@ -54,6 +68,7 @@ class PlayerHost(private val activity: Activity) {
         wanted = true
         aspect = 0f
         frameRate = 0f
+        forgetPicture()
         beginRetirement()
         advance()
     }
@@ -78,7 +93,45 @@ class PlayerHost(private val activity: Activity) {
     fun fit(aspect: Float) {
         if (kotlin.math.abs(this.aspect - aspect) < 0.0005f) return
         this.aspect = aspect
-        views?.takeUnless { it.closing }?.fit(aspect)
+        forgetPicture()
+        views?.takeUnless { it.closing }?.let {
+            it.crop(null)
+            it.fit(aspect)
+        }
+    }
+
+    /**
+     * Playback reached [positionMs], so a new frame may be on screen: read it back and look for
+     * bars encoded into it. Frames drive this, never a clock; one read-back runs at a time.
+     */
+    fun shown(positionMs: Long) {
+        if (positionMs == readPosition || reading || aspect <= 0f) return
+        val current = views?.takeUnless { it.closing } ?: return
+        readPosition = positionMs
+        val bitmap = sample ?: Bitmap.createBitmap(SAMPLE, SAMPLE, Bitmap.Config.ARGB_8888).also {
+            sample = it
+            samplePixels = IntArray(SAMPLE * SAMPLE)
+        }
+        val asked = generation
+        reading = true
+        reading = current.read(bitmap) { copied ->
+            reading = false
+            if (!copied || asked != generation || destroyed) return@read
+            bitmap.getPixels(samplePixels, 0, SAMPLE, 0, 0, SAMPLE, SAMPLE)
+            val next = letterbox.add(samplePixels, SAMPLE, SAMPLE)
+            if (next != crop) {
+                crop = next
+                views?.takeUnless { it.closing }?.crop(next)
+            }
+        }
+    }
+
+    private fun forgetPicture() {
+        generation++
+        letterbox.reset()
+        crop = null
+        reading = false
+        readPosition = Long.MIN_VALUE
     }
 
     /** Locks HDMI / panel VSYNC onto the stream's exact cadence (e.g. 3840x2160 @ 23.976 Hz) so 30 Hz never strobes 24p film. */
@@ -180,6 +233,7 @@ class PlayerHost(private val activity: Activity) {
         }
         if (views == null && wanted) {
             views = PlayerViews(activity, this, handler).also {
+                it.crop(crop)
                 it.fit(aspect)
                 if (frameRate > 0f) it.setSurfaceFrameRate(frameRate)
                 if (hasFrame) it.place(frame)
@@ -188,21 +242,21 @@ class PlayerHost(private val activity: Activity) {
     }
 }
 
-private class PlayerViews(activity: Activity, host: PlayerHost, handler: Handler) {
+private class PlayerViews(activity: Activity, host: PlayerHost, private val handler: Handler) {
     private val root = FrameLayout(activity)
     private val video = SurfaceView(activity)
     private val videoCallback = SurfaceCallback(host, handler, 1)
     private val subtitleCallback = SurfaceCallback(host, handler, 2)
 
-    // The slot's size, and the picture's width over its height (0: unknown, fill the slot).
+    // The slot's size, the picture's width over its height (0: unknown, fill the slot), and
+    // the part of the frame that is picture rather than encoded bars (null: all of it).
     private var slotWidth = 0
     private var slotHeight = 0
     private var aspect = 0f
+    private var crop: Crop? = null
     private var appliedLeft = Int.MIN_VALUE
     private var appliedTop = Int.MIN_VALUE
-    private var appliedVideoW = Int.MIN_VALUE
-    private var appliedVideoH = Int.MIN_VALUE
-    private var appliedVideoGravity = Int.MIN_VALUE
+    private val appliedVideo = IntArray(4) { Int.MIN_VALUE }
     var closing = false
         private set
 
@@ -217,6 +271,11 @@ private class PlayerViews(activity: Activity, host: PlayerHost, handler: Handler
         root.addView(video, FrameLayout.LayoutParams(fill))
         root.addView(subtitles, fill)
         root.keepScreenOn = true
+        // Rotation and fullscreen move the rounded corners and the camera hole the picture avoids.
+        root.setOnApplyWindowInsetsListener { _, insets ->
+            layoutVideo()
+            insets
+        }
         // Invisible views get no surface: none exists until the screen reports its slot.
         root.visibility = View.INVISIBLE
         activity.findViewById<ViewGroup>(android.R.id.content).addView(root, 0, FrameLayout.LayoutParams(0, 0))
@@ -244,30 +303,75 @@ private class PlayerViews(activity: Activity, host: PlayerHost, handler: Handler
         layoutVideo()
     }
 
+    fun crop(crop: Crop?) {
+        if (closing || this.crop == crop) return
+        this.crop = crop
+        layoutVideo()
+    }
+
     fun setSurfaceFrameRate(fps: Float) {
         if (closing) return
         videoCallback.setDesiredFrameRate(fps)
     }
 
-    // The largest rect of the picture's shape inside the slot, centred.
-    // Resizing the view keeps its surface; only surfaceChanged follows.
+    /** Copies the video surface's latest frame, whatever the view's size, scaled into [into]. */
+    fun read(into: Bitmap, done: (Boolean) -> Unit): Boolean {
+        if (closing || !video.holder.surface.isValid) return false
+        return runCatching {
+            PixelCopy.request(video, into, { done(it == PixelCopy.SUCCESS) }, handler)
+        }.isSuccess
+    }
+
+    // The picture, less its encoded bars, as large as the slot allows, with every pixel of it on
+    // the screen: clear of the rounded corners and the camera hole ([visibleFit]). The view holds
+    // the whole frame at that scale, so the encoded bars fall around it, off the screen where the
+    // picture spans it. Resizing the view keeps its surface; only surfaceChanged follows.
     private fun layoutVideo() {
         val (w, h) = slotWidth to slotHeight
-        val (targetW, targetH, gravity) = when {
-            aspect <= 0f || w <= 0 || h <= 0 ->
-                Triple(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT, Gravity.NO_GRAVITY)
-            w > h * aspect -> Triple(Math.round(h * aspect), h, Gravity.CENTER)
-            else -> Triple(w, Math.round(w / aspect), Gravity.CENTER)
-        }
-        if (targetW == appliedVideoW && targetH == appliedVideoH && gravity == appliedVideoGravity) return
-        appliedVideoW = targetW
-        appliedVideoH = targetH
-        appliedVideoGravity = gravity
-        video.layoutParams = if (gravity == Gravity.NO_GRAVITY) {
-            FrameLayout.LayoutParams(targetW, targetH)
+        val next = if (aspect <= 0f || w <= 0 || h <= 0) {
+            intArrayOf(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT, 0, 0)
         } else {
-            FrameLayout.LayoutParams(targetW, targetH, gravity)
+            val c = crop ?: FULL_FRAME
+            val (corners, holes) = screenEdges()
+            val picture = visibleFit(w.toFloat(), h.toFloat(), aspect * c.width / c.height, corners, holes)
+            val frameW = picture.width / c.width
+            val frameH = picture.height / c.height
+            intArrayOf(
+                frameW.roundToInt(),
+                frameH.roundToInt(),
+                (picture.left - c.left * frameW).roundToInt(),
+                (picture.top - c.top * frameH).roundToInt(),
+            )
         }
+        if (next.contentEquals(appliedVideo)) return
+        next.copyInto(appliedVideo)
+        video.layoutParams = FrameLayout.LayoutParams(next[0], next[1], Gravity.TOP or Gravity.LEFT).apply {
+            leftMargin = next[2]
+            topMargin = next[3]
+        }
+    }
+
+    /** The window's rounded corners and camera holes, in the slot's pixels. */
+    private fun screenEdges(): Pair<List<Corner>, List<Box>> {
+        val insets = root.rootWindowInsets ?: return emptyList<Corner>() to emptyList()
+        val origin = IntArray(2)
+        (root.parent as? View)?.getLocationInWindow(origin)
+        val x = (origin[0] + appliedLeft).toFloat()
+        val y = (origin[1] + appliedTop).toFloat()
+        val corners = if (Build.VERSION.SDK_INT < 31) emptyList() else listOf(
+            RoundedCorner.POSITION_TOP_LEFT to (-1 to -1),
+            RoundedCorner.POSITION_TOP_RIGHT to (1 to -1),
+            RoundedCorner.POSITION_BOTTOM_RIGHT to (1 to 1),
+            RoundedCorner.POSITION_BOTTOM_LEFT to (-1 to 1),
+        ).mapNotNull { (position, way) ->
+            insets.getRoundedCorner(position)?.takeIf { it.radius > 0 }?.let {
+                Corner(it.center.x - x, it.center.y - y, it.radius.toFloat(), way.first, way.second)
+            }
+        }
+        val holes = insets.displayCutout?.boundingRects.orEmpty().filter { !it.isEmpty }.map {
+            Box(it.left - x, it.top - y, it.right - x, it.bottom - y)
+        }
+        return corners to holes
     }
 
     fun beginRetirement() {
@@ -295,6 +399,8 @@ private class PlayerViews(activity: Activity, host: PlayerHost, handler: Handler
         (root.parent as? ViewGroup)?.removeView(root)
     }
 }
+
+private val FULL_FRAME = Crop(0f, 0f, 1f, 1f)
 
 private class SurfaceCallback(
     private val host: PlayerHost,

@@ -612,12 +612,9 @@ private fun DumbTvReceiverScreen(activity: Activity, worker: ReceiverWorker, hos
                 val snap = runCatching { PlayerState.parse(NativePlayer.state(h)) }.getOrNull()
                 if (snap != null) {
                     latestHolder.snap = snap
-                    val w = snap.videoWidth
-                    val ht = snap.videoHeight
-                    if (w != null && ht != null && w > 0 && ht > 0) {
-                        host.fit(w.toFloat() / ht.toFloat())
-                    }
+                    snap.displayAspect?.let { host.fit(it) }
                     snap.videoFps?.let { host.matchFrameRate(it) }
+                    host.shown(snap.positionMs)
                     // Keep AndroidComposeView dead-still while the HUD is tucked away unless playback status visibly shifted.
                     val visibleChange = uiOpen ||
                         snap.playing != state.playing ||

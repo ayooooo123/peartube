@@ -65,7 +65,18 @@ data class PlayerState(
     val videoFps: Float? = null,
     val videoDecoder: String? = null,
     val droppedFrames: Long = 0,
+    /** One pixel's width over its height when not square (anamorphic video). */
+    val videoPixelAspect: Pair<Int, Int>? = null,
 ) {
+    /** The picture's width over its height as shown: the coded size stretched by the pixel's shape. */
+    val displayAspect: Float?
+        get() {
+            val w = videoWidth?.takeIf { it > 0 } ?: return null
+            val h = videoHeight?.takeIf { it > 0 } ?: return null
+            val (across, down) = videoPixelAspect ?: (1 to 1)
+            return w.toFloat() * across / (h.toFloat() * down)
+        }
+
     companion object {
         fun parse(text: String): PlayerState {
             val json = JSONObject(text)
@@ -90,6 +101,7 @@ data class PlayerState(
                 videoFps = if (json.isNull("videoFps")) null else json.optDouble("videoFps").toFloat().takeIf { it > 0f },
                 videoDecoder = json.optText("videoDecoder"),
                 droppedFrames = json.optLong("droppedFrames", 0L),
+                videoPixelAspect = json.optJSONArray("videoPixelAspect")?.let { it.getInt(0) to it.getInt(1) },
             )
         }
     }

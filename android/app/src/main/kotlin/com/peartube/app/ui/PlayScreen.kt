@@ -176,17 +176,12 @@ fun PlayScreen(model: AppModel, host: PlayerHost, entry: Entry, startPositionMs:
     LaunchedEffect(handle) {
         val h = handle
         if (h == 0L) return@LaunchedEffect
-        var shape: Pair<Int, Int>? = null
         var ticks = 0
         while (true) {
             val st = PlayerState.parse(NativePlayer.state(h))
-            val w = st.videoWidth
-            val ht = st.videoHeight
-            if (w != null && ht != null && ht > 0 && (w to ht) != shape) {
-                shape = w to ht
-                host.fit(w.toFloat() / ht)
-            }
+            st.displayAspect?.let { host.fit(it) }
             st.videoFps?.let { host.matchFrameRate(it) }
+            host.shown(st.positionMs)
             state = st
             if (resumePending && st.durationMs != null) {
                 resumePending = false

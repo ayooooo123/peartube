@@ -141,6 +141,7 @@ fn state_json(st: &State) -> String {
         "subtitle": st.subtitle,
         "videoWidth": st.video_size.map(|(w, _)| w),
         "videoHeight": st.video_size.map(|(_, h)| h),
+        "videoPixelAspect": st.video_pixel_aspect.map(|(h, v)| [h, v]),
         "videoFps": st.video_fps,
         "videoDecoder": st.video_decoder,
         "droppedFrames": st.dropped_frames,

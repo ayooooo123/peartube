@@ -159,6 +159,10 @@ function readAtSync (offset, dstPtr, len) {
   return -1
 }
 
+// SRI hash of web/assets/peartube_web.wasm; regenerate (openssl dgst -sha384 -binary <wasm> | openssl base64 -A)
+// and update this constant whenever `sh web/build.sh` produces a new binary.
+const WASM_SRI = 'sha384-CjCopec5iYvL1ueeJ4LVGbAjkZZRd6Ic4D7n0xnvRYFwKsmFwKvxxvHBsI+JnJfg'
+
 function ensureWasm (wasmUrl) {
   if (wasm) return Promise.resolve(wasm)
   if (wasmReady) return wasmReady
@@ -172,11 +176,11 @@ function ensureWasm (wasmUrl) {
     let inst
     if (WebAssembly.instantiateStreaming) {
       try {
-        inst = (await WebAssembly.instantiateStreaming(fetch(wasmUrl), imports)).instance
+        inst = (await WebAssembly.instantiateStreaming(fetch(wasmUrl, { integrity: WASM_SRI }), imports)).instance
       } catch {}
     }
     if (!inst) {
-      const bytes = await fetch(wasmUrl).then(r => r.arrayBuffer())
+      const bytes = await fetch(wasmUrl, { integrity: WASM_SRI }).then(r => r.arrayBuffer())
       inst = (await WebAssembly.instantiate(bytes, imports)).instance
     }
     wasm = inst.exports

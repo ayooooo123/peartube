@@ -9,7 +9,7 @@
 import { createReadStream, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, statSync, statfsSync, writeFileSync } from 'node:fs'
 import { request as httpRequest } from 'node:http'
 import { request as httpsRequest } from 'node:https'
-import { basename, extname, join, resolve } from 'node:path'
+import { basename, extname, join, resolve, sep } from 'node:path'
 import { createHash } from 'node:crypto'
 import b4a from 'b4a'
 import { parseUri } from './index.js'
@@ -278,7 +278,13 @@ export async function createMirrorHost ({
     name: 'watch-dir',
     description: 'Ingests media files dropped into a local folder (PEARTUBE_WATCH_DIR) once, tracking fingerprints in mirror-watch.json',
     async run (payload, ctx) {
-      return scanFolder(payload?.dir || watchDir, ctx)
+      // A run may narrow the scan to a folder inside PEARTUBE_WATCH_DIR, never widen it: whatever it ingests is published.
+      const root = watchDir ? resolve(watchDir) : null
+      const dir = payload?.dir ? resolve(String(payload.dir)) : root
+      if (dir && (!root || (dir !== root && !dir.startsWith(root + sep)))) {
+        throw Object.assign(new Error('dir must be inside PEARTUBE_WATCH_DIR'), { status: 403 })
+      }
+      return scanFolder(dir, ctx)
     },
     async poll (ctx) {
       if (watchDir) return scanFolder(watchDir, ctx)

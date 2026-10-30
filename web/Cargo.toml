@@ -19,8 +19,8 @@ oxideav-pixfmt = "*"
 # bitstream, so the browser muxes display times instead of decode times.
 oxideav-h264 = "*"
 oxideav-h265 = "*"
-codecs = { git = "https://github.com/ayooooo123/peartube-media", rev = "664fa93244c2ad94541757b351c8f7f8b2d2a20d" }
-audio-trim = { git = "https://github.com/ayooooo123/peartube-media", rev = "664fa93244c2ad94541757b351c8f7f8b2d2a20d" }
+codecs = { git = "https://github.com/ayooooo123/peartube-media", rev = "7b5a36f1f67d92e80b3c1f922c11727a15975e90" }
+audio-trim = { git = "https://github.com/ayooooo123/peartube-media", rev = "7b5a36f1f67d92e80b3c1f922c11727a15975e90" }
 
 [profile.release]
 lto = "fat"
@@ -35,7 +35,7 @@ oxideav-aac = { git = "https://github.com/ayooooo123/oxideav-aac", rev = "a8f4f5
 oxideav-ac3 = { git = "https://github.com/ayooooo123/oxideav-ac3", rev = "65384d52a21eddd59ab72409278f497f045f9a7f" }
 oxideav-adpcm = { git = "https://github.com/ayooooo123/oxideav-adpcm", rev = "9b406df6912068e06743cd04f8c2758ebf8c97f1" }
 oxideav-ass = { git = "https://github.com/OxideAV/oxideav-ass", rev = "e89607612ef19285c60b84f51ce5d34c72a493b1" }
-oxideav-av1 = { git = "https://github.com/ayooooo123/oxideav-av1", rev = "cab66b04918136a7533019122da1677c7b2a42b3" }
+oxideav-av1 = { git = "https://github.com/ayooooo123/oxideav-av1", rev = "a9dd1b194ec61dd05997f57de0bfb2188008d218" }
 oxideav-avi = { git = "https://github.com/ayooooo123/oxideav-avi", rev = "a574dbbddf34a0a7c153bfe0e0ad6415f0fd9933" }
 oxideav-basic = { git = "https://github.com/ayooooo123/oxideav-basic", rev = "609c78b793f7d303e21cff5d60e0fb98313ea288" }
 oxideav-cinepak = { git = "https://github.com/ayooooo123/oxideav-cinepak", rev = "22c2931117975f87facb30bf0981cfe71b773c52" }
@@ -84,6 +84,6 @@ oxideav-vc2 = { git = "https://github.com/ayooooo123/oxideav-vc2", rev = "364ebd
 oxideav-vorbis = { git = "https://github.com/ayooooo123/oxideav-vorbis", rev = "01fa38348842cb32613558ae71d39aa3fa2b4525" }
 oxideav-vp6 = { git = "https://github.com/ayooooo123/oxideav-vp6", rev = "4a2ff51bc5e139b1833f3bf08dd1f167e6225c29" }
 oxideav-vp8 = { git = "https://github.com/ayooooo123/oxideav-vp8", rev = "5aad171851320a741981f3d331c1e3cfdb48c044" }
-oxideav-vp9 = { git = "https://github.com/ayooooo123/oxideav-vp9", rev = "35a7c43234e04c2d8d12e1cd6a2fda41be5e411e" }
+oxideav-vp9 = { git = "https://github.com/ayooooo123/oxideav-vp9", rev = "2737c8be4b56381075861f746968a08d05902ee9" }
 oxideav-wma = { git = "https://github.com/OxideAV/oxideav-wma", rev = "ab1eeb2acb51388d5da21e735723ac05bd7226fe" }
 # END pin-oxideav

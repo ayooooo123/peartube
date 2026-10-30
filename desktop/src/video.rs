@@ -1,6 +1,6 @@
 //! The player's picture: a safe macOS window slot under GPUI's view, backed by
-//! `player::AppleWindowSlot` (AVSampleBufferDisplayLayer, AVPlayerLayer, and
-//! subtitle layer). While a video plays the window is transparent, and the play
+//! `player::AppleWindowSlot` (an AVSampleBufferDisplayLayer and the subtitle
+//! layer). While a video plays the window is transparent, and the play
 //! screen paints nothing over its video slot, so the picture shows through and
 //! the controls draw over it.
 

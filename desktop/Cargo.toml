@@ -27,8 +27,8 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 # The video player: peartube-media's engine, OxideAV codecs and the
 # platform video decoders. See [patch.crates-io] below.
-player = { git = "https://github.com/ayooooo123/peartube-media", rev = "b4119b9acf64ba6c7e137a0858e91fc45de81c4d" }
-codecs = { git = "https://github.com/ayooooo123/peartube-media", rev = "b4119b9acf64ba6c7e137a0858e91fc45de81c4d" }
+player = { git = "https://github.com/ayooooo123/peartube-media", rev = "bf257fe4eb0098e81271fe03da99c3e31500d1b5" }
+codecs = { git = "https://github.com/ayooooo123/peartube-media", rev = "bf257fe4eb0098e81271fe03da99c3e31500d1b5" }
 oxideav-core = "*"
 
 [dev-dependencies]
@@ -55,7 +55,7 @@ oxideav-aac = { git = "https://github.com/ayooooo123/oxideav-aac", rev = "a8f4f5
 oxideav-ac3 = { git = "https://github.com/ayooooo123/oxideav-ac3", rev = "65384d52a21eddd59ab72409278f497f045f9a7f" }
 oxideav-adpcm = { git = "https://github.com/ayooooo123/oxideav-adpcm", rev = "9b406df6912068e06743cd04f8c2758ebf8c97f1" }
 oxideav-ass = { git = "https://github.com/OxideAV/oxideav-ass", rev = "e89607612ef19285c60b84f51ce5d34c72a493b1" }
-oxideav-av1 = { git = "https://github.com/ayooooo123/oxideav-av1", rev = "588800ab43ab36da18e25c2e83f44ef2988fd41a" }
+oxideav-av1 = { git = "https://github.com/ayooooo123/oxideav-av1", rev = "1452c435f39fced0d5fe97037cb533fcdfbaef36" }
 oxideav-avi = { git = "https://github.com/ayooooo123/oxideav-avi", rev = "a574dbbddf34a0a7c153bfe0e0ad6415f0fd9933" }
 oxideav-basic = { git = "https://github.com/ayooooo123/oxideav-basic", rev = "609c78b793f7d303e21cff5d60e0fb98313ea288" }
 oxideav-cinepak = { git = "https://github.com/ayooooo123/oxideav-cinepak", rev = "22c2931117975f87facb30bf0981cfe71b773c52" }

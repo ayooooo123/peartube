@@ -225,8 +225,8 @@ When an AI coding/ops agent (Codex CLI, Claude Code, OpenCode, etc.) installs `p
    ```
 
 4. **Verify and report.** Poll `curl -fsS http://127.0.0.1:8174/v1/status` until `tracker` and
-   `channel` are 64-character hex keys, and confirm `curl -fsSI http://127.0.0.1:8174/manifest.json`
-   returns `200 OK`. Return the Web UI (`http://<host>:8174/`), Smart TV page (`/tv`), Stremio
+   `channel` are 64-character hex keys, and confirm `curl -fsS -o /dev/null -w '%{http_code}\n' http://127.0.0.1:8174/manifest.json`
+   prints `200` (a GET: the relay answers `HEAD` only on blob routes). Return the Web UI (`http://<host>:8174/`), Smart TV page (`/tv`), Stremio
    addon (`/manifest.json`), M3U playlist (`/v1/playlist.m3u`), public channel URI
    (`peartube://channel/<status.channel>`), tracker key, and where `PEARTUBE_API_TOKEN` is stored.
 

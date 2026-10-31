@@ -4,6 +4,7 @@ import { join } from 'node:path'
 import b4a from 'b4a'
 import { page } from './ui.js'
 import { receiverPage } from './cast-ui.js'
+import { videoSize, resolutionLabel } from './resolution.js'
 
 const MAX_BODY = 64 * 1024
 // Loopback, RFC 1918, CGNAT/Tailscale (100.64/10), link-local, and IPv6 ULA/link-local, plain or IPv4-mapped.
@@ -40,16 +41,52 @@ function stremioToPearId (raw) {
   return clean.toLowerCase()
 }
 
+// Catalog items must be ids another addon (Cinemeta) can describe: this addon serves no `meta`, so a `clip:` tile
+// would not open. A series is named after its show, not the first episode found.
 function pearToStremioMeta (entry) {
   const ep = entry.id.match(/^imdb:(tt\d+):s\d{2}e\d{2,3}$/)
-  if (ep) return { id: ep[1], type: 'series', name: entry.title }
+  if (ep) return { id: ep[1], type: 'series', name: entry.title.replace(/\s+S\d{2}E\d{2,3}$/i, '') }
   const mv = entry.id.match(/^imdb:(tt\d+)$/)
-  return { id: mv ? mv[1] : entry.id, type: 'movie', name: entry.title }
+  return mv ? { id: mv[1], type: 'movie', name: entry.title } : null
+}
+
+// Bytes start..end of a stream, through the node's own blob server. Only a 206 is accepted: a server that ignores
+// the range would send the whole video.
+function readStream (port, search, start, end) {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => req.destroy(new Error('Stream read timed out')), 4000)
+    const fail = err => { clearTimeout(timer); reject(err) }
+    const req = httpRequest({ host: '127.0.0.1', port, path: '/' + search, headers: { range: `bytes=${start}-${end}` } }, res => {
+      if (res.statusCode !== 206) { res.destroy(); fail(new Error(`Stream read returned ${res.statusCode}`)); return }
+      const chunks = []
+      res.on('data', chunk => chunks.push(chunk))
+      res.once('end', () => { clearTimeout(timer); resolve(b4a.concat(chunks)) })
+      res.once('error', fail)
+    })
+    req.once('error', fail)
+    req.end()
+  })
 }
 
 // Single HTTP surface for relays AND local client daemons: /v1 API, SSE events, Stremio v3 addon, and M3U playlist.
 export function createApi (state) {
   const sse = new Set()
+  // Resolution labels by stream, read once from each file's header. A file that gave none is tried again after
+  // 10 minutes: its header may not have been reachable yet.
+  const resolutions = new Map()
+  function resolutionOf (entry) {
+    const port = state.node?.blobServer?.port
+    if (!port) return null
+    const search = new URL(entry.streamUrl).search
+    const known = resolutions.get(search)
+    if (known && (known.label !== null || Date.now() - known.at < 600000)) return known.promise
+    const record = { at: Date.now(), label: undefined }
+    record.promise = videoSize((start, end) => readStream(port, search, start, end))
+      .then(size => size && resolutionLabel(size), () => null)
+      .then(label => { record.label = label; return label })
+    resolutions.set(search, record)
+    return record.promise
+  }
 
   async function body (req) {
     let size = 0
@@ -235,20 +272,35 @@ export function createApi (state) {
       const seen = new Map()
       for (const e of entries) {
         const meta = pearToStremioMeta(e)
-        if (meta.type === catMatch[1] && !seen.has(meta.id)) seen.set(meta.id, meta)
+        if (meta?.type === catMatch[1] && !seen.has(meta.id)) seen.set(meta.id, meta)
       }
+      // Stremio requires a poster on every catalog item; /v1/poster redirects to Cinemeta's.
+      const host = req.headers.host
+      if (state.posterUrl && host) for (const meta of seen.values()) meta.poster = `http://${host}/v1/poster/${meta.id}`
       return { metas: [...seen.values()] }
     }
     const streamMatch = req.method === 'GET' && path.match(/^\/stream\/[^/]+\/(.+)\.json$/)
     if (streamMatch) {
       const entries = node ? await node.search(stremioToPearId(streamMatch[1])) : []
+      // Clients rank by resolution (MediaStorm puts an unknown one below every 480p source); release names say it.
+      const resolutions = await Promise.all(entries.map(resolutionOf))
+      // Streams go through /v1/blob on the address the client reached the add-on at. Clients that admit private
+      // addresses only for their configured add-on (MediaStorm refuses the blob server's own port) can then play them.
+      const origin = req.headers.host && node?.blobServer ? `http://${req.headers.host}/v1/blob` : null
       return {
-        streams: entries.map(e => ({
-          name: e.local ? 'PearTube (Local)' : `PearTube (${e.sourceKind})`,
-          title: `${e.title}\n${(e.size / 1048576).toFixed(1)} MB · ${e.source.slice(0, 8)}…`,
-          url: e.streamUrl,
-          behaviorHints: { bingeGroup: `peartube-${e.source}` }
-        }))
+        streams: entries.map((e, i) => {
+          // Release-name matchers read the episode from the title, as they do from other add-ons' release names.
+          const ep = e.id.match(/:(s\d{2}e\d{2,3})$/)
+          const label = ep && !/\bS\d{2}E\d{2,3}\b/i.test(e.title) ? `${e.title} ${ep[1].toUpperCase()}` : e.title
+          const name = e.local ? 'PearTube (Local)' : `PearTube (${e.sourceKind})`
+          return {
+            name: resolutions[i] ? `${name}\n${resolutions[i]}` : name,
+            title: `${label}\n${(e.size / 1048576).toFixed(1)} MB · ${e.source.slice(0, 8)}…`,
+            url: origin ? origin + new URL(e.streamUrl).search : e.streamUrl,
+            // Plain http and mostly MKV: Stremio must route it through its streaming server rather than a web <video>.
+            behaviorHints: { bingeGroup: `peartube-${e.source}`, notWebReady: true, videoSize: e.size }
+          }
+        })
       }
     }
     return undefined

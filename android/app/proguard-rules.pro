@@ -1,5 +1,5 @@
-# bare-kit's JNI looks up these classes, their fields and the readable()/writable()
-# callbacks by name.
+# bare-kit-kotlin's JNI bridge looks up Native, BareKitException$Failed and the
+# Worklet.onExit()/Ipc.onPoll() callbacks by name.
 -keep class to.holepunch.bare.kit.** { *; }
 
 # libpeartube.so binds its functions to these names.

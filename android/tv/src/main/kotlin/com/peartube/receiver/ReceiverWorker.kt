@@ -2,23 +2,25 @@ package com.peartube.receiver
 
 import android.content.Context
 import android.content.Intent
-import android.os.Handler
-import android.os.HandlerThread
 import android.os.PowerManager
 import android.os.Environment
 import android.os.StatFs
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import org.json.JSONObject
-import to.holepunch.bare.kit.IPC
+import to.holepunch.bare.kit.BareKitException
+import to.holepunch.bare.kit.Ipc
 import to.holepunch.bare.kit.Worklet
 import java.io.ByteArrayOutputStream
 import java.io.File
-import java.nio.ByteBuffer
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicLong
 
@@ -87,7 +89,6 @@ data class TvCommand(
 }
 
 class ReceiverWorker(private val appContext: Context) {
-    private val handler = Handler(HandlerThread("peartube-tv-worklet").apply { start() }.looper)
     private val castDir = File(appContext.noBackupFilesDir, "cast").path
     private val pending = ConcurrentHashMap<Long, CompletableDeferred<Any?>>()
     private val nextId = AtomicLong(1)
@@ -102,29 +103,24 @@ class ReceiverWorker(private val appContext: Context) {
     @Volatile var lastHandledSeq: Long = 0L
     private val startLock = Mutex()
     private var activePeerDir: String = ""
-    private var worklet: Worklet? = null
-    private var ipc: IPC? = null
-    private val outgoing = ArrayDeque<ByteBuffer>()
-    private val incoming = ByteArrayOutputStream()
+    // Guards failure and the registration of replies (see Worker.kt).
+    private val lock = Any()
     private var failure: String? = null
+    private var worklet: Worklet? = null
+    private var ipc: Ipc? = null
 
     init {
-        handler.post {
-            try {
-                val assets = File(appContext.filesDir, "bare-assets").apply { mkdirs() }
-                val bundle = appContext.assets.open("worker.bundle").use { it.readBytes() }
-                val source = ByteBuffer.allocateDirect(bundle.size)
-                source.put(bundle)
-                source.flip()
-                val w = Worklet(Worklet.Options().assets(assets.path))
-                w.start("/worker.bundle", source, null)
-                val pipe = IPC(w)
-                worklet = w
-                ipc = pipe
-                pipe.readable { read(pipe) }
-            } catch (e: Throwable) {
-                fail("Receiver engine failed to start: ${e.message ?: e}")
-            }
+        try {
+            val bundle = appContext.assets.open("worker.bundle").use { it.readBytes() }
+            val w = Worklet(appContext)
+            // The ipc exists before the worker runs, so nothing it writes at start is missed.
+            val pipe = Ipc(w)
+            w.start("/worker.bundle", bundle)
+            worklet = w
+            ipc = pipe
+            CoroutineScope(SupervisorJob() + Dispatchers.Default).launch { read(pipe) }
+        } catch (e: Throwable) {
+            fail("Receiver engine failed to start: ${e.message ?: e}")
         }
     }
 
@@ -176,56 +172,26 @@ class ReceiverWorker(private val appContext: Context) {
         val id = nextId.getAndIncrement()
         val reply = CompletableDeferred<Any?>()
         val line = JSONObject().put("id", id).put("method", method).put("params", params).toString() + "\n"
-        handler.post {
-            val failed = failure
-            if (failed != null) reply.completeExceptionally(IllegalStateException(failed))
-            else {
-                pending[id] = reply
-                send(line.toByteArray())
-            }
+        synchronized(lock) {
+            failure?.let { throw IllegalStateException(it) }
+            pending[id] = reply
         }
         try {
+            val pipe = ipc ?: throw IllegalStateException(failure ?: "Receiver engine failed to start")
+            try {
+                pipe.write(line.toByteArray())
+            } catch (e: BareKitException.Closed) {
+                throw IllegalStateException(failure ?: "Receiver engine stopped")
+            }
             return reply.await()
         } finally {
             pending.remove(id)
         }
     }
 
-    private fun send(bytes: ByteArray) {
-        if (failure != null) return
-        val buffer = ByteBuffer.allocateDirect(bytes.size)
-        buffer.put(bytes)
-        buffer.flip()
-        outgoing.addLast(buffer)
-        if (outgoing.size == 1) flush()
-    }
-
-    private fun flush() {
-        val pipe = ipc ?: return
-        while (outgoing.isNotEmpty()) {
-            val buffer = outgoing.first()
-            val written = pipe.write(buffer)
-            if (written < buffer.limit()) {
-                buffer.position(written)
-                outgoing[0] = buffer.slice()
-                pipe.writable { flush() }
-                return
-            }
-            outgoing.removeFirst()
-        }
-        pipe.writable(null)
-    }
-
-    private fun read(pipe: IPC) {
-        while (true) {
-            val data = pipe.read() ?: return
-            if (data.limit() == 0) {
-                pipe.readable(null)
-                fail("Receiver engine stopped")
-                return
-            }
-            val bytes = ByteArray(data.remaining())
-            data.get(bytes)
+    private suspend fun read(pipe: Ipc) {
+        val incoming = ByteArrayOutputStream()
+        pipe.data.collect { bytes ->
             var start = 0
             for (i in bytes.indices) {
                 if (bytes[i] == '\n'.code.toByte()) {
@@ -237,6 +203,7 @@ class ReceiverWorker(private val appContext: Context) {
             }
             incoming.write(bytes, start, bytes.size - start)
         }
+        fail("Receiver engine stopped")
     }
 
     private fun dispatch(line: String) {
@@ -278,8 +245,10 @@ class ReceiverWorker(private val appContext: Context) {
     }
 
     private fun fail(message: String) {
-        if (failure != null) return
-        failure = message
+        synchronized(lock) {
+            if (failure != null) return
+            failure = message
+        }
         error.value = message
         pending.values.forEach { it.completeExceptionally(IllegalStateException(message)) }
         pending.clear()

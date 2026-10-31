@@ -1,5 +1,5 @@
 // The app's P2P worker: a Bare worklet running the same core as the relay.
-// The Rust app talks to it over BareKit.IPC in newline-delimited JSON:
+// The Rust app talks to it over Bare.IPC in newline-delimited JSON:
 //   app -> worker  {id, method, params}   start | status | search | stop
 //   worker -> app  {id, result} | {id, error} | {event: 'update'} | {event: 'fatal', error}
 // Host events {event, ...} are dispatched on Bare's 'appEvent' channel; iOS
@@ -21,7 +21,7 @@ const CINEMETA = 'https://v3-cinemeta.strem.io'
 import { createLan, interfaceAdapter, lanAddress } from '../src/lan.js'
 import { createCastController, reclaimLowDiskReceiverStorage, resolvePeerStorage } from '../src/cast.js'
 
-const ipc = BareKit.IPC
+const ipc = Bare.IPC
 let node = null
 let api = null
 let apiUrl = null
@@ -210,6 +210,7 @@ const methods = {
       relayThrough,
       bootstrap: bootstrap ? bootstrap.map(hostPort) : undefined,
       privateRouting,
+      worklet: true,
       onchange: update
     })
     node.swarm.on('update', update)

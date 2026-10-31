@@ -164,6 +164,8 @@ async function openNode ({
   privateRelay = false,
   relayThrough = null,
   lan: createLan = null,
+  // Set by the apps' worklet (worklet/worker.js): small request windows for phones' UDP buffers.
+  worklet: isWorklet = false,
   onchange = null
 }, undo) {
   if (privateRelay) {
@@ -200,7 +202,6 @@ async function openNode ({
   const localChannel = new Hyperbee(store.namespace('channel'), { writable: true, autoUpdate: false })
   undo.push(() => localChannel.close())
   await localChannel.ready()
-  const isWorklet = typeof globalThis.BareKit !== 'undefined'
   // Per-peer request window for video cores, passed as Hypercore's documented `inflightRange` when a core opens;
   // the reciprocity tier picks the window for cores opened from then on.
   let inflightRange = isWorklet ? [6, 8] : [12, 32]

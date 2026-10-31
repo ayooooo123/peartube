@@ -3,8 +3,8 @@
 //! bare-kit's IPC pipes; worker.js documents the messages.
 
 use std::collections::{HashMap, VecDeque};
-use std::ffi::{CString, c_char, c_int, c_void};
-use std::path::{Path, PathBuf};
+use std::ffi::{c_char, c_int, c_void};
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, LazyLock};
 
@@ -315,17 +315,8 @@ pub enum Event {
     /// The worklet closed its IPC; no more replies will come.
     Exited,
 }
-#[repr(C)]
-struct UvBuf {
-    base: *const c_char,
-    len: usize,
-}
 
-#[repr(C)]
-struct WorkletOptions {
-    memory_limit: usize,
-    assets: *const c_char,
-}
+// bare-kit 3's C API (include/bare-kit.h in the framework).
 
 #[repr(C)]
 struct BareWorklet {
@@ -349,17 +340,14 @@ struct BareIpc {
 }
 
 unsafe extern "C" {
-    fn bare_worklet_alloc(result: *mut *mut BareWorklet) -> c_int;
-    fn bare_worklet_init(worklet: *mut BareWorklet, options: *const WorkletOptions) -> c_int;
-    fn bare_worklet_start(worklet: *mut BareWorklet, filename: *const c_char, source: *const UvBuf, argc: c_int, argv: *const *const c_char) -> c_int;
+    fn bare_worklet_create(options: *const c_void, result: *mut *mut BareWorklet) -> c_int;
+    fn bare_worklet_start(worklet: *mut BareWorklet, filename: *const c_char, source: *const c_void, len: usize, argc: c_int, argv: *const *const c_char) -> c_int;
     fn bare_worklet_suspend(worklet: *mut BareWorklet, linger: c_int) -> c_int;
     fn bare_worklet_resume(worklet: *mut BareWorklet) -> c_int;
-    fn bare_ipc_alloc(result: *mut *mut BareIpc) -> c_int;
-    fn bare_ipc_init(ipc: *mut BareIpc, worklet: *mut BareWorklet) -> c_int;
+    fn bare_ipc_create(worklet: *mut BareWorklet, result: *mut *mut BareIpc) -> c_int;
     fn bare_ipc_read(ipc: *mut BareIpc, data: *mut c_void, len: usize) -> c_int;
     fn bare_ipc_write(ipc: *mut BareIpc, data: *const c_void, len: usize) -> c_int;
-    fn bare_ipc_poll_alloc(result: *mut *mut BareIpcPoll) -> c_int;
-    fn bare_ipc_poll_init(poll: *mut BareIpcPoll, ipc: *mut BareIpc) -> c_int;
+    fn bare_ipc_poll_create(ipc: *mut BareIpc, result: *mut *mut BareIpcPoll) -> c_int;
     fn bare_ipc_poll_start(poll: *mut BareIpcPoll, events: c_int, cb: IpcPollCb) -> c_int;
     fn bare_ipc_poll_stop(poll: *mut BareIpcPoll) -> c_int;
     fn bare_ipc_poll_set_data(poll: *mut BareIpcPoll, data: *mut c_void);
@@ -493,7 +481,7 @@ pub struct Worker {
 unsafe impl Send for Worker {}
 unsafe impl Sync for Worker {}
 
-static WORKER: LazyLock<Result<Worker, String>> = LazyLock::new(|| Worker::spawn(&DATA_DIR.join("bare-assets")));
+static WORKER: LazyLock<Result<Worker, String>> = LazyLock::new(Worker::spawn);
 
 /// The process's one worklet, started on first use.
 pub fn worker() -> Result<&'static Worker, String> {
@@ -501,25 +489,20 @@ pub fn worker() -> Result<&'static Worker, String> {
 }
 
 impl Worker {
-    fn spawn(assets: &Path) -> Result<Worker, String> {
-        std::fs::create_dir_all(assets).map_err(|err| format!("Cannot create {}: {err}", assets.display()))?;
-        let assets = CString::new(assets.to_string_lossy().as_bytes()).map_err(|err| err.to_string())?;
-        let source = UvBuf { base: BUNDLE.as_ptr().cast(), len: BUNDLE.len() };
+    fn spawn() -> Result<Worker, String> {
         let (worklet, ipc, poll) = unsafe {
-            // A write to a worklet that has exited must fail with EPIPE, not kill the app.
+            // A write to a closed socket or pipe must fail with EPIPE, not kill the app.
             libc::signal(libc::SIGPIPE, libc::SIG_IGN);
             let mut worklet = std::ptr::null_mut();
-            check(bare_worklet_alloc(&mut worklet), "alloc")?;
-            let options = WorkletOptions { memory_limit: 0, assets: assets.as_ptr() };
-            check(bare_worklet_init(worklet, &options), "init")?;
-            // Returns once the source, filename and assets have been copied in.
-            check(bare_worklet_start(worklet, c"/worker.bundle".as_ptr(), &source, 0, std::ptr::null()), "start")?;
+            // Default options: the heap limit follows the machine's memory.
+            check(bare_worklet_create(std::ptr::null(), &mut worklet), "create")?;
+            // The ipc exists before the worker runs, so nothing it writes at start is missed.
             let mut ipc = std::ptr::null_mut();
-            check(bare_ipc_alloc(&mut ipc), "IPC alloc")?;
-            check(bare_ipc_init(ipc, worklet), "IPC init")?;
+            check(bare_ipc_create(worklet, &mut ipc), "IPC create")?;
             let mut poll = std::ptr::null_mut();
-            check(bare_ipc_poll_alloc(&mut poll), "IPC poll alloc")?;
-            check(bare_ipc_poll_init(poll, ipc), "IPC poll init")?;
+            check(bare_ipc_poll_create(ipc, &mut poll), "IPC poll create")?;
+            // Returns once the filename and source have been copied in.
+            check(bare_worklet_start(worklet, c"/worker.bundle".as_ptr(), BUNDLE.as_ptr().cast(), BUNDLE.len(), 0, std::ptr::null()), "start")?;
             (worklet, ipc, poll)
         };
         let shared = Arc::new(Shared::default());

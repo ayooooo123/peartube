@@ -1,2 +1,2 @@
-#import <BareKit/BareKit.h>
+#include <BareKit/bare-kit.h>
 #include "../native/include/peartube.h"

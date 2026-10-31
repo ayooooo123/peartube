@@ -5,11 +5,13 @@ struct WorkerError: LocalizedError {
     var errorDescription: String? { message }
 }
 
+/// The P2P worker over bare-kit-swift (Runtime/BareKit). Writes go one at a time from `writes`, so
+/// lines reach the worklet in the order they were sent.
 @MainActor
 final class Worker {
     var onEvent: (([String: Any]) -> Void)?
-    private var worklet: BareWorklet?
-    private var ipc: BareIPC?
+    private var worklet: Worklet?
+    private var ipc: IPC?
     private let bonjour = BonjourHost()
     private var pending = Data()
     private var nextID = 0
@@ -24,26 +26,23 @@ final class Worker {
             throw WorkerError(message: "The PearTube worklet is missing from this app.")
         }
         let source = try Data(contentsOf: bundle)
-        guard let worklet = BareWorklet(configuration: nil) else {
-            throw WorkerError(message: "Cannot initialize the embedded P2P runtime.")
-        }
-        worklet.start("/worker.bundle", source: source, arguments: [])
-        guard let ipc = BareIPC(worklet: worklet) else {
-            worklet.terminate()
-            throw WorkerError(message: "Cannot open the embedded P2P connection.")
+        let worklet: Worklet
+        let ipc: IPC
+        do {
+            worklet = try Worklet()
+            // The ipc exists before the worker runs, so nothing it writes at start is missed.
+            ipc = try IPC(worklet: worklet)
+            try worklet.start("/worker.bundle", source: source)
+        } catch {
+            throw WorkerError(message: "Cannot start the embedded P2P runtime: \(error)")
         }
         self.worklet = worklet
         self.ipc = ipc
         bonjour.send = { [weak self] message in self?.send(message) }
-        ipc.readable = { [weak self] channel in
-            while let data = channel.read() {
-                if data.isEmpty {
-                    channel.readable = nil
-                    DispatchQueue.main.async { self?.fail("The embedded P2P worker closed its connection.") }
-                    return
-                }
-                DispatchQueue.main.async { self?.receive(data) }
-            }
+        Task { [weak self] in
+            for await data in ipc { self?.receive(data) }
+            guard let self, !self.closed else { return }
+            self.fail("The embedded P2P worker closed its connection.")
         }
     }
 
@@ -74,12 +73,16 @@ final class Worker {
         guard !writing, !writes.isEmpty, let ipc, !closed else { return }
         writing = true
         let data = writes.removeFirst()
-        ipc.write(data) { [weak self] error in
-            DispatchQueue.main.async {
+        Task { [weak self] in
+            do {
+                try await ipc.write(data)
                 guard let self, !self.closed else { return }
                 self.writing = false
-                if let error { self.fail(error.localizedDescription) }
-                else { self.flush() }
+                self.flush()
+            } catch {
+                guard let self, !self.closed else { return }
+                self.writing = false
+                self.fail(error.localizedDescription)
             }
         }
     }
@@ -117,7 +120,7 @@ final class Worker {
     func suspend() {
         guard !closed, !suspended else { return }
         suspended = true
-        worklet?.suspend(withLinger: 5000)
+        worklet?.suspend(linger: 5000)
     }
 
     func resume() {
@@ -136,11 +139,9 @@ final class Worker {
         bonjour.close()
         closed = true
         fail("The P2P worker was closed.")
-        ipc?.readable = nil
         ipc?.close()
         ipc = nil
-        let runtime = worklet
+        // Releasing the worklet terminates it without blocking.
         worklet = nil
-        DispatchQueue.global(qos: .utility).async { runtime?.terminate() }
     }
 }

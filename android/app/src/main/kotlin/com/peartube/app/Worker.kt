@@ -1,18 +1,20 @@
 package com.peartube.app
 
 import android.content.Context
-import android.os.Handler
-import android.os.HandlerThread
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharedFlow
+import kotlinx.coroutines.launch
 import org.json.JSONArray
 import org.json.JSONObject
-import to.holepunch.bare.kit.IPC
+import to.holepunch.bare.kit.BareKitException
+import to.holepunch.bare.kit.Ipc
 import to.holepunch.bare.kit.Worklet
 import java.io.ByteArrayOutputStream
 import java.io.File
-import java.nio.ByteBuffer
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicLong
 
@@ -21,7 +23,7 @@ class WorkerException(message: String) : Exception(message)
 /**
  * The P2P worker: a Bare worklet running worklet/worker.js, the relay's own core. We talk
  * to it in newline-delimited JSON over bare-kit's IPC; worker.js documents the messages.
- * Every bare-kit call runs on one thread, whose looper also delivers IPC readiness.
+ * bare-kit-kotlin's Ipc queues whole writes in order, so concurrent calls never interleave lines.
  */
 class Worker(context: Context) {
     sealed interface Event {
@@ -42,38 +44,31 @@ class Worker(context: Context) {
         data object Exited : Event
     }
 
-    private val handler = Handler(HandlerThread("peartube-worklet").apply { start() }.looper)
     private val storeDir = context.noBackupFilesDir
     private val pending = ConcurrentHashMap<Long, CompletableDeferred<Any?>>()
     private val nextId = AtomicLong(1)
     private val _events = MutableSharedFlow<Event>(extraBufferCapacity = 64)
     val events: SharedFlow<Event> = _events
 
-    // Worklet thread only.
-    private var worklet: Worklet? = null
-    private var ipc: IPC? = null
-    private val outgoing = ArrayDeque<ByteBuffer>()
-    private val incoming = ByteArrayOutputStream()
+    // Guards failure and the registration of replies, so a failure can't land between a
+    // call's check and its registration and leave the reply unanswered.
+    private val lock = Any()
     private var failure: String? = null
+    private var worklet: Worklet? = null
+    private var ipc: Ipc? = null
 
     init {
-        handler.post {
-            try {
-                // Where bare-kit unpacks assets: the files dir, as in the Dioxus app.
-                val assets = File(context.filesDir, "bare-assets").apply { mkdirs() }
-                val bundle = context.assets.open("worker.bundle").use { it.readBytes() }
-                val source = ByteBuffer.allocateDirect(bundle.size)
-                source.put(bundle)
-                source.flip()
-                val worklet = Worklet(Worklet.Options().assets(assets.path))
-                worklet.start("/worker.bundle", source, null)
-                val ipc = IPC(worklet)
-                this.worklet = worklet
-                this.ipc = ipc
-                ipc.readable { read(ipc) }
-            } catch (e: Throwable) {
-                fail("The P2P worker did not start: ${e.message ?: e}")
-            }
+        try {
+            val bundle = context.assets.open("worker.bundle").use { it.readBytes() }
+            val worklet = Worklet(context)
+            // The ipc exists before the worker runs, so nothing it writes at start is missed.
+            val ipc = Ipc(worklet)
+            worklet.start("/worker.bundle", bundle)
+            this.worklet = worklet
+            this.ipc = ipc
+            CoroutineScope(SupervisorJob() + Dispatchers.Default).launch { read(ipc) }
+        } catch (e: Throwable) {
+            fail("The P2P worker did not start: ${e.message ?: e}")
         }
     }
 
@@ -145,68 +140,34 @@ class Worker(context: Context) {
         CastStatus.from(call("castStop", JSONObject().put("storage", castDir).put("stopPlayback", stopPlayback)) as? JSONObject)
 
     /** Stops the worklet's I/O while the app is in the background. */
-    fun suspend() = handler.post { worklet?.suspend() }
+    fun suspend() = worklet?.suspend()
 
-    fun resume() = handler.post { worklet?.resume() }
+    fun resume() = worklet?.resume()
 
     private suspend fun call(method: String, params: JSONObject = JSONObject()): Any? {
         val id = nextId.getAndIncrement()
         val reply = CompletableDeferred<Any?>()
         val line = JSONObject().put("id", id).put("method", method).put("params", params).toString() + "\n"
-        // On the worklet thread, where fail() runs: a failure can't land between the check and
-        // the registration and leave the reply unanswered.
-        handler.post {
-            val failed = failure
-            if (failed != null) {
-                reply.completeExceptionally(WorkerException(failed))
-            } else {
-                pending[id] = reply
-                send(line.toByteArray())
-            }
+        synchronized(lock) {
+            failure?.let { throw WorkerException(it) }
+            pending[id] = reply
         }
         try {
+            val ipc = ipc ?: throw WorkerException(failure ?: "The P2P worker did not start")
+            try {
+                ipc.write(line.toByteArray())
+            } catch (e: BareKitException.Closed) {
+                throw WorkerException(failure ?: "The P2P worker stopped")
+            }
             return reply.await()
         } finally {
             pending.remove(id)
         }
     }
 
-    private fun send(bytes: ByteArray) {
-        if (failure != null) return
-        val buffer = ByteBuffer.allocateDirect(bytes.size)
-        buffer.put(bytes)
-        buffer.flip()
-        outgoing.addLast(buffer)
-        if (outgoing.size == 1) flush()
-    }
-
-    // IPC.write takes a buffer from its start to its limit, so a partial write leaves a slice.
-    private fun flush() {
-        val ipc = ipc ?: return
-        while (outgoing.isNotEmpty()) {
-            val buffer = outgoing.first()
-            val written = ipc.write(buffer)
-            if (written < buffer.limit()) {
-                buffer.position(written)
-                outgoing[0] = buffer.slice()
-                ipc.writable { flush() }
-                return
-            }
-            outgoing.removeFirst()
-        }
-        ipc.writable(null)
-    }
-
-    private fun read(ipc: IPC) {
-        while (true) {
-            val data = ipc.read() ?: return
-            if (data.limit() == 0) {
-                ipc.readable(null)
-                fail("The P2P worker stopped")
-                return
-            }
-            val bytes = ByteArray(data.remaining())
-            data.get(bytes)
+    private suspend fun read(ipc: Ipc) {
+        val incoming = ByteArrayOutputStream()
+        ipc.data.collect { bytes ->
             var start = 0
             for (i in bytes.indices) {
                 if (bytes[i] == '\n'.code.toByte()) {
@@ -218,6 +179,7 @@ class Worker(context: Context) {
             }
             incoming.write(bytes, start, bytes.size - start)
         }
+        fail("The P2P worker stopped")
     }
 
     private fun dispatch(line: String) {
@@ -248,8 +210,10 @@ class Worker(context: Context) {
     }
 
     private fun fail(message: String) {
-        if (failure != null) return
-        failure = message
+        synchronized(lock) {
+            if (failure != null) return
+            failure = message
+        }
         pending.values.forEach { it.completeExceptionally(WorkerException(message)) }
         pending.clear()
         _events.tryEmit(Event.Exited)

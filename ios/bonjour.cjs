@@ -4,7 +4,7 @@ const EventEmitter = require('bare-events')
 // This implements the BonjourAdapter dependency without a multicast entitlement.
 let next = 0
 const handles = new Map()
-const send = msg => BareKit.IPC.write(JSON.stringify({ event: 'bonjour', ...msg }) + '\n')
+const send = msg => Bare.IPC.write(JSON.stringify({ event: 'bonjour', ...msg }) + '\n')
 Bare.on('appEvent', msg => {
   if (msg.event !== 'bonjour') return
   const handle = handles.get(msg.handle)

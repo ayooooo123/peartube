@@ -21,9 +21,9 @@
 # (default ~/Library/Android/sdk on a Mac, ~/Android/Sdk elsewhere).
 set -eu
 
-# bare-kit v2.5.5, libqjs main, and the libjs headers and QuickJS master that
-# libqjs main was made against. libqjs fetches those two unpinned, so they are
-# given to CMake from here.
+# bare-kit main at 230e202 (v2.5.5 plus its IPC rework), libqjs main, and the
+# libjs headers and QuickJS master that libqjs main was made against. libqjs
+# fetches those two unpinned, so they are given to CMake from here.
 BARE_KIT=230e20265b3ea66606bae1f1d69e0ae331f7c09e
 LIBQJS=348141095737bed3a7da01c5b5756e84904ffb5f
 LIBJS=a2249688df3c36b928477539c6e2bf3e08c711bc

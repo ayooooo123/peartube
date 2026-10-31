@@ -106,21 +106,27 @@ class ReceiverWorker(private val appContext: Context) {
     // Guards failure and the registration of replies (see Worker.kt).
     private val lock = Any()
     private var failure: String? = null
+    // Worklet.start() blocks until the worklet thread has set Bare up, so it runs off the UI
+    // thread; calls wait for the ipc, which is null if the engine did not start.
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    private val ready = CompletableDeferred<Ipc?>()
     private var worklet: Worklet? = null
-    private var ipc: Ipc? = null
 
     init {
-        try {
-            val bundle = appContext.assets.open("worker.bundle").use { it.readBytes() }
-            val w = Worklet(appContext)
-            // The ipc exists before the worker runs, so nothing it writes at start is missed.
-            val pipe = Ipc(w)
-            w.start("/worker.bundle", bundle)
-            worklet = w
-            ipc = pipe
-            CoroutineScope(SupervisorJob() + Dispatchers.Default).launch { read(pipe) }
-        } catch (e: Throwable) {
-            fail("Receiver engine failed to start: ${e.message ?: e}")
+        scope.launch(Dispatchers.IO) {
+            try {
+                val bundle = appContext.assets.open("worker.bundle").use { it.readBytes() }
+                val w = Worklet(appContext)
+                // The ipc exists before the worker runs, so nothing it writes at start is missed.
+                val pipe = Ipc(w)
+                w.start("/worker.bundle", bundle)
+                worklet = w
+                ready.complete(pipe)
+                scope.launch { read(pipe) }
+            } catch (e: Throwable) {
+                ready.complete(null)
+                fail("Receiver engine failed to start: ${e.message ?: e}")
+            }
         }
     }
 
@@ -177,7 +183,7 @@ class ReceiverWorker(private val appContext: Context) {
             pending[id] = reply
         }
         try {
-            val pipe = ipc ?: throw IllegalStateException(failure ?: "Receiver engine failed to start")
+            val pipe = ready.await() ?: throw IllegalStateException(failure ?: "Receiver engine failed to start")
             try {
                 pipe.write(line.toByteArray())
             } catch (e: BareKitException.Closed) {

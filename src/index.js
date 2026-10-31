@@ -137,6 +137,18 @@ async function apply (nodes, view, host) {
   }
 }
 
+// Reads take a tracker's view as far as Autobee has applied it, waiting at most a second for more. A fresh
+// joiner of a large tracker takes minutes to catch up (V8 on a Mac: about two; a phone's QuickJS: far longer),
+// and starting, listing and playback must not wait that out: the list fills in as it applies, and Autobee's
+// update events redraw it. Writes and garbage collection still wait for the whole update.
+function applied (bee) {
+  const update = bee.update()
+  update.catch(() => {})
+  let timer
+  const wait = new Promise(resolve => { timer = setTimeout(resolve, 1000) })
+  return Promise.race([update, wait]).finally(() => clearTimeout(timer))
+}
+
 // A node that fails partway through opening closes what it opened, so the same storage can be opened again.
 export async function createNode (opts) {
   const undo = []
@@ -244,11 +256,13 @@ async function openNode ({
   const isOwnedBlob = hex => ownedBlobs.has(hex) || slotSet.has(hex)
   const blobsKey = blobSlots[0].key
 
-  // Hydrates locally authored per-video cores from RocksDB headers on boot and closes sessions immediately so idle movies take 0 RAM.
-  {
+  // Finds the per-video cores this node authored (announces under its own tracker writer, and its channel) and
+  // records them as owned from their RocksDB headers, closing each session at once so idle movies take 0 RAM.
+  // Startup scans what the tracker has applied so far; a second pass once Autobee has fully caught up adds any
+  // it missed, and the content rotation announces those from then on.
+  async function hydrateOwned () {
     const candidates = new Set()
     if (usePrimaryTracker) {
-      await tracker.update()
       const writer = b4a.toString(tracker.local.key, 'hex')
       for await (const n of tracker.view.createReadStream()) {
         const k = b4a.toString(n.key)
@@ -263,7 +277,7 @@ async function openNode ({
         if (op?.type === 'announce' && !slotSet.has(op.blobs)) candidates.add(op.blobs)
       }
     }
-    const keys = [...candidates]
+    const keys = [...candidates].filter(hex => !ownedBlobs.has(hex))
     for (let i = 0; i < keys.length; i += 32) {
       await Promise.all(keys.slice(i, i + 32).map(async hex => {
         const c = store.get({ key: b4a.from(hex, 'hex') })
@@ -278,6 +292,11 @@ async function openNode ({
       }))
     }
   }
+  // A relay waits for the whole update, so every video it owns is announced from the start, as before. The apps'
+  // worklet must not: a phone catching up on a large tracker would sit on "Connecting…" for as long as that takes,
+  // and the pass after catch-up (below) still finds any video it owns.
+  if (usePrimaryTracker) await (isWorklet ? applied(tracker) : tracker.update())
+  await hydrateOwned()
   const host = privateHost ?? (Array.isArray(bootstrap) && bootstrap.some(b => String(b?.host || b).startsWith('127.')) ? '127.0.0.1' : undefined)
   const isPrivate = Boolean(privateRouting)
   const privateOpts = typeof privateRouting === 'object' && privateRouting !== null ? privateRouting : {}
@@ -422,6 +441,7 @@ async function openNode ({
   }, CONTENT_TOPIC_ROTATE_MS)
   rotateTimer.unref?.()
   undo.push(() => clearInterval(rotateTimer))
+  if (usePrimaryTracker) tracker.update().then(() => closing ? null : hydrateOwned()).catch(() => {})
   function leaveContentSwarm (blobsHex) {
     const oldTopics = contentTopics.get(blobsHex)
     if (!oldTopics) return
@@ -731,7 +751,7 @@ async function openNode ({
     const raw = []
     const primarySlices = new Set()
     if (usePrimaryTracker && (!filterSource || filterSource === primaryKey)) {
-      await tracker.update()
+      await applied(tracker)
       const range = id ? { gte: b4a.from(`${id}/`), lt: b4a.from(`${id}/\xff`) } : {}
       for await (const node of tracker.view.createReadStream(range)) {
         const key = b4a.toString(node.key)
@@ -752,7 +772,7 @@ async function openNode ({
     for (const s of extraSources.values()) {
       if (filterSource && filterSource !== s.key) continue
       if (s.kind === 'tracker') {
-        await s.bee.update()
+        await applied(s.bee)
         const range = id ? { gte: b4a.from(`${id}/`), lt: b4a.from(`${id}/\xff`) } : {}
         for await (const node of s.bee.view.createReadStream(range)) {
           const sub = b4a.toString(node.key)
@@ -824,10 +844,10 @@ async function openNode ({
         }
       }
     }
-    if (usePrimaryTracker) { await tracker.update(); await scan(tracker.view, primaryKey) }
+    if (usePrimaryTracker) { await applied(tracker); await scan(tracker.view, primaryKey) }
     if (localChannel.core.length > 0) await scan(localChannel, channelKey)
     for (const s of extraSources.values()) {
-      if (s.kind === 'tracker') await s.bee.update()
+      if (s.kind === 'tracker') await applied(s.bee)
       await scan(s.kind === 'tracker' ? s.bee.view : s.bee, s.key)
     }
     const list = [...found.values()]
@@ -852,11 +872,11 @@ async function openNode ({
     if (trMatch) {
       const src = extraSources.get(trMatch[1])
       if (src?.kind !== 'tracker') return null
-      await src.bee.update()
+      await applied(src.bee)
       const n = await src.bee.view.get(b4a.from(trMatch[2]))
       return n ? decodeOp(n.value) : null
     }
-    await tracker.update()
+    await applied(tracker)
     const n = await tracker.view.get(b4a.from(key))
     return n ? decodeOp(n.value) : null
   }
@@ -1156,7 +1176,7 @@ async function openNode ({
       }
     }
     if (usePrimaryTracker) {
-      await tracker.update()
+      await applied(tracker)
       const writer = b4a.toString(tracker.local.key, 'hex')
       const pfx = `source/${writer}/`
       for await (const node of tracker.view.createReadStream({ gte: b4a.from(pfx), lt: b4a.from(`${pfx}\xff`) })) {

@@ -5,6 +5,7 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.launch
@@ -16,6 +17,7 @@ import to.holepunch.bare.kit.Worklet
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicLong
 
 class WorkerException(message: String) : Exception(message)
@@ -54,21 +56,30 @@ class Worker(context: Context) {
     // call's check and its registration and leave the reply unanswered.
     private val lock = Any()
     private var failure: String? = null
+
+    // Worklet.start() blocks until the worklet thread has set Bare up, so starting, suspending
+    // and resuming run in order on a thread of their own, never the UI thread. Calls wait for
+    // the ipc, which is null if the worker did not start.
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    private val lifecycle = Executors.newSingleThreadExecutor { Thread(it, "peartube-worklet") }.asCoroutineDispatcher()
+    private val ready = CompletableDeferred<Ipc?>()
     private var worklet: Worklet? = null
-    private var ipc: Ipc? = null
 
     init {
-        try {
-            val bundle = context.assets.open("worker.bundle").use { it.readBytes() }
-            val worklet = Worklet(context)
-            // The ipc exists before the worker runs, so nothing it writes at start is missed.
-            val ipc = Ipc(worklet)
-            worklet.start("/worker.bundle", bundle)
-            this.worklet = worklet
-            this.ipc = ipc
-            CoroutineScope(SupervisorJob() + Dispatchers.Default).launch { read(ipc) }
-        } catch (e: Throwable) {
-            fail("The P2P worker did not start: ${e.message ?: e}")
+        scope.launch(lifecycle) {
+            try {
+                val bundle = context.assets.open("worker.bundle").use { it.readBytes() }
+                val worklet = Worklet(context)
+                // The ipc exists before the worker runs, so nothing it writes at start is missed.
+                val ipc = Ipc(worklet)
+                worklet.start("/worker.bundle", bundle)
+                this@Worker.worklet = worklet
+                ready.complete(ipc)
+                scope.launch { read(ipc) }
+            } catch (e: Throwable) {
+                ready.complete(null)
+                fail("The P2P worker did not start: ${e.message ?: e}")
+            }
         }
     }
 
@@ -140,9 +151,13 @@ class Worker(context: Context) {
         CastStatus.from(call("castStop", JSONObject().put("storage", castDir).put("stopPlayback", stopPlayback)) as? JSONObject)
 
     /** Stops the worklet's I/O while the app is in the background. */
-    fun suspend() = worklet?.suspend()
+    fun suspend() {
+        scope.launch(lifecycle) { worklet?.suspend() }
+    }
 
-    fun resume() = worklet?.resume()
+    fun resume() {
+        scope.launch(lifecycle) { worklet?.resume() }
+    }
 
     private suspend fun call(method: String, params: JSONObject = JSONObject()): Any? {
         val id = nextId.getAndIncrement()
@@ -153,7 +168,7 @@ class Worker(context: Context) {
             pending[id] = reply
         }
         try {
-            val ipc = ipc ?: throw WorkerException(failure ?: "The P2P worker did not start")
+            val ipc = ready.await() ?: throw WorkerException(failure ?: "The P2P worker did not start")
             try {
                 ipc.write(line.toByteArray())
             } catch (e: BareKitException.Closed) {

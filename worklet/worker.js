@@ -341,8 +341,12 @@ ipc.on('data', chunk => {
   }
 })
 
-// A worklet error aborts the whole app unless handled here; report it instead.
-const fatal = err => send({ event: 'fatal', error: String(err?.message || err) })
+// A worklet error aborts the whole app unless handled here; report it instead. The stack goes to
+// the system log (logcat, Console.app), where the app's one-line message can be traced from.
+const fatal = err => {
+  console.error('worker fatal:', err?.stack || err)
+  send({ event: 'fatal', error: String(err?.message || err) })
+}
 Bare.on('uncaughtException', fatal).on('unhandledRejection', fatal)
 
 // The app suspends the worklet in the background, and the OS grants `linger` ms

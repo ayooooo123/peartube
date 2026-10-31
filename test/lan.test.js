@@ -180,3 +180,47 @@ test('peers with no topic in common never dial', async () => {
   assert.deepEqual(connections, [0, 0])
   assert.equal(dials, 0)
 })
+
+// bonjour-service does not throw when an advertisement's name is taken: it logs and silently stops it. A name this
+// peer used before can still be answered for (a cache, a reflector echoing the old record), so the same name must
+// never be advertised twice. Ways a fix could fail: the topics A → A+B → A bring back A's name and the peer vanishes
+// from the network; a peer that joins later never hears it; the old advertisement is left up instead.
+test('a peer whose topics change back stays visible on the network', async () => {
+  const bus = mdnsBus()
+  const used = new Set()
+  // Like bonjour-service on a network that remembers names: a name heard before is dropped without an error.
+  const remembers = (adapter, { deaf = false } = {}) => ({
+    advertise (record, handlers) {
+      if (used.has(record.name)) return { stop: async () => {} }
+      used.add(record.name)
+      return adapter.advertise(record, handlers)
+    },
+    browse: (query, handlers) => deaf ? { stop: async () => {} } : adapter.browse(query, handlers)
+  })
+  const [x, y] = [b4a.alloc(32, 11), b4a.alloc(32, 12)]
+  // a hears nobody, so the two connect only if b hears a's advertisement.
+  const a = createLan({ host: '127.0.0.1', keyPair: HyperDHT.keyPair(), adapter: remembers(bus(s => s), { deaf: true }), dialAfter: 200 })
+  quiet(a)
+  let b = null
+  try {
+    await a.ready()
+    const settle = () => new Promise(resolve => setTimeout(resolve, 150))
+    a.join(x)
+    await settle()
+    a.join(y)
+    await settle()
+    a.leave(y)
+    await settle()
+    // b arrives now, so it can only learn of a from a's current advertisement.
+    b = createLan({ host: '127.0.0.1', keyPair: HyperDHT.keyPair(), adapter: remembers(bus(s => s)), dialAfter: 200 })
+    quiet(b)
+    const opened = new Promise(resolve => b.once('connection', resolve))
+    await b.ready()
+    b.join(x)
+    await Promise.race([opened, new Promise((resolve, reject) => setTimeout(reject, 10_000, new Error('a was not visible to b')))])
+    assert.equal(b.connections.size, 1)
+  } finally {
+    await a.destroy()
+    await b?.destroy()
+  }
+})

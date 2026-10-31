@@ -1,9 +1,10 @@
 import { readFileSync, writeFileSync, renameSync } from 'node:fs'
 import { join } from 'node:path'
 
-// Relay settings: an env var wins, then settings.json, then the default. settings.json is a private
-// file beside jobs.json (0600), never in the Corestore. Secrets (HiveRelay API keys, tokens inside URLs)
-// are write-only: views carry a redacted label and a `#n` ref that keeps the stored value on update.
+// Relay settings: settings.json (set from the UI) wins, then an env var, then the default. settings.json is a private
+// file beside jobs.json (0600), never in the Corestore. Secrets (HiveRelay API keys, tokens inside URLs) are
+// write-only: views carry a redacted label and a `#n` ref that keeps the stored value on update. `null` clears a
+// saved value, so the env var or default applies again. `live` settings apply in place; the rest reopen the node.
 const HEX64 = /^[0-9a-f]{64}$/
 const HOST = /^[a-z0-9.:[\]-]{1,253}$/i
 const csv = s => String(s).split(',').map(x => x.trim()).filter(Boolean)
@@ -18,11 +19,13 @@ const SPEC = {
   bootstrap: { env: 'PEARTUBE_BOOTSTRAP', type: 'hosts', def: [] },
   relayThrough: { env: 'PEARTUBE_RELAY_THROUGH', type: 'keys', def: [] },
   privateRouting: { env: 'PEARTUBE_PRIVATE_ROUTING', type: 'bool', def: false, fromEnv: s => Boolean(s) },
+  privateGuard: { env: 'PEARTUBE_PRIVATE_GUARD', type: 'bool', def: false, live: true, fromEnv: flag },
+  privateGuardPort: { env: 'PEARTUBE_PRIVATE_GUARD_PORT', type: 'port', def: 0, live: true },
   tracker: { env: 'PEARTUBE_TRACKER', type: 'key', def: '' },
   allowedPeers: { env: 'PEARTUBE_ALLOWED_PEERS', type: 'keys', def: [], live: true },
   publishChannel: { env: 'PEARTUBE_PUBLISH_CHANNEL', type: 'bool', def: true, fromEnv: s => s !== '0' },
-  directory: { env: 'PEARTUBE_DIRECTORY', type: 'bool', def: false, fromEnv: s => Boolean(s) },
-  acquireConcurrency: { env: 'PEARTUBE_ACQUIRE_CONCURRENCY', type: 'number', def: 4, min: 1, max: 32 },
+  directory: { env: 'PEARTUBE_DIRECTORY', type: 'bool', def: false, live: true, fromEnv: s => Boolean(s) },
+  acquireConcurrency: { env: 'PEARTUBE_ACQUIRE_CONCURRENCY', type: 'number', def: 4, min: 1, max: 32, live: true },
   watchDir: { env: 'PEARTUBE_WATCH_DIR', type: 'path', def: '', live: true },
   feeds: { env: 'PEARTUBE_MIRROR_FEEDS', type: 'urls', def: [], live: true },
   replicate: { env: 'PEARTUBE_REPLICATE', type: 'bool', def: false, live: true, fromEnv: s => Boolean(s) && s !== '0' && s !== 'false' },
@@ -34,7 +37,7 @@ const SPEC = {
   hiverelayDiscover: { env: 'PEARTUBE_HIVERELAY_DISCOVER', type: 'bool', def: false, fromEnv: s => Boolean(s) },
   hiverelayReplicas: { env: 'PEARTUBE_HIVERELAY_REPLICAS', type: 'number', def: 3, min: 1, max: 32 },
   hiverelayUploadMbps: { env: 'PEARTUBE_HIVERELAY_UPLOAD_MBPS', type: 'number', def: 50, min: 0, max: 1e5 },
-  rechunk: { env: 'PEARTUBE_RECHUNK', type: 'bool', def: false, fromEnv: flag },
+  rechunk: { env: 'PEARTUBE_RECHUNK', type: 'bool', def: false, live: true, fromEnv: flag },
   cinemetaUrl: { env: 'PEARTUBE_CINEMETA_URL', type: 'url', def: 'https://v3-cinemeta.strem.io', live: true, empty: true }
 }
 
@@ -104,23 +107,27 @@ export function createSettings (storage, env = {}) {
   let saved = {}
   try { saved = JSON.parse(readFileSync(file, 'utf8')) || {} } catch {}
 
-  const lockedBy = key => {
-    const name = SPEC[key].env
-    return env[name] !== undefined && env[name] !== '' ? name : null
+  const envSet = key => {
+    const raw = env[SPEC[key].env]
+    return raw !== undefined && raw !== ''
   }
-  function get (key) {
+  function read (key, from) {
     const spec = SPEC[key]
-    if (lockedBy(key)) return parseEnv(spec, env[spec.env])
-    if (Object.hasOwn(saved, key)) return saved[key]
+    if (Object.hasOwn(from, key)) return from[key]
+    if (envSet(key)) return parseEnv(spec, env[spec.env])
     return spec.def
   }
-  const boot = Object.fromEntries(Object.keys(SPEC).map(k => [k, JSON.stringify(get(k))]))
+  const get = key => read(key, saved)
+  // What the running relay uses: the snapshot taken before its node opened. A failed reopen leaves keys in `restartNeeded`.
+  const snapshot = () => Object.fromEntries(Object.keys(SPEC).map(k => [k, JSON.stringify(get(k))]))
+  let applied = snapshot()
+  const markApplied = snap => { applied = snap }
 
   function view () {
     const settings = {}
     for (const [key, spec] of Object.entries(SPEC)) {
       let value = get(key)
-      const out = { type: spec.type, live: Boolean(spec.live), source: lockedBy(key) ? 'env' : (Object.hasOwn(saved, key) ? 'file' : 'default'), env: spec.env }
+      const out = { type: spec.type, live: Boolean(spec.live), source: Object.hasOwn(saved, key) ? 'file' : (envSet(key) ? 'env' : 'default'), env: spec.env, envSet: envSet(key) }
       if (spec.type === 'secret') {
         out.set = Boolean(value)
         value = ''
@@ -130,7 +137,7 @@ export function createSettings (storage, env = {}) {
       out.value = value
       settings[key] = out
     }
-    const restartNeeded = Object.keys(SPEC).filter(k => !SPEC[k].live && JSON.stringify(get(k)) !== boot[k])
+    const restartNeeded = Object.keys(SPEC).filter(k => !SPEC[k].live && JSON.stringify(get(k)) !== applied[k])
     return { settings, restartNeeded }
   }
 
@@ -141,20 +148,26 @@ export function createSettings (storage, env = {}) {
     for (const [key, raw] of Object.entries(patch)) {
       const spec = SPEC[key]
       if (!spec) throw bad(key, 'unknown setting')
-      const locked = lockedBy(key)
-      if (locked) throw Object.assign(new Error(`${key} is set by ${locked}; change it there`), { status: 409 })
-      let value = raw
-      // `#n` keeps a stored URL whose view was redacted.
-      if (spec.type === 'urls' && Array.isArray(raw)) {
-        const current = get(key)
-        value = raw.map(item => typeof item === 'string' && /^#\d+$/.test(item) ? current[Number(item.slice(1))] : item).filter(v => v !== undefined)
+      const before = JSON.stringify(read(key, next))
+      if (raw === null) {
+        delete next[key]
+      } else {
+        let value = raw
+        // `#n` keeps a stored URL whose view was redacted.
+        if (spec.type === 'urls' && Array.isArray(raw)) {
+          const current = get(key)
+          value = raw.map(item => typeof item === 'string' && /^#\d+$/.test(item) ? current[Number(item.slice(1))] : item).filter(v => v !== undefined)
+        }
+        next[key] = validate(key, spec, value)
       }
-      value = validate(key, spec, value)
-      if (JSON.stringify(value) === JSON.stringify(get(key))) continue
-      next[key] = value
-      changed.push(key)
+      if (JSON.stringify(read(key, next)) !== before) changed.push(key)
     }
-    if (changed.length) {
+    // The guard runs its own HyperDHT node beside the relay's: a fixed port both ask for would leave one deaf.
+    const guardPort = read('privateGuardPort', next)
+    if (read('privateGuard', next) && guardPort && guardPort === read('dhtPort', next) && (changed.includes('dhtPort') || changed.includes('privateGuardPort') || changed.includes('privateGuard'))) {
+      throw bad(changed.includes('dhtPort') ? 'dhtPort' : 'privateGuardPort', 'the peer port and the guard port must differ')
+    }
+    if (JSON.stringify(next) !== JSON.stringify(saved)) {
       writeFileSync(file + '.tmp', JSON.stringify(next, null, 2), { mode: 0o600 })
       renameSync(file + '.tmp', file)
       saved = next
@@ -164,10 +177,11 @@ export function createSettings (storage, env = {}) {
 
   // A value the running relay already uses (the tracker it founded): saved so the next start keeps it, no restart flagged.
   function remember (key, value) {
-    if (lockedBy(key) || Object.hasOwn(saved, key)) return
+    if (Object.hasOwn(saved, key)) return
     update({ [key]: value })
-    boot[key] = JSON.stringify(get(key))
+    applied[key] = JSON.stringify(get(key))
   }
 
-  return { get, view, update, remember, file }
+  const isLive = key => Boolean(SPEC[key]?.live)
+  return { get, view, update, remember, snapshot, markApplied, isLive, file }
 }

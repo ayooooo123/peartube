@@ -34,6 +34,10 @@
       "bare": "bare-net",
       "default": "node:net"
     },
+    "node:process": {
+      "bare": "bare-process",
+      "default": "node:process"
+    },
     "node:os": {
       "bare": "bare-os",
       "default": "node:os"

@@ -137,7 +137,20 @@ async function apply (nodes, view, host) {
   }
 }
 
-export async function createNode ({
+// A node that fails partway through opening closes what it opened, so the same storage can be opened again.
+export async function createNode (opts) {
+  const undo = []
+  try {
+    return await openNode(opts, undo)
+  } catch (err) {
+    for (const fn of undo.reverse()) {
+      try { await fn() } catch {}
+    }
+    throw err
+  }
+}
+
+async function openNode ({
   storage,
   tracker: trackerKey = null,
   sources: initialSources = [],
@@ -152,7 +165,7 @@ export async function createNode ({
   relayThrough = null,
   lan: createLan = null,
   onchange = null
-}) {
+}, undo) {
   if (privateRelay) {
     throw new Error('Embedded privateRelay was removed; run standalone peartube-private-relay (bin/private-relay.js) so guard forwarders never open Corestore or tracker state')
   }
@@ -170,6 +183,7 @@ export async function createNode ({
     store = new Corestore(coreStorage)
     await store.ready()
   }
+  undo.push(() => store.close())
   const wakeup = new ProtomuxWakeup()
   let onPeersChanged = null
   let viewEpoch = 1
@@ -179,17 +193,13 @@ export async function createNode ({
     if (onPeersChanged) queueMicrotask(onPeersChanged)
   }
   // fastForward: false forces every peer to verify writer namespaces locally through apply.
-  let tracker, localChannel
-  try {
-    tracker = new Autobee(store.namespace('tracker'), trackerKey && b4a.from(trackerKey, 'hex'), { apply, update, optimistic: true, fastForward: false, wakeup })
-    await tracker.ready()
-    // Every node also owns an unforgeable single-writer Hyperbee channel; strangers can read & seed, never append.
-    localChannel = new Hyperbee(store.namespace('channel'), { writable: true, autoUpdate: false })
-    await localChannel.ready()
-  } catch (err) {
-    await store.close().catch(() => {})
-    throw err
-  }
+  const tracker = new Autobee(store.namespace('tracker'), trackerKey && b4a.from(trackerKey, 'hex'), { apply, update, optimistic: true, fastForward: false, wakeup })
+  undo.push(() => tracker.close())
+  await tracker.ready()
+  // Every node also owns an unforgeable single-writer Hyperbee channel; strangers can read & seed, never append.
+  const localChannel = new Hyperbee(store.namespace('channel'), { writable: true, autoUpdate: false })
+  undo.push(() => localChannel.close())
+  await localChannel.ready()
   const isWorklet = typeof globalThis.BareKit !== 'undefined'
   // Per-peer request window for video cores, passed as Hypercore's documented `inflightRange` when a core opens;
   // the reciprocity tier picks the window for cores opened from then on.
@@ -318,6 +328,11 @@ export async function createNode ({
     trackConn(conn, dht ? traffic.private : traffic.public)
     if (dht) { tracker.update().catch(() => {}); scanPeers().catch(() => {}) }
   })
+  undo.push(() => swarm.destroy({ force: true }))
+  undo.push(() => {
+    closing = true
+    wakeup.destroy()
+  })
   const discoveries = new Map()
   const lanTopics = new Map()
   // lanPeers declared above so swarm firewall yields to direct LAN sockets
@@ -405,6 +420,7 @@ export async function createNode ({
     if (candidates.length > 0) joinContentSwarm(candidates[0])
   }, CONTENT_TOPIC_ROTATE_MS)
   rotateTimer.unref?.()
+  undo.push(() => clearInterval(rotateTimer))
   function leaveContentSwarm (blobsHex) {
     const oldTopics = contentTopics.get(blobsHex)
     if (!oldTopics) return
@@ -492,6 +508,7 @@ export async function createNode ({
     for (const d of discoveries.values()) d.refresh().catch(() => {})
   }, 20_000) : null
   refreshTimer?.unref?.()
+  undo.push(() => clearInterval(refreshTimer))
 
   const roster = new Map()
   let scanningPeers = false
@@ -553,6 +570,7 @@ export async function createNode ({
     scanPeers().catch(() => {})
   }, 20_000) : null
   peerTimer?.unref?.()
+  undo.push(() => clearInterval(peerTimer))
   if (dht) swarm.listen().then(() => advertisePeer()).catch(() => {})
   onPeersChanged()
 
@@ -586,7 +604,9 @@ export async function createNode ({
     if (!dht) for (const topics of contentTopics.values()) for (const t of topics) next.join(t)
     lan = next
   }
-  await setLan(createLan)
+  // LAN discovery is optional: a node that cannot start it (an address this machine lacks) runs without it.
+  await setLan(createLan).catch(err => console.error('LAN discovery did not start: ' + (err?.message || err)))
+  undo.push(() => lan?.destroy())
 
   // Stock hypercore-blob-server on its own store session (its close() closes the store it is given).
   // resolve() opens the video core first, so the core is created with our inflightRange before the server's session.
@@ -601,6 +621,7 @@ export async function createNode ({
       return { key }
     }
   })
+  undo.push(() => server.close())
   await server.listen()
 
   function streamUrl (entry) {

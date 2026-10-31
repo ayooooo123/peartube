@@ -1,113 +1,32 @@
 #!/usr/bin/env bare
 import 'bare-process/global'
+import { spawn } from 'node:child_process'
 import { mkdirSync, readFileSync, writeFileSync, renameSync } from 'node:fs'
-import { request } from 'node:http'
 import { join } from 'node:path'
 import os from 'node:os'
+import b4a from 'b4a'
 import { createNode } from '../src/index.js'
-import { createLan } from '../src/lan.js'
+import { createLan, lanAddress } from '../src/lan.js'
 import { createAcquirer } from '../src/acquire.js'
 import { createApi } from '../src/http.js'
 import { createMirrorHost } from '../src/mirror.js'
 import { createCastController } from '../src/cast.js'
-import { lanAddress } from '../src/lan.js'
 import { createSettings } from '../src/settings.js'
 import { identify, posterUrl, backdropUrl } from '../src/identify.js'
 
 const env = process.env
 
-// Keep a VPN-configured seeder off the public overlay if its tunnel drops.
-// OpenVPN can leave the host default route behind while its split /1 routes go.
-function vpnRouteActive () {
-  try {
-    const routes = readFileSync('/proc/net/route', 'utf8').trim().split('\n').slice(1).map(line => {
-      const [iface, destination, , flags, , , metric, mask] = line.trim().split(/\s+/)
-      let prefix = 0
-      for (let bits = Number.parseInt(mask, 16) >>> 0; bits; bits &= bits - 1) prefix++
-      return { iface, destination: Number.parseInt(destination, 16) >>> 0, flags: Number.parseInt(flags, 16), metric: Number(metric), mask: Number.parseInt(mask, 16) >>> 0, prefix }
-    })
-    return [0x01010101, 0x01010181].every(address => {
-      let selected = null
-      for (const route of routes) {
-        if (!(route.flags & 1) || (address & route.mask) !== (route.destination & route.mask)) continue
-        if (!selected || route.prefix > selected.prefix || (route.prefix === selected.prefix && route.metric < selected.metric)) selected = route
-      }
-      return selected?.iface === 'tun0'
-    })
-  } catch {
-    return false
-  }
-}
-
-if (env.VPN_SERVICE_PROVIDER) {
-  for (let i = 0; i < 60 && !vpnRouteActive(); i++) await new Promise(resolve => setTimeout(resolve, 1000))
-  if (!vpnRouteActive()) throw new Error('VPN routing unavailable; refusing to seed over the host network')
-  setInterval(() => {
-    if (!vpnRouteActive()) {
-      console.error('VPN routing lost; stopping the seeder before it uses the host network')
-      process.exit(1)
-    }
-  }, 2000).unref?.()
-}
-function readForwardedPort () {
-  try {
-    const p = Number(readFileSync('/tmp/gluetun/forwarded_port', 'utf8').trim())
-    if (p > 0) return Promise.resolve(p)
-  } catch {}
-  return new Promise(resolve => {
-    const req = request('http://127.0.0.1:8000/v1/portforward', res => {
-      let data = ''
-      res.on('data', c => { data += c })
-      res.on('end', () => { try { resolve(Number(JSON.parse(data).port) || 0) } catch { resolve(0) } })
-    })
-    req.on('error', () => resolve(0))
-    req.end()
-  })
-}
-
+// Guard-only mode: the standalone Corestore-free forwarder (bin/private-relay.js, same env), never a content relay.
 if (env.PEARTUBE_PRIVATE_RELAY || env.PEARTUBE_PRIVATE_RELAY_PORT) {
   if (env.PEARTUBE_TRACKER || env.PEARTUBE_SOURCES || env.PEARTUBE_PRIVATE_ROUTING || env.PEARTUBE_REPLICATE || env.PEARTUBE_WATCH_DIR || env.PEARTUBE_MIRROR_FEEDS) {
     throw new Error('PEARTUBE_PRIVATE_RELAY runs a standalone Corestore-free guard forwarder and cannot be combined with tracker or content flags; run peartube-private-relay separately')
   }
-  let guardPort = Number(env.PEARTUBE_PRIVATE_RELAY_PORT || env.PEARTUBE_DHT_PORT || 0)
-  if (!guardPort) {
-    for (let i = 0; i < 15 && !guardPort; i++) {
-      const p = await readForwardedPort()
-      if (p > 0) { guardPort = p; break }
-      if (!env.VPN_SERVICE_PROVIDER && i >= 5) break
-      await new Promise(resolve => setTimeout(resolve, 1000))
-    }
-  }
-  const { createPrivateGuard } = await import('../src/private-overlay.js')
-  const bootstrap = env.PEARTUBE_BOOTSTRAP
-    ? env.PEARTUBE_BOOTSTRAP.split(',').map(s => {
-        const i = s.trim().lastIndexOf(':')
-        return i > 0 ? { host: s.trim().slice(0, i), port: Number(s.trim().slice(i + 1)) } : s.trim()
-      }).filter(Boolean)
-    : undefined
-  const guard = await createPrivateGuard({ host: env.PEARTUBE_PRIVATE_HOST || undefined, port: guardPort, bootstrap })
-  const addr = guard.address()
-  console.log(JSON.stringify({ msg: 'private-guard ready', publicKey: Buffer.from(guard.publicKey).toString('hex'), host: addr?.host || '0.0.0.0', port: addr?.port || guardPort }))
-  const hb = setInterval(() => console.log(JSON.stringify({ msg: 'private-guard heartbeat', publicKey: Buffer.from(guard.publicKey).toString('hex'), ...guard.stats() })), 60_000)
-  hb.unref?.()
-  const stopGuard = async () => {
-    clearInterval(hb)
-    setTimeout(() => process.exit(0), 2000).unref?.()
-    await guard.close().catch(() => {})
-    process.exit(0)
-  }
-  for (const sig of ['SIGINT', 'SIGTERM']) process.on(sig, stopGuard)
-  if (!env.PEARTUBE_DHT_PORT && !env.PEARTUBE_PRIVATE_RELAY_PORT) {
-    setInterval(async () => {
-      const p = await readForwardedPort()
-      if (p > 0 && p !== guardPort) await stopGuard()
-    }, 15_000).unref?.()
-  }
+  await import('./private-relay.js')
   await new Promise(() => {})
 }
 const storage = env.PEARTUBE_STORAGE || './peartube-data'
 mkdirSync(storage, { recursive: true, mode: 0o700 })
-// Everything below reads settings: an env var wins, then settings.json (set from the UI), then the default.
+// Everything below reads settings: settings.json (set from the UI) wins, then an env var, then the default.
 const settings = createSettings(storage, env)
 const cfg = settings.get
 const jobsFile = join(storage, 'jobs.json')
@@ -117,13 +36,49 @@ function loadSavedSources () {
   const fromEnv = env.PEARTUBE_SOURCES ? env.PEARTUBE_SOURCES.split(',').map(s => s.trim()).filter(Boolean) : []
   return [...saved, ...fromEnv]
 }
-const isDirectory = cfg('directory')
-async function syncDirectory (list) {
-  if (!isDirectory || !state.node) return
-  const published = new Set((await state.node.publishedSources()).map(p => p.key))
+// Followed sources the `directory` setting listed on its own (private, beside jobs.json). Turning the setting off
+// unlists exactly these, so sources listed by hand with "Add to directory" stay listed.
+const directoryFile = join(storage, 'directory.json')
+let autoListed = (() => { try { return new Set(JSON.parse(readFileSync(directoryFile, 'utf8'))) } catch { return null } })()
+function saveAutoListed () {
+  writeFileSync(directoryFile + '.tmp', JSON.stringify([...autoListed]), { mode: 0o600 })
+  renameSync(directoryFile + '.tmp', directoryFile)
+}
+let directorySync = Promise.resolve()
+function syncDirectory (list) {
+  const run = directorySync.then(() => reconcileDirectory(list))
+  directorySync = run.catch(() => {})
+  return run
+}
+async function reconcileDirectory (list) {
+  const node = state.node
+  if (!node) return
+  const published = new Set((await node.publishedSources()).map(p => p.key))
+  if (!cfg('directory')) {
+    // A relay that first runs this with the setting off listed nothing on its own: start an empty record, so turning
+    // the setting on later never mistakes sources listed by hand for its own.
+    if (!autoListed) {
+      autoListed = new Set()
+      saveAutoListed()
+    }
+    if (!autoListed.size) return
+    for (const key of [...autoListed]) {
+      if (published.has(key)) await node.unpublishSource(key)
+      autoListed.delete(key)
+      saveAutoListed()
+    }
+    return
+  }
+  // Before this file existed, a relay with the setting on listed every followed source itself.
+  if (!autoListed) {
+    autoListed = new Set(list.filter(s => !s.primary && published.has(s.key)).map(s => s.key))
+    saveAutoListed()
+  }
   for (const s of list) {
     if (s.primary || published.has(s.key)) continue
-    await state.node.publishSource({ sourceKey: s.key, kind: s.kind, title: s.alias || s.key.slice(0, 12) }, { target: 'both' }).catch(() => {})
+    await node.publishSource({ sourceKey: s.key, kind: s.kind, title: s.alias || s.key.slice(0, 12) }, { target: 'both' })
+    autoListed.add(s.key)
+    saveAutoListed()
   }
 }
 function saveSources (list) {
@@ -154,15 +109,23 @@ const apiPort = Number(env.PEARTUBE_API_PORT || 8174)
 api.listen(apiPort, env.PEARTUBE_API_HOST || '0.0.0.0')
 
 let shuttingDown = false
+let guard = null
+let guardConfig = ''
+// Opens, reopens and live changes run one at a time through `serial`.
+let lifecycle = Promise.resolve()
+let mirrorStarting = null
+let mirrorHost = null
 async function shutdown () {
   if (shuttingDown) return
   shuttingDown = true
   const kill = () => { try { os.kill?.(process.pid, 9) } catch {} process.exit(0) }
   setTimeout(kill, 3000).unref()
   api.close()
-  await state.mirror?.close().catch(() => {})
-  await state.node?.close().catch(() => {})
-  await state.cast?.close().catch(() => {})
+  const guardStopped = stopGuard()
+  // Let an open or reopen in flight finish (bounded by the kill timer) so its node is closed, not cut off mid-open.
+  await Promise.race([lifecycle, new Promise(resolve => setTimeout(resolve, 2000))])
+  await stop()
+  await guardStopped
   kill()
 }
 for (const signal of ['SIGINT', 'SIGTERM']) {
@@ -171,7 +134,6 @@ for (const signal of ['SIGINT', 'SIGTERM']) {
 
 const stagger = env.PEARTUBE_LAN_HOST ? Math.max(0, (Number(env.PEARTUBE_LAN_HOST.split('.')[3]) - 111) * 3000) : 0
 if (stagger > 0) await new Promise(resolve => setTimeout(resolve, stagger))
-const dhtPort = cfg('dhtPort') || undefined
 const list = value => value.length ? value : null
 const replicateValue = () => cfg('replicate') ? (cfg('replicateSources').length ? cfg('replicateSources') : true) : false
 const lanHost = () => cfg('lanHost') || lanAddress(os.networkInterfaces())
@@ -180,17 +142,15 @@ function lanFactory () {
   const host = cfg('lan') ? lanHost() : null
   return host ? keyPair => createLan({ host, keyPair }) : null
 }
-
-const replicateOpt = replicateValue()
-const hiverelayOpt = {
+const hiverelayOpt = () => ({
   relays: cfg('hiverelays').join(','),
   apiKey: cfg('hiverelayApiKey') || null,
   discover: cfg('hiverelayDiscover') || env.PEARTUBE_HIVERELAY === '1' || env.PEARTUBE_HIVERELAY === 'true',
   replicas: cfg('hiverelayReplicas'),
-  includeCached: Boolean(replicateOpt),
+  includeCached: Boolean(replicateValue()),
   uploadMbps: Math.max(0, cfg('hiverelayUploadMbps'))
-}
-const hiverelayEnabled = Boolean(hiverelayOpt.relays || hiverelayOpt.discover)
+})
+let hiverelayEnabled = false
 let replicateDebounce = null
 function scheduleReplicate () {
   if ((!cfg('replicate') && !hiverelayEnabled) || shuttingDown || replicateDebounce) return
@@ -202,43 +162,6 @@ function scheduleReplicate () {
   }, 2000)
   replicateDebounce.unref?.()
 }
-const node = await createNode({
-  storage,
-  tracker: cfg('tracker') || null,
-  sources: loadSavedSources(),
-  allowedPeers: list(cfg('allowedPeers')),
-  streamHost: cfg('streamHost'),
-  streamPort: cfg('streamPort'),
-  bootstrap: list(cfg('bootstrap')) || undefined,
-  dhtPort,
-  privateRouting: cfg('privateRouting'),
-  privateRelay: false,
-  relayThrough: list(cfg('relayThrough')),
-  lan: lanFactory(),
-  onchange: () => {
-    api.notify('update')
-    scheduleReplicate()
-  }
-})
-state.node = node
-// A relay started without a tracker founds its own, keyed by its writer. Saved sources would otherwise replace it as
-// the primary catalog on the next start (createNode only keeps its own tracker when told the key), hiding its library.
-if (!cfg('tracker')) {
-  const { tracker, writer } = node.status()
-  if (tracker === writer) settings.remember('tracker', writer)
-  // Followed something before this fix: the founded tracker comes back after a restart, which the UI asks for.
-  else settings.update({ tracker: writer })
-}
-if (isDirectory) await syncDirectory(node.listSources())
-const mirrorChannel = cfg('publishChannel')
-state.acquirer = createAcquirer(node, jobsFile, {
-  concurrency: cfg('acquireConcurrency'),
-  defaultChannel: mirrorChannel,
-  onDone: () => {
-    api.notify('update')
-    scheduleReplicate()
-  }
-})
 const mirrorConfig = () => ({
   watchDir: cfg('watchDir') || null,
   feeds: cfg('feeds'),
@@ -246,35 +169,206 @@ const mirrorConfig = () => ({
   replicateMinFreeBytes: Math.max(0, cfg('replicateFreeGb')) * 1024 * 1024 * 1024,
   replicateMbps: Math.max(0, cfg('replicateMbps'))
 })
-state.mirror = await createMirrorHost({
-  node,
-  storage,
-  acquirer: state.acquirer,
-  mirrorChannel,
-  rechunk: cfg('rechunk'),
-  ...mirrorConfig(),
-  hiverelay: hiverelayOpt,
-  pluginsDir: env.PEARTUBE_PLUGINS_DIR || join(storage, 'plugins'),
-  onchange: () => api.notify('update')
-})
-state.cast = createCastController({
-  storage,
-  getNode: () => state.node,
-  getLanHost: lanHost,
-  onchange: () => api.notify('cast')
-})
-await state.cast.setLanHost(lanHost()).catch(() => {})
-state.extraStatus = () => ({ lan: node.lanEndpoint() ? { host: node.lanEndpoint().host, port: node.lanEndpoint().port } : null, privateRouting: node.privateRouting })
-// Live settings apply here; the rest wait for a restart (the settings view lists them in `restartNeeded`).
-state.applySettings = async changed => {
-  const has = (...keys) => keys.some(k => changed.includes(k))
-  if (has('allowedPeers')) node.setAllowedPeers(list(cfg('allowedPeers')))
-  if (has('watchDir', 'feeds', 'replicate', 'replicateSources', 'replicateFreeGb', 'replicateMbps')) state.mirror.configure(mirrorConfig())
-  if (has('lan', 'lanHost')) {
-    await state.cast.setLanHost(lanHost()).catch(() => {})
-    await node.setLan(lanFactory())
+
+// The node, its jobs, plugins and cast stack open from the current settings; a reopen closes them and opens them
+// again in this process, so settings that shape the node apply without restarting the relay. The API stays up.
+async function start () {
+  const using = settings.snapshot()
+  const node = await createNode({
+    storage,
+    tracker: cfg('tracker') || null,
+    sources: loadSavedSources(),
+    allowedPeers: list(cfg('allowedPeers')),
+    streamHost: cfg('streamHost'),
+    streamPort: cfg('streamPort'),
+    bootstrap: list(cfg('bootstrap')) || undefined,
+    dhtPort: cfg('dhtPort') || undefined,
+    privateRouting: cfg('privateRouting'),
+    relayThrough: list(cfg('relayThrough')),
+    lan: lanFactory(),
+    onchange: () => {
+      api.notify('update')
+      scheduleReplicate()
+    }
+  })
+  settings.markApplied(using)
+  // A relay started without a tracker founds its own, keyed by its writer. Saved sources would otherwise replace it as
+  // the primary catalog on the next start (createNode only keeps its own tracker when told the key), hiding its library.
+  if (!cfg('tracker')) {
+    const { tracker, writer } = node.status()
+    if (tracker === writer) settings.remember('tracker', writer)
+    // Followed something before this fix: the founded tracker comes back on the next reopen, which the UI offers.
+    else settings.update({ tracker: writer })
   }
+  state.fallbackStatus.tracker = node.status().tracker
+  state.node = node
+  await syncDirectory(node.listSources()).catch(err => console.error(JSON.stringify({ msg: 'directory sync failed', error: err.message })))
+  state.acquirer = createAcquirer(node, jobsFile, {
+    concurrency: cfg('acquireConcurrency'),
+    defaultChannel: cfg('publishChannel'),
+    onDone: () => {
+      api.notify('update')
+      scheduleReplicate()
+    }
+  })
+  state.cast = createCastController({
+    storage,
+    getNode: () => state.node,
+    getLanHost: lanHost,
+    onchange: () => api.notify('cast')
+  })
+  await state.cast.setLanHost(lanHost()).catch(() => {})
+  const hiverelay = hiverelayOpt()
+  hiverelayEnabled = Boolean(hiverelay.relays || hiverelay.discover)
+  // Plugins start after the node answers: the channel backfill and folder scan can take a while on a large library.
+  mirrorStarting = createMirrorHost({
+    node,
+    storage,
+    acquirer: state.acquirer,
+    mirrorChannel: cfg('publishChannel'),
+    rechunk: cfg('rechunk'),
+    ...mirrorConfig(),
+    hiverelay,
+    pluginsDir: env.PEARTUBE_PLUGINS_DIR || join(storage, 'plugins'),
+    onchange: () => api.notify('update'),
+    onstarting: host => { mirrorHost = host }
+  }).then(mirror => { state.mirror = mirror }, err => {
+    console.error(JSON.stringify({ msg: 'plugins failed to start', error: err?.message || String(err) }))
+  })
   api.notify('update')
 }
-console.log(JSON.stringify({ msg: 'relay ready', api: apiPort, ...node.status() }))
-setInterval(() => console.log(JSON.stringify({ msg: 'heartbeat', ...node.status() })), 60_000).unref()
+
+// The node keeps serving until the plugins have stopped: closing the plugin host first ends a folder import between
+// files, so a reopen waits for one file, not the whole import.
+async function stop () {
+  await mirrorHost?.close().catch(() => {})
+  await mirrorStarting
+  const { node, acquirer, cast } = state
+  state.node = state.acquirer = state.cast = state.mirror = null
+  mirrorHost = null
+  await cast?.close().catch(() => {})
+  acquirer?.close()
+  await node?.close().catch(() => {})
+  api.notify('update')
+}
+
+// Guard forwarder for other peers' 2-hop private routing: bin/private-relay.js in its own process, so it never shares
+// this Corestore's process, with its own HyperDHT, port and a fresh key each start. This relay's connections stay direct.
+const guardScript = decodeURIComponent(new URL('./private-relay.js', import.meta.url).pathname)
+function spawnGuard (port, bootstrap) {
+  const childEnv = { PATH: env.PATH || '', PEARTUBE_PRIVATE_RELAY_PORT: String(port), PEARTUBE_GUARD_FOLLOW_PARENT: '1' }
+  if (bootstrap.length) childEnv.PEARTUBE_BOOTSTRAP = bootstrap.join(',')
+  if (env.PEARTUBE_PRIVATE_HOST) childEnv.PEARTUBE_PRIVATE_HOST = env.PEARTUBE_PRIVATE_HOST
+  const child = spawn(process.execPath, [guardScript], { env: childEnv, stdio: ['ignore', 'pipe', 'inherit'] })
+  const g = { child, publicKey: '', port: 0, stats: {}, exited: new Promise(resolve => { child.once('exit', resolve); child.once('error', () => resolve(null)) }) }
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => { child.kill(); reject(new Error('privateGuard: the guard did not start within 30 s')) }, 30_000)
+    let buf = ''
+    child.stdout.on('data', chunk => {
+      buf += b4a.toString(chunk)
+      for (let i = buf.indexOf('\n'); i !== -1; i = buf.indexOf('\n')) {
+        const line = buf.slice(0, i)
+        buf = buf.slice(i + 1)
+        let msg = null
+        try { msg = JSON.parse(line) } catch {}
+        if (msg?.msg === 'private-guard ready') {
+          Object.assign(g, { publicKey: msg.publicKey, port: msg.port })
+          console.log(line)
+          clearTimeout(timer)
+          resolve(g)
+        } else if (msg?.msg === 'private-guard heartbeat') {
+          const { msg: _, publicKey, ...stats } = msg
+          g.stats = stats
+        }
+      }
+    })
+    g.exited.then(code => {
+      clearTimeout(timer)
+      reject(new Error(`privateGuard: the guard exited (${code})`))
+      if (guard === g) {
+        guard = null
+        guardConfig = ''
+        console.error(JSON.stringify({ msg: 'private guard stopped', code }))
+        api.notify('update')
+      }
+    })
+  })
+}
+async function stopGuard () {
+  const g = guard
+  guard = null
+  guardConfig = ''
+  if (!g) return
+  g.child.kill()
+  const t = setTimeout(() => g.child.kill(9), 3000)
+  await g.exited
+  clearTimeout(t)
+}
+async function applyGuard () {
+  const want = cfg('privateGuard') ? JSON.stringify([cfg('privateGuardPort'), cfg('bootstrap')]) : ''
+  if (want === guardConfig) return
+  await stopGuard()
+  if (!want) return
+  const port = cfg('privateGuardPort')
+  if (port && port === cfg('dhtPort')) throw new Error('privateGuardPort: use a different port from the peer port')
+  guard = await spawnGuard(port, cfg('bootstrap'))
+  guardConfig = want
+}
+
+function serial (fn) {
+  if (shuttingDown) return Promise.reject(new Error('The relay is shutting down'))
+  const run = lifecycle.then(fn)
+  lifecycle = run.catch(() => {})
+  return run
+}
+async function reopen () {
+  await stop()
+  await start()
+}
+
+state.extraStatus = () => {
+  const lan = state.node?.lanEndpoint()
+  return {
+    lan: lan ? { host: lan.host, port: lan.port } : null,
+    privateRouting: Boolean(state.node?.privateRouting),
+    privateGuard: guard ? { publicKey: guard.publicKey, port: guard.port, ...guard.stats } : null
+  }
+}
+// Live settings apply in place; any other change reopens the node. A failed reopen leaves its keys in `restartNeeded`.
+state.applySettings = changed => serial(async () => {
+  const has = (...keys) => keys.some(k => changed.includes(k))
+  if (!state.node || changed.some(k => !settings.isLive(k))) {
+    await reopen()
+  } else {
+    const { node } = state
+    if (has('allowedPeers')) node.setAllowedPeers(list(cfg('allowedPeers')))
+    if (has('acquireConcurrency')) state.acquirer.setConcurrency(cfg('acquireConcurrency'))
+    if (has('directory')) await syncDirectory(node.listSources())
+    // "Convert at every start": turning it on converts now, as a start would. Off only skips later starts.
+    if (has('rechunk') && cfg('rechunk')) {
+      await mirrorStarting
+      state.mirror?.run('blob-rechunk').catch(() => {})
+    }
+    if (has('watchDir', 'feeds', 'replicate', 'replicateSources', 'replicateFreeGb', 'replicateMbps')) {
+      await mirrorStarting
+      state.mirror?.configure(mirrorConfig())
+    }
+    if (has('lan', 'lanHost')) {
+      await state.cast.setLanHost(lanHost()).catch(() => {})
+      await node.setLan(lanFactory())
+    }
+  }
+  await applyGuard()
+  api.notify('update')
+})
+// Reopens the node, then brings back an opted-in guard whose process has gone.
+state.restart = () => serial(async () => {
+  await reopen()
+  await applyGuard()
+  api.notify('update')
+})
+await serial(start)
+await mirrorStarting
+await serial(applyGuard).catch(err => console.error(JSON.stringify({ msg: 'private guard failed to start', error: err.message })))
+console.log(JSON.stringify({ msg: 'relay ready', api: apiPort, ...state.node.status() }))
+setInterval(() => { if (state.node) console.log(JSON.stringify({ msg: 'heartbeat', ...state.node.status() })) }, 60_000).unref()

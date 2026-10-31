@@ -88,7 +88,9 @@ export async function createMirrorHost ({
   hiverelay = null,
   pluginsDir = join(storage, 'plugins'),
   pollIntervalMs = 60_000,
-  onchange = null
+  onchange = null,
+  // Called with the host before the startup backfill and folder import, so a caller can close it while they run.
+  onstarting = null
 }) {
   const plugins = new Map()
   const stats = new Map()
@@ -768,33 +770,36 @@ export async function createMirrorHost ({
     }
   }
 
+  let timer = null
+  onstarting?.({ close })
   // Backfill any previously saved tracker entries into this relay's single-writer channel right on boot!
   if (mirrorChannel) {
     await run('channel-backfill').catch(() => {})
   }
-  if (rechunk) {
+  if (rechunk && !closed) {
     run('blob-rechunk').catch(() => {})
-  } else {
+  } else if (!closed) {
     // Count legacy blobs without moving any, so the UI can offer the migration only when there is something to migrate.
     node.rechunkLegacyBlobs?.({ limit: 0 }).then(res => {
       if (!rechunkRunning) rechunkProgress = { ...rechunkProgress, ...res, running: false }
     }).catch(() => {})
   }
-  if (watchDir) {
+  // The folder import stops between files once the host is closed.
+  if (watchDir && !closed) {
     mkdirSync(watchDir, { recursive: true })
     await run('watch-dir').catch(() => {})
   }
-  if (configuredFeeds.length) {
+  if (configuredFeeds.length && !closed) {
     run('feed-mirror').catch(() => {})
   }
-  if (replicateEnabled) {
+  if (replicateEnabled && !closed) {
     run('p2p-replicate').catch(() => {})
   }
-  if (hiverelayPlugin.enabled()) {
+  if (hiverelayPlugin.enabled() && !closed) {
     run('hiverelay-seed').catch(() => {})
   }
 
-  const timer = pollIntervalMs > 0
+  timer = pollIntervalMs > 0 && !closed
     ? setInterval(async () => {
         if (closed) return
         for (const [name, p] of plugins) {

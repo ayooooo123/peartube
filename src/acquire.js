@@ -20,8 +20,11 @@ export function createAcquirer (node, file, {
     }
   }
   const running = new Map()
+  // A closed acquirer leaves jobs.json as it was at close: the next one reads its running jobs back as queued.
+  let closed = false
 
   function save () {
+    if (closed) return
     writeFileSync(file + '.tmp', JSON.stringify(jobs), { mode: 0o600 })
     renameSync(file + '.tmp', file)
   }
@@ -73,6 +76,8 @@ export function createAcquirer (node, file, {
         job.bytes = 0
         const op = await node.put({ id: job.id, title: job.title, expectedSize: job.total }, res, bytes => { job.bytes = bytes })
         if (job.status === 'cancelled') throw new Error('Cancelled')
+        // Closed for a reopen: the next acquirer runs this job again from jobs.json, so this one must not announce it.
+        if (closed) throw new Error('Closed')
         await node.clearCache?.().catch(() => {})
         Object.assign(job, { status: 'announcing', announce: op, source: null })
         save()
@@ -86,7 +91,7 @@ export function createAcquirer (node, file, {
       job.error = err.message
       if (job.status === 'failed' && job.source && retryDelay > 0) {
         setTimeout(() => {
-          if (job.status === 'failed' && !node.closing) {
+          if (job.status === 'failed' && !node.closing && !closed) {
             job.status = 'queued'
             save()
             next()
@@ -96,11 +101,11 @@ export function createAcquirer (node, file, {
     }
     running.delete(job)
     save()
-    if (!node.closing) next()
+    if (!node.closing && !closed) next()
   }
 
   function next () {
-    while (running.size < concurrency) {
+    while (!closed && running.size < concurrency) {
       const job = jobs.find(j => !running.has(j) && j.status === 'announcing') || jobs.find(j => !running.has(j) && j.status === 'queued')
       if (!job) break
       run(job)
@@ -150,6 +155,15 @@ export function createAcquirer (node, file, {
     cancel,
     repointBlob,
     get: jobId => { const job = jobs.find(j => j.jobId === jobId); return job ? view(job) : null },
-    list: () => jobs.map(view)
+    list: () => jobs.map(view),
+    setConcurrency (n) {
+      concurrency = n
+      next()
+    },
+    close () {
+      save()
+      closed = true
+      for (const controller of running.values()) controller.abort()
+    }
   }
 }

@@ -86,20 +86,26 @@ export function createApi (state) {
       const st = node ? { ...node.status(), ...(state.extraStatus?.() || {}) } : state.fallbackStatus
       return { ...st, tokenRequired: Boolean(state.apiToken), settingsOpen }
     }
-    if (state.settings && path === '/v1/settings') {
+    if (state.settings && (path === '/v1/settings' || path === '/v1/restart')) {
       if (!settingsOpen) throw Object.assign(new Error('Set PEARTUBE_API_TOKEN to change settings over the internet'), { status: 403 })
       // Other websites can reach a LAN relay through the visitor's browser (CORS is open for players); settings only from its own page.
       const origin = req.headers.origin
       if (origin && (() => { try { return new URL(origin).host !== req.headers.host } catch { return true } })()) {
         throw Object.assign(new Error('Settings can only be changed from the relay’s own page'), { status: 403 })
       }
-      if (req.method === 'GET') return state.settings.view()
-      if (req.method === 'PUT') {
-        const res = state.settings.update(await body(req))
-        if (res.changed.length) {
-          try { await state.applySettings?.(res.changed) } catch (err) { res.warning = err.message }
+      if (req.method === 'GET' && path === '/v1/settings') return state.settings.view()
+      // Changes apply before the reply: live ones in place, the rest by reopening the node in this process.
+      if (req.method === 'PUT' && path === '/v1/settings') {
+        const { changed } = state.settings.update(await body(req))
+        let warning
+        if (changed.length) {
+          try { await state.applySettings?.(changed) } catch (err) { warning = err.message }
         }
-        return res
+        return { changed, ...state.settings.view(), ...(warning ? { warning } : {}) }
+      }
+      if (req.method === 'POST' && path === '/v1/restart' && state.restart) {
+        await state.restart()
+        return state.settings.view()
       }
     }
     if (req.method === 'POST' && path === '/v1/identify' && state.identify) {

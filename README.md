@@ -96,8 +96,13 @@ docker run -d --name peartube-relay --restart unless-stopped \
 ```
 
 On a LAN host, prefer `--network host` so mDNS (`224.0.0.251:5353`) and ephemeral LAN ports
-reach the network. `docker build -t peartube-relay .` works too. Beyond Docker, the
-[agent quickstart](#install-on-a-system-agent-quickstart) covers `systemd` and `launchd`.
+reach the network. `docker build -t peartube-relay .` works too. The image is
+`gcr.io/distroless/cc-debian12` plus the `bare` binary and the relay: no shell, no package
+manager, no Node. Node runs only in a build stage that installs the dependencies, which keeps
+just this platform's native add-ons. Bare is the container's main process, so `docker stop`
+shuts the relay down cleanly; keep `--restart unless-stopped` so it comes back after a crash.
+Beyond Docker, the [agent quickstart](#install-on-a-system-agent-quickstart) covers `systemd`
+and `launchd`.
 
 A bare `npm start` founds a new tracker and prints its `tracker` and `channel` keys
 (`{"msg":"relay ready", …}`). Open `http://<relay>:8174/` and finish under **Settings**.
@@ -126,7 +131,7 @@ When an AI coding/ops agent (Codex CLI, Claude Code, OpenCode, etc.) installs `p
 1. **Host and network capability check.**
    - **Real Linux/macOS host, NAS or VPS (including self-hosted remote `codex` CLI / SSH sessions):** supported. If the agent runs in a command sandbox (`workspace-write` + `codex-network-proxy`), escalate: `udx-native` needs raw UDP sockets (an HTTP proxy cannot carry HyperDHT), and the relay must be registered under Docker, `systemd` or `launchd` so the agent's process reaper does not kill it when the turn ends.
    - **OpenAI-hosted Codex Cloud VMs (`Work in > Cloud`):** cannot host a live public or LAN relay. Their HTTP/HTTPS-only egress proxy blocks HyperDHT/UDX UDP, no inbound ports exist, and the VM hibernates between turns. Use loopback-only tests against `createTestnet()` (`PEARTUBE_BOOTSTRAP=127.0.0.1:<port>`), call an external relay's HTTPS `/v1/acquire`, or deploy the container to a real VPS.
-2. **Settings before starting.** An unattended install sets these as env vars; each one locks its setting in the UI.
+2. **Settings before starting.** An unattended install sets these as env vars; each one is the starting value of its setting in the UI.
    - Detect the reachable LAN, Tailscale or public IPv4 (`HOST_IP`) and set `PEARTUBE_STREAM_HOST=$HOST_IP`. The `127.0.0.1` default breaks playback on every other device. On a LAN host also set `PEARTUBE_LAN_HOST=$HOST_IP`.
    - Generate `PEARTUBE_API_TOKEN=$(openssl rand -hex 32)` on any non-loopback network (`GET` playback/Stremio/M3U routes stay open; `POST`/`PUT`/`DELETE` `/v1/*` and `/v1/settings` require `Authorization: Bearer <token>`). Keep `PEARTUBE_STORAGE` at mode `0700` and env files at `0600`.
    - Leave `PEARTUBE_TRACKER` unset to found a new catalog, or pass an existing `PEARTUBE_TRACKER`/`PEARTUBE_SOURCES` (add `PEARTUBE_REPLICATE=1` to mirror and seed remote blobs).
@@ -146,10 +151,10 @@ When an AI coding/ops agent (Codex CLI, Claude Code, OpenCode, etc.) installs `p
      ghcr.io/ayooooo123/peartube-relay:latest
    ```
 
-   **Native Linux (`systemd`, no Docker)** needs Node >= 22, `git`, and `libatomic1` for `rocksdb-native`:
+   **Native Linux (`systemd`, no Docker)** needs Node >= 22 and `git`:
 
    ```sh
-   sudo apt-get update && sudo apt-get install -y --no-install-recommends git curl ca-certificates libatomic1
+   sudo apt-get update && sudo apt-get install -y --no-install-recommends git curl ca-certificates
    sudo useradd --system --home-dir /var/lib/peartube --shell /usr/sbin/nologin peartube || true
    sudo install -d -m 0700 -o peartube -g peartube /var/lib/peartube
    sudo install -d -m 0755 /etc/peartube
@@ -227,12 +232,12 @@ When an AI coding/ops agent (Codex CLI, Claude Code, OpenCode, etc.) installs `p
 
 Every variable except `PEARTUBE_STORAGE`, `PEARTUBE_API_HOST`, `PEARTUBE_API_PORT`,
 `PEARTUBE_API_TOKEN`, `PEARTUBE_SOURCES`, `PEARTUBE_PLUGINS_DIR` and the `PEARTUBE_PRIVATE_RELAY*`
-guard mode is also a setting in the web UI. An env var overrides that setting and locks it there.
+guard mode is also a setting in the web UI. An env var is that setting's starting value; a change
+saved in the UI overrides it until you put the env value back.
 
 ## Run from source
 
-Node 22 or newer (22.21+/24.9+ for `worklet/bare-kit.sh`), plus `git`; on Debian/Ubuntu,
-`libatomic1`.
+Node 22 or newer (22.21+/24.9+ for `worklet/bare-kit.sh`), plus `git`.
 
 ```sh
 npm install
@@ -249,10 +254,22 @@ The apps need Rust and more; the commands that build them are under
 ## Settings and environment
 
 Settings are saved in `settings.json` (`0600`) in the data directory and are never part of the
-Corestore. Each is marked **Applies now** or **After restart**, and the page lists changes still
-waiting. Precedence is env var, then `settings.json`, then the default. A value set by an env
-var shows **Set by PEARTUBE_…** and is read-only in the UI. Settings are accepted only from the
-relay's own page, never cross-origin.
+Corestore. On the Settings tab nothing changes until you press a card's **Save changes**: text
+fields, switches, list entries and the button that goes back to an env value all wait for it, and
+saving one card keeps the unsaved edits in the others. A saved change applies in the running
+relay: most in place (**Applies on save**), and those that shape the node (addresses, ports,
+tracker, bootstrap, private routing, HiveRelays, channel publishing) by reopening the node, jobs,
+plugins and cast stack in the same process, which drops peers for a few seconds (**Applies on save,
+reconnects peers**). The one-click switches on the Sharing tab apply at once. Precedence is
+`settings.json`, then the env var, then the default. A value that still comes from its env var shows
+**From PEARTUBE_…**; one saved over an env var shows **Overrides PEARTUBE_…** with a button that puts
+the env value back (`PUT /v1/settings` with `null`). **Restart relay** under Access reopens everything the same way,
+and also restarts a guard whose process has stopped. A reopen that fails (an unreadable saved
+source, say) leaves its changes listed as not applied; fix the cause and **Restart relay** opens the
+same storage again. A LAN address this machine doesn't have no longer stops the node: it runs
+without LAN discovery. A reopen waits for the file being imported from the watch folder, not the
+whole import, which carries on afterwards. The peer port and the guard port can't be set to the
+same fixed port. Settings are accepted only from the relay's own page, never cross-origin.
 
 A relay without `PEARTUBE_API_TOKEN` already trusts its local network: devices on private
 addresses may change settings, while public clients get `403`. Its founded tracker key is
@@ -272,11 +289,13 @@ silently replace the relay's own library.
 | `PEARTUBE_PRIVATE_ROUTING` | off | `1`: two-hop encrypted guard circuits on stock HyperDHT; endpoint addresses and tracker keys are never announced publicly |
 | `PEARTUBE_PRIVATE_RELAY` | off | `1`: standalone Corestore-free guard forwarder (`bin/private-relay.js`); cannot combine with tracker or content flags |
 | `PEARTUBE_PRIVATE_RELAY_PORT` | `PEARTUBE_DHT_PORT` | UDP port for the standalone guard forwarder |
+| `PEARTUBE_PRIVATE_GUARD` | off | `1`: also run a guard forwarder beside this relay so others can route privately; the relay's own connections stay direct |
+| `PEARTUBE_PRIVATE_GUARD_PORT` | random | UDP port for that guard; must differ from `PEARTUBE_DHT_PORT` |
 | `PEARTUBE_RELAY_THROUGH` | none | Comma-separated blind relay keys |
 | `PEARTUBE_LAN_HOST` | off | This machine's LAN IPv4; turns on mDNS discovery |
 | `PEARTUBE_SOURCES` | none | Extra channel/tracker keys or `peartube://` URIs to follow |
 | `PEARTUBE_PUBLISH_CHANNEL` | `1` on relays | List this relay's saved videos in its own channel without duplicating media (`0` disables) |
-| `PEARTUBE_DIRECTORY` | off | `1`: publish a list of subscribed channels and trackers so peers can discover them |
+| `PEARTUBE_DIRECTORY` | off | `1`: publish a list of subscribed channels and trackers so peers can discover them. Turning it off unlists the ones it listed (kept in private `directory.json`); sources added with **Add to directory** stay |
 | `PEARTUBE_WATCH_DIR` | none | Folder (e.g. `/data/import`) imported once per file |
 | `PEARTUBE_MIRROR_FEEDS` | none | Comma-separated JSON feed or peer `/v1/entries` URLs to import |
 | `PEARTUBE_REPLICATE` | off | `1` (or keys) to P2P-replicate remote blobs without duplicating catalog entries |
@@ -301,10 +320,15 @@ direct over ephemeral UDP ports. Across networks, forward a UDP port and set
 `PEARTUBE_DHT_PORT`, or use a blind relay via `PEARTUBE_RELAY_THROUGH`.
 
 Private routing connects peers over two-hop encrypted UDX-spliced guard circuits on unmodified
-`hyperdht`. It needs at least two reachable, `/24`-diverse guards (run `node bin/private-relay.js`
-or `PEARTUBE_PRIVATE_RELAY=1` with no tracker/content flags), which open zero disk state and
-are auto-discovered on each boot. Endpoints never announce IPs or tracker keys, disable LAN
-mDNS, and fail closed with fewer than two diverse guards.
+`hyperdht`. It needs at least two reachable, `/24`-diverse guards (run `node bin/private-relay.js`,
+`PEARTUBE_PRIVATE_RELAY=1` with no tracker/content flags, or turn on **Help others route privately**
+on any relay), which open zero disk state and are auto-discovered on each boot. Endpoints never
+announce IPs or tracker keys, disable LAN mDNS, and fail closed with fewer than two diverse guards.
+
+A relay's guard is `bin/private-relay.js` started as a child process, so it never shares the
+relay's Corestore process. It uses its own HyperDHT node, port and fresh key on every start, and
+exits with the relay. The relay keeps its direct and LAN connections; turning on **Private
+routing** instead moves the relay's own traffic onto guards and drops them.
 
 ## Web UI and API
 
@@ -319,12 +343,13 @@ and control) and **Settings**. Plugins appear only as user intents.
 | Route | Does |
 |---|---|
 | `GET /` | Web UI |
-| `GET/PUT /v1/settings` | Settings with each one's `value`, `source`, `env`, `live` flag and `restartNeeded`. Env-set keys answer `409`; secrets inside URLs never return |
+| `GET/PUT /v1/settings` | Settings with each one's `value`, `source` (`file`, `env` or `default`), `env`, `envSet`, `live` flag and `restartNeeded`. `PUT` applies before it answers; `null` puts a value back to its env var or default; secrets inside URLs never return |
+| `POST /v1/restart` | Reopens the node, jobs, plugins and cast stack in the running process; same auth and origin rules as settings |
 | `POST /v1/identify` `{url}` | Link contents: parsed name, Cinemeta `candidates` and `match`, or a plain `clip:` fallback |
 | `GET /v1/search?id=imdb:tt…`, `GET /v1/entries` | Tracker entries with `streamUrl`; one result per file (`id` + `sha256`), picking a copy that plays |
 | `POST /v1/acquire` `{id, title, source}` | Fetch, store and announce; `page: true` resolves a page through `yt-dlp` on every attempt |
 | `GET/DELETE /v1/jobs[/:id]` | Acquire jobs; sources are never returned. `DELETE` cancels or removes |
-| `GET /v1/status` | Keys, stored bytes, peers and per-transport traffic, `lan`, `privateRouting`, `tokenRequired`, `settingsOpen` |
+| `GET /v1/status` | Keys, stored bytes, peers and per-transport traffic, `lan`, `privateRouting`, `privateGuard` (`publicKey`, `port`, circuit counts, or `null`), `tokenRequired`, `settingsOpen` |
 | `GET/POST /v1/sources`, `DELETE /v1/sources/:key` | Follow or remove a tracker or channel |
 | `POST /v1/open`, `GET /v1/resolve` | Open a `peartube://` channel, tracker, receiver pairing or `peartube://watch/…` link |
 | `POST /v1/cache/clear`, `GET /v1/events` | Clear cached pieces; live SSE updates |

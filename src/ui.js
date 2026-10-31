@@ -41,6 +41,8 @@ export const page = `<!doctype html>
   .pill { font-size: 12px; font-weight: 500; padding: 4px 10px; border-radius: var(--r-pill); background: var(--raised); color: var(--dim); white-space: nowrap; }
   .pill b { color: var(--text); font-weight: 600; font-variant-numeric: tabular-nums; }
   .pill.warn { color: var(--warn); }
+  button.pill { border: 0; font-family: inherit; cursor: pointer; }
+  button.pill:disabled { opacity: .6; cursor: default; }
   .pill.ok::before { content: ''; display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--ok); margin-right: 6px; vertical-align: 1px; box-shadow: 0 0 0 3px color-mix(in srgb, var(--ok) 16%, transparent); }
   .tabs { max-width: 1440px; margin: 0 auto; padding: 0 20px; display: flex; gap: 4px; overflow-x: auto; scrollbar-width: none; }
   .tabs a { padding: 12px 14px 11px; color: var(--dim); text-decoration: none; font-size: 14px; font-weight: 600; border-bottom: 2px solid transparent; white-space: nowrap; transition: color var(--t-fast) var(--ease), border-color var(--t-fast) var(--ease); }
@@ -546,16 +548,27 @@ addEventListener('hashchange', showTab)
 async function refresh () {
   if (pressing || player) { refreshQueued = true; return }
   try {
-    const [st, src, ent, jb, pl] = await Promise.all([
+    const [st, src, ent, jb, pl, set] = await Promise.all([
       api('/v1/status'), api('/v1/sources'), api('/v1/entries'), api('/v1/jobs'),
-      api('/v1/plugins').catch(() => ({ plugins: [] }))
+      api('/v1/plugins').catch(() => ({ plugins: [] })),
+      // Another tab, a reopen or the relay itself can change settings; reload them once this page may see them.
+      S.settings ? api('/v1/settings').catch(() => S.settings) : null
     ])
     Object.assign(S, { status: st, sources: src, entries: ent.results || [], jobs: jb.jobs || [], plugins: pl.plugins || [], offline: false })
+    if (set) S.settings = set
   } catch (err) {
     S.offline = !needsToken
   }
   if (pressing || player) { refreshQueued = true; return }
   render()
+  if (tab === 'settings') refreshSettingsView()
+}
+// Redraws the Settings tab when what it shows changed, unless the user is in one of its fields.
+let settingsShown = ''
+function refreshSettingsView () {
+  const shown = JSON.stringify([S.settings, S.status.privateGuard ? S.status.privateGuard.port : 0])
+  if (shown === settingsShown || $('settingsBody').contains(document.activeElement)) return
+  renderSettings()
 }
 let settingsLoaded = false
 async function loadSettings () {
@@ -590,7 +603,11 @@ function renderPills () {
     pills.push(h('span', { class: 'pill rate' }, '↓ ', h('b', null, rate(st.downBps)), ' ↑ ', h('b', null, rate(st.upBps))))
   }
   const restart = S.settings ? S.settings.restartNeeded.length : 0
-  if (restart) pills.push(h('a', { class: 'pill warn', href: '#settings' }, 'Restart to apply ' + plural(restart, 'change', 'changes')))
+  if (restart) {
+    const btn = h('button', { class: 'pill warn', type: 'button' }, 'Restart to apply ' + plural(restart, 'change', 'changes'))
+    btn.onclick = () => act(btn, restartRelay)
+    pills.push(btn)
+  }
   if (needsToken && !token) pills.push(h('span', { class: 'pill warn' }, 'Read-only until you sign in'))
   $('pills').replaceChildren(...pills)
 }
@@ -1036,9 +1053,10 @@ async function keepCopy (key, on) {
   const next = (only.length ? only : followed.concat(key)).filter(k => k !== key)
   return saveSettings(next.length ? { replicateSources: [...new Set(next)] } : { replicate: false, replicateSources: [] })
 }
-function lockedNote (...keys) {
-  const locked = keys.map(setting).find(s => s && s.source === 'env')
-  return locked ? 'Set by ' + locked.env : ''
+// A setting that still follows its env var says so.
+function envNote (key) {
+  const s = setting(key)
+  return s && s.source === 'env' ? 'From ' + s.env : ''
 }
 function switchRow (label, checked, onchange, { disabled = false, note = '' } = {}) {
   const input = h('input', { type: 'checkbox', role: 'switch', checked: Boolean(checked), disabled })
@@ -1065,7 +1083,7 @@ function renderChannels () {
       h('div', { class: 'info' },
         h('div', { class: 'name' }, s.alias || (s.kind === 'channel' ? 'Channel ' : 'Tracker ') + short(s.key)),
         h('div', { class: 'meta' }, (s.kind === 'channel' ? 'Channel' : 'Tracker') + (listed ? ' · In your directory' : '')),
-        canEdit ? switchRow('Keep a copy here', copying(s.key), on => keepCopy(s.key, on), { disabled: Boolean(lockedNote('replicate')), note: lockedNote('replicate') }) : null),
+        canEdit ? switchRow('Keep a copy here', copying(s.key), on => keepCopy(s.key, on)) : null),
       h('div', { class: 'acts' },
         copyBtn('Copy link', 'peartube://' + s.kind + '/' + s.key),
         listed
@@ -1091,8 +1109,9 @@ function renderSharing () {
       stat(String((routes.public && routes.public.peers) || 0), 'over the internet'),
       stat(String(st.lanPeers || 0), lan ? 'nearby on ' + lan.host : 'nearby'),
       stat(st.privateRouting ? String((routes.private && routes.private.peers) || 0) : 'Off', 'private routing'),
+      stat(st.privateGuard ? String(st.privateGuard.activeCircuits || 0) : 'Off', 'guard circuits'),
       stat(rate(st.upBps), 'sending now')),
-    S.settings ? h('div', { style: 'margin-top:12px' }, switchRow('Find peers on this network', sval('lan'), on => saveSettings({ lan: on }), { disabled: Boolean(lockedNote('lan')), note: lockedNote('lan') })) : null)
+    S.settings ? h('div', { style: 'margin-top:12px' }, switchRow('Find peers on this network', sval('lan'), on => saveSettings({ lan: on }), { note: envNote('lan') })) : null)
 
   const rep = plugin('p2p-replicate')
   const only = sval('replicateSources') || []
@@ -1108,7 +1127,7 @@ function renderSharing () {
   }
   $('copiesCard').replaceChildren(
     S.settings
-      ? switchRow(only.length ? 'Keep copies of ' + plural(only.length, 'followed source', 'followed sources') : 'Keep copies of everything I follow', sval('replicate'), on => saveSettings({ replicate: on, replicateSources: on ? only : [] }), { disabled: Boolean(lockedNote('replicate')), note: lockedNote('replicate') })
+      ? switchRow(only.length ? 'Keep copies of ' + plural(only.length, 'followed source', 'followed sources') : 'Keep copies of everything I follow', sval('replicate'), on => saveSettings({ replicate: on, replicateSources: on ? only : [] }), { note: envNote('replicate') })
       : h('div', { class: 'hint' }, 'Sign in to change sharing.'),
     ...copyLines,
     h('div', { class: 'hint', style: 'margin-top:8px' }, 'Disk and speed limits are in ', h('a', { href: '#settings' }, 'Settings'), '.'))
@@ -1116,7 +1135,7 @@ function renderSharing () {
   const hr = plugin('hiverelay-seed')
   const relays = sval('hiverelays') || []
   const lines = []
-  if (S.settings) lines.push(switchRow('Find HiveRelays automatically', sval('hiverelayDiscover'), on => saveSettings({ hiverelayDiscover: on }), { disabled: Boolean(lockedNote('hiverelayDiscover')), note: lockedNote('hiverelayDiscover') || (setting('hiverelayDiscover').live ? '' : 'After restart') }))
+  if (S.settings) lines.push(switchRow('Find HiveRelays automatically', sval('hiverelayDiscover'), on => saveSettings({ hiverelayDiscover: on }), { note: envNote('hiverelayDiscover') }))
   if (hr.enabled) {
     lines.push(h('div', { class: 'stats' },
       stat(String((hr.p2pAcceptedRelays || []).length + (hr.configuredRelays || []).filter(r => r.pubkey).length), 'HiveRelays seeding'),
@@ -1131,11 +1150,11 @@ function renderSharing () {
     const running = new Map((hr.configuredRelays || []).map(r => [r.url.replace(/^https?:[/][/]/, '').replace(/[/]+$/, ''), r]))
     const later = S.settings.restartNeeded.includes('hiverelays')
     lines.push(h('div', { class: 'listedit', style: 'margin-top:10px' }, relays.map(r => h('div', { class: 'entry' }, h('span', null, r.label, ' ',
-      h('span', { class: 'tag' + (running.get(r.label)?.pubkey ? ' ok' : '') }, later && !running.has(r.label) ? 'After restart' : running.get(r.label)?.pubkey ? 'Seeding' : 'Not reached yet')),
+      h('span', { class: 'tag' + (running.get(r.label)?.pubkey ? ' ok' : '') }, later && !running.has(r.label) ? 'Not applied yet' : running.get(r.label)?.pubkey ? 'Seeding' : 'Not reached yet')),
       h('button', { class: 'btn quiet', onclick: e => act(e.currentTarget, () => saveSettings({ hiverelays: relays.filter(x => x !== r).map(x => x.ref) })) }, 'Remove')))))
   }
   $('hiveStatus').replaceChildren(...lines)
-  $('hiveForm').hidden = !S.settings || Boolean(lockedNote('hiverelays'))
+  $('hiveForm').hidden = !S.settings
 
   const origin = location.origin
   $('appsCard').replaceChildren(
@@ -1150,7 +1169,7 @@ $('hiveForm').onsubmit = async ev => {
     await saveSettings({ hiverelays: [...(sval('hiverelays') || []).map(r => r.ref), key ? url + '=' + key : url] })
     $('hiveInput').value = ''
     $('hiveKey').value = ''
-    say('hiveMsg', 'Added. Restart the relay to start seeding there.')
+    say('hiveMsg', 'Added. Seeding starts once it answers.')
   }, 'hiveMsg')
 }
 
@@ -1219,7 +1238,9 @@ const GROUPS = [
     { key: 'lan', label: 'Find peers on this network', hint: 'mDNS discovery on the LAN; needs both on the same Wi-Fi.' },
     { key: 'lanHost', label: 'Advertised LAN address', hint: 'Interface peers dial; picks Wi-Fi or Ethernet automatically.', ph: '192.168.1.20' },
     { key: 'dhtPort', label: 'Peer port (UDP)', hint: '0 picks a random port; fix it to forward through NAT.', ph: '49737' },
-    { key: 'privateRouting', label: 'Private routing (2-hop guards)', hint: 'Sends traffic through two guards; slower, hides your IP.' },
+    { key: 'privateRouting', label: 'Private routing (2-hop guards)', hint: 'Routes your own traffic through two guards; no direct or LAN peers.' },
+    { key: 'privateGuard', label: 'Help others route privately (guard)', hint: 'Forwards encrypted 2-hop traffic for others; your connections stay direct.' },
+    { key: 'privateGuardPort', label: 'Guard port (UDP)', hint: '0 picks a random port; forward it so others reach it.', ph: '49738' },
     { key: 'relayThrough', label: 'Blind relays', hint: 'DHT relay keys that forward when both sides are behind NAT.', ph: '3a8f0c1e5b7d92f4a6c0e8b1d3f5a7c9e2b4d6f8a0c2e4b6d8f0a2c4e6b8d0f2' },
     { key: 'bootstrap', label: 'DHT bootstrap nodes', hint: 'Leave empty to use the public HyperDHT bootstrap list.', ph: '88.99.3.86:49737' },
     { key: 'allowedPeers', label: 'Only connect to these peers', hint: 'Allowlist of peer keys; empty means anyone.', ph: '3a8f0c1e5b7d92f4a6c0e8b1d3f5a7c9e2b4d6f8a0c2e4b6d8f0a2c4e6b8d0f2' }
@@ -1231,7 +1252,9 @@ const GROUPS = [
     { key: 'acquireConcurrency', label: 'Concurrent downloads', hint: 'Each one is a yt-dlp process; higher costs CPU.', ph: '4' },
     { key: 'cinemetaUrl', label: 'Title lookup service', hint: 'Matches titles to IMDb ids; supplies posters and backdrops.', ph: 'https://v3-cinemeta.strem.io' },
     { key: 'watchDir', label: 'Import folder', hint: 'Absolute path on the relay; new files are added automatically.', ph: '/data/import' },
-    { key: 'feeds', label: 'Mirrored catalogs (feeds)', hint: 'JSON list of titles and sources; another relay’s /v1/entries works.', ph: 'https://example.org/catalog.json' }
+    { key: 'feeds', label: 'Mirrored catalogs (feeds)', hint: 'JSON list of titles and sources; another relay’s /v1/entries works.', ph: 'https://example.org/catalog.json' },
+    // Only on relays with videos in the old format (or with the switch already on), like the Storage card.
+    { key: 'rechunk', label: 'Convert old-format videos at every start', hint: 'Moves videos from the old shared storage into their own files.', when: () => plugin('blob-rechunk').running || plugin('blob-rechunk').remaining > 0 || sval('rechunk') }
   ] },
   { title: 'Sharing', hint: 'What it keeps for others.', items: [
     { key: 'replicate', label: 'Keep copies of what I follow', hint: 'Seeds followed content until the free-space floor is hit.' },
@@ -1246,51 +1269,117 @@ const GROUPS = [
 ]
 
 const INPUT_TYPE = { host: 'text', port: 'number', number: 'number', key: 'text', path: 'text', url: 'url', secret: 'password' }
-let settingsDirty = false
+// Settings cards with unsaved edits, by title: redraws leave them alone, and saving one card redraws only that card.
+const dirtyCards = new Set()
 
-async function saveSettings (patch) {
+async function saveSettings (patch, card = null) {
+  const reopens = Object.keys(patch).some(k => !setting(k).live)
+  if (reopens) toast('Applying…')
   const r = await api('/v1/settings', { method: 'PUT', body: patch })
   S.settings = r
   if (r.warning) toast(r.warning)
-  else toast(r.changed.some(k => !setting(k).live) ? 'Saved. Restart the relay to apply.' : 'Saved')
-  if (tab === 'settings') renderSettings(true)
+  else toast(reopens && r.changed.length ? 'Saved and applied' : 'Saved')
+  if (card) {
+    dirtyCards.delete(card.dataset.group)
+    const group = GROUPS.find(g => g.title === card.dataset.group)
+    if (dirtyCards.size) card.replaceWith(settingsCard(group))
+    else renderSettings(true)
+  } else if (tab === 'settings') renderSettings()
   refresh()
   return r
 }
 
-function settingRow (item) {
+// Reopens the node, jobs, plugins and cast stack in the relay's process; the page stays connected.
+async function restartRelay () {
+  toast('Restarting…')
+  try {
+    S.settings = await api('/v1/restart', { method: 'POST' })
+    toast('Restarted')
+    if (tab === 'settings') renderSettings()
+  } finally {
+    refresh()
+  }
+}
+
+// Nothing on the Settings tab applies until its card's Save: switches, list edits and "Use PEARTUBE_..." go into
+// the card's draft (key to value, or null to go back to the env value) beside the text fields.
+function settingRow (item, draft) {
   const s = setting(item.key)
   if (!s) return null
   const id = 'set-' + item.key
-  const locked = s.source === 'env'
-  const tags = [h('span', { class: s.live ? 'tag ok' : 'tag warn' }, s.live ? 'Applies now' : 'After restart')]
-  if (locked) tags.push(h('span', { class: 'tag' }, 'Set by ' + s.env))
+  const changed = el => {
+    const card = el.closest('.card')
+    dirtyCards.add(card.dataset.group)
+    card.querySelector('.save').disabled = false
+  }
+  const tags = [h('span', { class: 'tag ok' }, s.live ? 'Applies on save' : 'Applies on save, reconnects peers')]
+  // A pending "Use PEARTUBE_…" is undone by any later edit of the same setting: the newest edit is what Save sends.
+  let cancelReset = () => {}
+  if (s.source === 'env') tags.push(h('span', { class: 'tag' }, 'From ' + s.env))
+  else if (s.envSet) {
+    tags.push(h('span', { class: 'tag' }, 'Overrides ' + s.env))
+    const reset = h('button', { class: 'btn quiet' }, 'Use ' + s.env)
+    const pending = h('span', { class: 'tag warn' }, 'Uses ' + s.env + ' after saving')
+    reset.onclick = () => {
+      draft.set(item.key, null)
+      reset.replaceWith(pending)
+      changed(what)
+    }
+    cancelReset = () => {
+      if (draft.get(item.key) !== null) return
+      draft.delete(item.key)
+      pending.replaceWith(reset)
+    }
+    tags.push(reset)
+  }
+  if (item.key === 'privateGuard' && S.status.privateGuard) tags.push(h('span', { class: 'tag ok' }, 'Guarding on port ' + S.status.privateGuard.port))
   const what = h('div', { class: 'what' }, h('label', { for: id }, item.label), item.hint ? h('div', { class: 'hint' }, item.hint) : null, h('div', { class: 'row' }, tags))
   if (s.type === 'bool') {
-    const input = h('input', { id, type: 'checkbox', role: 'switch', checked: Boolean(s.value), disabled: locked })
-    input.onchange = () => act(input, () => saveSettings({ [item.key]: input.checked }))
+    const input = h('input', { id, type: 'checkbox', role: 'switch', checked: Boolean(s.value) })
+    input.onchange = () => {
+      cancelReset()
+      if (input.checked === Boolean(s.value)) draft.delete(item.key)
+      else draft.set(item.key, input.checked)
+      changed(input)
+    }
     return h('div', { class: 'setting' }, what, h('div', { class: 'control narrow' }, h('span', { class: 'switch' }, input)))
   }
   if (s.type === 'keys' || s.type === 'hosts' || s.type === 'urls') {
-    const values = s.value || []
     const shown = v => s.type === 'urls' ? v.label : v
     const kept = v => s.type === 'urls' ? v.ref : v
-    const input = h('input', { id, type: s.type === 'urls' ? 'url' : 'text', spellcheck: 'false', placeholder: item.ph, disabled: locked })
-    const add = h('button', { class: 'btn', disabled: locked, onclick: () => {
+    let working = [...(s.value || [])]
+    const entries = h('div')
+    const draw = () => entries.replaceChildren(...working.map(v => h('div', { class: 'entry' }, h('span', null, shown(v)),
+      h('button', { class: 'btn quiet', onclick: e => { working = working.filter(x => x !== v); edited(e.currentTarget) } }, 'Remove'))))
+    const edited = el => {
+      cancelReset()
+      draft.set(item.key, working.map(kept))
+      changed(el)
+      draw()
+    }
+    draw()
+    const input = h('input', { id, type: s.type === 'urls' ? 'url' : 'text', spellcheck: 'false', placeholder: item.ph })
+    const add = h('button', { class: 'btn' }, 'Add')
+    add.onclick = () => {
       const v = input.value.trim()
-      if (v) act(add, () => saveSettings({ [item.key]: [...values.map(kept), v] }))
-    } }, 'Add')
+      if (!v) return
+      working.push(s.type === 'urls' ? { ref: v, label: v } : v)
+      input.value = ''
+      edited(add)
+    }
     input.onkeydown = e => { if (e.key === 'Enter') { e.preventDefault(); add.click() } }
-    return h('div', { class: 'setting' }, what, h('div', { class: 'control listedit' },
-      values.map(v => h('div', { class: 'entry' }, h('span', null, shown(v)), locked ? null : h('button', { class: 'btn quiet', onclick: e => act(e.currentTarget, () => saveSettings({ [item.key]: values.filter(x => x !== v).map(kept) })) }, 'Remove'))),
+    return h('div', { class: 'setting' }, what, h('div', { class: 'control listedit' }, entries,
       h('div', { class: 'row' }, h('span', { class: 'grow' }, input), add)))
   }
   const detected = item.key === 'lanHost' && S.status.lan ? S.status.lan.host : ''
-  const input = h('input', { id, type: INPUT_TYPE[s.type] || 'text', placeholder: detected || item.ph, spellcheck: 'false', disabled: locked, value: s.type === 'secret' ? '' : String(s.value ?? '') })
+  const input = h('input', { id, type: INPUT_TYPE[s.type] || 'text', placeholder: detected || item.ph, spellcheck: 'false', value: s.type === 'secret' ? '' : String(s.value ?? '') })
   if (s.type === 'port' || s.type === 'number') { input.min = '0'; input.step = 'any'; input.inputMode = 'numeric' }
   if (s.type === 'secret' && s.set) input.placeholder = 'Saved. Type to replace.'
   input.dataset.key = item.key
-  input.oninput = () => { settingsDirty = true; input.closest('.card').querySelector('.save').disabled = false }
+  input.oninput = () => {
+    cancelReset()
+    changed(input)
+  }
   return h('div', { class: 'setting' }, what, h('div', { class: 'control' }, input))
 }
 
@@ -1298,6 +1387,25 @@ function readField (input) {
   const s = setting(input.dataset.key)
   if (s.type === 'port' || s.type === 'number') return input.value === '' ? 0 : Number(input.value)
   return input.value.trim()
+}
+
+function settingsCard (g) {
+  const draft = new Map()
+  const card = h('div', { class: 'card' }, h('h3', null, g.title), g.hint ? h('div', { class: 'hint', style: 'margin:-2px 0 6px' }, g.hint) : null, g.items.filter(item => !item.when || item.when()).map(item => settingRow(item, draft)))
+  card.dataset.group = g.title
+  const save = h('button', { class: 'btn primary save', disabled: true }, 'Save changes')
+  save.onclick = () => {
+    const patch = Object.fromEntries(draft)
+    for (const input of card.querySelectorAll('input[data-key]')) {
+      if (draft.has(input.dataset.key)) continue
+      const s = setting(input.dataset.key)
+      const v = readField(input)
+      if (s.type === 'secret' ? v !== '' : v !== s.value) patch[input.dataset.key] = v
+    }
+    if (Object.keys(patch).length) act(save, () => saveSettings(patch, card))
+  }
+  card.append(h('div', { class: 'row', style: 'margin-top:12px' }, save))
+  return card
 }
 
 function renderSettings (force) {
@@ -1308,30 +1416,19 @@ function renderSettings (force) {
       : h('div', { class: 'hint' }, !settingsLoaded ? 'Loading…' : S.status.settingsOpen === false ? 'Over the internet, settings need the relay’s access token.' : 'Settings are not available on this relay.')))
     return
   }
-  if (settingsDirty && !force) return
-  settingsDirty = false
+  if (dirtyCards.size && !force) return
+  dirtyCards.clear()
+  settingsShown = JSON.stringify([S.settings, S.status.privateGuard ? S.status.privateGuard.port : 0])
   const blocks = []
   const pending = S.settings.restartNeeded
   if (pending.length) {
     const names = pending.map(k => (GROUPS.flatMap(g => g.items).find(i => i.key === k) || { label: k }).label)
-    blocks.push(h('div', { class: 'banner' }, h('div', { class: 'label' }, 'Restart the relay to apply ' + plural(pending.length, 'change', 'changes') + '.'), h('div', { class: 'row', style: 'margin-top:8px' }, names.map(n => h('span', { class: 'tag' }, n)))))
+    const again = h('button', { class: 'btn primary' }, 'Restart now')
+    again.onclick = () => act(again, restartRelay)
+    blocks.push(h('div', { class: 'banner' }, h('div', { class: 'label' }, plural(pending.length, 'change is', 'changes are') + ' not applied yet.'),
+      h('div', { class: 'row', style: 'margin-top:8px' }, names.map(n => h('span', { class: 'tag' }, n)), again)))
   }
-  for (const g of GROUPS) {
-    const card = h('div', { class: 'card' }, h('h3', null, g.title), g.hint ? h('div', { class: 'hint', style: 'margin:-2px 0 6px' }, g.hint) : null, g.items.map(settingRow))
-    const save = h('button', { class: 'btn primary save', disabled: true }, 'Save changes')
-    save.onclick = () => {
-      const patch = {}
-      for (const input of card.querySelectorAll('input[data-key]')) {
-        const s = setting(input.dataset.key)
-        if (s.source === 'env') continue
-        const v = readField(input)
-        if (s.type === 'secret' ? v !== '' : v !== s.value) patch[input.dataset.key] = v
-      }
-      if (Object.keys(patch).length) act(save, () => saveSettings(patch))
-    }
-    card.append(h('div', { class: 'row', style: 'margin-top:12px' }, save))
-    blocks.push(card)
-  }
+  for (const g of GROUPS) blocks.push(settingsCard(g))
   const rechunk = plugin('blob-rechunk')
   if (rechunk.running || rechunk.remaining > 0) {
     const done = (rechunk.migrated || 0) + (rechunk.deduped || 0)
@@ -1339,12 +1436,13 @@ function renderSettings (force) {
       h('div', { class: 'meta' }, rechunk.running ? 'Converting old-format videos: ' + done + ' of ' + rechunk.total : plural(rechunk.remaining, 'video uses', 'videos use') + ' the old storage format.'),
       rechunk.running ? h('div', { class: 'bar-track' }, h('div', { style: 'width:' + Math.round(done / Math.max(1, rechunk.total) * 100) + '%' })) : null,
       h('div', { class: 'row', style: 'margin-top:12px' },
-        h('button', { class: 'btn primary', disabled: Boolean(rechunk.running), onclick: e => act(e.currentTarget, async () => { api('/v1/plugins/blob-rechunk/run', { body: { foreground: true } }).then(refresh, err => toast(err.message)); toast('Converting now'); setTimeout(refresh, 500) }) }, 'Convert now'),
-        switchRow('Convert at every start', sval('rechunk'), on => saveSettings({ rechunk: on }), { disabled: Boolean(lockedNote('rechunk')), note: lockedNote('rechunk') }))))
+        h('button', { class: 'btn primary', disabled: Boolean(rechunk.running), onclick: e => act(e.currentTarget, async () => { api('/v1/plugins/blob-rechunk/run', { body: { foreground: true } }).then(refresh, err => toast(err.message)); toast('Converting now'); setTimeout(refresh, 500) }) }, 'Convert now'))))
   }
   blocks.push(h('div', { class: 'card' }, h('h3', null, 'Access'),
     h('div', { class: 'row' }, h('span', { class: 'grow hint' }, token ? 'Signed in on this browser.' : 'No token needed on this relay.'),
-      token ? h('button', { class: 'btn', onclick: () => { token = ''; localStorage.removeItem('peartube.token'); location.reload() } }, 'Sign out') : null)))
+      token ? h('button', { class: 'btn', onclick: () => { token = ''; localStorage.removeItem('peartube.token'); location.reload() } }, 'Sign out') : null),
+    h('div', { class: 'row', style: 'margin-top:12px' }, h('span', { class: 'grow hint' }, 'Reopens peers, downloads and plugins in a few seconds.'),
+      h('button', { class: 'btn', onclick: e => act(e.currentTarget, restartRelay) }, 'Restart relay'))))
   body.replaceChildren(...blocks)
 }
 

@@ -1,5 +1,6 @@
-import { readFileSync, writeFileSync, renameSync } from 'node:fs'
+import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { writeJsonAtomic } from './io.js'
 
 // Relay settings: settings.json (set from the UI) wins, then an env var, then the default. settings.json is a private
 // file beside jobs.json (0600), never in the Corestore. Secrets (HiveRelay API keys, tokens inside URLs) are
@@ -168,8 +169,7 @@ export function createSettings (storage, env = {}) {
       throw bad(changed.includes('dhtPort') ? 'dhtPort' : 'privateGuardPort', 'the peer port and the guard port must differ')
     }
     if (JSON.stringify(next) !== JSON.stringify(saved)) {
-      writeFileSync(file + '.tmp', JSON.stringify(next, null, 2), { mode: 0o600 })
-      renameSync(file + '.tmp', file)
+      writeJsonAtomic(file, next, 2)
       saved = next
     }
     return { changed, ...view() }

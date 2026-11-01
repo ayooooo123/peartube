@@ -6,50 +6,16 @@
 //   - Greedy P2P Hyperblobs block replication (`p2p-replicate`) to stuff a replica disk full without duplicating catalog ops
 //   - Recruits existing HiveRelays (`hiverelay-seed`) via HTTP `/seed-core` and P2P `hiverelay-seed` DHT as supplemental seeders
 //   - Dynamically loads custom user plugins dropped into `/data/plugins/*.mjs` or `*.js`
-import { createReadStream, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, statSync, statfsSync, writeFileSync } from 'node:fs'
-import { request as httpRequest } from 'node:http'
-import { request as httpsRequest } from 'node:https'
+import { createReadStream, existsSync, mkdirSync, readdirSync, readFileSync, statSync, statfsSync } from 'node:fs'
 import { basename, extname, join, resolve } from 'node:path'
 import { createHash } from 'node:crypto'
 import b4a from 'b4a'
 import { parseUri } from './index.js'
 import { createHiverelaySeeder } from './hiverelay.js'
+import { fetchJson, writeJsonAtomic } from './io.js'
 
 const VALID_ID = /^[a-z0-9]+:[a-z0-9]+(:s\d{2}e\d{2,3})?$/
 const MEDIA_EXT = new Set(['.mp4', '.mkv', '.webm', '.avi', '.mov', '.m4v', '.ts', '.m2ts', '.mpg', '.mpeg', '.ogv', '.ogg', '.flac', '.mp3', '.opus', '.wav', '.aac'])
-
-function fetchJson (url, headers = {}, redirects = 0) {
-  return new Promise((resolveJson, reject) => {
-    const parsed = new URL(url)
-    const fn = parsed.protocol === 'https:' ? httpsRequest : httpRequest
-    const req = fn(parsed, { headers: { accept: 'application/json', ...headers } }, res => {
-      if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location && redirects < 5) {
-        res.resume?.()
-        resolveJson(fetchJson(new URL(res.headers.location, parsed).href, headers, redirects + 1))
-        return
-      }
-      if (res.statusCode < 200 || res.statusCode >= 300) {
-        res.resume?.()
-        // Plugin errors are public on /v1/plugins: name the feed by host and path, never its query or credentials.
-        reject(new Error(`Feed ${parsed.host}${parsed.pathname} answered ${res.statusCode}`))
-        return
-      }
-      const chunks = []
-      let total = 0
-      res.on('data', chunk => {
-        const buf = typeof chunk === 'string' ? b4a.from(chunk) : chunk
-        total += buf.length
-        if (total > 8 * 1024 * 1024) { req.destroy(new Error('Feed payload exceeded 8 MiB')); return }
-        chunks.push(buf)
-      })
-      res.on('end', () => {
-        try { resolveJson(JSON.parse(b4a.toString(b4a.concat(chunks)))) } catch (err) { reject(err) }
-      })
-    })
-    req.on('error', reject)
-    req.end()
-  })
-}
 
 // Infers a canonical PearTube ID (`imdb:tt...:s01e02`, `imdb:tt...`, or `clip:<slug>`) from a filename or sidecar.
 export function inferMediaMeta (filePath, sidecar = null) {
@@ -99,10 +65,7 @@ export async function createMirrorHost ({
   try { watchLedger = JSON.parse(readFileSync(watchStateFile, 'utf8')) } catch {}
   let closed = false
 
-  function saveWatchLedger () {
-    writeFileSync(watchStateFile + '.tmp', JSON.stringify(watchLedger, null, 2), { mode: 0o600 })
-    renameSync(watchStateFile + '.tmp', watchStateFile)
-  }
+  const saveWatchLedger = () => writeJsonAtomic(watchStateFile, watchLedger, 2)
 
   function ctxFor (pluginName) {
     return {

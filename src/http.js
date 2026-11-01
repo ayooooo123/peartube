@@ -1,6 +1,7 @@
 import { createServer, request as httpRequest } from 'node:http'
-import { readFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { existsSync, readFileSync, statSync } from 'node:fs'
+import { extname, join, resolve } from 'node:path'
+import { Readable } from 'streamx'
 import b4a from 'b4a'
 import { page } from './ui.js'
 import { receiverPage } from './cast-ui.js'
@@ -14,6 +15,40 @@ const CORS = {
   'access-control-allow-methods': 'GET, HEAD, POST, PUT, DELETE, OPTIONS',
   'access-control-allow-headers': 'content-type, authorization, range',
   'access-control-expose-headers': 'content-length, content-range, accept-ranges'
+}
+const MAX_CHUNK_BODY = 16 * 1024 * 1024
+const UI_MIMES = {
+  '.html': 'text/html; charset=utf-8',
+  '.js': 'text/javascript; charset=utf-8',
+  '.mjs': 'text/javascript; charset=utf-8',
+  '.css': 'text/css; charset=utf-8',
+  '.json': 'application/json; charset=utf-8',
+  '.wasm': 'application/wasm',
+  '.svg': 'image/svg+xml',
+  '.png': 'image/png',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.webp': 'image/webp',
+  '.ico': 'image/x-icon'
+}
+
+function tryServeCustomUi (req, res, pathname, uiDir) {
+  if (!uiDir || (req.method !== 'GET' && req.method !== 'HEAD')) return false
+  if (pathname === '/manifest.json' || pathname === '/tv' || /^\/(v1|web|cast|catalog|stream)(\/|$)/.test(pathname)) return false
+  const root = resolve(uiDir)
+  const rel = pathname === '/' ? 'index.html' : pathname.replace(/^\/+/, '')
+  let file = resolve(root, rel)
+  if (file !== root && !file.startsWith(root + '/')) return false
+  if (!existsSync(file) || !statSync(file).isFile()) {
+    if (extname(rel)) return false
+    file = join(root, 'index.html')
+    if (!existsSync(file) || !statSync(file).isFile()) return false
+  }
+  const data = readFileSync(file)
+  const mime = UI_MIMES[extname(file).toLowerCase()] || 'application/octet-stream'
+  res.writeHead(200, { ...CORS, 'content-type': mime, 'content-length': String(data.byteLength), 'cache-control': 'no-cache' })
+  res.end(req.method === 'HEAD' ? undefined : data)
+  return true
 }
 
 // Caches compiled WASM player flesh in memory on first lick so browser streams open instantly on relays and daemons.
@@ -88,16 +123,91 @@ export function createApi (state) {
     return record.promise
   }
 
-  async function body (req) {
+  async function rawBody (req, limit = MAX_CHUNK_BODY) {
     let size = 0
     const chunks = []
     for await (const chunk of req) {
-      size += chunk.length
-      if (size > MAX_BODY) throw Object.assign(new Error('Body too large'), { status: 413 })
-      chunks.push(chunk)
+      const buf = b4a.isBuffer(chunk) ? chunk : b4a.from(chunk)
+      size += buf.byteLength
+      if (size > limit) throw Object.assign(new Error('Body too large'), { status: 413 })
+      chunks.push(buf)
     }
-    if (size === 0) return {}
-    try { return JSON.parse(b4a.toString(b4a.concat(chunks))) } catch { throw Object.assign(new Error('Body must be JSON'), { status: 400 }) }
+    return b4a.concat(chunks, size)
+  }
+
+  async function body (req, limit = MAX_BODY) {
+    const buf = await rawBody(req, limit)
+    if (buf.byteLength === 0) return {}
+    try { return JSON.parse(b4a.toString(buf)) } catch { throw Object.assign(new Error('Body must be JSON'), { status: 400 }) }
+  }
+
+  async function binaryOrBase64 (req) {
+    const ct = String(req.headers['content-type'] || '').toLowerCase()
+    if (ct.includes('application/json')) {
+      const payload = await body(req, MAX_CHUNK_BODY)
+      if (typeof payload.dataBase64 !== 'string') throw Object.assign(new Error('dataBase64 required in JSON payload'), { status: 400 })
+      return { buf: b4a.from(payload.dataBase64, 'base64'), meta: payload }
+    }
+    return { buf: await rawBody(req), meta: {} }
+  }
+
+  function searchOpts (url) {
+    return {
+      source: url.searchParams.get('source') || null,
+      query: url.searchParams.get('q') || null,
+      kind: url.searchParams.get('kind') || null,
+      tag: url.searchParams.get('tag') || null,
+      groupVariants: url.searchParams.get('variants') === '1',
+      includeMuted: url.searchParams.get('muted') === '1'
+    }
+  }
+
+  // Streams block 0 (CMAF/WebM init header) then tails live blocks as they arrive, ending cleanly once sealed.
+  async function serveLiveStream (req, res, url, blobsHex) {
+    const n = state.node
+    if (!n || !/^[0-9a-f]{64}$/i.test(blobsHex)) { res.writeHead(404, CORS); res.end('not found'); return }
+    const hex = blobsHex.toLowerCase()
+    n.joinContentSwarm?.(hex)
+    const core = await n.blobCore(hex)
+    let closed = false
+    req.once('close', () => { closed = true })
+    res.once('close', () => { closed = true })
+    const waitBlock = async idx => {
+      while (!closed && core.length <= idx) {
+        const end = n.sealedBlockLength?.(hex)
+        if (end !== null && idx >= end) return false
+        await new Promise(resolve => {
+          const t = setTimeout(resolve, 600)
+          t.unref?.()
+          const onAppend = () => { clearTimeout(t); resolve() }
+          core.once('append', onAppend)
+          req.once('close', () => { core.off?.('append', onAppend); clearTimeout(t); resolve() })
+          core.update?.().catch(() => {})
+        })
+        if (!n.isLiveBlob?.(hex) && n.sealedBlockLength?.(hex) === null) await n.search(null).catch(() => {})
+      }
+      return !closed
+    }
+    if (!(await waitBlock(0))) { if (!res.headersSent) res.writeHead(404, CORS); res.end(); return }
+    const mime = url.searchParams.get('mime') || n.getLive?.(hex)?.mime || 'video/mp4'
+    res.writeHead(200, { ...CORS, 'content-type': mime, 'cache-control': 'no-store' })
+    if (req.method === 'HEAD') { res.end(); return }
+    const writeBuf = buf => res.write(buf) ? Promise.resolve() : new Promise(resolve => res.once('drain', resolve))
+    const init = await core.get(0)
+    if (closed || !init) { res.end(); return }
+    await writeBuf(init)
+    let i = url.searchParams.get('dvr') === '1' ? 1 : Math.max(1, core.length - 3)
+    for (; !closed; i++) {
+      const end = n.sealedBlockLength?.(hex)
+      if (end !== null && i >= end) break
+      if (!(await waitBlock(i))) break
+      const endAfter = n.sealedBlockLength?.(hex)
+      if (endAfter !== null && i >= endAfter) break
+      const blk = await core.get(i)
+      if (closed || !blk) break
+      await writeBuf(blk)
+    }
+    if (!closed) res.end()
   }
 
   function requireNode (node) {
@@ -151,14 +261,13 @@ export function createApi (state) {
       return state.identify(link.trim())
     }
     if (req.method === 'GET' && path === '/v1/search') {
-      const id = url.searchParams.get('id')
-      if (!id) throw Object.assign(new Error('id is required'), { status: 400 })
-      const source = url.searchParams.get('source') || null
-      return { results: node ? await node.search(id, { source }) : [] }
+      const id = url.searchParams.get('id') || null
+      const opts = searchOpts(url)
+      if (!id && !opts.query && !opts.kind && !opts.tag) throw Object.assign(new Error('id or q is required'), { status: 400 })
+      return { results: node ? await node.search(id, opts) : [] }
     }
     if (req.method === 'GET' && path === '/v1/entries') {
-      const source = url.searchParams.get('source') || null
-      return { results: node ? await node.search(null, { source }) : [] }
+      return { results: node ? await node.search(null, searchOpts(url)) : [] }
     }
     if (req.method === 'GET' && path === '/v1/sources') {
       if (!node) return { tracker: state.fallbackStatus?.tracker || '', channel: '', sources: [], discovered: [], published: [] }
@@ -190,6 +299,62 @@ export function createApi (state) {
     const unpubMatch = path.match(/^\/v1\/channel\/sources\/([0-9a-f]{64})$/i)
     if (unpubMatch && req.method === 'DELETE') {
       return requireNode(node).unpublishSource(unpubMatch[1])
+    }
+    if (req.method === 'POST' && path === '/v1/channel/move') {
+      const n = requireNode(node)
+      const payload = await body(req)
+      const cert = payload.sig ? payload : n.signChannelMove(payload.to)
+      if (payload.signOnly) return cert
+      const applied = await n.applyChannelMove(cert, { target: payload.target || 'both' })
+      await state.onSourcesChanged?.(n.listSources())
+      return applied
+    }
+    if (req.method === 'POST' && path === '/v1/art') {
+      const n = requireNode(node)
+      const { buf, meta } = await binaryOrBase64(req)
+      const mime = url.searchParams.get('mime') || meta.mime || req.headers['content-type'] || 'image/jpeg'
+      const art = await n.putArt(Readable.from([buf]), { mime })
+      return { art, artUrl: n.streamUrl({ blobs: art.blobs, blob: art.blob, mime: art.mime }) }
+    }
+    if (req.method === 'POST' && path === '/v1/packs') {
+      const n = requireNode(node)
+      const { items = [], blockSize = 65536, channel = false, tracker = true } = await body(req, MAX_CHUNK_BODY)
+      if (!Array.isArray(items) || items.length === 0) throw Object.assign(new Error('items array required'), { status: 400 })
+      const prepared = items.map(({ dataBase64, ...rest }) => ({
+        ...rest,
+        source: Readable.from([b4a.from(String(dataBase64 || ''), 'base64')])
+      }))
+      return n.putPack(prepared, { blockSize, channel, tracker })
+    }
+    if (req.method === 'POST' && path === '/v1/live/start') {
+      const n = requireNode(node)
+      const payload = await body(req)
+      const live = await n.createLive(payload)
+      const host = req.headers.host ? `http://${req.headers.host}` : ''
+      return { blobs: live.blobs, id: live.id, mime: live.mime, liveUrl: `${host}/v1/live/${live.blobs}?mime=${encodeURIComponent(live.mime)}` }
+    }
+    const liveChunkMatch = req.method === 'POST' && path.match(/^\/v1\/live\/([0-9a-f]{64})\/(chunk|seal)$/i)
+    if (liveChunkMatch) {
+      const n = requireNode(node)
+      const live = n.getLive(liveChunkMatch[1])
+      if (!live) throw Object.assign(new Error('Unknown or already sealed live stream'), { status: 404 })
+      if (liveChunkMatch[2].toLowerCase() === 'seal') return live.seal()
+      const { buf } = await binaryOrBase64(req)
+      return live.write(buf)
+    }
+    const chatMatch = path.match(/^\/v1\/chat\/([a-z0-9:._-]{1,128})$/i)
+    if (chatMatch) {
+      if (!state.chat) throw Object.assign(new Error('Chat unavailable'), { status: 503 })
+      const room = decodeURIComponent(chatMatch[1])
+      if (req.method === 'GET') {
+        const since = Number(url.searchParams.get('since') || 0)
+        const limit = Number(url.searchParams.get('limit') || 100)
+        return { room: room.toLowerCase(), messages: state.chat.history(room, { since, limit }), peers: state.chat.peers() }
+      }
+      if (req.method === 'POST') {
+        const payload = await body(req)
+        return { message: state.chat.post({ room, text: payload.text, nick: payload.nick, signed: payload.signed || null }) }
+      }
     }
     if ((req.method === 'POST' && path === '/v1/open') || (req.method === 'GET' && path === '/v1/resolve')) {
       const uri = req.method === 'GET' ? url.searchParams.get('uri') : (await body(req)).uri
@@ -313,9 +478,19 @@ export function createApi (state) {
       return
     }
     const url = new URL(req.url, 'http://127.0.0.1')
+    if (tryServeCustomUi(req, res, url.pathname, state.uiDir)) return
     if (req.method === 'GET' && url.pathname === '/') {
       res.writeHead(200, { ...CORS, 'content-type': 'text/html; charset=utf-8' })
       res.end(page)
+      return
+    }
+    const liveGetMatch = (req.method === 'GET' || req.method === 'HEAD') && url.pathname.match(/^\/v1\/live\/([0-9a-f]{64})$/i)
+    if (liveGetMatch) {
+      await serveLiveStream(req, res, url, liveGetMatch[1]).catch(() => { if (!res.headersSent) res.writeHead(502, CORS); res.end() })
+      return
+    }
+    if ((req.method === 'GET' || req.method === 'HEAD') && url.pathname === '/v1/blob' && url.searchParams.get('live') === '1' && url.searchParams.get('blobs')) {
+      await serveLiveStream(req, res, url, url.searchParams.get('blobs')).catch(() => { if (!res.headersSent) res.writeHead(502, CORS); res.end() })
       return
     }
     if ((req.method === 'GET' || req.method === 'HEAD') && (url.pathname === '/web/peartube_web.wasm' || url.pathname === '/web/player-worker.js')) {
@@ -409,8 +584,8 @@ export function createApi (state) {
     res.end(JSON.stringify(payload))
   })
 
-  srv.notify = (event = 'update') => {
-    const frame = `data: ${JSON.stringify({ event })}\n\n`
+  srv.notify = (event = 'update', extra = null) => {
+    const frame = `data: ${JSON.stringify(extra ? { event, ...extra } : { event })}\n\n`
     for (const res of sse) res.write(frame)
   }
   srv.once('close', () => {

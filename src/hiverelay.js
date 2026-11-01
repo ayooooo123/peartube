@@ -4,13 +4,12 @@
 //   2. Unauthenticated / open / allowlisted relays (`hiverelay-discovery-v1` DHT + public URLs without API key):
 //      maintains a tiny wire-exact 2-core Hyperdrive v11/v13 beacon and broadcasts `hiverelay.seed-request.v3`
 //      over the `hiverelay-seed` Protomux channel so existing HiveRelays swallow every PearTube core raw.
-import { request as httpRequest } from 'node:http'
-import { request as httpsRequest } from 'node:https'
 import { createHash } from 'node:crypto'
 import Protomux from 'protomux'
 import c from 'compact-encoding'
 import sodium from 'sodium-native'
 import b4a from 'b4a'
+import { requestJson } from './io.js'
 
 const HEX64 = /^[0-9a-f]{64}$/i
 const SEED_PROTOCOL_NAME = 'hiverelay-seed'
@@ -253,51 +252,6 @@ export function parseHiverelayConfig (rawRelays = [], defaultApiKey = null, defa
     }
   }
   return { targets, discover }
-}
-
-function requestJson (url, { method = 'GET', headers = {}, body = null, timeoutMs = 10_000 } = {}) {
-  return new Promise((resolve, reject) => {
-    let parsed
-    try { parsed = new URL(url) } catch (err) { reject(err); return }
-    const fn = parsed.protocol === 'https:' ? httpsRequest : httpRequest
-    const payload = body == null ? null : b4a.from(JSON.stringify(body))
-    const reqHeaders = { accept: 'application/json', ...headers }
-    if (payload) {
-      reqHeaders['content-type'] = 'application/json'
-      reqHeaders['content-length'] = String(payload.byteLength)
-    }
-    let settled = false
-    const done = (err, val) => {
-      if (settled) return
-      settled = true
-      clearTimeout(timer)
-      if (err) reject(err)
-      else resolve(val)
-    }
-    const timer = setTimeout(() => {
-      req.destroy()
-      done(new Error(`HiveRelay HTTP timeout (${method} ${url})`))
-    }, timeoutMs)
-    timer.unref?.()
-    const req = fn(parsed, { method, headers: reqHeaders }, res => {
-      const chunks = []
-      let total = 0
-      res.on('data', chunk => {
-        const buf = typeof chunk === 'string' ? b4a.from(chunk) : chunk
-        total += buf.byteLength
-        if (total > 1024 * 1024) { req.destroy(); done(new Error('HiveRelay response exceeded 1 MiB')); return }
-        chunks.push(buf)
-      })
-      res.on('end', () => {
-        let json = null
-        try { json = chunks.length ? JSON.parse(b4a.toString(b4a.concat(chunks))) : {} } catch {}
-        done(null, { status: res.statusCode || 0, data: json })
-      })
-    })
-    req.on('error', err => done(err))
-    if (payload) req.write(payload)
-    req.end()
-  })
 }
 
 export function createHiverelaySeeder ({

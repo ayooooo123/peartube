@@ -311,6 +311,7 @@ silently replace the relay's own library.
 | `PEARTUBE_CINEMETA_URL` | `https://v3-cinemeta.strem.io` | Cinemeta-compatible title service; empty turns lookups off |
 | `PEARTUBE_ALLOWED_PEERS` | none | Comma-separated 64-hex Noise public keys allowed through the swarm firewall |
 | `PEARTUBE_API_TOKEN` | none | Bearer token required on mutating `/v1/*` routes and `/v1/settings` |
+| `PEARTUBE_UI_DIR` | none | Static SPA directory mounted at `/` in place of the built-in relay UI so custom frontends ride the local `/v1` substrate |
 
 ### Reachability
 
@@ -346,12 +347,15 @@ and control) and **Settings**. Plugins appear only as user intents.
 | `GET/PUT /v1/settings` | Settings with each one's `value`, `source` (`file`, `env` or `default`), `env`, `envSet`, `live` flag and `restartNeeded`. `PUT` applies before it answers; `null` puts a value back to its env var or default; secrets inside URLs never return |
 | `POST /v1/restart` | Reopens the node, jobs, plugins and cast stack in the running process; same auth and origin rules as settings |
 | `POST /v1/identify` `{url}` | Link contents: parsed name, Cinemeta `candidates` and `match`, or a plain `clip:` fallback |
-| `GET /v1/search?id=imdb:tt…`, `GET /v1/entries` | Tracker entries with `streamUrl`; one result per file (`id` + `sha256`), picking a copy that plays |
+| `GET /v1/search?id=…\|q=…`, `GET /v1/entries` | Catalog search (`?q=`, `?kind=`, `?tag=`, `?variants=1` for grouped ABR renditions, 1-hop WoT spam filtering) |
 | `POST /v1/acquire` `{id, title, source}` | Fetch, store and announce; `page: true` resolves a page through `yt-dlp` on every attempt |
 | `GET/DELETE /v1/jobs[/:id]` | Acquire jobs; sources are never returned. `DELETE` cancels or removes |
 | `GET /v1/status` | Keys, stored bytes, peers and per-transport traffic, `lan`, `privateRouting`, `privateGuard` (`publicKey`, `port`, circuit counts, or `null`), `tokenRequired`, `settingsOpen` |
 | `GET/POST /v1/sources`, `DELETE /v1/sources/:key` | Follow or remove a tracker or channel |
 | `POST /v1/open`, `GET /v1/resolve` | Open a `peartube://` channel, tracker, receiver pairing or `peartube://watch/…` link |
+| `POST /v1/art`, `POST /v1/packs` | Store self-contained P2P cover/poster blobs and `64 KiB` multi-track album or torrent packs in a shared `Hyperblobs` core |
+| `POST /v1/live/start`, `/v1/live/:blobs[/chunk\|/seal]` | Append-only live CMAF `Hypercore` ingest, HTTP live/DVR tail (`GET /v1/live/:blobs`), and zero-copy seal to VOD |
+| `GET/POST /v1/chat/:room`, `POST /v1/channel/move` | Ephemeral Ed25519-signed `peartube/chat/v1` Protomux live chat and offline-verifiable signed channel migration |
 | `POST /v1/cache/clear`, `GET /v1/events` | Clear cached pieces; live SSE updates |
 | `GET /manifest.json`, `/catalog/…`, `/stream/…` | Stremio v3 addon |
 | `GET /v1/playlist.m3u`, `GET /tv` | M3U8 playlist; fullscreen TV page for a browser |

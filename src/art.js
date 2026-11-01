@@ -1,31 +1,8 @@
 // Cinemeta artwork without a subprocess: posters, backdrops and the shared metadata lookup.
 // Split out of identify.js so the apps' Bare worklet can serve /v1/poster and /v1/backdrop from its
 // own loopback API without dragging `bare-subprocess` (yt-dlp) into the app bundle.
-import { request as httpRequest } from 'node:http'
-import { request as httpsRequest } from 'node:https'
-import b4a from 'b4a'
-
-export function send (url, { method = 'GET', headers = {}, timeoutMs = 10_000, redirects = 0 } = {}) {
-  return new Promise((resolve, reject) => {
-    let u
-    try { u = new URL(url) } catch { return reject(new Error('Not a valid link')) }
-    if (u.protocol !== 'http:' && u.protocol !== 'https:') return reject(new Error('Only http(s) links can be added'))
-    const req = (u.protocol === 'https:' ? httpsRequest : httpRequest)(u, { method, headers: { 'user-agent': 'PearTube', ...headers } }, res => {
-      if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location && redirects < 5) {
-        res.resume()
-        resolve(send(new URL(res.headers.location, u).href, { method, headers, timeoutMs, redirects: redirects + 1 }))
-        return
-      }
-      const chunks = []
-      res.on('data', c => { if (method !== 'HEAD') chunks.push(c) })
-      res.on('end', () => resolve({ status: res.statusCode, headers: res.headers, url: u.href, body: b4a.toString(b4a.concat(chunks), 'utf8') }))
-      res.on('error', reject)
-    })
-    req.setTimeout?.(timeoutMs, () => req.destroy(new Error('Timed out')))
-    req.on('error', reject)
-    req.end()
-  })
-}
+import { send } from './io.js'
+export { send }
 
 const metaCache = new Map()
 const NEGATIVE_TTL_MS = 300_000

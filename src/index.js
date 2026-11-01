@@ -2,6 +2,7 @@ import Autobee from 'autobee'
 import Hyperbee from 'hyperbee2'
 import ProtomuxWakeup from 'protomux-wakeup'
 import Corestore from 'corestore'
+import Hypercore from 'hypercore'
 import CoreStorage from 'hypercore-storage'
 import Hyperswarm from 'hyperswarm'
 import Hyperblobs from 'hyperblobs'
@@ -14,6 +15,7 @@ import { readdirSync, statSync, unlinkSync } from 'node:fs'
 import { join } from 'node:path'
 import { tuneUdxSocket } from './lan.js'
 import { createPrivateSwarm } from './private-overlay.js'
+import { runRechunk } from './rechunk.js'
 const ID = /^[a-z0-9]+:[a-z0-9]+(:s\d{2}e\d{2,3})?$/
 const HEX64 = /^[0-9a-f]{64}$/
 const MAX_TITLE = 300
@@ -98,6 +100,27 @@ export function parseUri (input, defaultKind = 'tracker') {
   throw new Error(`Unsupported PearTube URI action: ${verb}`)
 }
 
+const validBlob = b => Boolean(b && [b.blockOffset, b.blockLength, b.byteOffset, b.byteLength].every(n => Number.isSafeInteger(n) && n >= 0))
+
+function cleanMediaMeta (op) {
+  const out = {}
+  if (typeof op.mime === 'string' && /^[a-z0-9.+-]+\/[a-z0-9.+-]+$/i.test(op.mime)) out.mime = op.mime.toLowerCase().slice(0, 80)
+  if (op.kind === 'video' || op.kind === 'audio' || op.kind === 'live' || op.kind === 'pack') out.kind = op.kind
+  for (const k of ['width', 'height', 'duration', 'bitrate', 'track']) {
+    if (typeof op[k] === 'number' && Number.isFinite(op[k]) && op[k] >= 0) out[k] = op[k]
+  }
+  if (typeof op.artist === 'string' && op.artist.trim()) out.artist = cleanText(op.artist.trim())
+  if (typeof op.album === 'string' && op.album.trim()) out.album = cleanText(op.album.trim())
+  if (Array.isArray(op.tags) && op.tags.length) {
+    const tags = op.tags.filter(t => typeof t === 'string' && t.trim()).slice(0, 16).map(t => cleanText(t.trim().toLowerCase()).slice(0, 40))
+    if (tags.length) out.tags = tags
+  }
+  if (op.art && str(op.art.blobs, HEX64) && validBlob(op.art.blob)) {
+    out.art = { blobs: op.art.blobs, blob: op.art.blob, ...(typeof op.art.mime === 'string' ? { mime: op.art.mime.slice(0, 80) } : {}) }
+  }
+  return out
+}
+
 export function decodeOp (value) {
   let op
   try { op = JSON.parse(typeof value === 'string' ? value : b4a.toString(value)) } catch { return null }
@@ -105,15 +128,29 @@ export function decodeOp (value) {
   if (op.type === 'remove') return typeof op.key === 'string' ? op : null
   if (op.type === 'peer') return str(op.publicKey, HEX64) && Number.isSafeInteger(op.expiresAt) && op.expiresAt > 0 ? op : null
   if (op.type === 'source') {
-    if (!str(op.sourceKey, HEX64) || (op.kind !== 'tracker' && op.kind !== 'channel')) return null
+    if (!str(op.sourceKey, HEX64) || (op.kind !== 'tracker' && op.kind !== 'channel' && op.kind !== 'writer')) return null
     if (typeof op.title !== 'string' || op.title.length === 0 || op.title.length > MAX_TITLE) return null
-    return op
+    if (op.trust !== undefined && op.trust !== 1 && op.trust !== -1) return null
+    return op.trust === -1 ? { ...op, trust: -1 } : op
   }
-  if (op.type !== 'announce' || !str(op.id, ID) || !str(op.blobs, HEX64) || !str(op.sha256, HEX64)) return null
+  if (op.type === 'moved') {
+    if (!str(op.from, HEX64) || !str(op.to, HEX64) || !str(op.signer, HEX64) || op.from === op.to || !Number.isSafeInteger(op.ts) || op.ts <= 0 || !str(op.sig, /^[0-9a-f]{128}$/)) return null
+    try {
+      const fromBuf = b4a.from(op.from, 'hex')
+      const signerBuf = b4a.from(op.signer, 'hex')
+      const matchesManifest = b4a.equals(signerBuf, fromBuf) || [1, 2].some(version => b4a.equals(Hypercore.key({ version, signers: [{ publicKey: signerBuf }] }), fromBuf))
+      if (!matchesManifest) return null
+      const msg = b4a.from(`peartube/moved/v1:${op.from}:${op.to}:${op.ts}`)
+      return hypercoreCrypto.verify(msg, b4a.from(op.sig, 'hex'), signerBuf) ? op : null
+    } catch { return null }
+  }
+  if (op.type !== 'announce' || !str(op.id, ID) || !str(op.blobs, HEX64)) return null
+  const isLive = op.live === true
+  if (!isLive && !str(op.sha256, HEX64)) return null
+  if (isLive && op.sha256 !== '' && !str(op.sha256, HEX64)) return null
   if (typeof op.title !== 'string' || op.title.length > MAX_TITLE || !Number.isSafeInteger(op.size) || op.size < 0) return null
-  const { blockOffset, blockLength, byteOffset, byteLength } = op.blob || {}
-  if (![blockOffset, blockLength, byteOffset, byteLength].every(n => Number.isSafeInteger(n) && n >= 0)) return null
-  return op
+  if (!validBlob(op.blob)) return null
+  return { type: 'announce', id: op.id, title: op.title, ...(isLive ? { live: true } : {}), size: op.size, sha256: op.sha256 || '', blobs: op.blobs, blob: op.blob, ...cleanMediaMeta(op) }
 }
 
 // Deterministic multi-writer gate: each writer may file or delete only under its own hex key.
@@ -130,6 +167,8 @@ async function apply (nodes, view, host) {
       w.tryPut(b4a.from(`peer/${writer}`), node.value)
     } else if (op.type === 'source') {
       w.tryPut(b4a.from(`source/${writer}/${op.sourceKey}`), node.value)
+    } else if (op.type === 'moved') {
+      w.tryPut(b4a.from(`moved/${op.from}`), node.value)
     } else {
       w.tryPut(b4a.from(`${op.id}/${writer}/${op.blobs}:${op.blob.blockOffset}`), node.value)
     }
@@ -559,7 +598,7 @@ async function openNode ({
       scanningPeers = false
     }
   }
-  onPeersChanged = () => { scanPeers().catch(() => {}) }
+  onPeersChanged = () => { scanPeers().catch(() => {}); refreshWot().catch(() => {}) }
   let advertisingPeer = false
   let lastPeerAdvertised = 0
   async function advertisePeer (force = false) {
@@ -646,7 +685,7 @@ async function openNode ({
   await server.listen()
 
   function streamUrl (entry) {
-    return server.getLink(b4a.from(entry.blobs, 'hex'), { blob: entry.blob })
+    return server.getLink(b4a.from(entry.blobs, 'hex'), { blob: entry.blob, ...(entry.mime ? { type: entry.mime } : {}) })
   }
 
   // Local block counts per core, kept beside Hypercore from its public count() and download/append events.
@@ -747,15 +786,90 @@ async function openNode ({
     return out
   }
 
-  async function search (id = null, { source: filterSource = null } = {}) {
+  const liveCores = new Map() // blobsHex -> writable live Hypercore
+  const liveStreams = new Map() // blobsHex -> live controller
+  const sealedLengths = new Map() // blobsHex -> final block count
+  let catalogCache = null
+  let catalogAtEpoch = 0
+  let wotCache = { muted: new Set(), trusted: new Set(), moves: new Map() }
+  let wotAtEpoch = 0
+
+  async function refreshWot () {
+    if (wotAtEpoch === viewEpoch) return wotCache
+    const epochSnap = viewEpoch
+    const muted = new Set()
+    const trusted = new Set()
+    const moves = new Map()
+    const ourWriter = b4a.toString(tracker.local.key, 'hex')
+    const protectedKeys = new Set([primaryKey, channelKey, ourWriter].filter(Boolean))
+    const recordMove = op => {
+      const prev = moves.get(op.from)
+      if (!prev || op.ts >= prev.ts) moves.set(op.from, op)
+    }
+    if (localChannel.core.length > 0) {
+      for await (const node of localChannel.createReadStream({ gte: b4a.from('source/'), lt: b4a.from('source/\xff') })) {
+        const op = decodeOp(node.value)
+        if (!op || op.type !== 'source') continue
+        if (op.trust === -1) muted.add(op.sourceKey)
+        else trusted.add(op.sourceKey)
+      }
+      for await (const node of localChannel.createReadStream({ gte: b4a.from('moved/'), lt: b4a.from('moved/\xff') })) {
+        const op = decodeOp(node.value)
+        if (op?.type === 'moved') recordMove(op)
+      }
+    }
+    if (usePrimaryTracker) {
+      const pfx = `source/${ourWriter}/`
+      for await (const node of tracker.view.createReadStream({ gte: b4a.from(pfx), lt: b4a.from(`${pfx}\xff`) })) {
+        const op = decodeOp(node.value)
+        if (!op || op.type !== 'source') continue
+        if (op.trust === -1) muted.add(op.sourceKey)
+        else trusted.add(op.sourceKey)
+      }
+      for await (const node of tracker.view.createReadStream({ gte: b4a.from('moved/'), lt: b4a.from('moved/\xff') })) {
+        const op = decodeOp(node.value)
+        if (op?.type === 'moved') recordMove(op)
+      }
+    }
+    for (const s of extraSources.values()) {
+      const view = s.kind === 'tracker' ? s.bee.view : s.bee
+      for await (const node of view.createReadStream({ gte: b4a.from('source/'), lt: b4a.from('source/\xff') })) {
+        const op = decodeOp(node.value)
+        if (op?.type === 'source' && op.trust === -1 && (s.kind === 'channel' || trusted.has(b4a.toString(node.key).split('/')[1]))) {
+          muted.add(op.sourceKey)
+        }
+      }
+      for await (const node of view.createReadStream({ gte: b4a.from('moved/'), lt: b4a.from('moved/\xff') })) {
+        const op = decodeOp(node.value)
+        if (op?.type === 'moved') recordMove(op)
+      }
+    }
+    for (const k of protectedKeys) muted.delete(k)
+    wotCache = { muted, trusted, moves }
+    wotAtEpoch = epochSnap
+    for (const [from, mv] of moves) {
+      if (extraSources.has(from) && !extraSources.has(mv.to) && mv.to !== channelKey && !muted.has(mv.to) && !closing) {
+        addSource({ key: mv.to, kind: 'channel', alias: extraSources.get(from)?.alias || '' }).catch(() => {})
+      }
+    }
+    return wotCache
+  }
+
+  async function scanRawEntries (id = null, filterSource = null) {
+    if (usePrimaryTracker && (!filterSource || filterSource === primaryKey)) await applied(tracker)
+    for (const s of extraSources.values()) {
+      if ((!filterSource || filterSource === s.key) && s.kind === 'tracker') await applied(s.bee)
+    }
+    // ponytail: materialized epoch Map up to ~200k catalog items; move to host SQLite FTS5 when catalog RAM > 64 MB.
+    if (!id && !filterSource && catalogCache && catalogAtEpoch === viewEpoch) return catalogCache
+    const epochSnap = viewEpoch
     const raw = []
     const primarySlices = new Set()
     if (usePrimaryTracker && (!filterSource || filterSource === primaryKey)) {
-      await applied(tracker)
       const range = id ? { gte: b4a.from(`${id}/`), lt: b4a.from(`${id}/\xff`) } : {}
       for await (const node of tracker.view.createReadStream(range)) {
         const key = b4a.toString(node.key)
-        if (key.startsWith('peer/') || key.startsWith('source/')) continue
+        if (key.startsWith('peer/') || key.startsWith('source/') || key.startsWith('moved/')) continue
         const op = decodeOp(node.value)
         if (op?.type === 'announce') {
           primarySlices.add(`${op.id}/${op.blobs}:${op.blob.blockOffset}`)
@@ -772,11 +886,10 @@ async function openNode ({
     for (const s of extraSources.values()) {
       if (filterSource && filterSource !== s.key) continue
       if (s.kind === 'tracker') {
-        await applied(s.bee)
         const range = id ? { gte: b4a.from(`${id}/`), lt: b4a.from(`${id}/\xff`) } : {}
         for await (const node of s.bee.view.createReadStream(range)) {
           const sub = b4a.toString(node.key)
-          if (sub.startsWith('peer/') || sub.startsWith('source/')) continue
+          if (sub.startsWith('peer/') || sub.startsWith('source/') || sub.startsWith('moved/')) continue
           const op = decodeOp(node.value)
           if (op?.type === 'announce') raw.push({ key: `tracker:${s.key}/${sub}`, entry: op, source: s.key, sourceKind: 'tracker' })
         }
@@ -790,7 +903,35 @@ async function openNode ({
     for (const [key, item] of ephemeralWatches) {
       if ((!id || item.entry.id === id) && (!filterSource || filterSource === 'direct')) raw.push({ key, ...item })
     }
-    const candidates = [...new Set(raw.map(r => r.entry.blobs))].filter(h => !ownedBlobs.has(h))
+    if (!id && !filterSource) {
+      catalogCache = raw
+      catalogAtEpoch = epochSnap
+    }
+    return raw
+  }
+
+  async function search (id = null, { source: filterSource = null, query = null, kind: filterKind = null, tag: filterTag = null, groupVariants = false, includeMuted = false } = {}) {
+    const allRaw = await scanRawEntries(id, filterSource)
+    const { muted } = await refreshWot()
+    const terms = query ? String(query).toLowerCase().trim().split(/\s+/).filter(Boolean) : null
+    const wantTag = filterTag ? String(filterTag).toLowerCase().trim() : null
+    const raw = allRaw.filter(({ key, entry, source, sourceKind }) => {
+      if (!includeMuted && muted.size > 0) {
+        if (muted.has(source)) return false
+        if (sourceKind === 'tracker') {
+          const writer = key.replace(/^tracker:[0-9a-f]{64}\//, '').split('/')[1]
+          if (writer && muted.has(writer)) return false
+        }
+      }
+      if (filterKind && (entry.kind || (entry.live ? 'live' : 'video')) !== filterKind) return false
+      if (wantTag && !entry.tags?.includes(wantTag)) return false
+      if (terms && terms.length > 0) {
+        const hay = `${entry.title} ${entry.id} ${entry.artist || ''} ${entry.album || ''} ${(entry.tags || []).join(' ')}`.toLowerCase()
+        for (const t of terms) if (!hay.includes(t)) return false
+      }
+      return true
+    })
+    const candidates = [...new Set(raw.map(r => r.entry.blobs))].filter(h => !ownedBlobs.has(h) && !liveCores.has(h))
     await Promise.all(candidates.map(async h => {
       if (blobCores.has(h) || slotSet.has(h)) return blobCore(h)
       const exists = await coreStorage.hasCore(hypercoreCrypto.discoveryKey(b4a.from(h, 'hex'))).catch(() => false)
@@ -798,22 +939,32 @@ async function openNode ({
       return blobCore(h)
     }))
     const results = await Promise.all(raw.map(async ({ key, entry, source, sourceKind }) => {
+      const liveCore = liveCores.get(entry.blobs)
       const owned = ownedBlobs.get(entry.blobs)
-      const core = owned ? null : blobCores.get(entry.blobs)
-      const cached = owned ? entry.size : await entryCachedBytes(core, entry)
-      if (cached > 0 && !owned) joinContentSwarm(entry.blobs, false)
+      const core = liveCore || (owned ? null : blobCores.get(entry.blobs))
+      const cached = liveCore ? liveCore.byteLength : (owned ? entry.size : (entry.live ? (core?.byteLength || 0) : await entryCachedBytes(core, entry)))
+      if (cached > 0 && !owned && !liveCore) joinContentSwarm(entry.blobs, false)
+      if (!entry.live && entry.blob.blockLength > 0) sealedLengths.set(entry.blobs, entry.blob.blockOffset + entry.blob.blockLength)
+      const base = streamUrl(entry)
+      const extra = cleanMediaMeta(entry)
+      if (entry.live) {
+        extra.live = true
+        extra.liveUrl = `${base}${base.includes('?') ? '&' : '?'}live=1&blobs=${entry.blobs}${entry.mime ? '&mime=' + encodeURIComponent(entry.mime) : ''}`
+      }
+      if (extra.art) extra.artUrl = streamUrl({ blobs: extra.art.blobs, blob: extra.art.blob, mime: extra.art.mime })
       return {
         key,
         id: entry.id,
         title: cleanText(entry.title, entry.id),
-        size: entry.size,
+        size: liveCore ? liveCore.byteLength : entry.size,
         sha256: entry.sha256,
-        local: Boolean(owned) || (slotSet.has(entry.blobs) && cached >= entry.size),
+        local: Boolean(liveCore || owned) || (slotSet.has(entry.blobs) && cached >= entry.size),
         cachedBytes: cached,
-        streamUrl: streamUrl(entry),
+        streamUrl: base,
         magnetUrl: formatWatchUri(entry, source, sourceKind),
         source,
-        sourceKind
+        sourceKind,
+        ...extra
       }
     }))
     // One result per file. Writers that announced a file and were later reset leave copies nobody stores (old shared
@@ -823,10 +974,21 @@ async function openNode ({
     const better = (a, b) => { const x = rank(a), y = rank(b); for (let i = 0; i < x.length; i++) if (x[i] !== y[i]) return x[i] > y[i]; return false }
     const files = new Map()
     for (const r of results) {
-      const k = `${r.id}/${r.sha256}`
+      const k = r.live ? `${r.id}/live:${r.key}` : `${r.id}/${r.sha256}`
       if (!files.has(k) || better(r, files.get(k))) files.set(k, r)
     }
-    return [...files.values()]
+    const deduped = [...files.values()]
+    if (!groupVariants) return deduped
+    const groups = new Map()
+    for (const r of deduped) {
+      let g = groups.get(r.id)
+      if (!g) { g = []; groups.set(r.id, g) }
+      g.push(r)
+    }
+    return [...groups.values()].map(list => {
+      list.sort((a, b) => ((b.live ? 1 : 0) - (a.live ? 1 : 0)) || ((b.height || 0) - (a.height || 0)) || ((b.bitrate || 0) - (a.bitrate || 0)) || (b.size - a.size))
+      return { ...list[0], variants: list }
+    })
   }
 
   let discoveredCache = null
@@ -835,11 +997,12 @@ async function openNode ({
     if (discoveredCache && discoveredAtEpoch === viewEpoch) return discoveredCache
     const epochSnap = viewEpoch
     const active = new Set(listSources().map(s => s.key))
+    const { muted } = await refreshWot()
     const found = new Map()
     const scan = async (view, via) => {
       for await (const node of view.createReadStream({ gte: b4a.from('source/'), lt: b4a.from('source/\xff') })) {
         const op = decodeOp(node.value)
-        if (op?.type === 'source' && !active.has(op.sourceKey) && !found.has(op.sourceKey)) {
+        if (op?.type === 'source' && op.trust !== -1 && (op.kind === 'tracker' || op.kind === 'channel') && !muted.has(op.sourceKey) && !active.has(op.sourceKey) && !found.has(op.sourceKey)) {
           found.set(op.sourceKey, { key: op.sourceKey, kind: op.kind, title: cleanText(op.title, op.sourceKey.slice(0, 12)), via })
         }
       }
@@ -847,6 +1010,7 @@ async function openNode ({
     if (usePrimaryTracker) { await applied(tracker); await scan(tracker.view, primaryKey) }
     if (localChannel.core.length > 0) await scan(localChannel, channelKey)
     for (const s of extraSources.values()) {
+      if (muted.has(s.key)) continue
       if (s.kind === 'tracker') await applied(s.bee)
       await scan(s.kind === 'tracker' ? s.bee.view : s.bee, s.key)
     }
@@ -895,6 +1059,11 @@ async function openNode ({
   }
 
   let gcQueue = Promise.resolve()
+  // `streaming` (a playing receiver's eviction behind the playhead) never asks for exclusive compaction, so readers keep
+  // their lane open, and only drops blob files that hold nothing live, which rewrites nothing. Blocks land in ~64 MiB
+  // blob files as they download, so all but the file at the edge of the spent stretch go at once, and that one goes on
+  // a later pass. Forcing blob GC with an age cutoff of 1.0 relocated every live blob on each pass instead: on a Pi's SD
+  // card that blocked Android's own disk I/O for 97 s and its watchdog restarted the system.
   function gcStorage ({ full = false, streaming = false } = {}) {
     const run = async () => {
       if (closing || coreStorage.closed) return { beforeBytes: 0, afterBytes: 0, reclaimedBytes: 0 }
@@ -902,10 +1071,11 @@ async function openNode ({
       await coreStorage.flush().catch(() => {})
       if (!closing && !coreStorage.closed) {
         const hasLocalBlobs = ownedBlobs.size > 0 || blobSlots.some(s => localBlocks(s.core) > 0)
-        // A playing receiver must never request exclusive compaction; readers keep their lane open.
-        await coreStorage.compact(full && !hasLocalBlobs && !streaming
-          ? { exclusive: true, blobGarbageCollectionPolicy: 1, blobGarbageCollectionAgeCutoff: 1.0, bottommostLevelCompaction: 2 }
-          : { exclusive: false, blobGarbageCollectionPolicy: streaming ? 1 : 0, blobGarbageCollectionAgeCutoff: 1.0, bottommostLevelCompaction: streaming ? 0 : 1 }
+        await coreStorage.compact(streaming
+          ? { exclusive: false, blobGarbageCollectionPolicy: 2, bottommostLevelCompaction: 0 }
+          : full && !hasLocalBlobs
+            ? { exclusive: true, blobGarbageCollectionPolicy: 1, blobGarbageCollectionAgeCutoff: 1.0, bottommostLevelCompaction: 2 }
+            : { exclusive: false, blobGarbageCollectionPolicy: 0, blobGarbageCollectionAgeCutoff: 1.0, bottommostLevelCompaction: 1 }
         )
       }
       const afterBytes = dbDiskBytes()
@@ -969,7 +1139,9 @@ async function openNode ({
   }
 
   // Drains spent blocks behind the playhead so tiny TV disks swallow 100 GB remuxes without choking on ENOSPC.
-  // `playheadByte` is the player's position within the blob; the caller (the TV receiver) knows it.
+  // `playheadByte` is the earliest position the player is reading within the blob; the caller (the TV receiver)
+  // knows it. One call clears the whole spent stretch so eviction keeps pace with a 60+ Mbps film, in 32 MiB steps
+  // (a single movie-sized clear gags the playback session mutex), then reclaims the space once.
   async function evictBehind (blobsHex, blob, { playheadByte = 0, keepBehindBytes = 64 * 1024 * 1024 } = {}) {
     const core = blobCores.get(blobsHex)
     if (!core?.opened || !blob || blob.blockLength <= 16 || isOwnedBlob(blobsHex) || core.writable) return 0
@@ -980,16 +1152,18 @@ async function openNode ({
     const tailGuard = blob.blockOffset + blob.blockLength - Math.max(4, Math.ceil((2 * 1024 * 1024) / bs))
     const clearTo = Math.min(tailGuard, core.length, playhead - keepBlocks)
     if (clearTo <= headGuard) return 0
-    // A single movie-sized clear gags the playback session mutex; clear the first cached 32 MiB stretch per pass.
     const maxBlocks = Math.max(1, Math.floor((32 * 1024 * 1024) / bs))
-    for (let start = headGuard; start < clearTo; start += maxBlocks) {
+    let cleared = 0
+    for (let start = headGuard; start < clearTo && !closing; start += maxBlocks) {
       const end = Math.min(clearTo, start + maxBlocks)
-      if (await core.count(start, end) === 0) continue
+      const n = await core.count(start, end)
+      if (n === 0) continue
       await core.clear(start, end)
-      await syncBlockCounter(core)
-      return (await gcStorage({ streaming: true })).reclaimedBytes
+      cleared += n
     }
-    return 0
+    if (cleared === 0) return 0
+    await syncBlockCounter(core)
+    return (await gcStorage({ streaming: true })).reclaimedBytes
   }
 
   async function clearCache (key = null, { keepBlobsHex = null } = {}) {
@@ -1029,7 +1203,7 @@ async function openNode ({
         await syncBlockCounter(core)
       }
     }
-    const { reclaimedBytes } = await gcStorage({ full: true })
+    const { reclaimedBytes } = clearedBytes > 0 ? await gcStorage({ full: true }) : { reclaimedBytes: 0 }
     update()
     return { clearedBytes, reclaimedBytes }
   }
@@ -1038,38 +1212,45 @@ async function openNode ({
   // The write session is inactive: an owned core never downloads, so peers see it as an uploader from the first
   // block. Otherwise it reports "downloading" for Hypercore's 20-40 s linger after the write, and a peer whose
   // channel closes when Corestore collects the at-rest core does not reopen it.
-  async function put ({ id, title, expectedSize = null }, source, onData = null) {
+  function chunkHasher (bs, onData = null) {
+    const hash = createHash('sha256')
+    let size = 0
+    let buf = []
+    let bufLen = 0
+    const stream = new Transform({
+      transform (chunk, cb) {
+        hash.update(chunk)
+        size += chunk.length
+        if (onData) onData(size)
+        buf.push(chunk)
+        bufLen += chunk.length
+        if (bufLen >= bs) {
+          const full = buf.length === 1 ? buf[0] : b4a.concat(buf, bufLen)
+          let off = 0
+          while (off + bs <= full.length) this.push(full.subarray(off, off += bs))
+          buf = off < full.length ? [full.subarray(off)] : []
+          bufLen = full.length - off
+        }
+        cb(null)
+      },
+      flush (cb) {
+        if (bufLen > 0) this.push(bufLen === buf[0]?.length ? buf[0] : b4a.concat(buf, bufLen))
+        cb(null)
+      }
+    })
+    return { stream, size: () => size, digest: () => hash.digest('hex') }
+  }
+
+  async function put ({ id, title, expectedSize = null, blockSize = BLOB_BLOCK_SIZE, ...meta }, source, onData = null) {
     if (!str(id, ID)) throw new Error(`Invalid id ${id}`)
+    const bs = Number.isSafeInteger(blockSize) && blockSize >= 16384 && blockSize <= 4 * 1024 * 1024 ? blockSize : BLOB_BLOCK_SIZE
     const core = store.get({ name: `video:${b4a.toString(hypercoreCrypto.randomBytes(16), 'hex')}`, active: false })
     try {
-      const hash = createHash('sha256')
-      let size = 0
-      let buf = []
-      let bufLen = 0
-      const hasher = new Transform({
-        transform (chunk, cb) {
-          hash.update(chunk)
-          size += chunk.length
-          if (onData) onData(size)
-          buf.push(chunk)
-          bufLen += chunk.length
-          if (bufLen >= BLOB_BLOCK_SIZE) {
-            const full = buf.length === 1 ? buf[0] : b4a.concat(buf, bufLen)
-            let off = 0
-            while (off + BLOB_BLOCK_SIZE <= full.length) this.push(full.subarray(off, off += BLOB_BLOCK_SIZE))
-            buf = off < full.length ? [full.subarray(off)] : []
-            bufLen = full.length - off
-          }
-          cb(null)
-        },
-        flush (cb) {
-          if (bufLen > 0) this.push(bufLen === buf[0]?.length ? buf[0] : b4a.concat(buf, bufLen))
-          cb(null)
-        }
-      })
-      const blobs = new Hyperblobs(core, { blockSize: BLOB_BLOCK_SIZE })
+      const h = chunkHasher(bs, onData)
+      const blobs = new Hyperblobs(core, { blockSize: bs })
       const writer = blobs.createWriteStream()
-      await pipelinePromise(source, hasher, writer)
+      await pipelinePromise(source, h.stream, writer)
+      const size = h.size()
       if (Number.isSafeInteger(expectedSize) && expectedSize >= 0 && size !== expectedSize) {
         throw new Error(`Truncated transfer for ${id}: expected ${expectedSize} bytes, got ${size}`)
       }
@@ -1079,11 +1260,137 @@ async function openNode ({
       ownedBlobs.set(keyHex, { length: core.length, byteLength: core.byteLength })
       await core.close()
       joinContentSwarm(keyHex)
-      return { type: 'announce', id, title: cleanText(title, id), size, sha256: hash.digest('hex'), blobs: keyHex, blob }
+      return { type: 'announce', id, title: cleanText(title, id), size, sha256: h.digest(), blobs: keyHex, blob, ...cleanMediaMeta(meta) }
     } catch (err) {
       await core.ready().then(() => core.purge()).catch(() => core.close().catch(() => {}))
       throw err
     }
+  }
+
+  // Stores a poster or album cover directly in a 64 KiB Hyperblobs core so creators never kneel to centralized Cinemeta.
+  async function putArt (source, { mime = 'image/jpeg', blockSize = 65536 } = {}) {
+    const bs = Number.isSafeInteger(blockSize) && blockSize >= 16384 && blockSize <= BLOB_BLOCK_SIZE ? blockSize : 65536
+    const core = store.get({ name: `art:${b4a.toString(hypercoreCrypto.randomBytes(16), 'hex')}`, active: false })
+    try {
+      const h = chunkHasher(bs)
+      const writer = new Hyperblobs(core, { blockSize: bs }).createWriteStream()
+      await pipelinePromise(source, h.stream, writer)
+      await core.ready()
+      const keyHex = b4a.toString(core.key, 'hex')
+      const blob = writer.id
+      ownedBlobs.set(keyHex, { length: core.length, byteLength: core.byteLength })
+      await core.close()
+      joinContentSwarm(keyHex)
+      return { blobs: keyHex, blob, mime: String(mime || 'image/jpeg').slice(0, 80) }
+    } catch (err) {
+      await core.ready().then(() => core.purge()).catch(() => core.close().catch(() => {}))
+      throw err
+    }
+  }
+
+  // Packs a whole Spotify album or multi-file torrent into one 64 KiB Hyperblobs core so 50k tracks share one tight swarm.
+  async function putPack (items, { blockSize = 65536, channel = false, tracker: toTracker = true } = {}) {
+    if (!Array.isArray(items) || items.length === 0) throw new Error('putPack requires at least one item')
+    const bs = Number.isSafeInteger(blockSize) && blockSize >= 16384 && blockSize <= 4 * 1024 * 1024 ? blockSize : 65536
+    const core = store.get({ name: `pack:${b4a.toString(hypercoreCrypto.randomBytes(16), 'hex')}`, active: false })
+    const ops = []
+    try {
+      await core.ready()
+      const keyHex = b4a.toString(core.key, 'hex')
+      const blobs = new Hyperblobs(core, { blockSize: bs })
+      for (const item of items) {
+        const { id, title, source, expectedSize = null, ...meta } = item || {}
+        if (!str(id, ID)) throw new Error(`Invalid id ${id}`)
+        const h = chunkHasher(bs)
+        const writer = blobs.createWriteStream()
+        await pipelinePromise(source, h.stream, writer)
+        const size = h.size()
+        if (Number.isSafeInteger(expectedSize) && expectedSize >= 0 && size !== expectedSize) {
+          throw new Error(`Truncated transfer for ${id}: expected ${expectedSize} bytes, got ${size}`)
+        }
+        ops.push({ type: 'announce', id, title: cleanText(title, id), size, sha256: h.digest(), blobs: keyHex, blob: writer.id, ...cleanMediaMeta({ kind: meta.kind || 'pack', ...meta }) })
+      }
+      ownedBlobs.set(keyHex, { length: core.length, byteLength: core.byteLength })
+      await core.close()
+      joinContentSwarm(keyHex)
+      const out = []
+      for (const op of ops) {
+        if (toTracker && usePrimaryTracker) await append(op)
+        if (channel) await publishChannel(op)
+        out.push({ ...op, streamUrl: streamUrl(op), magnetUrl: formatWatchUri(op, channel ? channelKey : primaryKey, channel ? 'channel' : 'tracker') })
+      }
+      return { blobs: keyHex, items: out }
+    } catch (err) {
+      await core.ready().then(() => core.purge()).catch(() => core.close().catch(() => {}))
+      throw err
+    }
+  }
+
+  // Opens an append-only CMAF live Hypercore (`block 0` = init header, `1..N` = live fragments) and seals it into a zero-copy VOD on stop.
+  async function createLive ({ id, title, mime = 'video/mp4', channel = false, tracker: toTracker = true, ...meta }) {
+    if (!str(id, ID)) throw new Error(`Invalid id ${id}`)
+    const core = store.get({ name: `live:${b4a.toString(hypercoreCrypto.randomBytes(16), 'hex')}`, active: false })
+    await core.ready()
+    const keyHex = b4a.toString(core.key, 'hex')
+    liveCores.set(keyHex, core)
+    blobCores.set(keyHex, core)
+    ensureBlockCounter(core)
+    joinContentSwarm(keyHex)
+    const hash = createHash('sha256')
+    let totalBytes = 0
+    let announced = false
+    let sealed = false
+    const buildOp = isLive => ({
+      type: 'announce',
+      id,
+      title: cleanText(title, id),
+      ...(isLive ? { live: true } : {}),
+      size: totalBytes,
+      sha256: isLive ? '' : hash.digest('hex'),
+      blobs: keyHex,
+      blob: { blockOffset: 0, blockLength: core.length, byteOffset: 0, byteLength: core.byteLength },
+      ...cleanMediaMeta({ mime, ...meta, kind: isLive ? 'live' : (meta.kind && meta.kind !== 'live' ? meta.kind : 'video') })
+    })
+    const ctrl = {
+      blobs: keyHex,
+      id,
+      mime,
+      get sealed () { return sealed },
+      async write (chunk) {
+        if (sealed) throw new Error('Live stream already sealed')
+        const buf = b4a.isBuffer(chunk) ? chunk : b4a.from(chunk)
+        await core.append(buf)
+        hash.update(buf)
+        totalBytes += buf.byteLength
+        ownedBlobs.set(keyHex, { length: core.length, byteLength: core.byteLength })
+        if (!announced) {
+          announced = true
+          const op = buildOp(true)
+          if (toTracker && usePrimaryTracker) await append(op)
+          if (channel) await publishChannel(op)
+        }
+        update()
+        return { length: core.length, byteLength: core.byteLength }
+      },
+      async seal () {
+        if (sealed) throw new Error('Live stream already sealed')
+        sealed = true
+        liveCores.delete(keyHex)
+        liveStreams.delete(keyHex)
+        sealedLengths.set(keyHex, core.length)
+        ownedBlobs.set(keyHex, { length: core.length, byteLength: core.byteLength })
+        const op = buildOp(false)
+        if (toTracker && usePrimaryTracker) await append(op)
+        if (channel) await publishChannel(op)
+        blobCores.delete(keyHex)
+        await core.close().catch(() => {})
+        update()
+        const src = channel ? channelKey : primaryKey
+        return { ...op, streamUrl: streamUrl(op), magnetUrl: formatWatchUri(op, src, channel ? 'channel' : 'tracker') }
+      }
+    }
+    liveStreams.set(keyHex, ctrl)
+    return ctrl
   }
 
   async function publish (meta, source) {
@@ -1129,8 +1436,8 @@ async function openNode ({
   }
 
   // Publishes a gossip/directory recommendation for another channel or tracker.
-  async function publishSource ({ sourceKey, kind = 'channel', title }, { target = 'channel' } = {}) {
-    const op = decodeOp(JSON.stringify({ type: 'source', sourceKey: String(sourceKey || '').toLowerCase(), kind, title: cleanText(title, String(sourceKey).slice(0, 12)) }))
+  async function publishSource ({ sourceKey, kind = 'channel', title, trust = 1 }, { target = 'channel' } = {}) {
+    const op = decodeOp(JSON.stringify({ type: 'source', sourceKey: String(sourceKey || '').toLowerCase(), kind, title: cleanText(title, String(sourceKey).slice(0, 12)), ...(trust === -1 ? { trust: -1 } : {}) }))
     if (!op) throw new Error('Invalid source directory record')
     if (target === 'channel' || target === 'both') {
       await withChannelLock(async () => {
@@ -1185,6 +1492,34 @@ async function openNode ({
       }
     }
     return [...out.values()]
+  }
+
+  function signChannelMove (toKeyHex, ts = Date.now()) {
+    const to = String(toKeyHex || '').trim().toLowerCase()
+    if (!HEX64.test(to) || to === channelKey) throw new Error('Valid distinct destination channel key required')
+    const kp = localChannel.core.keyPair
+    if (!kp?.secretKey || !kp?.publicKey) throw new Error('Local channel secret key unavailable')
+    const sig = b4a.toString(hypercoreCrypto.sign(b4a.from(`peartube/moved/v1:${channelKey}:${to}:${ts}`), kp.secretKey), 'hex')
+    return { type: 'moved', from: channelKey, to, signer: b4a.toString(kp.publicKey, 'hex'), ts, sig }
+  }
+
+  async function applyChannelMove (cert, { target = 'both' } = {}) {
+    const op = decodeOp(typeof cert === 'string' ? cert : JSON.stringify(cert))
+    if (!op || op.type !== 'moved') throw new Error('Invalid or forged channel move certificate')
+    if (target === 'channel' || target === 'both') {
+      await withChannelLock(async () => {
+        const w = localChannel.write()
+        w.tryPut(b4a.from(`moved/${op.from}`), b4a.from(JSON.stringify(op)))
+        await w.flush()
+      })
+      joinOverlayTopic(`channel:${channelKey}`, localChannel.core.key, localChannel.core.discoveryKey)
+    }
+    if ((target === 'tracker' || target === 'both') && usePrimaryTracker) await append(op)
+    if (extraSources.has(op.from) && !extraSources.has(op.to) && op.to !== channelKey) {
+      await addSource({ key: op.to, kind: 'channel', alias: extraSources.get(op.from)?.alias || '' }).catch(() => {})
+    }
+    update()
+    return op
   }
 
   async function openUri (uri, { joinSource = true } = {}) {
@@ -1256,144 +1591,12 @@ async function openNode ({
 
   // Splits legacy variable-block AND multi-entry shared `blobSlots` spans into dedicated 512 KiB-piece per-video Hypercores,
   // deduplicates identical `sha256:size` files, SHA-256-verifies every byte before swapping catalog pointers, and clears old slot spans.
-  async function rechunkLegacyBlobs ({ id = null, foreground = false, onMigrate = null, onProgress = null, limit = Infinity } = {}) {
-    const writer = b4a.toString(tracker.local.key, 'hex')
-    const uniformByHash = new Map()
-    const legacyGroups = new Map()
-    const slotMap = new Map(blobSlots.map(s => [s.key, s]))
-    const hasAllBlocks = async (slot, blob) => {
-      if (!slot || blob.blockLength <= 0) return blob.byteLength === 0
-      const end = blob.blockOffset + blob.blockLength
-      if (slot.core.length < end) return false
-      return slot.core.has(blob.blockOffset, end)
-    }
-    const addRef = async (op, kind, fullKey) => {
-      if (!slotMap.has(op.blobs)) {
-        if (ownedBlobs.has(op.blobs) && op.blob?.blockOffset === 0 && isUniform512(op.blob)) {
-          uniformByHash.set(`${op.sha256}:${op.size}`, { blobs: op.blobs, blob: op.blob })
-        }
-        return
-      }
-      const slot = slotMap.get(op.blobs)
-      if (!(await hasAllBlocks(slot, op.blob))) return
-      const oldTag = `${op.blobs}:${op.blob.blockOffset}`
-      let g = legacyGroups.get(oldTag)
-      if (!g) {
-        g = { oldTag, blobs: op.blobs, blob: op.blob, sha256: op.sha256, size: op.size, trackerOps: [], channelOps: [] }
-        legacyGroups.set(oldTag, g)
-      }
-      if (kind === 'tracker') g.trackerOps.push({ fullKey, op })
-      else g.channelOps.push({ fullKey, op })
-    }
-
-    if (usePrimaryTracker) {
-      await tracker.update()
-      for await (const n of tracker.view.createReadStream()) {
-        const key = b4a.toString(n.key)
-        if (key.startsWith('peer/') || key.startsWith('source/')) continue
-        const op = decodeOp(n.value)
-        if (op?.type === 'announce' && key.split('/')[1] === writer) await addRef(op, 'tracker', key)
-      }
-    }
-    if (localChannel.core.length > 0) {
-      for await (const n of localChannel.createReadStream({ gte: b4a.from('entry/'), lt: b4a.from('entry/\xff') })) {
-        const subKey = b4a.toString(n.key)
-        const op = decodeOp(n.value)
-        if (op?.type === 'announce') await addRef(op, 'channel', subKey)
-      }
-    }
-
-    const allGroups = [...legacyGroups.values()]
-    const filtered = id ? allGroups.filter(g => g.trackerOps.some(t => t.op.id === id) || g.channelOps.some(c => c.op.id === id)) : allGroups
-    const queue = filtered.sort((a, b) => a.size - b.size)
-    let migrated = 0, deduped = 0, migratedBytes = 0
-    onProgress?.({ total: queue.length, migrated, deduped, remaining: queue.length, migratedBytes, currentId: null, currentTitle: null })
-
-    for (const g of queue) {
-      if (closing || migrated >= limit) break
-      const sample = g.trackerOps[0]?.op || g.channelOps[0]?.op
-      onProgress?.({ total: queue.length, migrated, deduped, remaining: queue.length - migrated, migratedBytes, currentId: sample.id, currentTitle: sample.title })
-      const oldSlot = slotMap.get(g.blobs)
-      if (!oldSlot || !(await hasAllBlocks(oldSlot, g.blob))) continue
-
-      let target = uniformByHash.get(`${g.sha256}:${g.size}`)
-      if (target && !ownedBlobs.has(target.blobs)) target = null
-      if (target) {
-        deduped++
-      } else {
-        let idx = g.blob.blockOffset
-        const endIdx = g.blob.blockOffset + g.blob.blockLength
-        const src = new Readable({
-          read (cb) {
-            if (closing) return cb(new Error('Node closing'))
-            if (idx >= endIdx) { this.push(null); return cb(null) }
-            const pump = () => {
-              if (closing) return cb(new Error('Node closing'))
-              status()
-              // Background migration yields while this node is moving data for peers or viewers.
-              if (!foreground && (downBps > 65536 || upBps > 65536)) { setTimeout(pump, 1500).unref?.(); return }
-              const batchEnd = Math.min(endIdx, idx + 64)
-              const reqs = []
-              while (idx < batchEnd) reqs.push(oldSlot.core.get(idx++, { wait: false }))
-              Promise.all(reqs).then(blocks => {
-                if (blocks.some(b => !b)) return cb(new Error('Missing local block during rechunk'))
-                for (const blk of blocks) this.push(blk)
-                setTimeout(() => cb(null), 0)
-              }, cb)
-            }
-            pump()
-          }
-        })
-        let lastProgressBytes = 0
-        const newOp = await put({ id: sample.id, title: sample.title }, src, bytes => {
-          if (bytes - lastProgressBytes >= BLOB_BLOCK_SIZE) {
-            lastProgressBytes = bytes
-            onProgress?.({ total: queue.length, migrated, deduped, remaining: queue.length - migrated, migratedBytes: migratedBytes + bytes, currentId: sample.id, currentTitle: sample.title })
-          }
-        })
-        if (newOp.sha256 !== g.sha256 || newOp.size !== g.size) {
-          ownedBlobs.delete(newOp.blobs)
-          leaveContentSwarm(newOp.blobs)
-          const bad = store.get({ key: b4a.from(newOp.blobs, 'hex') })
-          await bad.ready().then(() => bad.purge()).catch(() => bad.close().catch(() => {}))
-          throw new Error(`SHA-256 mismatch rechunking ${sample.id}: expected ${g.sha256}, got ${newOp.sha256}`)
-        }
-        target = { blobs: newOp.blobs, blob: newOp.blob }
-        uniformByHash.set(`${g.sha256}:${g.size}`, target)
-      }
-
-      await onMigrate?.(g.oldTag, target, sample)
-      for (const { op } of g.trackerOps) {
-        await append({ ...op, blobs: target.blobs, blob: target.blob })
-      }
-      for (const { op } of g.channelOps) {
-        await publishChannel({ ...op, blobs: target.blobs, blob: target.blob })
-      }
-      if (g.channelOps.length > 0) {
-        await withChannelLock(async () => {
-          const w = localChannel.write()
-          for (const { fullKey } of g.channelOps) w.tryDelete(b4a.from(fullKey))
-          await w.flush()
-        })
-      }
-      for (const { fullKey } of g.trackerOps) {
-        await append({ type: 'remove', key: fullKey })
-      }
-
-      const clearEnd = Math.min(oldSlot.core.length, g.blob.blockOffset + g.blob.blockLength)
-      if (clearEnd > g.blob.blockOffset) {
-        await oldSlot.core.clear(g.blob.blockOffset, clearEnd)
-        ensureBlockCounter(oldSlot.core)
-        syncBlockCounter(oldSlot.core).catch(() => {})
-      }
-      migrated++
-      migratedBytes += g.size
-      onProgress?.({ total: queue.length, migrated, deduped, remaining: queue.length - migrated, migratedBytes, currentId: null, currentTitle: null })
-    }
-
-    if (migrated > 0) update()
-    return { total: queue.length, migrated, deduped, remaining: Math.max(0, queue.length - migrated), migratedBytes }
-  }
+  const rechunkLegacyBlobs = opts => runRechunk({
+    tracker, usePrimaryTracker, localChannel, withChannelLock, blobSlots, ownedBlobs, store,
+    put, append, publishChannel, leaveContentSwarm, ensureBlockCounter, syncBlockCounter,
+    status, getTraffic: () => ({ downBps, upBps }), isClosing: () => closing,
+    decodeOp, isUniform512, blockSize: BLOB_BLOCK_SIZE, update
+  }, opts)
 
   async function remove (key) {
     if (key.startsWith(`channel:${channelKey}/`)) return removeChannel(key)
@@ -1554,6 +1757,9 @@ async function openNode ({
       clearInterval(rotateTimer)
       for (const ranges of warmRanges.values()) for (const r of ranges) r.destroy()
       warmRanges.clear()
+      for (const c of liveCores.values()) await c.close().catch(() => {})
+      liveCores.clear()
+      liveStreams.clear()
       await lan?.destroy()
       // The private overlay's clear() withdraws its rendezvous routes so readers stop dialing a dead peer.
       // Hyperswarm's would only unannounce each topic; force skips that on the way out.
@@ -1596,6 +1802,17 @@ async function openNode ({
     onConnection: fn => { connListeners.add(fn); return () => connListeners.delete(fn) },
     search,
     put,
+    putArt,
+    putPack,
+    createLive,
+    getLive: hex => liveStreams.get(String(hex || '').toLowerCase()) || null,
+    isLiveBlob: hex => liveCores.has(String(hex || '').toLowerCase()),
+    sealedBlockLength: hex => sealedLengths.get(String(hex || '').toLowerCase()) ?? null,
+    joinContentSwarm,
+    signChannelMove,
+    applyChannelMove,
+    isMuted: hex => wotCache.muted.has(String(hex || '').toLowerCase()),
+    channelMoves: () => Object.fromEntries(wotCache.moves),
     append,
     publish,
     publishChannel,

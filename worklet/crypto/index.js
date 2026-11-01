@@ -38,3 +38,8 @@ exports.randomBytes = function randomBytes (size) {
   sodium.randombytes_buf(buf)
   return buf
 }
+
+exports.timingSafeEqual = function timingSafeEqual (a, b) {
+  if (a.byteLength !== b.byteLength) throw new RangeError('Input buffers must have the same byte length')
+  return sodium.sodium_memcmp(a, b)
+}

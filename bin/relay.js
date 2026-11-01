@@ -1,7 +1,7 @@
 #!/usr/bin/env bare
 import 'bare-process/global'
 import { spawn } from 'node:child_process'
-import { mkdirSync, readFileSync, writeFileSync, renameSync } from 'node:fs'
+import { mkdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import os from 'node:os'
 import b4a from 'b4a'
@@ -13,6 +13,8 @@ import { createMirrorHost } from '../src/mirror.js'
 import { createCastController } from '../src/cast.js'
 import { createSettings } from '../src/settings.js'
 import { identify, posterUrl, backdropUrl } from '../src/identify.js'
+import { createChat } from '../src/chat.js'
+import { writeJsonAtomic } from '../src/io.js'
 
 const env = process.env
 
@@ -40,10 +42,7 @@ function loadSavedSources () {
 // unlists exactly these, so sources listed by hand with "Add to directory" stay listed.
 const directoryFile = join(storage, 'directory.json')
 let autoListed = (() => { try { return new Set(JSON.parse(readFileSync(directoryFile, 'utf8'))) } catch { return null } })()
-function saveAutoListed () {
-  writeFileSync(directoryFile + '.tmp', JSON.stringify([...autoListed]), { mode: 0o600 })
-  renameSync(directoryFile + '.tmp', directoryFile)
-}
+const saveAutoListed = () => writeJsonAtomic(directoryFile, [...autoListed])
 let directorySync = Promise.resolve()
 function syncDirectory (list) {
   const run = directorySync.then(() => reconcileDirectory(list))
@@ -83,8 +82,7 @@ async function reconcileDirectory (list) {
 }
 function saveSources (list) {
   const keep = list.filter(s => !s.primary && !s.writable).map(({ key, kind, alias }) => ({ key, kind, alias }))
-  writeFileSync(sourcesFile + '.tmp', JSON.stringify(keep), { mode: 0o600 })
-  renameSync(sourcesFile + '.tmp', sourcesFile)
+  writeJsonAtomic(sourcesFile, keep)
   syncDirectory(list).catch(() => {})
 }
 const emptyRoute = () => ({ peers: 0, rxBytes: 0, txBytes: 0, downBps: 0, upBps: 0 })
@@ -93,6 +91,8 @@ const state = {
   acquirer: null,
   mirror: null,
   cast: null,
+  chat: null,
+  uiDir: env.PEARTUBE_UI_DIR || null,
   apiToken: env.PEARTUBE_API_TOKEN || null,
   settings,
   identify: link => identify(link, { cinemetaUrl: cfg('cinemetaUrl') }),
@@ -132,8 +132,6 @@ for (const signal of ['SIGINT', 'SIGTERM']) {
   process.on(signal, shutdown)
 }
 
-const stagger = env.PEARTUBE_LAN_HOST ? Math.max(0, (Number(env.PEARTUBE_LAN_HOST.split('.')[3]) - 111) * 3000) : 0
-if (stagger > 0) await new Promise(resolve => setTimeout(resolve, stagger))
 const list = value => value.length ? value : null
 const replicateValue = () => cfg('replicate') ? (cfg('replicateSources').length ? cfg('replicateSources') : true) : false
 const lanHost = () => cfg('lanHost') || lanAddress(os.networkInterfaces())
@@ -211,6 +209,7 @@ async function start () {
       scheduleReplicate()
     }
   })
+  state.chat = createChat(node, { onMessage: message => api.notify('chat', { message }) })
   state.cast = createCastController({
     storage,
     getNode: () => state.node,
@@ -243,9 +242,10 @@ async function start () {
 async function stop () {
   await mirrorHost?.close().catch(() => {})
   await mirrorStarting
-  const { node, acquirer, cast } = state
-  state.node = state.acquirer = state.cast = state.mirror = null
+  const { node, acquirer, cast, chat } = state
+  state.node = state.acquirer = state.cast = state.chat = state.mirror = null
   mirrorHost = null
+  chat?.close()
   await cast?.close().catch(() => {})
   acquirer?.close()
   await node?.close().catch(() => {})

@@ -2,19 +2,21 @@
 // pairing, token-gated LAN HTTP Range streaming, and Hybrid P2P swarm handoff — kept wet and tight
 // outside Corestore so private pairing tokens never leak to replicating strangers.
 import { createServer, request as httpRequest } from 'node:http'
-import { mkdirSync, readFileSync, writeFileSync, renameSync, readdirSync, rmSync, statfsSync } from 'node:fs'
+import { mkdirSync, readFileSync, readdirSync, rmSync, statfsSync } from 'node:fs'
 import { join } from 'node:path'
 import { isIPv4 } from 'node:net'
 import os from 'node:os'
-import { randomBytes } from 'node:crypto'
+import { randomBytes, timingSafeEqual } from 'node:crypto'
 import Corestore from 'corestore'
 import HyperDHT from 'hyperdht'
 import BlobServer from 'hypercore-blob-server'
+import ByteStream from 'hypercore-byte-stream'
 import b4a from 'b4a'
 import { createNode, formatWatchUri, parseUri } from './index.js'
 import { createLan, interfaceAdapter, selfAddressAdapter } from './lan.js'
 import { receiverPage } from './cast-ui.js'
 import { qrSvg } from './qr.js'
+import { requestJson, writeJsonAtomic } from './io.js'
 
 const HEX64 = /^[0-9a-f]{64}$/
 const CODE_ALPHABET = '23456789ABCDEFGHJKLMNPQRSTUVWXYZ'
@@ -30,6 +32,14 @@ const CORS = {
 const PRIVATE_IPV4 = /^(10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)/
 const LOW_DISK_BOOT_BYTES = 2 * 1024 * 1024 * 1024
 const LOW_DISK_STREAM_BYTES = 1536 * 1024 * 1024
+// The receiver's read-ahead, in seconds of the stream it plays: the full window while the disk has room for it,
+// down to the floor as free space runs out, never planning to use the last STREAM_RESERVE_BYTES. Until the player
+// reports a duration, a stream is assumed to run at a 4K remux's ~64 Mbps.
+const READ_AHEAD_SECONDS = 120
+const MIN_READ_AHEAD_SECONDS = 20
+const STREAM_RESERVE_BYTES = 1024 * 1024 * 1024
+const DEFAULT_STREAM_BYTES_PER_SEC = 8 * 1024 * 1024
+const EVICT_EVERY_MS = 15_000
 
 // Checks how much free flesh the filesystem still has for non-root UIDs before RocksDB gags on ENOSPC.
 function freeDiskBytes (dir) {
@@ -89,10 +99,7 @@ export async function resolvePeerStorage (candidate, fallback) {
 function safeEqual (a, b) {
   const ba = b4a.from(String(a || ''))
   const bb = b4a.from(String(b || ''))
-  if (ba.length === 0 || ba.length !== bb.length) return false
-  let diff = 0
-  for (let i = 0; i < ba.length; i++) diff |= ba[i] ^ bb[i]
-  return diff === 0
+  return ba.byteLength > 0 && ba.byteLength === bb.byteLength && timingSafeEqual(ba, bb)
 }
 
 export function normalizePairCode (raw) {
@@ -226,38 +233,10 @@ function listenHttp (srv, port, host = '0.0.0.0', anyPort = true) {
   })
 }
 
-function httpJson (url, { method = 'GET', headers = {}, body = null, timeoutMs = 5000 } = {}) {
-  return new Promise((resolve, reject) => {
-    const payload = body !== null ? b4a.from(JSON.stringify(body)) : null
-    const reqHeaders = { ...headers }
-    if (payload) {
-      reqHeaders['content-type'] = 'application/json'
-      reqHeaders['content-length'] = String(payload.length)
-    }
-    const req = httpRequest(url, { method, headers: reqHeaders }, res => {
-      const chunks = []
-      res.on('data', c => chunks.push(b4a.isBuffer(c) ? c : b4a.from(c)))
-      res.on('end', () => {
-        clearTimeout(timer)
-        const text = b4a.toString(b4a.concat(chunks))
-        let parsed = null
-        try { parsed = text ? JSON.parse(text) : {} } catch { parsed = { error: text || `HTTP ${res.statusCode}` } }
-        if (res.statusCode >= 200 && res.statusCode < 300) resolve(parsed)
-        else reject(new Error(parsed?.error || `Receiver answered ${res.statusCode}`))
-      })
-    })
-    const timer = setTimeout(() => { req.destroy(new Error('Receiver HTTP request timed out')) }, timeoutMs)
-    timer.unref?.()
-    req.once('error', err => { clearTimeout(timer); reject(err) })
-    if (payload) req.write(payload)
-    req.end()
-  })
-}
-
-function writeJsonAtomic (file, data) {
-  const tmp = `${file}.tmp`
-  writeFileSync(tmp, JSON.stringify(data, null, 2), { mode: 0o600 })
-  renameSync(tmp, file)
+async function httpJson (url, { method = 'GET', headers = {}, body = null, timeoutMs = 5000 } = {}) {
+  const { status, data } = await requestJson(url, { method, headers, body, timeoutMs })
+  if (status >= 200 && status < 300) return data
+  throw new Error(data?.error || `Receiver answered ${status}`)
 }
 
 function adapterForHost (host, customAdapter) {
@@ -473,6 +452,54 @@ async function serveSpliceStream (media, req, res, onModeUpgrade) {
   }
 }
 
+// Serves the receiver's own player straight from the video core, with no prefetch of its own. The stock blob server
+// downloads from the read position to the end of the file on every request (the player asks for `bytes=N-`), so a
+// 77 GB film filled a Pi's SD card; the receiver's read-ahead (`steerReadAhead`) keeps one sliding window instead.
+// Each open response is a reader whose position the window follows.
+function serveWindowedStream (media, req, res, onReader) {
+  const total = media.blob.byteLength
+  const parsed = parseHttpRange(req.headers.range, total)
+  if (parsed.invalid) {
+    res.writeHead(416, { ...CORS, 'content-range': `bytes */${total}` })
+    res.end()
+    return
+  }
+  const { partial, start, end } = parsed
+  const headers = { ...CORS, 'accept-ranges': 'bytes', 'content-type': media.mime || 'video/mp4', 'content-length': String(end - start + 1) }
+  if (partial) headers['content-range'] = `bytes ${start}-${end}/${total}`
+  res.writeHead(partial ? 206 : 200, headers)
+  if (req.method === 'HEAD') {
+    res.end()
+    return
+  }
+  const reader = { pos: start, sent: 0, at: Date.now() }
+  // ByteStream closes the core it reads when it ends, so each reader gets its own session of the media's core.
+  const rs = new ByteStream(media.core.session(), media.blob, { start, length: end - start + 1, prefetch: false })
+  const finish = () => {
+    media.readers.delete(reader)
+    rs.destroy()
+  }
+  media.readers.add(reader)
+  rs.on('data', chunk => {
+    reader.pos += chunk.byteLength
+    reader.sent += chunk.byteLength
+    reader.at = Date.now()
+    media.servedBytes += chunk.byteLength
+    if (!res.write(chunk)) rs.pause()
+  })
+  res.on('drain', () => rs.resume())
+  rs.once('end', () => {
+    media.readers.delete(reader)
+    res.end()
+  })
+  rs.once('error', () => {
+    finish()
+    res.destroy()
+  })
+  res.once('close', finish)
+  onReader()
+}
+
 // Persistent Noise P2P RPC client over HyperDHT: keeps one encrypted pipe throbbing per cast session.
 function connectNoiseOnce (dht, publicKeyHex, { relayThrough = null, onState = null, onClose = null, attemptTimeoutMs = 15_000 } = {}) {
   return new Promise((resolve, reject) => {
@@ -634,6 +661,79 @@ export async function createReceiver ({
   let lastLoadedBlobs = ''
   let evicting = false
   let lastEvictAt = 0
+  // The last few loads stay streamable by token (a replay after the end, a late seek), each with its own window.
+  const streams = new Map()
+  function rememberStream (media) {
+    streams.set(media.token, media)
+    while (streams.size > 4) {
+      const [token, old] = streams.entries().next().value
+      old.window?.range.destroy()
+      streams.delete(token)
+    }
+  }
+
+  // One sliding download window ahead of the player, sized in seconds of the stream (its average bitrate, or the
+  // player's recent read rate up to twice that) and shrunk by the free disk. Spent blocks behind the earliest reader
+  // are cleared every EVICT_EVERY_MS whenever the disk is what limits the window, so the cache stays about one
+  // window in size on a small disk and keeps the whole film for seeding on a large one.
+  async function steerReadAhead (media) {
+    const { core, blob } = media
+    if (!core?.opened || core.closing || !blob?.blockLength) return
+    const bs = Math.ceil(blob.byteLength / blob.blockLength)
+    const readers = [...media.readers]
+    const lead = readers.filter(r => r.sent >= 2 * 1024 * 1024).sort((a, b) => b.at - a.at)[0] || readers[readers.length - 1]
+    const leadByte = lead ? lead.pos : (state.durationMs > 0 ? Math.floor((state.positionMs / state.durationMs) * blob.byteLength) : 0)
+    const avg = media === activeMedia && state.durationMs > 0 ? blob.byteLength / (state.durationMs / 1000) : (media.avgRate || DEFAULT_STREAM_BYTES_PER_SEC)
+    media.avgRate = avg
+    const rate = Math.max(avg, Math.min(media.readRate, 2 * avg))
+    const last = blob.blockOffset + blob.blockLength
+    const first = Math.min(last - 1, blob.blockOffset + Math.floor(leadByte / bs))
+    const fullEnd = Math.min(last, first + Math.ceil((rate * READ_AHEAD_SECONDS) / bs))
+    const cachedAhead = (await core.count(first, fullEnd)) * bs
+    const free = freeDiskBytes(peerRoot)
+    const ahead = Math.max(rate * MIN_READ_AHEAD_SECONDS, Math.min(rate * READ_AHEAD_SECONDS, free - STREAM_RESERVE_BYTES + cachedAhead))
+    const end = Math.min(last, first + Math.ceil(ahead / bs))
+    if (closing || !streams.has(media.token)) return
+    const win = media.window
+    const step = Math.max(4, Math.floor((end - first) / 8))
+    if (!win || Math.abs(first - win.start) >= step || Math.abs(end - win.end) >= step) {
+      const range = core.download({ start: first, end, linear: true })
+      win?.range.destroy()
+      media.window = { range, start: first, end }
+    }
+    const squeezed = end < fullEnd
+    if ((squeezed || free < STREAM_RESERVE_BYTES) && media.coreKeyHex && !evicting && Date.now() - lastEvictAt >= EVICT_EVERY_MS) {
+      evicting = true
+      lastEvictAt = Date.now()
+      const playheadByte = Math.min(leadByte, ...readers.map(r => r.pos))
+      media.peerNode.evictBehind?.(media.coreKeyHex, blob, { playheadByte }).catch(() => {}).finally(() => { evicting = false })
+    }
+  }
+
+  let steering = false
+  async function steerStreams () {
+    if (steering || closing) return
+    steering = true
+    try {
+      const now = Date.now()
+      for (const media of streams.values()) {
+        const seconds = Math.max(0.25, (now - media.rateAt) / 1000)
+        media.readRate = 0.8 * media.readRate + 0.2 * ((media.servedBytes - media.rateServed) / seconds)
+        media.rateAt = now
+        media.rateServed = media.servedBytes
+        if (media.readers.size > 0 || media === activeMedia) {
+          await steerReadAhead(media).catch(() => {})
+        } else if (media.window) {
+          media.window.range.destroy()
+          media.window = null
+        }
+      }
+    } finally {
+      steering = false
+    }
+  }
+  const readAheadTimer = setInterval(steerStreams, 1000)
+  readAheadTimer.unref?.()
 
   const sseClients = new Set()
   const webSseClients = new Set()
@@ -881,9 +981,11 @@ export async function createReceiver ({
     }
 
     const loadToken = randomHex(16)
-    // Native P2P receivers (Android TV / Pi 4 / Mac HTPC / daemon) hand OxideAV/mpv the direct 1-hop
-    // BlobServer URL — avoiding a second QuickJS HTTP copy at 75+ Mbps 4K UHD bitrates.
-    // External Smart TV Web browsers (!onCommand) use the LAN-reachable /cast/v1/hybrid/<token> proxy.
+    // Native P2P receivers (Android TV / Pi 4 / Mac HTPC / daemon) hand OxideAV/mpv a direct loopback URL, and the
+    // hybrid splice reads the same one. For a known blob that is the windowed route (bounded read-ahead), not the
+    // node's blob server, which would download to the end of the film. External Smart TV Web browsers (!onCommand)
+    // use the LAN-reachable /cast/v1/hybrid/<token> proxy.
+    if (core && blob && localP2PUrl) localP2PUrl = `http://127.0.0.1:${actualPort}/cast/v1/p2p/${loadToken}`
     const directLocalP2P = Boolean(onCommand && localP2PUrl)
     const startOnP2P = Boolean(localP2PUrl && (directLocalP2P || !allowColdHttp || await hasBlockCached(core, blob, 0) || hasActiveReplicationPeer(core, blob)))
     const initialMode = startOnP2P ? p2pMode : 'http'
@@ -900,8 +1002,16 @@ export async function createReceiver ({
       core,
       coreKeyHex: parsedWatch?.action === 'watch' ? parsedWatch.entry.blobs : '',
       blob,
-      senderHttpAlive: allowColdHttp
+      senderHttpAlive: allowColdHttp,
+      readers: new Set(),
+      servedBytes: 0,
+      readRate: 0,
+      rateAt: Date.now(),
+      rateServed: 0,
+      avgRate: 0,
+      window: null
     }
+    if (core && blob) rememberStream(activeMedia)
 
     const hostForPlayer = onCommand ? '127.0.0.1' : (currentHost || '127.0.0.1')
     const streamUrl = directLocalP2P
@@ -1012,6 +1122,18 @@ export async function createReceiver ({
     if (req.method === 'GET' && (p === '/' || p === '/tv' || p === '/cast/receiver')) {
       res.writeHead(200, { ...CORS, 'content-type': 'text/html; charset=utf-8' })
       res.end(receiverPage({ mode: 'standalone', defaultName: identity.name }))
+      return
+    }
+
+    const streamMatch = (req.method === 'GET' || req.method === 'HEAD') && p.match(/^\/cast\/v1\/p2p\/([0-9a-f]{32})$/)
+    if (streamMatch) {
+      const media = streams.get(streamMatch[1])
+      if (!media) {
+        res.writeHead(404, CORS)
+        res.end()
+        return
+      }
+      serveWindowedStream(media, req, res, steerStreams)
       return
     }
 
@@ -1202,13 +1324,6 @@ export async function createReceiver ({
       if (p2pPeers !== state.p2pPeers || cachedBytes !== state.cachedBytes || seeding !== state.seeding || nextMode !== state.mode) {
         updateState({ p2pPeers, cachedBytes, seeding, mode: nextMode })
       }
-      if (media.coreKeyHex && media.blob && !evicting && Date.now() - lastEvictAt >= 6_000 && freeDiskBytes(peerRoot) < LOW_DISK_STREAM_BYTES) {
-        evicting = true
-        lastEvictAt = Date.now()
-        // The player's position maps to a byte offset; eviction keeps everything after it.
-        const playheadByte = state.durationMs > 0 ? Math.floor((state.positionMs / state.durationMs) * size) : 0
-        media.peerNode.evictBehind?.(media.coreKeyHex, media.blob, { playheadByte }).catch(() => {}).finally(() => { evicting = false })
-      }
     } catch {} finally {
       statsBusy = false
     }
@@ -1270,6 +1385,9 @@ export async function createReceiver ({
       if (closing) return
       closing = true
       clearInterval(peerStatsTimer)
+      clearInterval(readAheadTimer)
+      for (const media of streams.values()) media.window?.range.destroy()
+      streams.clear()
       activeMedia = null
       const prevAd = adHandle
       adHandle = null

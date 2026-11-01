@@ -26,9 +26,7 @@ export function tuneUdxSocket (sock) {
   }
 }
 
-function toBase64Url (buf) {
-  return b4a.toString(buf, 'base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
-}
+const toBase64Url = buf => b4a.toString(buf, 'base64url')
 
 function topicToken (topic) {
   return toBase64Url(createHash('sha256').update(TOPIC_PREFIX).update(topic).digest())

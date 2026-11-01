@@ -20,12 +20,14 @@ import { posterUrl, backdropUrl } from '../src/art.js'
 const CINEMETA = 'https://v3-cinemeta.strem.io'
 import { createLan, interfaceAdapter, lanAddress } from '../src/lan.js'
 import { createCastController, reclaimLowDiskReceiverStorage, resolvePeerStorage } from '../src/cast.js'
+import { createChat } from '../src/chat.js'
 
 const ipc = Bare.IPC
 let node = null
 let api = null
 let apiUrl = null
 let cast = null
+let chat = null
 let castStorage = null
 let castPeerStorage = null
 let receiverNodeOwned = false
@@ -56,14 +58,17 @@ async function close () {
   const open = node
   const openApi = api
   const openCast = cast
+  const openChat = chat
   node = null
   api = null
   apiUrl = null
   cast = null
+  chat = null
   receiverNodeOwned = false
   lanHost = null
   lanError = null
   lanNote = null
+  openChat?.close()
   if (openCast) await openCast.close().catch(() => {})
   if (openApi) await new Promise(resolve => {
     openApi.close(() => resolve())
@@ -200,7 +205,7 @@ function listenLoopback (srv, preferredPort) {
 }
 
 const methods = {
-  start: ({ storage, tracker = null, sources = [], relayThrough = null, bootstrap = null, lan = false, privateRouting = false, apiPort = 8174, apiToken = null }) => serial(async () => {
+  start: ({ storage, tracker = null, sources = [], relayThrough = null, bootstrap = null, lan = false, privateRouting = false, apiPort = 8174, apiToken = null, uiDir = null }) => serial(async () => {
     await close()
     castStorage = storage
     node = await createNode({
@@ -216,6 +221,12 @@ const methods = {
     node.swarm.on('update', update)
     lanWanted = lan
     await moveLan()
+    chat = createChat(node, {
+      onMessage: message => {
+        api?.notify('chat', { message })
+        send({ event: 'chat', message })
+      }
+    })
     if (apiPort !== false) {
       const srv = createApi({
         node,
@@ -223,6 +234,8 @@ const methods = {
         posterUrl: imdb => posterUrl(CINEMETA, imdb),
         backdropUrl: imdb => backdropUrl(CINEMETA, imdb),
         get cast () { return cast },
+        get chat () { return chat },
+        uiDir,
         apiToken,
         extraStatus: () => ({ lan: lanNote, apiUrl, lanStats: node?.lanStats?.() ?? null }),
         onSourcesChanged: list => send({ event: 'sources', sources: list })
@@ -237,7 +250,7 @@ const methods = {
     const n = await current()
     return { ...report(), discoveredSources: await n.discoveredSources() }
   },
-  search: async ({ id = null, source = null } = {}) => (await current()).search(id, { source }),
+  search: async ({ id = null, source = null, query = null, kind = null, tag = null, groupVariants = false, includeMuted = false } = {}) => (await current()).search(id, { source, query, kind, tag, groupVariants, includeMuted }),
   warm: async ({ key }) => {
     const n = await current()
     const entry = await n.findEntry(key)
@@ -268,6 +281,8 @@ const methods = {
   },
   publishSource: async params => (await current()).publishSource(params, { target: params.target || 'channel' }),
   clearCache: async ({ key = null } = {}) => { const res = await (await current()).clearCache(key); update(); return res },
+  chatPost: async params => { if (!chat) throw new Error('Not started'); return chat.post(params) },
+  chatHistory: async ({ room, since = 0, limit = 100 }) => { if (!chat) throw new Error('Not started'); return chat.history(room, { since, limit }) },
   castStatus: async ({ storage = null } = {}) => (await ensureCast(storage)).status(),
   castPair: async params => { const c = await ensureCast(params.storage); await c.pairReceiver(params); return c.status() },
   castRemove: async ({ id, storage = null }) => { const c = await ensureCast(storage); c.removeReceiver(id); return c.status() },

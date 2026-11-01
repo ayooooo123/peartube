@@ -15,7 +15,7 @@ Two kinds of catalog: a **shared Tracker**, where anyone with the key can add li
 **personal Channel**, where only the owner publishes while subscribers still help seed the catalog
 and the pieces.
 
-> **Status:** 0.4.39 is a working release, not a polished product. Browser playback, the relay
+> **Status:** 0.4.40 is a working release, not a polished product. Browser playback, the relay
 > UI, LAN discovery and both apps have been exercised on real hardware; everything else is
 > described honestly under [Known limitations](#known-limitations). Read that before trusting it
 > with anything you cannot lose.
@@ -116,7 +116,6 @@ Download from the [latest release](https://github.com/ayooooo123/peartube/releas
 | `PearTube-<version>-arm64.apk` | Android phones and tablets (arm64), beside the dev build |
 | `PearTubeReceiver-<version>-arm64.apk` | Android TV, Google TV, Fire TV and Pi receivers |
 | `PearTube-<version>-macos-arm64.zip` | Apple Silicon Macs, macOS 13 or later |
-| `PearTubeReceiver-<version>-macos-arm64.zip` | A dedicated Mac/HTPC TV display |
 
 Mac bundles are signed ad hoc, not notarized, so clear the quarantine once:
 

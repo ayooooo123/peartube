@@ -40,6 +40,10 @@ rm -rf "$app"
 mkdir -p "$app/Contents/MacOS" "$app/Contents/Frameworks"
 cp "target/release/$exe" "$app/Contents/MacOS/"
 cp -R ../worklet/vendor/bare-kit/darwin/BareKit.framework "target/bare-addons/$host/"*.framework "$app/Contents/Frameworks/"
+# bare-kit 3 builds BareKit.framework with a real Headers directory at its
+# root, which codesign refuses to seal in an embedded framework. The app
+# loads no headers at run time.
+rm -rf "$app/Contents/Frameworks/BareKit.framework/Headers"
 # The bundle loads its frameworks from Contents/Frameworks only: drop the
 # build's absolute rpaths, as the binary records them.
 bin="$app/Contents/MacOS/$exe"

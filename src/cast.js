@@ -39,6 +39,7 @@ const READ_AHEAD_SECONDS = 120
 const MIN_READ_AHEAD_SECONDS = 20
 const BEHIND_SECONDS = 30
 const STREAM_RESERVE_BYTES = 1024 * 1024 * 1024
+const STREAM_FLOOR_BYTES = 256 * 1024 * 1024
 const DEFAULT_STREAM_BYTES_PER_SEC = 8 * 1024 * 1024
 const EVICT_EVERY_MS = 15_000
 
@@ -723,8 +724,11 @@ export async function createReceiver ({
     const fullEnd = Math.min(last, first + Math.ceil((rate * READ_AHEAD_SECONDS) / bs))
     const cachedAhead = (await core.count(first, fullEnd)) * bs
     const free = freeDiskBytes(peerRoot)
-    const ahead = Math.max(rate * MIN_READ_AHEAD_SECONDS, Math.min(rate * READ_AHEAD_SECONDS, free - STREAM_RESERVE_BYTES + cachedAhead))
-    const end = Math.min(last, first + Math.ceil(ahead / bs))
+    // The floor keeps a jitter buffer when the reserve is already used, but never more than the disk can hold above
+    // STREAM_FLOOR_BYTES: below that the window shrinks to the block being read and the player reads on demand.
+    const wanted = Math.max(rate * MIN_READ_AHEAD_SECONDS, Math.min(rate * READ_AHEAD_SECONDS, free - STREAM_RESERVE_BYTES + cachedAhead))
+    const ahead = Math.min(wanted, Math.max(0, free - STREAM_FLOOR_BYTES + cachedAhead))
+    const end = Math.min(last, first + Math.max(1, Math.ceil(ahead / bs)))
     if (closing || !streams.has(media.token)) return
     const win = media.window
     const step = Math.max(4, Math.floor((end - first) / 8))
@@ -733,11 +737,13 @@ export async function createReceiver ({
       win?.range.destroy()
       media.window = { range, start: first, end }
     }
-    if (media.coreKeyHex && !evicting && Date.now() - lastEvictAt >= EVICT_EVERY_MS) {
+    // Under the reserve, trimming runs every 3 s and keeps only 64 MiB behind, so the disk never fills mid-film.
+    const tight = free < STREAM_RESERVE_BYTES
+    if (media.coreKeyHex && !evicting && Date.now() - lastEvictAt >= (tight ? 3000 : EVICT_EVERY_MS)) {
       evicting = true
       lastEvictAt = Date.now()
       const playheadByte = Math.min(leadByte, ...readers.map(r => r.pos))
-      const keepBehindBytes = Math.max(64 * 1024 * 1024, Math.ceil(rate * BEHIND_SECONDS))
+      const keepBehindBytes = tight ? 64 * 1024 * 1024 : Math.max(64 * 1024 * 1024, Math.ceil(rate * BEHIND_SECONDS))
       media.peerNode.evictBehind?.(media.coreKeyHex, blob, { playheadByte, keepBehindBytes }).catch(() => {}).finally(() => { evicting = false })
     }
   }

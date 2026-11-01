@@ -296,14 +296,15 @@ test('clearCache flushes RocksDB WAL and BlobDB so on-disk corestore bytes shrin
   assert.equal(viewer.status().cachedBytes, 0)
 })
 
-test('streaming cache cleanup reclaims behind-playhead blocks in bounded steps without touching the live tail', { timeout: 240_000 }, async t => {
+test('streaming cache cleanup reclaims the spent prefix in one call without stalling the live tail', { timeout: 240_000 }, async t => {
   const testnet = await createTestnet(3)
   const source = await createNode({ storage: tmp(), bootstrap: testnet.bootstrap })
   const viewDir = tmp()
   const viewer = await createNode({ storage: viewDir, bootstrap: testnet.bootstrap, tracker: source.status().tracker })
   t.after(async () => { await viewer.close(); await source.close(); await testnet.destroy() })
 
-  const bytes = randomBytes(64 * 1024 * 1024)
+  // Big enough to span several ~64 MiB blob files, as a film does: streaming cleanup drops the ones fully spent.
+  const bytes = randomBytes(256 * 1024 * 1024)
   const published = await source.publish({ id: 'imdb:tt0209144', title: 'Memento' }, Readable.from([bytes]))
   const [entry] = await until(async () => (await viewer.search('imdb:tt0209144')).length && viewer.search('imdb:tt0209144'))
   assert.deepEqual(Buffer.from(await (await fetch(entry.streamUrl)).arrayBuffer()), bytes)
@@ -314,7 +315,7 @@ test('streaming cache cleanup reclaims behind-playhead blocks in bounded steps w
     return sum + (f.isDirectory() ? diskBytes(p) : statSync(p).size)
   }, 0)
   const dbDir = join(viewDir, 'corestore', 'db')
-  await viewer.gcStorage({ full: true })
+  await viewer.gcStorage()
   const beforeDisk = diskBytes(dbDir)
 
   const keepBehind = 8 * 1024 * 1024
@@ -339,14 +340,8 @@ test('streaming cache cleanup reclaims behind-playhead blocks in bounded steps w
   let remaining = initial
   const cleanupStarted = performance.now()
   try {
-    for (let step = 0; step < 8; step++) {
-      await viewer.evictBehind(published.blobs, published.blob, { playheadByte: bytes.length - 524288, keepBehindBytes: keepBehind })
-      const now = viewer.status().cachedBytes
-      assert.ok(now <= remaining, 'cleanup cannot add cached blocks')
-      assert.ok(remaining - now <= 32 * 1024 * 1024, 'one cleanup pass cannot hold the core lock for a movie-sized span')
-      if (now === remaining) break
-      remaining = now
-    }
+    await viewer.evictBehind(published.blobs, published.blob, { playheadByte: bytes.length - 524288, keepBehindBytes: keepBehind })
+    remaining = viewer.status().cachedBytes
   } finally {
     probing = false
     await liveTail
@@ -354,13 +349,13 @@ test('streaming cache cleanup reclaims behind-playhead blocks in bounded steps w
   const cleanupEnded = performance.now()
   const cadence = [cleanupStarted, ...probeStarts.filter(at => at > cleanupStarted), cleanupEnded]
   const slowestCadenceMs = Math.max(...cadence.slice(1).map((at, i) => at - cadence[i]))
-  assert.ok(remaining <= 16 * 1024 * 1024, 'repeated bounded passes eventually reclaim the spent prefix')
+  assert.ok(remaining <= 16 * 1024 * 1024, 'one cleanup keeps pace: it reclaims the whole spent prefix')
 
   assert.ok(probes > 0, 'concurrent Range requests reached the active receiver')
   assert.ok(slowestRangeMs < 2500, `live cached Range stalled for ${Math.round(slowestRangeMs)} ms during cleanup`)
   assert.ok(slowestCadenceMs < 750, `live receiver made no new Range attempt for ${Math.round(slowestCadenceMs)} ms`)
   const afterDisk = diskBytes(dbDir)
-  assert.ok(beforeDisk - afterDisk >= 24 * 1024 * 1024, 'cleanup must reclaim physical BlobDB bytes, not just clear a bitfield')
+  assert.ok(beforeDisk - afterDisk >= 96 * 1024 * 1024, `cleanup must reclaim physical BlobDB bytes, not just clear a bitfield (${beforeDisk - afterDisk})`)
 
   const tail = await fetch(entry.streamUrl, { headers: { Range: `bytes=${tailStart}-${bytes.length - 1}` } })
   assert.equal(tail.status, 206)

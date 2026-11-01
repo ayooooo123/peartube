@@ -895,6 +895,11 @@ async function openNode ({
   }
 
   let gcQueue = Promise.resolve()
+  // `streaming` (a playing receiver's eviction behind the playhead) never asks for exclusive compaction, so readers keep
+  // their lane open, and only drops blob files that hold nothing live, which rewrites nothing. Blocks land in ~64 MiB
+  // blob files as they download, so all but the file at the edge of the spent stretch go at once, and that one goes on
+  // a later pass. Forcing blob GC with an age cutoff of 1.0 relocated every live blob on each pass instead: on a Pi's SD
+  // card that blocked Android's own disk I/O for 97 s and its watchdog restarted the system.
   function gcStorage ({ full = false, streaming = false } = {}) {
     const run = async () => {
       if (closing || coreStorage.closed) return { beforeBytes: 0, afterBytes: 0, reclaimedBytes: 0 }
@@ -902,10 +907,11 @@ async function openNode ({
       await coreStorage.flush().catch(() => {})
       if (!closing && !coreStorage.closed) {
         const hasLocalBlobs = ownedBlobs.size > 0 || blobSlots.some(s => localBlocks(s.core) > 0)
-        // A playing receiver must never request exclusive compaction; readers keep their lane open.
-        await coreStorage.compact(full && !hasLocalBlobs && !streaming
-          ? { exclusive: true, blobGarbageCollectionPolicy: 1, blobGarbageCollectionAgeCutoff: 1.0, bottommostLevelCompaction: 2 }
-          : { exclusive: false, blobGarbageCollectionPolicy: streaming ? 1 : 0, blobGarbageCollectionAgeCutoff: 1.0, bottommostLevelCompaction: streaming ? 0 : 1 }
+        await coreStorage.compact(streaming
+          ? { exclusive: false, blobGarbageCollectionPolicy: 2, bottommostLevelCompaction: 0 }
+          : full && !hasLocalBlobs
+            ? { exclusive: true, blobGarbageCollectionPolicy: 1, blobGarbageCollectionAgeCutoff: 1.0, bottommostLevelCompaction: 2 }
+            : { exclusive: false, blobGarbageCollectionPolicy: 0, blobGarbageCollectionAgeCutoff: 1.0, bottommostLevelCompaction: 1 }
         )
       }
       const afterBytes = dbDiskBytes()
@@ -969,7 +975,9 @@ async function openNode ({
   }
 
   // Drains spent blocks behind the playhead so tiny TV disks swallow 100 GB remuxes without choking on ENOSPC.
-  // `playheadByte` is the player's position within the blob; the caller (the TV receiver) knows it.
+  // `playheadByte` is the earliest position the player is reading within the blob; the caller (the TV receiver)
+  // knows it. One call clears the whole spent stretch so eviction keeps pace with a 60+ Mbps film, in 32 MiB steps
+  // (a single movie-sized clear gags the playback session mutex), then reclaims the space once.
   async function evictBehind (blobsHex, blob, { playheadByte = 0, keepBehindBytes = 64 * 1024 * 1024 } = {}) {
     const core = blobCores.get(blobsHex)
     if (!core?.opened || !blob || blob.blockLength <= 16 || isOwnedBlob(blobsHex) || core.writable) return 0
@@ -980,16 +988,18 @@ async function openNode ({
     const tailGuard = blob.blockOffset + blob.blockLength - Math.max(4, Math.ceil((2 * 1024 * 1024) / bs))
     const clearTo = Math.min(tailGuard, core.length, playhead - keepBlocks)
     if (clearTo <= headGuard) return 0
-    // A single movie-sized clear gags the playback session mutex; clear the first cached 32 MiB stretch per pass.
     const maxBlocks = Math.max(1, Math.floor((32 * 1024 * 1024) / bs))
-    for (let start = headGuard; start < clearTo; start += maxBlocks) {
+    let cleared = 0
+    for (let start = headGuard; start < clearTo && !closing; start += maxBlocks) {
       const end = Math.min(clearTo, start + maxBlocks)
-      if (await core.count(start, end) === 0) continue
+      const n = await core.count(start, end)
+      if (n === 0) continue
       await core.clear(start, end)
-      await syncBlockCounter(core)
-      return (await gcStorage({ streaming: true })).reclaimedBytes
+      cleared += n
     }
-    return 0
+    if (cleared === 0) return 0
+    await syncBlockCounter(core)
+    return (await gcStorage({ streaming: true })).reclaimedBytes
   }
 
   async function clearCache (key = null, { keepBlobsHex = null } = {}) {

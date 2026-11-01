@@ -306,6 +306,94 @@ test('cross-subnet Noise P2P keypair pairing casts and controls a remote receive
   }
 })
 
+test('a native receiver keeps one sliding window: bounded read-ahead, watched blocks trimmed behind, exact bytes', { timeout: 240_000 }, async t => {
+  const testnet = await createTestnet(3)
+  const relay = await createNode({ storage: tmp('window-relay'), bootstrap: testnet.bootstrap })
+  const receiverNode = await createNode({ storage: tmp('window-tv-node'), bootstrap: testnet.bootstrap })
+  // 160 MiB "film" said to run 1280 s: 128 KiB/s, so 120 s of read-ahead is 15 MiB (30 MiB at the read-rate cap).
+  const bytes = randomBytes(160 * 1024 * 1024)
+  const durationMs = 1_280_000
+  let loadCmd = null
+  const tv = await createReceiver({
+    storage: tmp('window-tv-cast'),
+    name: 'Window TV',
+    port: 0,
+    lanHost: null,
+    node: receiverNode,
+    onCommand: async (cmd, ctx) => {
+      if (cmd.action !== 'load') return
+      loadCmd = cmd
+      ctx.updateState({ status: 'playing', playing: true, buffering: false, positionMs: 0, durationMs })
+    }
+  })
+  t.after(async () => {
+    await tv.close()
+    await receiverNode.close()
+    await relay.close()
+    await testnet.destroy()
+  })
+
+  await relay.publish({ id: 'imdb:tt0499549', title: 'Window Avatar' }, Readable.from([bytes]))
+  const [entry] = await relay.search('imdb:tt0499549')
+  await tv.command({ action: 'load', magnetUrl: entry.magnetUrl, entry: { key: entry.key, id: entry.id, title: entry.title, size: entry.size } })
+  assert.match(loadCmd?.streamUrl || '', /^http:\/\/127\.0\.0\.1:\d+\/cast\/v1\/p2p\/[0-9a-f]{32}$/, 'the player gets the windowed route')
+
+  // The player opens one `bytes=0-` stream (as oxideav-http does) and stops reading at 8 MiB, then at 128 MiB.
+  const stops = [8 * 1024 * 1024, 128 * 1024 * 1024]
+  const chunks = []
+  let read = 0
+  let res = null
+  let resume = null
+  const done = new Promise((resolve, reject) => {
+    const req = httpRequest(loadCmd.streamUrl, { headers: { range: 'bytes=0-' } }, r => {
+      res = r
+      r.on('data', chunk => {
+        chunks.push(chunk)
+        read += chunk.length
+        if (resume === null && stops.length && read >= stops[0]) {
+          stops.shift()
+          r.pause()
+          resume = () => { resume = null; r.resume() }
+        }
+      })
+      r.once('end', () => resolve(r.statusCode))
+      r.once('error', reject)
+    })
+    req.once('error', reject)
+    req.end()
+  })
+  const cached = () => tv.peerStatus()?.cachedBytes || 0
+
+  await waitFor(() => resume, 'player read its first 8 MiB', 120_000)
+  let settled = 0
+  await waitFor(async () => {
+    const before = cached()
+    await new Promise(resolve => setTimeout(resolve, 3000))
+    settled = cached()
+    return settled === before && settled > read
+  }, 'read-ahead settled while the player paused', 120_000)
+  const pausedAt = read
+  const aheadOfPlayer = settled - pausedAt
+  assert.ok(aheadOfPlayer >= 10 * 1024 * 1024, `read ahead of the player: ${aheadOfPlayer} bytes`)
+  assert.ok(settled <= 48 * 1024 * 1024, `cache bounded to about one window, not the 160 MiB film: ${settled} bytes`)
+
+  // At 128 MiB the watched part is trimmed to the 64 MiB margin (plus the 4 MiB head the player reopens with):
+  // the cache holds at most head + margin + the 32 MiB still ahead, not the 128 MiB already watched.
+  resume()
+  await waitFor(() => resume, 'player read to 128 MiB', 120_000)
+  const trimmedAt = read
+  const trimmed = await waitFor(() => { const c = cached(); return c <= 104 * 1024 * 1024 && c }, 'watched blocks trimmed behind the player', 60_000)
+
+  resume()
+  assert.equal(await done, 206)
+  const full = Buffer.concat(chunks)
+  assert.equal(full.length, bytes.length)
+  assert.equal(sha256(full), sha256(bytes), 'the windowed stream delivers the exact film')
+  res.destroy()
+
+  evidence.scenarios.boundedReadAhead = { filmBytes: bytes.length, playerPausedAt: pausedAt, cachedWhilePaused: settled, aheadOfPlayer, trimmedAt, cachedAfterTrim: trimmed, verifiedSha256: sha256(full) }
+})
+
 test('private-routing cast initiator goes offline: TV receiver becomes a 2-hop private P2P peer, seeds privately, and fails closed on HTTP fallback', { timeout: 240_000 }, async t => {
   const testnet = await createTestnet(3)
   const bus = mdnsBus()

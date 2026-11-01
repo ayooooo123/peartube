@@ -654,7 +654,9 @@ export async function createReceiver ({
   openAuth = false,
   anyPort = true,
   onCommand = null,
-  onChange = null
+  onChange = null,
+  // Inside the apps' worklet: managed peer nodes get the worklet's small request windows, like the app's own node.
+  worklet = false
 }) {
   mkdirSync(storage, { recursive: true, mode: 0o700 })
   const peerRoot = await resolvePeerStorage(peerStorage, storage)
@@ -926,6 +928,7 @@ export async function createReceiver ({
           bootstrap: wantBootstrap || undefined,
           relayThrough: wantRelayThrough,
           privateRouting: wantPrivate,
+          worklet,
           lan: wantLan && currentHost
             ? kp => createLan({ host: currentHost, keyPair: kp, adapter: adapterForHost(currentHost, adapter) })
             : null
@@ -1452,7 +1455,8 @@ export function createCastController ({
   ensureNode = null,
   getLanHost = () => null,
   adapter = null,
-  onchange = null
+  onchange = null,
+  worklet = false
 }) {
   mkdirSync(storage, { recursive: true, mode: 0o700 })
   const savedFile = join(storage, 'cast-receivers.json')
@@ -2243,7 +2247,8 @@ export function createCastController ({
       allowPeerNode: true,
       openAuth,
       onCommand,
-      onChange: () => emitChange()
+      onChange: () => emitChange(),
+      worklet
     })
     emitChange()
     return localReceiver.info()

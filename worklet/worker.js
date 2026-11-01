@@ -135,14 +135,15 @@ async function ensureCast (storageHint = null, peerStorageHint = null) {
         receiverNodeOwned = true
         const peerDir = await resolvePeerStorage(castPeerStorage, castStorage)
         reclaimLowDiskReceiverStorage(peerDir)
-        node = await createNode({ storage: peerDir, onchange: update })
+        node = await createNode({ storage: peerDir, onchange: update, worklet: true })
         node.swarm.on('update', update)
         lanWanted = true
         await moveLan()
         return node
       },
       getLanHost: currentDeviceIp,
-      onchange: sendCast
+      onchange: sendCast,
+      worklet: true
     })
     await cast.initHub().catch(() => {})
     await cast.setLanHost(currentDeviceIp()).catch(() => {})

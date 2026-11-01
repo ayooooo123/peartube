@@ -12,8 +12,8 @@ crate-type = ["staticlib"]
 libc = "0.2"
 serde_json = "1"
 oxideav-core = "*"
-player = { git = "https://github.com/ayooooo123/peartube-media", rev = "289550c0481464f47cafde03e8f605fb7c0ec9c1" }
-codecs = { git = "https://github.com/ayooooo123/peartube-media", rev = "289550c0481464f47cafde03e8f605fb7c0ec9c1" }
+player = { git = "https://github.com/ayooooo123/peartube-media", rev = "53ca39b95fe758484808db2310e60866d7b2e65c" }
+codecs = { git = "https://github.com/ayooooo123/peartube-media", rev = "53ca39b95fe758484808db2310e60866d7b2e65c" }
 
 [profile.release]
 strip = true

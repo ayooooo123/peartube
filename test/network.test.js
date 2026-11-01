@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import { createServer } from 'node:http'
 import { createHash, randomBytes } from 'node:crypto'
 import { Readable } from 'node:stream'
-import { mkdtempSync, readdirSync, statSync, mkdirSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, readdirSync, readFileSync, statSync, mkdirSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import createTestnet from 'hyperdht/testnet.js'
@@ -296,14 +296,15 @@ test('clearCache flushes RocksDB WAL and BlobDB so on-disk corestore bytes shrin
   assert.equal(viewer.status().cachedBytes, 0)
 })
 
-test('streaming cache cleanup reclaims behind-playhead blocks in bounded steps without touching the live tail', { timeout: 240_000 }, async t => {
+test('streaming cache cleanup reclaims the spent prefix in one call without stalling the live tail', { timeout: 240_000 }, async t => {
   const testnet = await createTestnet(3)
   const source = await createNode({ storage: tmp(), bootstrap: testnet.bootstrap })
   const viewDir = tmp()
   const viewer = await createNode({ storage: viewDir, bootstrap: testnet.bootstrap, tracker: source.status().tracker })
   t.after(async () => { await viewer.close(); await source.close(); await testnet.destroy() })
 
-  const bytes = randomBytes(64 * 1024 * 1024)
+  // Big enough to span several ~64 MiB blob files, as a film does: streaming cleanup drops the ones fully spent.
+  const bytes = randomBytes(256 * 1024 * 1024)
   const published = await source.publish({ id: 'imdb:tt0209144', title: 'Memento' }, Readable.from([bytes]))
   const [entry] = await until(async () => (await viewer.search('imdb:tt0209144')).length && viewer.search('imdb:tt0209144'))
   assert.deepEqual(Buffer.from(await (await fetch(entry.streamUrl)).arrayBuffer()), bytes)
@@ -314,7 +315,7 @@ test('streaming cache cleanup reclaims behind-playhead blocks in bounded steps w
     return sum + (f.isDirectory() ? diskBytes(p) : statSync(p).size)
   }, 0)
   const dbDir = join(viewDir, 'corestore', 'db')
-  await viewer.gcStorage({ full: true })
+  await viewer.gcStorage()
   const beforeDisk = diskBytes(dbDir)
 
   const keepBehind = 8 * 1024 * 1024
@@ -339,14 +340,8 @@ test('streaming cache cleanup reclaims behind-playhead blocks in bounded steps w
   let remaining = initial
   const cleanupStarted = performance.now()
   try {
-    for (let step = 0; step < 8; step++) {
-      await viewer.evictBehind(published.blobs, published.blob, { playheadByte: bytes.length - 524288, keepBehindBytes: keepBehind })
-      const now = viewer.status().cachedBytes
-      assert.ok(now <= remaining, 'cleanup cannot add cached blocks')
-      assert.ok(remaining - now <= 32 * 1024 * 1024, 'one cleanup pass cannot hold the core lock for a movie-sized span')
-      if (now === remaining) break
-      remaining = now
-    }
+    await viewer.evictBehind(published.blobs, published.blob, { playheadByte: bytes.length - 524288, keepBehindBytes: keepBehind })
+    remaining = viewer.status().cachedBytes
   } finally {
     probing = false
     await liveTail
@@ -354,13 +349,13 @@ test('streaming cache cleanup reclaims behind-playhead blocks in bounded steps w
   const cleanupEnded = performance.now()
   const cadence = [cleanupStarted, ...probeStarts.filter(at => at > cleanupStarted), cleanupEnded]
   const slowestCadenceMs = Math.max(...cadence.slice(1).map((at, i) => at - cadence[i]))
-  assert.ok(remaining <= 16 * 1024 * 1024, 'repeated bounded passes eventually reclaim the spent prefix')
+  assert.ok(remaining <= 16 * 1024 * 1024, 'one cleanup keeps pace: it reclaims the whole spent prefix')
 
   assert.ok(probes > 0, 'concurrent Range requests reached the active receiver')
   assert.ok(slowestRangeMs < 2500, `live cached Range stalled for ${Math.round(slowestRangeMs)} ms during cleanup`)
   assert.ok(slowestCadenceMs < 750, `live receiver made no new Range attempt for ${Math.round(slowestCadenceMs)} ms`)
   const afterDisk = diskBytes(dbDir)
-  assert.ok(beforeDisk - afterDisk >= 24 * 1024 * 1024, 'cleanup must reclaim physical BlobDB bytes, not just clear a bitfield')
+  assert.ok(beforeDisk - afterDisk >= 96 * 1024 * 1024, `cleanup must reclaim physical BlobDB bytes, not just clear a bitfield (${beforeDisk - afterDisk})`)
 
   const tail = await fetch(entry.streamUrl, { headers: { Range: `bytes=${tailStart}-${bytes.length - 1}` } })
   assert.equal(tail.status, 206)
@@ -378,5 +373,106 @@ test('streaming cache cleanup reclaims behind-playhead blocks in bounded steps w
     slowestRangeMs: Math.round(slowestRangeMs),
     cleanupMs: Math.round(cleanupEnded - cleanupStarted),
     slowestCadenceMs: Math.round(slowestCadenceMs)
+  }, null, 2) + '\n')
+})
+
+test('acquirer strips cross-origin auth on redirect, resumes mid-stream resets and stalls via Range, and dead-letters 403s', async t => {
+  const { a, b } = await network(t)
+  const bytes = randomBytes(1536 * 1024 + 19)
+  let cdnHits = 0
+  let forbiddenHits = 0
+
+  const cdn = createServer((req, res) => {
+    // Presigned S3/R2 edges reject leaked cross-origin Authorization headers or missing User-Agents with 403.
+    if (req.headers.authorization || !String(req.headers['user-agent'] || '').startsWith('VLC/')) {
+      res.writeHead(403)
+      res.end('forbidden')
+      return
+    }
+    cdnHits++
+    if (cdnHits === 1) {
+      assert.equal(req.headers.range, undefined)
+      res.writeHead(200, { 'content-length': String(bytes.length), 'accept-ranges': 'bytes', etag: '"v1"' })
+      res.write(bytes.subarray(0, 700 * 1024), () => res.socket.destroy())
+      return
+    }
+    const m = String(req.headers.range || '').match(/^bytes=(\d+)-$/)
+    assert.ok(m, `expected Range header on reconnect #${cdnHits}`)
+    const start = Number(m[1])
+    assert.equal(req.headers['if-range'], '"v1"')
+    if (cdnHits === 2) {
+      // Hang before headers arrive (un-flushed upstream seek): openSource times out inside readResumable without purging.
+      return
+    }
+    if (cdnHits === 3) {
+      res.writeHead(502)
+      res.end('upstream hiccup')
+      return
+    }
+    res.writeHead(206, {
+      'content-length': String(bytes.length - start),
+      'content-range': `bytes ${start}-${bytes.length - 1}/${bytes.length}`,
+      etag: '"v1"'
+    })
+    res.flushHeaders()
+    if (cdnHits === 4) {
+      // Simulate a Usenet skipReader seek (> 1x stallTimeout before byte 1), then 400 KiB followed by a mid-body stall.
+      const t = setTimeout(() => { if (!res.destroyed) res.write(bytes.subarray(start, start + 400 * 1024)) }, 260)
+      t.unref?.()
+      return
+    }
+    res.end(bytes.subarray(start))
+  })
+  await new Promise(resolve => cdn.listen(0, '127.0.0.1', resolve))
+  t.after(() => { cdn.closeAllConnections?.(); cdn.close() })
+
+  const gateway = createServer((req, res) => {
+    if (req.url === '/forbidden') {
+      forbiddenHits++
+      res.writeHead(403)
+      res.end('denied')
+      return
+    }
+    assert.equal(req.headers.authorization, 'Bearer one-shot-secret')
+    res.writeHead(302, { location: `http://127.0.0.1:${cdn.address().port}/video.mkv` })
+    res.end()
+  })
+  await new Promise(resolve => gateway.listen(0, '127.0.0.1', resolve))
+  t.after(() => { gateway.closeAllConnections?.(); gateway.close() })
+
+  const jobsFile = join(tmp(), 'jobs.json')
+  const acquirer = createAcquirer(b, jobsFile, { concurrency: 1, retryDelay: 100, stallTimeout: 200 })
+  t.after(() => acquirer.close())
+  const gwBase = `http://127.0.0.1:${gateway.address().port}`
+
+  const dead = acquirer.add({ id: 'imdb:tt0000041', title: 'Dead 403', source: { url: `${gwBase}/forbidden` } })
+  const resumed = acquirer.add({
+    id: 'imdb:tt0000042',
+    title: 'Resumed Film',
+    source: { url: `${gwBase}/source`, headers: { Authorization: 'Bearer one-shot-secret' } }
+  })
+
+  await until(() => acquirer.get(dead.jobId)?.status === 'failed')
+  const done = await until(() => acquirer.get(resumed.jobId)?.status === 'done' && acquirer.get(resumed.jobId))
+  await new Promise(resolve => setTimeout(resolve, 350))
+
+  assert.equal(forbiddenHits, 1, 'terminal 403 must not loop retries or starve queued jobs')
+  assert.equal(cdnHits, 5, 'initial open + header-timeout Range retry + 502 Range retry + slow-seek/stall Range retry + finish')
+  assert.equal(done.attempts, undefined, 'Range reconnect hiccups must never purge the partial core or burn job attempts')
+  assert.equal(done.sha256, createHash('sha256').update(bytes).digest('hex'))
+  const savedDead = JSON.parse(readFileSync(jobsFile, 'utf8')).find(j => j.jobId === dead.jobId)
+  assert.equal(savedDead.source, null, 'terminal 403 clears stored source so restarts never resurrect it')
+
+  const [hit] = await until(async () => (await a.search('imdb:tt0000042')).length && a.search('imdb:tt0000042'))
+  const streamed = Buffer.from(await (await fetch(hit.streamUrl)).arrayBuffer())
+  assert.equal(createHash('sha256').update(streamed).digest('hex'), done.sha256)
+
+  const artifactDir = join('desktop', 'target', 'e2e')
+  mkdirSync(artifactDir, { recursive: true })
+  writeFileSync(join(artifactDir, 'acquire-resilience-result.json'), JSON.stringify({
+    sha256: done.sha256,
+    bytes: bytes.length,
+    cdnHits,
+    forbiddenHits
   }, null, 2) + '\n')
 })

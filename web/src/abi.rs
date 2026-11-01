@@ -240,7 +240,7 @@ pub unsafe extern "C" fn pt_open(ext_ptr: *const u8, ext_len: usize) -> i32 {
             "duration": duration_secs,
             "width": mse_cfg.as_ref().map_or(width, |c| c.width),
             "height": mse_cfg.as_ref().map_or(height, |c| c.height),
-            "mseCodec": mse_cfg.as_ref().map(|c| c.codec_string.as_str()),
+            "mseType": mse_cfg.as_ref().map(MseVideoConfig::mime_type),
             "webCodecs": webcodecs_hint,
             "tracks": tracks_json,
             "defaultVideo": first_video,
@@ -325,7 +325,7 @@ pub extern "C" fn pt_configure(video_stream: i32, audio_stream: i32, sub_stream:
         if sess.video_mode == VideoOutputMode::Mse
             && let Some(cfg) = sess.mse_cfg.as_ref()
         {
-            sess.out_queue.push_back(OutItem::MseInit(build_fmp4_init(cfg)));
+            sess.out_queue.push_back(OutItem::MseInit(cfg.init_segment()));
         }
         0
     })
@@ -361,7 +361,7 @@ pub extern "C" fn pt_seek(target_secs: f64) -> i32 {
         if sess.video_mode == VideoOutputMode::Mse
             && let Some(cfg) = sess.mse_cfg.as_ref()
         {
-            sess.out_queue.push_back(OutItem::MseInit(build_fmp4_init(cfg)));
+            sess.out_queue.push_back(OutItem::MseInit(cfg.init_segment()));
         }
         0
     })

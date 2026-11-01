@@ -583,17 +583,58 @@ enum NalFraming {
     RawPassthrough,
 }
 
+/// The byte stream MSE gets: fragmented MP4, or WebM for VP8, which browsers accept only in WebM.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum MseContainer {
+    Fmp4,
+    /// The Matroska codec ID of the one video track.
+    WebM(&'static str),
+}
+
 #[derive(Clone)]
 struct MseVideoConfig {
     kind: VideoCodecKind,
     width: u32,
     height: u32,
     framing: NalFraming,
+    container: MseContainer,
+    // The fMP4 sample entry; unused for WebM.
     config_box_fourcc: [u8; 4],
     sample_entry_fourcc: [u8; 4],
     config_payload: Vec<u8>,
     codec_string: String,
     frame_ticks_90k: i64,
+}
+
+impl MseVideoConfig {
+    /// The type the page hands `MediaSource.isTypeSupported` and `addSourceBuffer`.
+    fn mime_type(&self) -> String {
+        let base = match self.container {
+            MseContainer::Fmp4 => "video/mp4",
+            MseContainer::WebM(_) => "video/webm",
+        };
+        format!("{base}; codecs=\"{}\"", self.codec_string)
+    }
+
+    fn init_segment(&self) -> Vec<u8> {
+        match self.container {
+            MseContainer::Fmp4 => build_fmp4_init(self),
+            MseContainer::WebM(codec_id) => build_webm_init(self, codec_id),
+        }
+    }
+
+    fn media_segment(
+        &self,
+        seq: u32,
+        gop: &[GopPacket],
+        lookahead: &[GopPacket],
+        min_dts_90k: &mut i64,
+    ) -> Option<(Vec<u8>, f64, f64)> {
+        match self.container {
+            MseContainer::Fmp4 => build_fmp4_segment(seq, gop, lookahead, self.frame_ticks_90k, min_dts_90k),
+            MseContainer::WebM(_) => build_webm_clusters(gop, lookahead, self.frame_ticks_90k),
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -925,6 +966,7 @@ fn probe_mse_video(stream: &StreamInfo, first_keyframe: Option<&[u8]>) -> Option
                     width: w,
                     height: h,
                     framing: NalFraming::LengthPrefixed(len_size),
+                    container: MseContainer::Fmp4,
                     config_box_fourcc: *b"avcC",
                     sample_entry_fourcc: *b"avc1",
                     config_payload: rec,
@@ -957,6 +999,7 @@ fn probe_mse_video(stream: &StreamInfo, first_keyframe: Option<&[u8]>) -> Option
                     width: w,
                     height: h,
                     framing: NalFraming::AnnexB,
+                    container: MseContainer::Fmp4,
                     config_box_fourcc: *b"avcC",
                     sample_entry_fourcc: *b"avc1",
                     config_payload: rec,
@@ -1017,6 +1060,7 @@ fn probe_mse_video(stream: &StreamInfo, first_keyframe: Option<&[u8]>) -> Option
                     width: w,
                     height: h,
                     framing: NalFraming::LengthPrefixed(len_size),
+                    container: MseContainer::Fmp4,
                     config_box_fourcc: *b"hvcC",
                     sample_entry_fourcc: *b"hvc1",
                     config_payload: rec,
@@ -1065,6 +1109,7 @@ fn probe_mse_video(stream: &StreamInfo, first_keyframe: Option<&[u8]>) -> Option
                     width: w,
                     height: h,
                     framing: NalFraming::AnnexB,
+                    container: MseContainer::Fmp4,
                     config_box_fourcc: *b"hvcC",
                     sample_entry_fourcc: *b"hvc1",
                     config_payload: rec,
@@ -1080,6 +1125,7 @@ fn probe_mse_video(stream: &StreamInfo, first_keyframe: Option<&[u8]>) -> Option
                 width: w,
                 height: h,
                 framing: NalFraming::RawPassthrough,
+                container: MseContainer::Fmp4,
                 config_box_fourcc: *b"av1C",
                 sample_entry_fourcc: *b"av01",
                 config_payload: av1c,
@@ -1097,6 +1143,7 @@ fn probe_mse_video(stream: &StreamInfo, first_keyframe: Option<&[u8]>) -> Option
                 width: w,
                 height: h,
                 framing: NalFraming::RawPassthrough,
+                container: MseContainer::Fmp4,
                 config_box_fourcc: *b"vpcC",
                 sample_entry_fourcc: *b"vp09",
                 config_payload: vpcc,
@@ -1104,6 +1151,20 @@ fn probe_mse_video(stream: &StreamInfo, first_keyframe: Option<&[u8]>) -> Option
                 frame_ticks_90k,
             })
         }
+        // Browsers take VP8 through MSE only in WebM (Chromium refuses `vp08` in MP4), and the
+        // page needs no secure context for MSE, unlike WebCodecs.
+        "vp8" => Some(MseVideoConfig {
+            kind: VideoCodecKind::Vp8,
+            width: w,
+            height: h,
+            framing: NalFraming::RawPassthrough,
+            container: MseContainer::WebM("V_VP8"),
+            config_box_fourcc: [0; 4],
+            sample_entry_fourcc: [0; 4],
+            config_payload: Vec::new(),
+            codec_string: "vp8".to_string(),
+            frame_ticks_90k,
+        }),
         _ => None,
     }
 }
@@ -1314,6 +1375,123 @@ fn build_fmp4_segment(
         out.extend_from_slice(&pkt.data_4byte);
     }
     Some((out, start_secs, end_secs))
+}
+
+fn ebml_id(out: &mut Vec<u8>, id: u32) {
+    let bytes = id.to_be_bytes();
+    let skip = bytes.iter().position(|&b| b != 0).unwrap_or(3);
+    out.extend_from_slice(&bytes[skip..]);
+}
+
+/// The shortest EBML size; each width's all-ones value is reserved for "unknown size".
+fn ebml_size(out: &mut Vec<u8>, size: u64) {
+    let mut width = 1usize;
+    while width < 8 && size >= (1u64 << (7 * width)) - 1 {
+        width += 1;
+    }
+    let marked = size | (1u64 << (7 * width));
+    out.extend_from_slice(&marked.to_be_bytes()[8 - width..]);
+}
+
+fn ebml_bytes(out: &mut Vec<u8>, id: u32, payload: &[u8]) {
+    ebml_id(out, id);
+    ebml_size(out, payload.len() as u64);
+    out.extend_from_slice(payload);
+}
+
+fn ebml_uint(out: &mut Vec<u8>, id: u32, value: u64) {
+    let bytes = value.to_be_bytes();
+    let skip = bytes.iter().position(|&b| b != 0).unwrap_or(7);
+    ebml_bytes(out, id, &bytes[skip..]);
+}
+
+/// EBML header, a Segment of unknown size (clusters follow in later appends), millisecond
+/// timestamps and the one video track.
+fn build_webm_init(cfg: &MseVideoConfig, codec_id: &str) -> Vec<u8> {
+    let mut header = Vec::with_capacity(40);
+    ebml_uint(&mut header, 0x4286, 1); // EBMLVersion
+    ebml_uint(&mut header, 0x42F7, 1); // EBMLReadVersion
+    ebml_uint(&mut header, 0x42F2, 4); // EBMLMaxIDLength
+    ebml_uint(&mut header, 0x42F3, 8); // EBMLMaxSizeLength
+    ebml_bytes(&mut header, 0x4282, b"webm"); // DocType
+    ebml_uint(&mut header, 0x4287, 2); // DocTypeVersion
+    ebml_uint(&mut header, 0x4285, 2); // DocTypeReadVersion
+
+    let mut info = Vec::with_capacity(32);
+    ebml_uint(&mut info, 0x2AD7B1, 1_000_000); // TimestampScale: 1 ms
+    ebml_bytes(&mut info, 0x4D80, b"peartube"); // MuxingApp
+    ebml_bytes(&mut info, 0x5741, b"peartube"); // WritingApp
+
+    let mut video = Vec::with_capacity(12);
+    ebml_uint(&mut video, 0xB0, u64::from(cfg.width)); // PixelWidth
+    ebml_uint(&mut video, 0xBA, u64::from(cfg.height)); // PixelHeight
+    let mut entry = Vec::with_capacity(48);
+    ebml_uint(&mut entry, 0xD7, 1); // TrackNumber
+    ebml_uint(&mut entry, 0x73C5, 1); // TrackUID
+    ebml_uint(&mut entry, 0x83, 1); // TrackType: video
+    ebml_uint(&mut entry, 0x9C, 0); // FlagLacing
+    ebml_bytes(&mut entry, 0x86, codec_id.as_bytes()); // CodecID
+    // No DefaultDuration: the frame rate is often a guess and VP8 may be variable-rate, and a
+    // declared duration overrides the one the browser takes from the next block's timestamp.
+    ebml_bytes(&mut entry, 0xE0, &video); // Video
+    let mut tracks = Vec::with_capacity(entry.len() + 4);
+    ebml_bytes(&mut tracks, 0xAE, &entry); // TrackEntry
+
+    let mut out = Vec::with_capacity(160);
+    ebml_bytes(&mut out, 0x1A45_DFA3, &header); // EBML
+    ebml_id(&mut out, 0x1853_8067); // Segment
+    out.extend_from_slice(&[0x01, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF]);
+    ebml_bytes(&mut out, 0x1549_A966, &info); // Info
+    ebml_bytes(&mut out, 0x1654_AE6B, &tracks); // Tracks
+    out
+}
+
+/// Writes the 8-byte size of the element whose size field starts at `size_at` and runs to the end.
+fn close_webm_element(out: &mut [u8], size_at: usize) {
+    let size = (out.len() - size_at - 8) as u64;
+    out[size_at..size_at + 8].copy_from_slice(&(size | (1u64 << 56)).to_be_bytes());
+}
+
+/// Packets as SimpleBlocks in presentation order. A block holds its time as a signed 16-bit
+/// millisecond offset from its Cluster, so a new Cluster starts whenever that would not fit.
+fn build_webm_clusters(gop: &[GopPacket], lookahead: &[GopPacket], frame_90k: i64) -> Option<(Vec<u8>, f64, f64)> {
+    let (first, last) = (gop.first()?, gop.last()?);
+    let ticks_per_ms = i64::from(VIDEO_TIMESCALE / 1000);
+    let payload_bytes: usize = gop.iter().map(|p| p.data_4byte.len() + 16).sum();
+    let mut out = Vec::with_capacity(payload_bytes + 32);
+    let mut cluster: Option<(usize, i64)> = None;
+    for pkt in gop {
+        let ms = pkt.pts_90k.max(0) / ticks_per_ms;
+        let offset = match cluster {
+            Some((_, base)) if (0..=i64::from(i16::MAX)).contains(&(ms - base)) => ms - base,
+            _ => {
+                if let Some((size_at, _)) = cluster {
+                    close_webm_element(&mut out, size_at);
+                }
+                ebml_id(&mut out, 0x1F43_B675); // Cluster
+                cluster = Some((out.len(), ms));
+                out.extend_from_slice(&[0; 8]);
+                ebml_uint(&mut out, 0xE7, ms as u64); // Timestamp
+                0
+            }
+        };
+        ebml_id(&mut out, 0xA3); // SimpleBlock
+        ebml_size(&mut out, (4 + pkt.data_4byte.len()) as u64);
+        out.push(0x81); // track 1
+        out.extend_from_slice(&(offset as i16).to_be_bytes());
+        out.push(if pkt.sync { 0x80 } else { 0 });
+        out.extend_from_slice(&pkt.data_4byte);
+    }
+    if let Some((size_at, _)) = cluster {
+        close_webm_element(&mut out, size_at);
+    }
+    let end_90k = lookahead
+        .first()
+        .map(|p| p.pts_90k)
+        .filter(|&n| n > last.pts_90k)
+        .unwrap_or(last.pts_90k + frame_90k.max(1));
+    let secs = |ticks: i64| ticks.max(0) as f64 / f64::from(VIDEO_TIMESCALE);
+    Some((out, secs(first.pts_90k), secs(end_90k)))
 }
 
 fn strip_ass_overrides(raw: &str) -> String {
@@ -1795,10 +1973,7 @@ impl WebSession {
         let tb = vm.time_base;
 
         if self.video_mode == VideoOutputMode::Mse {
-            let Some((framing, kind, frame_ticks_90k)) = self
-                .mse_cfg
-                .as_ref()
-                .map(|c| (c.framing, c.kind, c.frame_ticks_90k))
+            let Some((framing, kind)) = self.mse_cfg.as_ref().map(|c| (c.framing, c.kind))
             else {
                 return;
             };
@@ -1826,13 +2001,10 @@ impl WebSession {
             if self.mse_gop.len() >= need_n {
                 let chunk: Vec<GopPacket> = self.mse_gop.drain(..emit_n).collect();
                 self.mse_seq = self.mse_seq.wrapping_add(1);
-                if let Some((seg, start, end)) = build_fmp4_segment(
-                    self.mse_seq,
-                    &chunk,
-                    &self.mse_gop,
-                    frame_ticks_90k,
-                    &mut self.mse_min_dts,
-                ) {
+                if let Some(cfg) = self.mse_cfg.as_ref()
+                    && let Some((seg, start, end)) =
+                        cfg.media_segment(self.mse_seq, &chunk, &self.mse_gop, &mut self.mse_min_dts)
+                {
                     self.out_queue.push_back(OutItem::MseSegment { data: seg, start, end });
                 }
             }
@@ -2098,13 +2270,11 @@ impl WebSession {
         self.flush_audio_accum();
         if self.video_mode == VideoOutputMode::Mse {
             if !self.mse_gop.is_empty()
-                && let Some(frame_ticks_90k) = self.mse_cfg.as_ref().map(|c| c.frame_ticks_90k)
+                && let Some(cfg) = self.mse_cfg.as_ref()
             {
                 self.mse_seq = self.mse_seq.wrapping_add(1);
                 let gop = std::mem::take(&mut self.mse_gop);
-                if let Some((seg, start, end)) =
-                    build_fmp4_segment(self.mse_seq, &gop, &[], frame_ticks_90k, &mut self.mse_min_dts)
-                {
+                if let Some((seg, start, end)) = cfg.media_segment(self.mse_seq, &gop, &[], &mut self.mse_min_dts) {
                     self.out_queue.push_back(OutItem::MseSegment { data: seg, start, end });
                 }
             }

@@ -70,7 +70,7 @@ async function run (bytes, mode) {
   assert.equal(wasm.pt_open(0, 0), 0, 'the engine opens the file')
   const manifest = json()
   assert.equal(wasm.pt_configure(manifest.defaultVideo, manifest.defaultAudio, -1, mode), 0, 'the engine takes the streams')
-  const out = { manifest, frames: [], audio: [], segments: [], packets: [] }
+  const out = { manifest, frames: [], audio: [], segments: [], packets: [], bytes: [] }
   let code
   let guard = 0
   while ((code = wasm.pt_step()) !== 0 && guard++ < 100000) {
@@ -83,8 +83,10 @@ async function run (bytes, mode) {
     } else if (code === 1 || code === 2) {
       const ptr = wasm.pt_out_ptr() >>> 0
       const len = wasm.pt_out_len() >>> 0
-      const digest = createHash('sha256').update(Buffer.from(new Uint8Array(wasm.memory.buffer, ptr, len))).digest('hex')
+      const data = Buffer.from(new Uint8Array(wasm.memory.buffer, ptr, len))
+      const digest = createHash('sha256').update(data).digest('hex')
       out.segments.push({ code, start: wasm.pt_out_pts(), end: wasm.pt_out_dur(), digest })
+      out.bytes.push(data)
     } else if (code === 8) {
       out.packets.push(wasm.pt_out_pts())
     }
@@ -124,8 +126,8 @@ test('the browser engine plays H.264 and HEVC stamped in decode order at present
       for (const [kind, mode] of Object.entries(MODE)) {
         normal[kind] = await run(twin.normal, mode)
         decodedOrder[kind] = await run(twin.decodeOrder, mode)
-        const expected = name === 'hevc' ? 'hvc1.' : 'avc1.'
-        assert.ok(String(normal[kind].manifest.mseCodec).startsWith(expected), `${name} muxes as ${expected}: ${normal[kind].manifest.mseCodec}`)
+        const expected = 'video/mp4; codecs="' + (name === 'hevc' ? 'hvc1.' : 'avc1.')
+        assert.ok(String(normal[kind].manifest.mseType).startsWith(expected), `${name} muxes as ${expected}: ${normal[kind].manifest.mseType}`)
       }
 
       // Software decode: every picture, in order, at 24 fps, and audio that follows the same clock.
@@ -157,4 +159,46 @@ test('the browser engine plays H.264 and HEVC stamped in decode order at present
   }
   mkdirSync(outDir, { recursive: true })
   writeFileSync(join(outDir, 'web-player-result.json'), JSON.stringify(result, null, 2))
+})
+
+// Browsers take VP8 through MSE only as WebM, and a LAN relay page over plain HTTP has no
+// WebCodecs. The engine's WebM init + clusters must be a stream a decoder reads back whole:
+// every picture at its source time, keyframes marked, and no declared duration that disagrees
+// with the next picture's time. The clip is variable-rate (10 fps, then 30 fps) and its own
+// container declares 30 fps throughout, so a frame rate guessed from metadata is wrong for half.
+test('the browser engine remuxes variable-rate VP8 to WebM for MSE', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'peartube-web-player-vp8-'))
+  const packets = file => JSON.parse(execFileSync('ffprobe', ['-v', 'error', '-select_streams', 'v:0',
+    '-show_entries', 'stream=codec_name,width,height:packet=pts_time,duration_time,flags', '-of', 'json', file]).toString())
+  try {
+    const source = join(dir, 'vp8.webm')
+    execFileSync('ffmpeg', ['-nostdin', '-v', 'error', '-y',
+      '-f', 'lavfi', '-i', 'testsrc2=size=320x240:rate=30',
+      '-f', 'lavfi', '-i', 'sine=frequency=440:sample_rate=48000',
+      '-t', '4', '-map', '0:v', '-map', '1:a', '-vf', "select='gte(t,2)+not(mod(n,3))'", '-fps_mode', 'vfr',
+      '-c:v', 'libvpx', '-g', '24', '-auto-alt-ref', '0', '-b:v', '500k', '-c:a', 'libopus', source])
+    const played = await run(readFileSync(source), MODE.mse)
+    assert.equal(played.manifest.mseType, 'video/webm; codecs="vp8"')
+    assert.ok(played.segments.length > 2, `VP8 MSE emits an init and media segments: ${played.segments.length}`)
+    assert.equal(played.segments[0].code, 1, 'the init segment comes first')
+
+    const remuxed = join(dir, 'remuxed.webm')
+    writeFileSync(remuxed, Buffer.concat(played.bytes))
+    const want = packets(source)
+    const got = packets(remuxed)
+    assert.deepEqual(got.streams[0], { codec_name: 'vp8', width: 320, height: 240 })
+    const times = probe => probe.packets.map(p => Number(p.pts_time))
+    same(times(got).map(t => Math.round(t * 1000)), times(want).map(t => Math.round(t * 1000)), 'VP8 picture times (ms)')
+    const keys = probe => probe.packets.flatMap((p, i) => p.flags.startsWith('K') ? [i] : [])
+    assert.deepEqual(keys(got), keys(want), 'keyframes stay marked')
+    got.packets.slice(0, -1).forEach((p, i) => {
+      if (p.duration_time === undefined) return
+      const gap = Number(got.packets[i + 1].pts_time) - Number(p.pts_time)
+      assert.ok(Math.abs(Number(p.duration_time) - gap) < 0.002, `picture ${i} lasts ${p.duration_time} s but the next starts ${gap.toFixed(3)} s later`)
+    })
+    const decoded = execFileSync('ffmpeg', ['-nostdin', '-v', 'error', '-xerror', '-i', remuxed, '-f', 'framemd5', '-']).toString()
+    assert.equal(decoded.split('\n').filter(l => l && !l.startsWith('#')).length, want.packets.length, 'every picture decodes')
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
 })

@@ -1839,8 +1839,8 @@ function openPlayer (entry, at = 0) {
     p.sb = null
     p.mseReady = false
     const MS = window.MediaSource || window.ManagedMediaSource
-    if (!MS || !p.manifest?.mseCodec) { fallbackSw(startAt); return }
-    const mime = 'video/mp4; codecs="' + p.manifest.mseCodec + '"'
+    if (!MS || !p.manifest?.mseType) { fallbackSw(startAt); return }
+    const mime = p.manifest.mseType
     if (!MS.isTypeSupported(mime)) { fallbackSw(startAt); return }
     const ms = new MS()
     p.ms = ms
@@ -1971,7 +1971,7 @@ function openPlayer (entry, at = 0) {
       if (typeof m.offscreen === 'boolean') workerOffscreenReady = m.offscreen
       p.webCodecsSupported = Boolean(m.webCodecsSupported)
       const MS = window.MediaSource || window.ManagedMediaSource
-      p.useMse = Boolean(p.videoStream >= 0 && mf.mseCodec && MS && MS.isTypeSupported('video/mp4; codecs="' + mf.mseCodec + '"'))
+      p.useMse = Boolean(p.videoStream >= 0 && mf.mseType && MS && MS.isTypeSupported(mf.mseType))
       p.allowWebCodecs = Boolean(!p.useMse && p.videoStream >= 0 && p.webCodecsSupported)
       p.usingWebCodecs = p.allowWebCodecs
       if (p.useMse) {

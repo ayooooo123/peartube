@@ -114,14 +114,16 @@
     "hyperswarm": "^4.17.2",
     "peartube-crypto": "file:worklet/crypto",
     "sodium-native": "github:ayooooo123/sodium-native#562d642e1a78a8e124cf97bfbda77f01c02d1a7f",
-    "streamx": "^2.28.0"
+    "streamx": "^2.28.0",
+    "udx-native": "github:ayooooo123/udx-native#d43a2bd1100913fc37aef21aa698a74584a384ac"
   },
   "devDependencies": {
     "bare-link": "4.1.0",
     "bare-pack": "3.0.2"
   },
   "overrides": {
-    "sodium-native": "$sodium-native"
+    "sodium-native": "$sodium-native",
+    "udx-native": "$udx-native"
   },
   "private": true
 }

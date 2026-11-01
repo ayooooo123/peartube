@@ -976,9 +976,12 @@ async function openNode ({
 
   // Drains spent blocks behind the playhead so tiny TV disks swallow 100 GB remuxes without choking on ENOSPC.
   // `playheadByte` is the earliest position the player is reading within the blob; the caller (the TV receiver)
-  // knows it. One call clears the whole spent stretch so eviction keeps pace with a 60+ Mbps film, in 32 MiB steps
-  // (a single movie-sized clear gags the playback session mutex), then reclaims the space once.
-  async function evictBehind (blobsHex, blob, { playheadByte = 0, keepBehindBytes = 64 * 1024 * 1024 } = {}) {
+  // knows it. It clears the spent stretch in 32 MiB steps (a single movie-sized clear gags the playback session
+  // mutex), oldest first, up to `maxBytes` per call, then reclaims the space once. Where the last call stopped is
+  // remembered, so a pass over a 77 GB film doesn't count its way up from the first block every time; one count
+  // checks that nothing below it was downloaded again.
+  const evictedTo = new WeakMap()
+  async function evictBehind (blobsHex, blob, { playheadByte = 0, keepBehindBytes = 64 * 1024 * 1024, maxBytes = Infinity } = {}) {
     const core = blobCores.get(blobsHex)
     if (!core?.opened || !blob || blob.blockLength <= 16 || isOwnedBlob(blobsHex) || core.writable) return 0
     const bs = Math.max(65536, Math.round((blob.byteLength || BLOB_BLOCK_SIZE) / blob.blockLength))
@@ -989,14 +992,17 @@ async function openNode ({
     const clearTo = Math.min(tailGuard, core.length, playhead - keepBlocks)
     if (clearTo <= headGuard) return 0
     const maxBlocks = Math.max(1, Math.floor((32 * 1024 * 1024) / bs))
+    const hint = Math.min(clearTo, Math.max(headGuard, evictedTo.get(core) || headGuard))
+    let start = hint > headGuard && await core.count(headGuard, hint) > 0 ? headGuard : hint
     let cleared = 0
-    for (let start = headGuard; start < clearTo && !closing; start += maxBlocks) {
+    for (; start < clearTo && !closing && cleared * bs < maxBytes; start += maxBlocks) {
       const end = Math.min(clearTo, start + maxBlocks)
       const n = await core.count(start, end)
       if (n === 0) continue
       await core.clear(start, end)
       cleared += n
     }
+    evictedTo.set(core, Math.min(start, clearTo))
     if (cleared === 0) return 0
     await syncBlockCounter(core)
     return (await gcStorage({ streaming: true })).reclaimedBytes

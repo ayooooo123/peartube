@@ -31,7 +31,7 @@ abstract class TvWorkletTask @Inject constructor(private val exec: ExecOperation
     fun run() {
         exec.exec {
             workingDir = repo.get().asFile
-            commandLine("node", "android/worklet.mjs", assetsDir.get().asFile.path, libsDir.get().asFile.path, temporaryDir.path)
+            commandLine("node", "android/worklet.mjs", assetsDir.get().asFile.path, libsDir.get().asFile.path, temporaryDir.path, "v8")
         }
     }
 }
@@ -41,7 +41,7 @@ val workletTask = tasks.register<TvWorkletTask>("worklet") {
     sources.from(
         File(checkout, "android/worklet.mjs"),
         File(worklet, "worker.js"), File(worklet, "build.mjs"), File(worklet, "pack.cjs"), File(worklet, "imports.json"), fileTree(File(worklet, "crypto")),
-        fileTree(File(worklet, "vendor/bare-kit/android/arm64-v8a")),
+        fileTree(File(worklet, "vendor/bare-kit/android-v8/arm64-v8a")),
         fileTree(File(checkout, "src")), File(checkout, "package.json"), File(checkout, "package-lock.json"),
     )
     assetsDir.set(layout.buildDirectory.dir("worklet/assets"))

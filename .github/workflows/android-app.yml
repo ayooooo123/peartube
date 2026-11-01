@@ -46,13 +46,13 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: android/native
-      # bare-kit built on QuickJS (worklet/bare-kit.sh), cached by its inputs.
+      # bare-kit built on QuickJS for the phone app and on V8 for the TV receiver (worklet/bare-kit.sh), cached by its inputs.
       - run: npm install --global cmake-runtime@4.3.1 ninja-runtime@1.13.2
       - uses: actions/cache@v4
         with:
           path: ~/.cache/peartube
           key: bare-kit-qjs-${{ hashFiles('worklet/bare-kit.sh', 'worklet/patches/*') }}
-      - run: sh worklet/bare-kit.sh arm64-v8a
+      - run: sh worklet/bare-kit.sh arm64-v8a arm64-v8a-v8
       - uses: actions/cache@v4
         with:
           path: |

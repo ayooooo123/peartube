@@ -6,8 +6,10 @@
 # A target is an Android ABI (arm64-v8a, armeabi-v7a, x86_64, x86), giving
 # android/<abi>/libbare-kit.so; darwin, giving darwin/BareKit.framework for
 # this Mac; or ios-arm64 / ios-arm64-simulator, giving <target>/BareKit.framework
-# (Xcode required). By default it builds for what this machine can: darwin on a
-# Mac, and arm64-v8a if it finds the Android NDK.
+# (Xcode required). arm64-v8a-v8 builds the same Android library on bare-kit's
+# own engine, V8, into android-v8/arm64-v8a: the TV receiver uses it (see
+# below). By default it builds for what this machine can: darwin on a Mac, and
+# arm64-v8a and arm64-v8a-v8 if it finds the Android NDK.
 #
 # bare-kit 3 is a C library; its language bindings live in their own repos and
 # build the native library their wrappers load. This builds those same CMake
@@ -24,6 +26,12 @@
 # the symbol table for V8's 66,000 exported symbols. libqjs is Holepunch's
 # libjs ABI on QuickJS, so bare, bare-kit and the worker's addons are
 # unchanged, and libbare-kit.so is a few MB.
+#
+# The TV receiver is the exception. On a Raspberry Pi 4 the worklet's one JS
+# thread pulls a 4K film off the network, decrypts and hashes it, and hands it
+# to the player; QuickJS, an interpreter, kept that thread pegged and a
+# ~63 Mbps film stalled, where V8 (a JIT) plays it in real time. Its library is
+# 41.9 MB stripped; the phone app stays on QuickJS.
 #
 # Builds are cached by the hash of this script and the patches. Needs git,
 # npm, node 22.21+ or 24.9+, cmake 4+ and ninja; Xcode for darwin; and for
@@ -53,7 +61,7 @@ ndk="${ANDROID_NDK_HOME:-$(ls -d "$sdk"/ndk/* 2>/dev/null | sort -V | tail -n 1)
 if [ $# -eq 0 ]; then
   if [ "$(uname)" = Darwin ]; then set -- darwin; fi
   if [ -n "$ndk" ]; then
-    set -- arm64-v8a "$@"
+    set -- arm64-v8a arm64-v8a-v8 "$@"
   else
     echo "No Android NDK (ANDROID_NDK_HOME, or $sdk/ndk): not building for Android"
   fi
@@ -61,9 +69,9 @@ if [ $# -eq 0 ]; then
 fi
 for target in "$@"; do
   case $target in
-    arm64-v8a | armeabi-v7a | x86_64 | x86) ;;
+    arm64-v8a | armeabi-v7a | x86_64 | x86 | arm64-v8a-v8) ;;
     darwin | ios-arm64 | ios-arm64-simulator) [ "$(uname)" = Darwin ] || { echo "$target builds only on a Mac" >&2; exit 1; } ;;
-    *) echo "Unknown target $target: an Android ABI, darwin, ios-arm64, or ios-arm64-simulator" >&2; exit 1 ;;
+    *) echo "Unknown target $target: an Android ABI, arm64-v8a-v8, darwin, ios-arm64, or ios-arm64-simulator" >&2; exit 1 ;;
   esac
 done
 key=$( { cat bare-kit.sh patches/*.patch; echo "$BARE_KIT_KOTLIN $BARE_KIT_SWIFT $LIBQJS $LIBJS $QUICKJS"; } | shasum -a 256 | cut -c1-16)
@@ -109,25 +117,33 @@ sources() {
 }
 
 # build <binding> <target> <name> <cmake flags...>: configure the binding's
-# CMake project in $work/<name> and build its library target.
+# CMake project in $work/<name> and build its library target, on QuickJS unless
+# $engine is v8 (bare-kit's default engine, fetched by its own CMake).
+engine=qjs
 build() {
   binding=$1
   target=$2
   name=$3
   shift 3
   log="$work/$name.log"
-  echo "Building bare-kit on QuickJS for $name (log: $log)"
-  { cmake -S "$work/src/$binding" -B "$work/$name" -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo \
-      "-DCMAKE_C_FLAGS=-I$work/$name/_deps/github+libuv+libuv-src/include" \
-      "-DBARE_ENGINE=github:holepunchto/libqjs#$LIBQJS" \
+  if [ "$engine" = v8 ]; then
+    echo "Building bare-kit on V8 for $name (log: $log)"
+  else
+    echo "Building bare-kit on QuickJS for $name (log: $log)"
+    set -- "-DBARE_ENGINE=github:holepunchto/libqjs#$LIBQJS" \
       "-DFETCHCONTENT_SOURCE_DIR_GITHUB+HOLEPUNCHTO+LIBQJS=$work/src/libqjs" \
       "-DFETCHCONTENT_SOURCE_DIR_GITHUB+HOLEPUNCHTO+LIBJS=$work/src/libjs" \
-      "-DFETCHCONTENT_SOURCE_DIR_GITHUB+BELLARD+QUICKJS=$work/src/quickjs" \
+      "-DFETCHCONTENT_SOURCE_DIR_GITHUB+BELLARD+QUICKJS=$work/src/quickjs" "$@"
+  fi
+  { cmake -S "$work/src/$binding" -B "$work/$name" -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+      "-DCMAKE_C_FLAGS=-I$work/$name/_deps/github+libuv+libuv-src/include" \
       "$@" &&
     cmake --build "$work/$name" --target "$target"; } >"$log" 2>&1 ||
     { tail -n 30 "$log" >&2; echo "bare-kit build failed: $log" >&2; exit 1; }
 }
 
+# android <abi> <dir>: bare-kit-kotlin's libbare-kit.so (and libc++_shared.so)
+# into vendor/bare-kit/<dir>/<abi>.
 android() {
   case $1 in
     arm64-v8a) triple=aarch64-linux-android ;;
@@ -135,25 +151,25 @@ android() {
     x86_64) triple=x86_64-linux-android ;;
     x86) triple=i686-linux-android ;;
   esac
-  if [ ! -f "$out/android/$1/libbare-kit.so" ]; then
+  if [ ! -f "$out/$2/$1/libbare-kit.so" ]; then
     [ -f "$ndk/build/cmake/android.toolchain.cmake" ] ||
       { echo "Building for $1 needs the Android NDK: set ANDROID_NDK_HOME, or install it under $sdk/ndk" >&2; exit 1; }
     sources
     llvm=$(echo "$ndk"/toolchains/llvm/prebuilt/*)
-    build bare-kit-kotlin bare_kit_kotlin "android-$1" "-DCMAKE_TOOLCHAIN_FILE=$ndk/build/cmake/android.toolchain.cmake" \
+    build bare-kit-kotlin bare_kit_kotlin "$2-$1" "-DCMAKE_TOOLCHAIN_FILE=$ndk/build/cmake/android.toolchain.cmake" \
       "-DANDROID_ABI=$1" "-DANDROID_PLATFORM=android-$API"
-    mkdir -p "$out/android/$1.part"
+    mkdir -p "$out/$2/$1.part"
     # libbare-kit.so links libc++ statically (bare-kit-kotlin's choice); the
     # worker's addons still load libc++_shared.so. The NDK's copy carries 8 MB
     # of debug info.
-    for lib in "$work/android-$1/libbare-kit.so" "$llvm/sysroot/usr/lib/$triple/libc++_shared.so"; do
-      "$llvm/bin/llvm-strip" --strip-unneeded -o "$out/android/$1.part/${lib##*/}" "$lib"
+    for lib in "$work/$2-$1/libbare-kit.so" "$llvm/sysroot/usr/lib/$triple/libc++_shared.so"; do
+      "$llvm/bin/llvm-strip" --strip-unneeded -o "$out/$2/$1.part/${lib##*/}" "$lib"
     done
-    mv "$out/android/$1.part" "$out/android/$1"
+    mv "$out/$2/$1.part" "$out/$2/$1"
   fi
-  mkdir -p vendor/bare-kit/android
-  rm -rf "vendor/bare-kit/android/$1"
-  cp -R "$out/android/$1" "vendor/bare-kit/android/$1"
+  mkdir -p "vendor/bare-kit/$2"
+  rm -rf "vendor/bare-kit/$2/$1"
+  cp -R "$out/$2/$1" "vendor/bare-kit/$2/$1"
 }
 
 # apple <name> <cmake flags...>: bare-kit-swift's BareKit.framework, installed
@@ -188,9 +204,10 @@ for target in "$@"; do
       -DCMAKE_OSX_DEPLOYMENT_TARGET=16.0 -DCMAKE_XCODE_ATTRIBUTE_CODE_SIGNING_ALLOWED=NO -DCMAKE_MACOSX_BUNDLE=OFF ;;
     ios-arm64-simulator) apple ios-arm64-simulator -DCMAKE_SYSTEM_NAME=iOS -DCMAKE_OSX_SYSROOT=iphonesimulator \
       -DCMAKE_OSX_ARCHITECTURES=arm64 -DCMAKE_OSX_DEPLOYMENT_TARGET=16.0 -DCMAKE_XCODE_ATTRIBUTE_CODE_SIGNING_ALLOWED=NO -DCMAKE_MACOSX_BUNDLE=OFF ;;
-    *) android "$target" ;;
+    arm64-v8a-v8) engine=v8; android arm64-v8a android-v8; engine=qjs ;;
+    *) android "$target" android ;;
   esac
 done
 # Only the outputs are kept; sources and build trees are ~1 GB per target.
 rm -rf "$work"
-echo "bare-kit on QuickJS in worklet/vendor/bare-kit: $*"
+echo "bare-kit in worklet/vendor/bare-kit: $*"

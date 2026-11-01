@@ -468,7 +468,7 @@ node android/e2e.mjs --serial <adb serial> --relay http://<relay>:8174 [--lan]
 Builds:
 
 ```sh
-sh worklet/bare-kit.sh           # once: bare-kit on QuickJS (Android if the NDK exists, macOS on a Mac)
+sh worklet/bare-kit.sh           # once: bare-kit on QuickJS, plus V8 for the TV receiver (Android if the NDK exists, macOS on a Mac)
 sh android/release.sh            # signed arm64 phone APK
 sh android/release-tv.sh         # signed arm64 TV receiver APK
 npm run app                      # macOS: builds and opens PearTube.app

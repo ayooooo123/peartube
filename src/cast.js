@@ -33,11 +33,13 @@ const LOW_DISK_BOOT_BYTES = 2 * 1024 * 1024 * 1024
 const LOW_DISK_STREAM_BYTES = 1536 * 1024 * 1024
 // The receiver's read-ahead, in seconds of the stream it plays: the full window while the disk has room for it,
 // down to the floor as free space runs out, never planning to use the last STREAM_RESERVE_BYTES. Watched blocks are
-// kept for BEHIND_SECONDS (a skip back stays local) and cleared every EVICT_EVERY_MS. Until the player reports a
-// duration, a stream is assumed to run at a 4K remux's ~64 Mbps.
+// trimmed only once free space falls under TRIM_FREE_BYTES (or three full windows, if larger), keeping BEHIND_SECONDS
+// (a skip back stays local), every EVICT_EVERY_MS. Until the player reports a duration, a stream is assumed to run
+// at a 4K remux's ~64 Mbps.
 const READ_AHEAD_SECONDS = 120
 const MIN_READ_AHEAD_SECONDS = 20
 const BEHIND_SECONDS = 30
+const TRIM_FREE_BYTES = 4 * 1024 * 1024 * 1024
 const STREAM_RESERVE_BYTES = 1024 * 1024 * 1024
 const STREAM_FLOOR_BYTES = 256 * 1024 * 1024
 const DEFAULT_STREAM_BYTES_PER_SEC = 8 * 1024 * 1024
@@ -513,6 +515,7 @@ function serveWindowedStream (media, req, res, onReader) {
     rs.destroy()
   }
   media.readers.add(reader)
+  media.lastReaderAt = reader.at
   rs.on('data', chunk => {
     reader.pos += chunk.byteLength
     reader.sent += chunk.byteLength
@@ -739,14 +742,23 @@ export async function createReceiver ({
       win?.range.destroy()
       media.window = { range, start: first, end }
     }
-    // Under the reserve, trimming runs every 3 s and keeps only 64 MiB behind, so the disk never fills mid-film.
+    // Trimming waits until the disk needs the space: each pass is block clears plus a compaction on the storage
+    // thread, and on the Pi's SSD with 960 GB free that every-15 s burst only competed with playback. Under the
+    // reserve it runs every 3 s and keeps only 64 MiB behind, so the disk never fills mid-film. It also waits while
+    // the player starts or seeks (buffering, or a reader opened in the last 20 s) unless the disk is nearly full:
+    // after a seek everything before the new spot counts as watched, and clearing hundreds of MB then held up the
+    // new reads (the Pi went 10 s without receiving a byte). Each pass clears at most twice what the stream plays
+    // between passes, so a backlog drains over several passes.
     const tight = free < STREAM_RESERVE_BYTES
-    if (media.coreKeyHex && !evicting && Date.now() - lastEvictAt >= (tight ? 3000 : EVICT_EVERY_MS)) {
+    const needed = free < Math.max(TRIM_FREE_BYTES, 3 * rate * READ_AHEAD_SECONDS)
+    const settling = (media === activeMedia && state.buffering) || Date.now() - (media.lastReaderAt || 0) < 20_000
+    if (media.coreKeyHex && needed && !evicting && (!settling || free < STREAM_FLOOR_BYTES) && Date.now() - lastEvictAt >= (tight ? 3000 : EVICT_EVERY_MS)) {
       evicting = true
       lastEvictAt = Date.now()
       const playheadByte = Math.min(leadByte, ...readers.map(r => r.pos))
       const keepBehindBytes = tight ? 64 * 1024 * 1024 : Math.max(64 * 1024 * 1024, Math.ceil(rate * BEHIND_SECONDS))
-      media.peerNode.evictBehind?.(media.coreKeyHex, blob, { playheadByte, keepBehindBytes }).catch(() => {}).finally(() => { evicting = false })
+      const maxBytes = Math.max(128 * 1024 * 1024, Math.ceil(rate * (EVICT_EVERY_MS / 1000) * 2))
+      media.peerNode.evictBehind?.(media.coreKeyHex, blob, { playheadByte, keepBehindBytes, maxBytes }).catch(() => {}).finally(() => { evicting = false })
     }
   }
 

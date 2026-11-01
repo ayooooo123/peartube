@@ -255,9 +255,14 @@ export function selfAddressAdapter (host, inner = new BonjourAdapter(), { rebrow
   }
 }
 
+// One multicast socket per interface for the whole process. LAN discovery, the cast receiver's advertisement and the
+// cast controller's browse each opened their own, so a TV parsed every mDNS packet on the network once per socket:
+// ~8% of the Pi receiver's JS thread went to mDNS while it streamed. BonjourAdapter refcounts its users, so the
+// socket still closes when the last one stops.
+const sharedBonjour = new Map()
 export function interfaceAdapter (host) {
-  const createBonjour = onError => new Bonjour({ interface: host, bind: '0.0.0.0' }, onError)
-  return selfAddressAdapter(host, new BonjourAdapter({ createBonjour }))
+  const inner = sharedBonjour.get(host) ?? sharedBonjour.set(host, new BonjourAdapter({ createBonjour: onError => new Bonjour({ interface: host, bind: '0.0.0.0' }, onError) })).get(host)
+  return selfAddressAdapter(host, inner)
 }
 
 // Zero-dependency LAN discovery directly over an isolated ephemeral HyperDHT + mDNS:

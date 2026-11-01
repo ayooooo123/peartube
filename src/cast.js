@@ -487,6 +487,34 @@ async function serveSpliceStream (media, req, res, onModeUpgrade) {
   }
 }
 
+// A reader past its first HOLD_AFTER_BYTES is the player streaming, not probing a header or an index. It gets no more
+// bytes while fewer than HOLD_LOW_SECONDS of the film lie downloaded ahead of it (HOLD_SECONDS when it has just
+// started or seeked), until HOLD_SECONDS do or HOLD_MAX_MS passes. The player then waits once, through one
+// "Buffering…", instead of resuming with a second in hand and stalling again moments later: on the Pi a fresh stretch
+// stalled for 1-2 s at 16, 82 and 93 s while the read-ahead was still building.
+const HOLD_AFTER_BYTES = 2 * 1024 * 1024
+const HOLD_SECONDS = 10
+const HOLD_LOW_SECONDS = 2
+const HOLD_MAX_MS = 20_000
+async function holdIfThin (media, reader) {
+  const { core, blob } = media
+  const bs = Math.ceil(blob.byteLength / blob.blockLength)
+  const rate = media.avgRate || DEFAULT_STREAM_BYTES_PER_SEC
+  const at = Math.min(blob.blockOffset + blob.blockLength, blob.blockOffset + Math.floor(reader.pos / bs))
+  const blocksFor = seconds => Math.min(blob.blockOffset + blob.blockLength - at, Math.ceil((rate * seconds) / bs))
+  const buffered = async seconds => {
+    const n = blocksFor(seconds)
+    return n <= 0 || (await core.count(at, at + n)) === n
+  }
+  const cushioned = reader.cushioned
+  reader.cushioned = true
+  if (await buffered(cushioned ? HOLD_LOW_SECONDS : HOLD_SECONDS)) return
+  const deadline = Date.now() + HOLD_MAX_MS
+  while (!reader.closed && Date.now() < deadline && !(await buffered(HOLD_SECONDS))) {
+    await new Promise(resolve => setTimeout(resolve, 250))
+  }
+}
+
 // Serves the receiver's own player straight from the video core, with no prefetch of its own. The stock blob server
 // downloads from the read position to the end of the file on every request (the player asks for `bytes=N-`), so a
 // 77 GB film filled a Pi's SD card; the receiver's read-ahead (`steerReadAhead`) keeps one sliding window instead.
@@ -507,13 +535,15 @@ function serveWindowedStream (media, req, res, onReader) {
     res.end()
     return
   }
-  const reader = { pos: start, sent: 0, at: Date.now() }
+  const reader = { pos: start, sent: 0, at: Date.now(), checkedAt: 0, holding: false, drained: true, cushioned: false, closed: false }
   // ByteStream closes the core it reads when it ends, so each reader gets its own session of the media's core.
   const rs = new ByteStream(media.core.session(), media.blob, { start, length: end - start + 1, prefetch: false })
   const finish = () => {
+    reader.closed = true
     media.readers.delete(reader)
     rs.destroy()
   }
+  const resume = () => { if (!reader.holding && reader.drained) rs.resume() }
   media.readers.add(reader)
   media.lastReaderAt = reader.at
   rs.on('data', chunk => {
@@ -521,9 +551,18 @@ function serveWindowedStream (media, req, res, onReader) {
     reader.sent += chunk.byteLength
     reader.at = Date.now()
     media.servedBytes += chunk.byteLength
-    if (!res.write(chunk)) rs.pause()
+    if (!res.write(chunk)) {
+      reader.drained = false
+      rs.pause()
+    }
+    if (reader.sent >= HOLD_AFTER_BYTES && !reader.holding && reader.at - reader.checkedAt >= 500) {
+      reader.checkedAt = reader.at
+      reader.holding = true
+      rs.pause()
+      holdIfThin(media, reader).catch(() => {}).finally(() => { reader.holding = false; resume() })
+    }
   })
-  res.on('drain', () => rs.resume())
+  res.on('drain', () => { reader.drained = true; resume() })
   rs.once('end', () => {
     media.readers.delete(reader)
     res.end()

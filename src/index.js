@@ -185,7 +185,9 @@ async function openNode ({
   }
   const csDir = join(storage, 'corestore')
   // The node owns its hypercore-storage so compaction and core lookups go through that instance, not Corestore internals.
-  let coreStorage = new CoreStorage(csDir)
+  // Collar client worklet RocksDB memtables down to 8 MiB instead of 64 MiB server slabs so movie blocks flush straight to disk.
+  const storageOpts = isWorklet ? { writeBufferSize: 8 * 1024 * 1024, treeCache: { maxSize: 2048 }, optimizeFiltersForMemory: true } : undefined
+  let coreStorage = new CoreStorage(csDir, storageOpts)
   let store = new Corestore(coreStorage)
   try {
     await store.ready()
@@ -193,7 +195,7 @@ async function openNode ({
     if (!/Invalid device file/i.test(err?.message || '')) throw err
     await store.close().catch(() => {})
     try { unlinkSync(join(csDir, 'CORESTORE')) } catch {}
-    coreStorage = new CoreStorage(csDir)
+    coreStorage = new CoreStorage(csDir, storageOpts)
     store = new Corestore(coreStorage)
     await store.ready()
   }

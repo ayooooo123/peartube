@@ -68,6 +68,7 @@ pub struct PlayScreen {
     seek: Option<(Entity<SliderState>, Subscription)>,
     dragging: Option<f32>,
     controls_until: Instant,
+    controls_drawn: bool,
     frame: Option<Bounds<Pixels>>,
     transparent_applied: bool,
     menu_open: bool,
@@ -82,7 +83,10 @@ impl EventEmitter<PlayEvent> for PlayScreen {}
 impl Drop for PlayScreen {
     fn drop(&mut self) {
         if let Some(player) = self.player.take() {
-            std::thread::spawn(move || drop(player));
+            std::thread::spawn(move || {
+                drop(player);
+                peartube::worker::release_unused_memory();
+            });
         }
     }
 }
@@ -166,6 +170,7 @@ impl PlayScreen {
             seek: None,
             dragging: None,
             controls_until: Instant::now() + SHOW_FOR,
+            controls_drawn: true,
             frame: None,
             transparent_applied: false,
             menu_open: false,
@@ -178,6 +183,7 @@ impl PlayScreen {
 
     fn tick(&mut self, ended: bool, window: &mut Window, cx: &mut Context<Self>) {
         let Some(player) = &self.player else { return };
+        let prev = (self.has_picture(), self.state.buffering, self.state.error.is_some(), self.controls_drawn);
         self.state = player.state();
         if ended {
             if let Some(dur) = self.state.duration {
@@ -194,25 +200,36 @@ impl PlayScreen {
             let subscription = cx.subscribe_in(&seek, window, Self::on_seek);
             self.seek = Some((seek, subscription));
         }
+        let shown = self.controls_shown();
+        self.controls_drawn = shown;
+        if shown {
+            self.sync_seek(window, cx);
+        }
+        if self.last_progress_saved.elapsed() >= Duration::from_secs(4)
+            && let Some(dur) = self.state.duration
+        {
+            self.last_progress_saved = Instant::now();
+            peartube::worker::release_unused_memory();
+            cx.emit(PlayEvent::Progress(self.entry.id.clone(), self.entry.key.clone(), self.state.position.as_millis() as u64, dur.as_millis() as u64));
+        }
+        if shown || prev != (self.has_picture(), self.state.buffering, self.state.error.is_some(), shown) {
+            cx.notify();
+        }
+    }
+
+    fn sync_seek(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if let (Some((seek, _)), None) = (&self.seek, self.dragging) {
-            let at = self.state.position.as_secs_f32();
+            let at = self.state.position.as_secs_f32().floor();
             seek.update(cx, |seek, cx| {
                 if seek.value().start() != at {
                     seek.set_value(at, window, cx);
                 }
             });
         }
-        if self.last_progress_saved.elapsed() >= Duration::from_secs(4)
-            && let Some(dur) = self.state.duration
-        {
-            self.last_progress_saved = Instant::now();
-            cx.emit(PlayEvent::Progress(self.entry.id.clone(), self.entry.key.clone(), self.state.position.as_millis() as u64, dur.as_millis() as u64));
-        }
-        cx.notify();
     }
 
-    fn on_seek(&mut self, _: &Entity<SliderState>, event: &SliderEvent, _: &mut Window, cx: &mut Context<Self>) {
-        self.poke(cx);
+    fn on_seek(&mut self, _: &Entity<SliderState>, event: &SliderEvent, window: &mut Window, cx: &mut Context<Self>) {
+        self.poke(window, cx);
         match event {
             SliderEvent::Change(at) => self.dragging = Some(at.start()),
             SliderEvent::Release(at) => {
@@ -225,10 +242,15 @@ impl PlayScreen {
         cx.notify();
     }
 
-    fn poke(&mut self, cx: &mut Context<Self>) {
+    fn poke(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let hidden = !self.controls_shown();
         self.controls_until = Instant::now() + SHOW_FOR;
+        self.controls_drawn = true;
         if hidden {
+            if let Some(p) = &self.player {
+                self.state = p.state();
+            }
+            self.sync_seek(window, cx);
             cx.notify();
         }
     }
@@ -265,9 +287,9 @@ impl PlayScreen {
                 let wait = VideoView::double_click_interval();
                 self.pending_click = Some(cx.spawn_in(window, async move |this, cx| {
                     cx.background_executor().timer(wait).await;
-                    let _ = this.update(cx, |this, cx| {
+                    let _ = this.update_in(cx, |this, window, cx| {
                         this.pending_click = None;
-                        this.toggle_play(cx);
+                        this.toggle_play(window, cx);
                     });
                 }));
             }
@@ -281,16 +303,16 @@ impl PlayScreen {
         }
     }
 
-    fn toggle_play(&mut self, cx: &mut Context<Self>) {
-        self.poke(cx);
+    fn toggle_play(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.poke(window, cx);
         let Some(player) = &self.player else { return };
         if player.state().playing { player.pause() } else { player.play() }
         self.state = player.state();
         cx.notify();
     }
 
-    fn skip(&mut self, forward: bool, cx: &mut Context<Self>) {
-        self.poke(cx);
+    fn skip(&mut self, forward: bool, window: &mut Window, cx: &mut Context<Self>) {
+        self.poke(window, cx);
         let (Some(player), Some(duration)) = (&self.player, self.state.duration) else { return };
         let at = if forward { (self.state.position + SKIP).min(duration) } else { self.state.position.saturating_sub(SKIP) };
         player.seek(at);
@@ -718,7 +740,7 @@ impl PlayScreen {
                     .child(fenced(div()).child(
                         overlay_button("skip-back", Lucide::RotateCcw.into(), "Back 10 seconds")
                             .with_size(px(48.))
-                            .on_click(cx.listener(|this, _, _, cx| this.skip(false, cx))),
+                            .on_click(cx.listener(|this, _, window, cx| this.skip(false, window, cx))),
                     ))
                     .child(if busy {
                         div().size(px(60.)).into_any_element()
@@ -730,14 +752,14 @@ impl PlayScreen {
                                     .with_size(px(60.))
                                     .rounded(px(30.))
                                     .bg(hsla(0., 0., 0., 0.42))
-                                    .on_click(cx.listener(|this, _, _, cx| this.toggle_play(cx))),
+                                    .on_click(cx.listener(|this, _, window, cx| this.toggle_play(window, cx))),
                             )
                             .into_any_element()
                     })
                     .child(fenced(div()).child(
                         overlay_button("skip-forward", IconName::RotateCw.into(), "Forward 10 seconds")
                             .with_size(px(48.))
-                            .on_click(cx.listener(|this, _, _, cx| this.skip(true, cx))),
+                            .on_click(cx.listener(|this, _, window, cx| this.skip(true, window, cx))),
                     )),
             )
             .child(
@@ -790,9 +812,9 @@ impl Render for PlayScreen {
                         let _ = placer.update(cx, |this, _| this.place(bounds, window));
                     },
                     move |bounds, _, window, _| {
-                        window.on_mouse_event(move |event: &MouseMoveEvent, phase, _, cx| {
+                        window.on_mouse_event(move |event: &MouseMoveEvent, phase, window, cx| {
                             if phase == DispatchPhase::Bubble && bounds.contains(&event.position) {
-                                let _ = mover.update(cx, |this, cx| this.poke(cx));
+                                let _ = mover.update(cx, |this, cx| this.poke(window, cx));
                             }
                         });
                     },
@@ -814,9 +836,9 @@ impl Render for PlayScreen {
             .size_full()
             .track_focus(&self.focus)
             .key_context(CONTEXT)
-            .on_action(cx.listener(|this, _: &TogglePlay, _, cx| this.toggle_play(cx)))
-            .on_action(cx.listener(|this, _: &SkipBack, _, cx| this.skip(false, cx)))
-            .on_action(cx.listener(|this, _: &SkipForward, _, cx| this.skip(true, cx)))
+            .on_action(cx.listener(|this, _: &TogglePlay, window, cx| this.toggle_play(window, cx)))
+            .on_action(cx.listener(|this, _: &SkipBack, window, cx| this.skip(false, window, cx)))
+            .on_action(cx.listener(|this, _: &SkipForward, window, cx| this.skip(true, window, cx)))
             .on_action(cx.listener(|this, _: &ToggleFullscreen, window, _| this.toggle_fullscreen_smooth(window)))
             .on_action(cx.listener(|this, _: &Back, window, cx| this.back(window, cx)))
             .child(slot)

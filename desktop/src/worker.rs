@@ -352,6 +352,7 @@ unsafe extern "C" {
     fn bare_ipc_poll_stop(poll: *mut BareIpcPoll) -> c_int;
     fn bare_ipc_poll_set_data(poll: *mut BareIpcPoll, data: *mut c_void);
     fn bare_ipc_poll_get_data(poll: *mut BareIpcPoll) -> *mut c_void;
+    fn malloc_zone_pressure_relief(zone: *mut c_void, goal: usize) -> usize;
 }
 
 type Reply = Result<Value, String>;
@@ -486,6 +487,13 @@ static WORKER: LazyLock<Result<Worker, String>> = LazyLock::new(Worker::spawn);
 /// The process's one worklet, started on first use.
 pub fn worker() -> Result<&'static Worker, String> {
     WORKER.as_ref().map_err(Clone::clone)
+}
+
+/// Drains empty xzone magazines across Rust, RocksDB, BareKit, and VideoToolbox back to macOS as clean pages.
+pub fn release_unused_memory() {
+    unsafe {
+        malloc_zone_pressure_relief(std::ptr::null_mut(), 0);
+    }
 }
 
 impl Worker {

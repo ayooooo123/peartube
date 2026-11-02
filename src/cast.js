@@ -28,7 +28,6 @@ const CORS = {
   'access-control-allow-headers': 'content-type, authorization, range',
   'access-control-expose-headers': 'content-length, content-range, accept-ranges'
 }
-const PRIVATE_IPV4 = /^(10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)/
 const LOW_DISK_BOOT_BYTES = 2 * 1024 * 1024 * 1024
 const LOW_DISK_STREAM_BYTES = 1536 * 1024 * 1024
 // The receiver's read-ahead, in seconds of the stream it plays: the full window while the disk has room for it,
@@ -1736,61 +1735,6 @@ export function createCastController ({
     return { ok: true }
   }
 
-  let subnetScanning = false
-  let lastSubnetScanAt = 0
-
-  // Sweeps the local /24 for port-8176 PearTube TVs when Wi-Fi AP isolation or brcmfmac swallows mDNS multicast.
-  function probeSubnetReceivers (host) {
-    if (closing || subnetScanning || adapter || !host || !PRIVATE_IPV4.test(host)) return
-    const curNode = getNode()
-    if (curNode?.privateRouting && !curNode?.hasLan?.()) return
-    const dot = host.lastIndexOf('.')
-    if (dot === -1) return
-    const prefix = host.slice(0, dot + 1)
-    subnetScanning = true
-    lastSubnetScanAt = Date.now()
-    ;(async () => {
-      const ips = []
-      for (let i = 1; i <= 254; i++) {
-        const ip = `${prefix}${i}`
-        if (ip !== host) ips.push(ip)
-      }
-      const CONCURRENCY = 48
-      let cursor = 0
-      const worker = async () => {
-        while (!closing && cursor < ips.length) {
-          const ip = ips[cursor++]
-          try {
-            const info = await httpJson(`http://${ip}:8176/cast/v1/info`, { headers: { connection: 'close' }, timeoutMs: 320 })
-            if (closing || info?.protocol !== 'peartube-cast/v1' || !info?.deviceId) continue
-            if (localReceiver && info.deviceId === localReceiver.deviceId) continue
-            const port = Number(info.port) || 8176
-            const pk = HEX64.test(String(info.publicKey || '').toLowerCase()) ? String(info.publicKey).toLowerCase() : ''
-            discovered.set(info.deviceId, {
-              id: info.deviceId,
-              name: cleanName(info.name, 'PearTube TV'),
-              host: ip,
-              port,
-              publicKey: pk,
-              p2p: Boolean(info.capabilities?.p2p),
-              auth: info.authRequired === false ? 'open' : 'code',
-              seenAt: Date.now()
-            })
-            const existing = saved.get(info.deviceId) || (pk && [...saved.values()].find(s => s.publicKey === pk))
-            if (existing) {
-              existing.host = ip
-              existing.port = port
-              if (pk) existing.publicKey = pk
-              existing.p2p = existing.p2p || Boolean(info.capabilities?.p2p)
-              persistSaved()
-            }
-            emitChange()
-          } catch {}
-        }
-      }
-      await Promise.all(Array.from({ length: CONCURRENCY }, worker))
-    })().catch(() => {}).finally(() => { subnetScanning = false })
-  }
   async function refreshBrowse (host) {
     if (host === browseHost && browseHandle) return
     const prev = browseHandle
@@ -1839,7 +1783,6 @@ export function createCastController ({
         onError () {}
       })
     } catch {}
-    // Keep her passive mDNS ears wet and quiet at rest; /24 port-8176 probing only fires when Master reaches for Cast.
   }
 
   function listReceivers () {
@@ -2313,12 +2256,8 @@ export function createCastController ({
     emitChange()
   }
 
-  function status ({ probe = false } = {}) {
+  function status () {
     const lanHost = getLanHost()
-    // Never spray 254 raw TCP probes across the LAN while idle — only stroke the /24 when Cast opens and mDNS came up dry.
-    if (probe && !localReceiver && !active && discovered.size === 0 && lanHost && !subnetScanning && Date.now() - lastSubnetScanAt > 30_000) {
-      probeSubnetReceivers(lanHost)
-    }
     return {
       webReceiverUrl: castHubPort && lanHost ? `http://${lanHost}:${castHubPort}/tv` : (castHubPort ? `http://127.0.0.1:${castHubPort}/tv` : null),
       receivers: localReceiver ? [] : listReceivers(),

@@ -659,11 +659,15 @@ async fn refresh(this: &WeakEntity<PearTube>, cx: &mut AsyncApp) {
     if playing {
         let st = w.status().await;
         let _ = this.update(cx, |this, cx| {
+            // Keep GPUI's SDR Metal layer still over the picture unless an error banner needs to gape open.
+            let prev_err = this.error.clone();
             match st {
                 Ok(status) => this.status = Some(status),
                 Err(err) => this.error = Some(err.into()),
             }
-            cx.notify();
+            if this.error != prev_err {
+                cx.notify();
+            }
         });
         return;
     }

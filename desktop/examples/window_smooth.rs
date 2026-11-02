@@ -137,7 +137,7 @@ fn edge_error_pt(m: &player::WindowSlotMetrics) -> f64 {
     err
 }
 
-fn metrics_json(m: &player::WindowSlotMetrics) -> serde_json::Value {
+fn metrics_with_z_json(m: &player::WindowSlotMetrics) -> serde_json::Value {
     json!({
         "parentSize": m.parent_size,
         "nsViewFrame": m.ns_view_frame,
@@ -145,9 +145,9 @@ fn metrics_json(m: &player::WindowSlotMetrics) -> serde_json::Value {
         "sublayerFrames": m.sublayer_frames,
         "activeAnimationKeys": m.active_animation_keys,
         "alignedWithParent": m.aligned_with_parent,
+        "hostAboveVideo": m.host_above_video,
     })
 }
-
 fn main() {
     let tmp_mp4 = std::env::temp_dir().join("peartube-window-smooth-fixture.mp4");
     let status = Command::new("ffmpeg")
@@ -236,6 +236,12 @@ fn main() {
                 }
                 cx.background_executor().timer(Duration::from_millis(100)).await;
             }
+            let initial_fs_host_above = win_handle
+                .update(cx, |_, _, cx| match &pt.read(cx).screen {
+                    app::Screen::Play(s) => s.read(cx).video_metrics().map(|m| m.host_above_video).unwrap_or(false),
+                    _ => false,
+                })
+                .unwrap_or(false);
 
             // 1. Cast UI Popup OVER Playing Video
             let pos_before_cast_popup = win_handle
@@ -319,13 +325,14 @@ fn main() {
                     max_anim_keys_restore = max_anim_keys_restore.max(m.active_animation_keys);
                 }
             }
-            let (is_fs_restored, restored_metrics) = win_handle
+            let (is_fs_restored, restored_host_above, restored_metrics) = win_handle
                 .update(cx, |_, window, cx| {
                     let m = match &pt.read(cx).screen {
                         app::Screen::Play(s) => s.read(cx).video_metrics().unwrap(),
                         _ => panic!("expected Screen::Play"),
                     };
-                    (window.is_fullscreen(), metrics_json(&m))
+                    let z_ok = m.host_above_video;
+                    (window.is_fullscreen(), z_ok, metrics_with_z_json(&m))
                 })
                 .unwrap();
 
@@ -364,13 +371,14 @@ fn main() {
                     max_anim_keys_maximize = max_anim_keys_maximize.max(m.active_animation_keys);
                 }
             }
-            let (is_fs_remaximized, remax_metrics) = win_handle
+            let (is_fs_remaximized, remax_host_above, remax_metrics) = win_handle
                 .update(cx, |_, window, cx| {
                     let m = match &pt.read(cx).screen {
                         app::Screen::Play(s) => s.read(cx).video_metrics().unwrap(),
                         _ => panic!("expected Screen::Play"),
                     };
-                    (window.is_fullscreen(), metrics_json(&m))
+                    let z_ok = m.host_above_video;
+                    (window.is_fullscreen(), z_ok, metrics_with_z_json(&m))
                 })
                 .unwrap();
 
@@ -422,15 +430,18 @@ fn main() {
             println!("{}", serde_json::to_string_pretty(&report).unwrap());
 
             assert_eq!(pre_layout_frame, [0.0, 0.0, 0.0, 0.0]);
+            assert!(initial_fs_host_above, "GPUI host must stay above video_window in initial fullscreen");
             assert_eq!(flips_during_cast_popup, 0);
             assert!(pos_while_cast_popup_open > pos_before_cast_popup);
             assert!(playing_after_cast_dismiss);
             assert_eq!(flips_restore, 0);
             assert!(!is_fs_restored);
+            assert!(restored_host_above, "GPUI host must stay above video_window after exiting fullscreen");
             assert!(max_edge_err_restore <= 1.0, "max_edge_err_restore={max_edge_err_restore}");
             assert_eq!(max_anim_keys_restore, 0);
             assert_eq!(flips_maximize, 0);
             assert!(is_fs_remaximized);
+            assert!(remax_host_above, "GPUI host must stay above video_window after re-entering fullscreen");
             assert!(max_edge_err_maximize <= 1.0, "max_edge_err_maximize={max_edge_err_maximize}");
             assert_eq!(max_anim_keys_maximize, 0);
             assert!(!playing_after_single_pause);

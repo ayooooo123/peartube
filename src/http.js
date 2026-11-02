@@ -234,7 +234,7 @@ export function createApi (state) {
     }
     if (state.cast && path.startsWith('/v1/cast/')) {
       if (req.method === 'GET' && path === '/v1/cast/status') {
-        const st = state.cast.status()
+        const st = state.cast.status({ probe: url.searchParams.get('probe') === '1' })
         return { ...st, webReceiverQrSvg: st.webReceiverUrl ? state.cast.webSetupQrSvg(st.webReceiverUrl) : '' }
       }
       if (req.method === 'POST' && path === '/v1/cast/web-register') return state.cast.registerWebReceiver(await body(req))

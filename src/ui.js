@@ -538,7 +538,7 @@ function showTab () {
   tab = ['library', 'channels', 'sharing', 'tv', 'settings'].includes(want) ? want : 'library'
   for (const a of document.querySelectorAll('.tabs a')) a.setAttribute('aria-current', a.dataset.tab === tab ? 'page' : 'false')
   for (const s of document.querySelectorAll('[data-panel]')) s.hidden = s.dataset.panel !== tab
-  if (tab === 'tv') loadCast()
+  if (tab === 'tv') loadCast(true)
   if (tab === 'settings') renderSettings()
   render()
 }
@@ -577,8 +577,8 @@ async function loadSettings () {
   if (tab === 'settings') renderSettings()
   render()
 }
-async function loadCast () {
-  try { S.cast = await api('/v1/cast/status') } catch { S.cast = null }
+async function loadCast (probe) {
+  try { S.cast = await api('/v1/cast/status' + (probe ? '?probe=1' : '')) } catch { S.cast = null }
   renderCast()
 }
 let refreshTimer = 0

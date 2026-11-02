@@ -655,31 +655,26 @@ async fn refresh(this: &WeakEntity<PearTube>, cx: &mut AsyncApp) {
     if !has_sources {
         return;
     }
+    // Leave Cast collared and quiet while idle or playing locally; opening the chooser wakes it, and Event::Cast drips live state back.
     if playing {
-        let (st, cst) = futures_util::join!(w.status(), w.cast_status());
+        let st = w.status().await;
         let _ = this.update(cx, |this, cx| {
             match st {
                 Ok(status) => this.status = Some(status),
                 Err(err) => this.error = Some(err.into()),
             }
-            if let Ok(cst) = cst {
-                this.cast = cst;
-            }
             cx.notify();
         });
         return;
     }
-    let result = futures_util::join!(w.status(), w.search(None), w.cast_status());
+    let result = futures_util::join!(w.status(), w.search(None));
     let _ = this.update(cx, |this, cx| {
-        match (result.0, result.1) {
+        match result {
             (Ok(status), Ok(entries)) => {
                 this.status = Some(status);
                 this.entries = entries;
             }
             (Err(err), _) | (_, Err(err)) => this.error = Some(err.into()),
-        }
-        if let Ok(cst) = result.2 {
-            this.cast = cst;
         }
         cx.notify();
     });

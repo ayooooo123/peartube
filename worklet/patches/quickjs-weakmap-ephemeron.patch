@@ -1,0 +1,303 @@
+QuickJS marks every WeakMap value unconditionally during gc_scan and only
+reaps WeakMap entries whose key ref_count was already zero before gc_decref, so
+every slutty socket<->connection pair stuffed into bare-http1's _connections
+(along with bare-https's _secureSockets, bare-url's URLSearchParams, and
+blind-relay's _clients) stayed pinned forever with its 64 KiB read buffer
+throbbing in RAM. On top of that, libqjs allocates ArrayBuffer backing stores
+outside js_mallocz, leaving js_trigger_gc blind to external ArrayBuffer bytes.
+Walk live WeakMaps as true ephemerons to a fixed point in gc_scan, sever dead
+edges, reap cyclic weak targets at the tail of JS_RunGCInternal, and count
+non-arena ArrayBuffer bytes toward malloc_gc_threshold. Apply in quickjs, after
+libqjs's patches.
+
+diff --git a/quickjs.c b/quickjs.c
+index a870743..c90d2f8 100644
+--- a/quickjs.c
++++ b/quickjs.c
+@@ -358,6 +358,7 @@ struct JSRuntime {
+     struct list_head tmp_obj_list; /* used during GC */
+     JSGCPhaseEnum gc_phase : 8;
+     size_t malloc_gc_threshold;
++    size_t ab_malloc_size;
+     struct list_head weakref_list; /* list of JSWeakRefHeader.link */
+ #ifdef DUMP_LEAKS
+     struct list_head string_list; /* list of JSString.link */
+@@ -791,6 +792,7 @@ typedef struct JSArrayBuffer {
+     struct list_head array_list;
+     void *opaque;
+     JSFreeArrayBufferDataFunc *free_func;
++    size_t tracked_bytes;
+ } JSArrayBuffer;
+ 
+ typedef struct JSTypedArray {
+@@ -1106,7 +1108,8 @@ struct JSObject {
+ 
+ typedef struct JSMapRecord {
+     int ref_count; /* used during enumeration to avoid freeing the record */
+-    BOOL empty : 8; /* TRUE if the record is deleted */
++    BOOL empty : 4; /* TRUE if the record is deleted */
++    BOOL gc_marked : 4; /* TRUE if ephemeron value was marked in gc_scan */
+     struct list_head link;
+     struct JSMapRecord *hash_next;
+     JSValue key;
+@@ -1114,7 +1117,8 @@ typedef struct JSMapRecord {
+ } JSMapRecord;
+ 
+ typedef struct JSMapState {
+-    BOOL is_weak; /* TRUE if WeakSet/WeakMap */
++    BOOL is_weak : 8; /* TRUE if WeakSet/WeakMap */
++    BOOL gc_live : 8; /* TRUE if live WeakMap/WeakSet visited in gc_scan */
+     struct list_head records; /* list of JSMapRecord.link */
+     uint32_t record_count;
+     JSMapRecord **hash_table;
+@@ -1431,6 +1435,9 @@ static JSValue JS_InstantiateFunctionListItem2(JSContext *ctx, JSObject *p,
+ static JSValue js_object_groupBy(JSContext *ctx, JSValueConst this_val,
+                                  int argc, JSValueConst *argv, int is_map);
+ static void map_delete_weakrefs(JSRuntime *rt, JSWeakRefHeader *wh);
++static void map_scan_ephemerons(JSRuntime *rt, JSWeakRefHeader *wh,
++                                JS_MarkFunc *mark_func);
++static void map_finish_ephemerons(JSRuntime *rt, JSWeakRefHeader *wh);
+ static void weakref_delete_weakref(JSRuntime *rt, JSWeakRefHeader *wh);
+ static void finrec_delete_weakref(JSRuntime *rt, JSWeakRefHeader *wh);
+ static void JS_RunGCInternal(JSRuntime *rt, BOOL remove_weak_objects);
+@@ -1826,17 +1833,20 @@ static void js_trigger_gc(JSRuntime *rt, size_t size)
+ #ifdef FORCE_GC_AT_MALLOC
+     force_gc = TRUE;
+ #else
+-    force_gc = ((rt->malloc_ctx.malloc_state.malloc_size + size) >
+-                rt->malloc_gc_threshold);
++    {
++        size_t total = rt->malloc_ctx.malloc_state.malloc_size + rt->ab_malloc_size;
++        force_gc = ((total + size) > rt->malloc_gc_threshold);
++    }
+ #endif
+     if (force_gc) {
++        size_t total;
+ #ifdef DUMP_GC
+         printf("GC: size=%" PRIu64 "\n",
+                (uint64_t)rt->malloc_ctx.malloc_state.malloc_size);
+ #endif
+         JS_RunGC(rt);
+-        rt->malloc_gc_threshold = rt->malloc_ctx.malloc_state.malloc_size +
+-            (rt->malloc_ctx.malloc_state.malloc_size >> 1);
++        total = rt->malloc_ctx.malloc_state.malloc_size + rt->ab_malloc_size;
++        rt->malloc_gc_threshold = total + (total >> 1);
+     }
+ }
+ 
+@@ -7024,15 +7034,35 @@ static void gc_scan_incref_child2(JSRuntime *rt, JSGCObjectHeader *p)
+ 
+ static void gc_scan(JSRuntime *rt)
+ {
+-    struct list_head *el;
++    struct list_head *el, *wel, *prev_tail;
+     JSGCObjectHeader *p;
+ 
+-    /* keep the objects with a refcount > 0 and their children. */
+-    list_for_each(el, &rt->gc_obj_list) {
+-        p = list_entry(el, JSGCObjectHeader, link);
+-        assert(js_rc(p)->ref_count > 0);
+-        js_rc(p)->mark = 0; /* reset the mark for the next GC call */
+-        mark_children(rt, p, gc_scan_incref_child);
++    /* keep the objects with a refcount > 0 and their children, iterating
++       WeakMap ephemerons until no new keys become live. */
++    el = rt->gc_obj_list.next;
++    for(;;) {
++        while (el != &rt->gc_obj_list) {
++            p = list_entry(el, JSGCObjectHeader, link);
++            assert(js_rc(p)->ref_count > 0);
++            js_rc(p)->mark = 0; /* reset the mark for the next GC call */
++            mark_children(rt, p, gc_scan_incref_child);
++            el = el->next;
++        }
++        prev_tail = rt->gc_obj_list.prev;
++        list_for_each(wel, &rt->weakref_list) {
++            JSWeakRefHeader *wh = list_entry(wel, JSWeakRefHeader, link);
++            if (wh->weakref_type == JS_WEAKREF_TYPE_MAP)
++                map_scan_ephemerons(rt, wh, gc_scan_incref_child);
++        }
++        el = prev_tail->next;
++        if (el == &rt->gc_obj_list)
++            break;
++    }
++
++    list_for_each(wel, &rt->weakref_list) {
++        JSWeakRefHeader *wh = list_entry(wel, JSWeakRefHeader, link);
++        if (wh->weakref_type == JS_WEAKREF_TYPE_MAP)
++            map_finish_ephemerons(rt, wh);
+     }
+ 
+     /* restore the refcount of the objects to be deleted. */
+@@ -7119,6 +7149,12 @@ static void JS_RunGCInternal(JSRuntime *rt, BOOL remove_weak_objects)
+ 
+     /* free the GC objects in a cycle */
+     gc_free_cycles(rt);
++
++    if (remove_weak_objects) {
++        /* reap WeakMap/WeakSet/WeakRef/FinalizationRegistry entries whose
++           targets were freed in gc_free_cycles */
++        gc_remove_weak_objects(rt);
++    }
+ }
+ 
+ void JS_RunGC(JSRuntime *rt)
+@@ -54790,6 +54826,7 @@ static JSMapRecord *map_add_record(JSContext *ctx, JSMapState *s,
+         return NULL;
+     mr->ref_count = 1;
+     mr->empty = FALSE;
++    mr->gc_marked = FALSE;
+     if (s->is_weak) {
+         mr->key = js_weakref_new(ctx, key);
+     } else {
+@@ -54883,6 +54920,51 @@ static void map_delete_weakrefs(JSRuntime *rt, JSWeakRefHeader *wh)
+     }
+ }
+ 
++static void map_scan_ephemerons(JSRuntime *rt, JSWeakRefHeader *wh,
++                                JS_MarkFunc *mark_func)
++{
++    JSMapState *s = container_of(wh, JSMapState, weakref_header);
++    struct list_head *el;
++
++    if (!s->gc_live)
++        return;
++    list_for_each(el, &s->records) {
++        JSMapRecord *mr = list_entry(el, JSMapRecord, link);
++        if (!mr->empty && !mr->gc_marked && js_weakref_is_live(mr->key)) {
++            mr->gc_marked = TRUE;
++            JS_MarkValue(rt, mr->value, mark_func);
++        }
++    }
++}
++
++static void map_finish_ephemerons(JSRuntime *rt, JSWeakRefHeader *wh)
++{
++    JSMapState *s = container_of(wh, JSMapState, weakref_header);
++    struct list_head *el;
++
++    if (!s->gc_live)
++        return;
++    s->gc_live = FALSE;
++    list_for_each(el, &s->records) {
++        JSMapRecord *mr = list_entry(el, JSMapRecord, link);
++        if (mr->gc_marked) {
++            mr->gc_marked = FALSE;
++        } else if (!mr->empty) {
++            /* gc_decref already dropped this WeakMap's reference to GC-object
++               values; sever the dead record's edge before gc_free_cycles. */
++            switch (JS_VALUE_GET_TAG(mr->value)) {
++            case JS_TAG_OBJECT:
++            case JS_TAG_FUNCTION_BYTECODE:
++            case JS_TAG_MODULE:
++                mr->value = JS_UNDEFINED;
++                break;
++            default:
++                break;
++            }
++        }
++    }
++}
++
+ static JSValue js_map_set(JSContext *ctx, JSValueConst this_val,
+                           int argc, JSValueConst *argv, int magic)
+ {
+@@ -55251,6 +55333,10 @@ static void js_map_mark(JSRuntime *rt, JSValueConst val, JS_MarkFunc *mark_func)
+ 
+     s = p->u.map_state;
+     if (s) {
++        if (s->is_weak && mark_func == gc_scan_incref_child) {
++            s->gc_live = TRUE;
++            return;
++        }
+         list_for_each(el, &s->records) {
+             mr = list_entry(el, JSMapRecord, link);
+             if (!s->is_weak)
+@@ -60541,6 +60627,19 @@ static uint8_t const typed_array_size_log2[JS_TYPED_ARRAY_COUNT] = {
+     1, 2, 3                 // Float16Array, Float32Array, Float64Array
+ };
+ 
++static void js_abuf_track(JSRuntime *rt, JSArrayBuffer *abuf, size_t bytes)
++{
++    abuf->tracked_bytes = bytes;
++    rt->ab_malloc_size += bytes;
++}
++
++static void js_abuf_untrack(JSRuntime *rt, JSArrayBuffer *abuf)
++{
++    assert(rt->ab_malloc_size >= abuf->tracked_bytes);
++    rt->ab_malloc_size -= abuf->tracked_bytes;
++    abuf->tracked_bytes = 0;
++}
++
+ static JSValue js_array_buffer_constructor3(JSContext *ctx,
+                                             JSValueConst new_target,
+                                             uint64_t len, uint64_t *max_len,
+@@ -60578,6 +60677,7 @@ static JSValue js_array_buffer_constructor3(JSContext *ctx,
+         goto fail;
+     abuf->byte_length = len;
+     abuf->max_byte_length = max_len ? *max_len : -1;
++    abuf->tracked_bytes = 0;
+     if (alloc_flag) {
+         if (class_id == JS_CLASS_SHARED_ARRAY_BUFFER &&
+             rt->sab_funcs.sab_alloc) {
+@@ -60617,6 +60717,17 @@ static JSValue js_array_buffer_constructor3(JSContext *ctx,
+     abuf->free_func = free_func;
+     if (alloc_flag && buf)
+         memcpy(abuf->data, buf, len);
++    if (alloc_flag) {
++        if (class_id == JS_CLASS_SHARED_ARRAY_BUFFER && rt->sab_funcs.sab_alloc)
++            js_abuf_track(rt, abuf, sab_alloc_len);
++        else if (rt->ab_funcs.ab_alloc)
++            js_abuf_track(rt, abuf, len);
++    } else if (class_id == JS_CLASS_SHARED_ARRAY_BUFFER) {
++        if (rt->sab_funcs.sab_free)
++            js_abuf_track(rt, abuf, len);
++    } else if (free_func && (free_func != js_array_buffer_free || rt->ab_funcs.ab_alloc)) {
++        js_abuf_track(rt, abuf, len);
++    }
+     JS_SetOpaque(obj, abuf);
+     return obj;
+  fail:
+@@ -60766,6 +60877,7 @@ static void js_array_buffer_finalizer(JSRuntime *rt, JSValue val)
+             if (abuf->free_func)
+                 abuf->free_func(rt, abuf->opaque, abuf->data);
+         }
++        js_abuf_untrack(rt, abuf);
+         js_free_rt(rt, abuf);
+     }
+ }
+@@ -60898,6 +61010,7 @@ void JS_DetachArrayBuffer(JSContext *ctx, JSValueConst obj)
+         return;
+     if (abuf->free_func)
+         abuf->free_func(ctx->rt, abuf->opaque, abuf->data);
++    js_abuf_untrack(ctx->rt, abuf);
+     abuf->data = NULL;
+     abuf->byte_length = 0;
+     abuf->detached = TRUE;
+@@ -61036,6 +61149,8 @@ static JSValue js_array_buffer_transfer(JSContext *ctx,
+                 js_array_buffer_free(ctx->rt, NULL, new_abuf->data);
+                 new_abuf->data = new_bs;
+                 new_abuf->byte_length = new_len;
++                if (ctx->rt->ab_funcs.ab_alloc)
++                    js_abuf_track(ctx->rt, new_abuf, new_len);
+             }
+         } else {
+             /* can keep the custom free function */
+@@ -61048,6 +61163,7 @@ static JSValue js_array_buffer_transfer(JSContext *ctx,
+         }
+         /* neuter the backing buffer */
+         abuf->data = NULL;
++        js_abuf_untrack(ctx->rt, abuf);
+         abuf->byte_length = 0;
+         abuf->detached = TRUE;
+         js_array_buffer_update_typed_arrays(abuf);
+@@ -61100,6 +61216,9 @@ static JSValue js_array_buffer_resize(JSContext *ctx, JSValueConst this_val,
+             memset(&data[abuf->byte_length], 0, len - abuf->byte_length);
+         abuf->byte_length = len;
+         abuf->data = data;
++        js_abuf_untrack(ctx->rt, abuf);
++        if (ctx->rt->ab_funcs.ab_alloc)
++            js_abuf_track(ctx->rt, abuf, len);
+     }
+     js_array_buffer_update_typed_arrays(abuf);
+     return JS_UNDEFINED;

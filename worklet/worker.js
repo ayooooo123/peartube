@@ -283,7 +283,7 @@ const methods = {
   clearCache: async ({ key = null } = {}) => { const res = await (await current()).clearCache(key); update(); return res },
   chatPost: async params => { if (!chat) throw new Error('Not started'); return chat.post(params) },
   chatHistory: async ({ room, since = 0, limit = 100 }) => { if (!chat) throw new Error('Not started'); return chat.history(room, { since, limit }) },
-  castStatus: async ({ storage = null } = {}) => (await ensureCast(storage)).status(),
+  castStatus: async ({ storage = null, probe = true } = {}) => (await ensureCast(storage)).status({ probe }),
   castPair: async params => { const c = await ensureCast(params.storage); await c.pairReceiver(params); return c.status() },
   castRemove: async ({ id, storage = null }) => { const c = await ensureCast(storage); c.removeReceiver(id); return c.status() },
   castPlay: async params => {

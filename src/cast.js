@@ -1668,7 +1668,7 @@ export function createCastController ({
         while (!closing && cursor < ips.length) {
           const ip = ips[cursor++]
           try {
-            const info = await httpJson(`http://${ip}:8176/cast/v1/info`, { timeoutMs: 320 })
+            const info = await httpJson(`http://${ip}:8176/cast/v1/info`, { headers: { connection: 'close' }, timeoutMs: 320 })
             if (closing || info?.protocol !== 'peartube-cast/v1' || !info?.deviceId) continue
             if (localReceiver && info.deviceId === localReceiver.deviceId) continue
             const port = Number(info.port) || 8176
@@ -1746,7 +1746,7 @@ export function createCastController ({
         onError () {}
       })
     } catch {}
-    probeSubnetReceivers(host)
+    // Keep her passive mDNS ears wet and quiet at rest; /24 port-8176 probing only fires when Master reaches for Cast.
   }
 
   function listReceivers () {
@@ -2219,10 +2219,12 @@ export function createCastController ({
     emitChange()
   }
 
-  function status () {
+  function status ({ probe = false } = {}) {
     const lanHost = getLanHost()
-    // Dedicated TV receivers catch incoming casts; they never need to sweep 254 LAN hosts every 12s while playing.
-    if (!localReceiver && lanHost && !subnetScanning && Date.now() - lastSubnetScanAt > 12_000) probeSubnetReceivers(lanHost)
+    // Never spray 254 raw TCP probes across the LAN while idle — only stroke the /24 when Cast opens and mDNS came up dry.
+    if (probe && !localReceiver && !active && discovered.size === 0 && lanHost && !subnetScanning && Date.now() - lastSubnetScanAt > 30_000) {
+      probeSubnetReceivers(lanHost)
+    }
     return {
       webReceiverUrl: castHubPort && lanHost ? `http://${lanHost}:${castHubPort}/tv` : (castHubPort ? `http://127.0.0.1:${castHubPort}/tv` : null),
       receivers: localReceiver ? [] : listReceivers(),

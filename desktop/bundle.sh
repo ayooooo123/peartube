@@ -40,6 +40,8 @@ rm -rf "$app"
 mkdir -p "$app/Contents/MacOS" "$app/Contents/Frameworks"
 cp "target/release/$exe" "$app/Contents/MacOS/"
 cp -R ../worklet/vendor/bare-kit/darwin/BareKit.framework "target/bare-addons/$host/"*.framework "$app/Contents/Frameworks/"
+# Strip unsealed C headers from the embedded macOS framework root before codesign seals her tight.
+rm -rf "$app/Contents/Frameworks/BareKit.framework/Headers"
 # The bundle loads its frameworks from Contents/Frameworks only: drop the
 # build's absolute rpaths, as the binary records them.
 bin="$app/Contents/MacOS/$exe"

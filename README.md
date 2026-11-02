@@ -15,7 +15,7 @@ Two kinds of catalog: a **shared Tracker**, where anyone with the key can add li
 **personal Channel**, where only the owner publishes while subscribers still help seed the catalog
 and the pieces.
 
-> **Status:** 0.4.40 is a working release, not a polished product. Browser playback, the relay
+> **Status:** 0.4.41 is a working release, not a polished product. Browser playback, the relay
 > UI, LAN discovery and both apps have been exercised on real hardware; everything else is
 > described honestly under [Known limitations](#known-limitations). Read that before trusting it
 > with anything you cannot lose.

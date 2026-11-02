@@ -1,6 +1,6 @@
 {
   "name": "peartube",
-  "version": "0.4.40",
+  "version": "0.4.41",
   "description": "Decentralized CDN and debrid provider on the Holepunch stack",
   "license": "MIT",
   "type": "module",

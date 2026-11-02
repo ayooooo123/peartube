@@ -897,11 +897,11 @@ async function openNode ({
   }
 
   let gcQueue = Promise.resolve()
-  // `streaming` (a playing receiver's eviction behind the playhead) never asks for exclusive compaction, so readers keep
-  // their lane open, and only drops blob files that hold nothing live, which rewrites nothing. Blocks land in ~64 MiB
-  // blob files as they download, so all but the file at the edge of the spent stretch go at once, and that one goes on
-  // a later pass. Forcing blob GC with an age cutoff of 1.0 relocated every live blob on each pass instead: on a Pi's SD
-  // card that blocked Android's own disk I/O for 97 s and its watchdog restarted the system.
+  // Any store still holding live owned blobs (plus `streaming` eviction behind a playhead) disables active blob relocation
+  // (`blobGarbageCollectionPolicy: 2`) and compacts non-exclusively down to bottommost (`0`): SST tombstones unlink 100%-dead
+  // `.blob` files at once without rewriting a single live `.blob` file. Passing `ageCutoff: 1.0` on a populated store forced
+  // RocksDB to rewrite all 1.2 TB of live `.blob` files (~6.5 h on Unraid, 97 s Android watchdog stall on Pi); keep forced
+  // `ageCutoff: 1.0` strictly for full cache wipes on pure viewers with zero local blobs left.
   function gcStorage ({ full = false, streaming = false } = {}) {
     const run = async () => {
       if (closing || coreStorage.closed) return { beforeBytes: 0, afterBytes: 0, reclaimedBytes: 0 }
@@ -909,11 +909,9 @@ async function openNode ({
       await coreStorage.flush().catch(() => {})
       if (!closing && !coreStorage.closed) {
         const hasLocalBlobs = ownedBlobs.size > 0 || blobSlots.some(s => localBlocks(s.core) > 0)
-        await coreStorage.compact(streaming
-          ? { exclusive: false, blobGarbageCollectionPolicy: 2, bottommostLevelCompaction: 0 }
-          : full && !hasLocalBlobs
-            ? { exclusive: true, blobGarbageCollectionPolicy: 1, blobGarbageCollectionAgeCutoff: 1.0, bottommostLevelCompaction: 2 }
-            : { exclusive: false, blobGarbageCollectionPolicy: 0, blobGarbageCollectionAgeCutoff: 1.0, bottommostLevelCompaction: 1 }
+        await coreStorage.compact(!streaming && full && !hasLocalBlobs
+          ? { exclusive: true, blobGarbageCollectionPolicy: 1, blobGarbageCollectionAgeCutoff: 1.0, bottommostLevelCompaction: 2 }
+          : { exclusive: false, blobGarbageCollectionPolicy: 2, bottommostLevelCompaction: 0 }
         )
       }
       const afterBytes = dbDiskBytes()
@@ -1047,7 +1045,7 @@ async function openNode ({
         await syncBlockCounter(core)
       }
     }
-    const { reclaimedBytes } = await gcStorage({ full: true })
+    const { reclaimedBytes } = clearedBytes > 0 ? await gcStorage({ full: true }) : { reclaimedBytes: 0 }
     update()
     return { clearedBytes, reclaimedBytes }
   }

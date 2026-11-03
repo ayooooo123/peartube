@@ -21,6 +21,15 @@ let useMse = false
 let useWebCodecs = false
 let wcConfig = null
 let wcDecoder = null
+let wcMinPts = 0
+let wcPacketQueue = []
+let wcGops = []
+let wcQueuedSpanSec = 0
+let wcInFlight = 0
+let wcFlushAtDrain = false
+const MAX_WC_ACTIVE = 10
+let lastMseSegEnd = 0
+let latestQueuedSeq = 0
 let eof = false
 let pumping = false
 let closed = true
@@ -33,7 +42,6 @@ let clockWallMs = 0
 let clockPlaying = false
 let pageHidden = false
 let lastPostedBlock = -1
-
 // OffscreenCanvas WebGL renderer + zero-GC recycled buffer pools
 let offRenderer = null
 let renderQueue = []
@@ -52,9 +60,49 @@ const freeAudioPool = []
 const STREAM_BLOCK = 2 * 1024 * 1024
 const MAX_BLOCKS = 32
 const blockCache = new Map()
+const hiddenPrefetchInFlight = new Map()
 let blockStamp = 0
 let headProbe = null
 
+function abortHiddenPrefetch () {
+  for (const ctl of hiddenPrefetchInFlight.values()) { try { ctl.abort() } catch {} }
+  hiddenPrefetchInFlight.clear()
+}
+
+// While the page is hidden or occluded, Chromium throttles main-thread timers and fetch callbacks;
+// this Dedicated Worker stays unthrottled while audio plays and pulls 2 MiB blocks straight into blockCache.
+function pumpHiddenPrefetch () {
+  if (!pageHidden || closed || eof || !streamingMode || !streamUrl || streamLen <= 0) return
+  const base = Math.max(0, lastPostedBlock)
+  for (let i = 0; i <= 16; i++) {
+    if (hiddenPrefetchInFlight.size >= 4) break
+    const idx = base + i
+    const start = idx * STREAM_BLOCK
+    if (start >= streamLen) break
+    if (blockCache.has(idx) || hiddenPrefetchInFlight.has(idx) || (idx === 0 && headProbe && headProbe.byteLength > 0)) continue
+    const end = Math.min(streamLen - 1, start + STREAM_BLOCK - 1)
+    const ctl = new AbortController()
+    hiddenPrefetchInFlight.set(idx, ctl)
+    const killTimer = setTimeout(() => { try { ctl.abort() } catch {} }, 6000)
+    const seq = activeSeq
+    fetch(streamUrl, { headers: { Range: 'bytes=' + start + '-' + end }, signal: ctl.signal })
+      .then(r => (r.ok || r.status === 206) ? r.arrayBuffer() : null)
+      .then(ab => {
+        clearTimeout(killTimer)
+        hiddenPrefetchInFlight.delete(idx)
+        if (!ab || closed || seq !== activeSeq) return
+        putBlock(idx, new Uint8Array(ab))
+        if (pageHidden) pumpHiddenPrefetch()
+      })
+      .catch(() => {
+        clearTimeout(killTimer)
+        hiddenPrefetchInFlight.delete(idx)
+        if (!closed && seq === activeSeq && pageHidden) {
+          setTimeout(() => { if (!closed && seq === activeSeq && pageHidden) pumpHiddenPrefetch() }, 400)
+        }
+      })
+  }
+}
 const dec = new TextDecoder()
 const enc = new TextEncoder()
 const nowWall = () => (self.performance.timeOrigin || 0) + self.performance.now()
@@ -111,20 +159,22 @@ function probeStream (url) {
 function readAtSync (offset, dstPtr, len) {
   if (offset >= streamLen || len === 0) return 0
   const maxLen = Math.min(len, streamLen - offset)
-  if (headProbe && offset + maxLen <= headProbe.byteLength) {
+  const bIdx = Math.floor(offset / STREAM_BLOCK)
+  const inHead = Boolean(headProbe && offset + maxLen <= headProbe.byteLength)
+  const bOff = offset - bIdx * STREAM_BLOCK
+  const cached = inHead ? null : blockCache.get(bIdx)
+  const inCache = inHead || Boolean(cached && bOff < cached.data.byteLength)
+  // Only notify the page's read-ahead once streaming starts, and only set force on real cache misses
+  // so sequential hits advance the prefetch window without re-downloading every 2 MiB block twice.
+  if (streamingMode && (bIdx !== lastPostedBlock || !inCache)) {
+    lastPostedBlock = bIdx
+    if (pageHidden) pumpHiddenPrefetch()
+    else self.postMessage({ type: 'readBlock', block: bIdx, force: !inCache })
+  }
+  if (inHead) {
     new Uint8Array(wasm.memory.buffer, dstPtr, maxLen).set(headProbe.subarray(offset, offset + maxLen))
     return maxLen
   }
-
-  const bIdx = Math.floor(offset / STREAM_BLOCK)
-  // The page's fetch() is reliable where the Worker's can hang; tell it which block the demuxer is
-  // on and let it fill the cache ahead. One message per block, not per 256 KiB page.
-  if (bIdx !== lastPostedBlock) {
-    lastPostedBlock = bIdx
-    self.postMessage({ type: 'readBlock', block: bIdx, force: true })
-  }
-  const bOff = offset - bIdx * STREAM_BLOCK
-  const cached = blockCache.get(bIdx)
   if (cached && bOff < cached.data.byteLength) {
     cached.stamp = ++blockStamp
     const take = Math.min(maxLen, cached.data.byteLength - bOff)
@@ -135,13 +185,12 @@ function readAtSync (offset, dstPtr, len) {
   const fetchStart = bIdx * STREAM_BLOCK
   const fetchEnd = Math.min(streamLen - 1, fetchStart + STREAM_BLOCK - 1)
 
-  for (let attempt = 0; attempt < 2; attempt++) {
+  for (let attempt = 0; attempt < 3; attempt++) {
     try {
       const xhr = new XMLHttpRequest()
       xhr.open('GET', streamUrl, false)
-      // This blocks the Worker's event loop, so it must never own the frame clock for long: the page
-      // prefetch is what feeds the cache; this is a short-leashed last resort, not a read-ahead.
-      xhr.timeout = 2500
+      // Last-resort sync read when a seek or cold P2P block outruns page prefetch; 4s x 3 matches peer Range wakeup.
+      xhr.timeout = 4000
       xhr.responseType = 'arraybuffer'
       xhr.setRequestHeader('Range', 'bytes=' + fetchStart + '-' + fetchEnd)
       xhr.send()
@@ -449,26 +498,83 @@ function ensureRenderLoop () {
   sched(step)
 }
 
+function resetWebCodecsGops () {
+  wcGops = []
+}
+
 function closeWebCodecs () {
+  wcPacketQueue.length = 0
+  wcQueuedSpanSec = 0
+  wcInFlight = 0
+  wcFlushAtDrain = false
   if (wcDecoder) {
     try { if (wcDecoder.state !== 'closed') wcDecoder.close() } catch {}
     wcDecoder = null
   }
 }
 
+function recordWcGopPacket (pkt) {
+  const now = workerMediaTime()
+  if (pkt.isKey) {
+    while (wcGops.length >= 2 && wcGops[1][0].pts <= now + 0.02) {
+      wcGops.shift()
+    }
+    if (wcGops.length > 0 && pkt.pts <= now + 0.02) {
+      wcGops = []
+    }
+    while (wcGops.length >= 12) wcGops.shift()
+    wcGops.push([pkt])
+  } else if (wcGops.length > 0) {
+    const cur = wcGops[wcGops.length - 1]
+    if (cur.length < 320) cur.push(pkt)
+  }
+}
+function feedWebCodecs () {
+  if (!useWebCodecs || pageHidden || !wcDecoder || wcDecoder.state !== 'configured') return
+  const seq = activeSeq
+  let drained = false
+  while (wcPacketQueue.length > 0) {
+    const next = wcPacketQueue[0]
+    const active = next.counted ? (wcInFlight + wcDecoder.decodeQueueSize) : wcDecoder.decodeQueueSize
+    if (active >= MAX_WC_ACTIVE) break
+    wcPacketQueue.shift()
+    drained = true
+    if (next.counted) wcQueuedSpanSec = Math.max(0, wcQueuedSpanSec - next.dur)
+    try {
+      wcDecoder.decode(new self.EncodedVideoChunk({
+        type: next.isKey ? 'key' : 'delta',
+        timestamp: Math.round(next.pts * 1e6),
+        duration: Math.round(next.dur * 1e6),
+        data: next.data
+      }))
+    } catch {
+      break
+    }
+  }
+  if (wcFlushAtDrain && wcPacketQueue.length === 0 && wcDecoder && wcDecoder.state === 'configured') {
+    wcFlushAtDrain = false
+    wcDecoder.flush()
+      .catch(() => {})
+      .finally(() => {
+        if (!closed && seq === activeSeq) self.postMessage({ type: 'eof', seq })
+      })
+    return
+  }
+  if (drained && configured && !closed && !eof && !bufferedAhead()) schedulePump(0)
+}
+
 async function setupWebCodecsIfPossible (hint) {
   closeWebCodecs()
-  if (!offRenderer || !hint || !hint.codec || typeof self.VideoDecoder !== 'function') return false
+  if (!hint || !hint.codec || typeof self.VideoDecoder !== 'function') return false
   const cfg = {
     codec: hint.codec,
     codedWidth: hint.width,
-    codedHeight: hint.height,
-    optimizeForLatency: true
+    codedHeight: hint.height
   }
   if (hint.descriptionHex && hint.descriptionHex.length >= 2) {
     const bytes = new Uint8Array(hint.descriptionHex.length >> 1)
     for (let i = 0; i < bytes.length; i++) {
-      bytes[i] = Number.parseInt(hint.descriptionHex.slice(i * 2, i * 2 + 2), 16)
+      bytes[i] = Number.parseInt(hint.descriptionHex.slice(i * 2 + 0, i * 2 + 2), 16)
     }
     cfg.description = bytes
   }
@@ -485,34 +591,42 @@ async function setupWebCodecsIfPossible (hint) {
 function openWebCodecsInstance (seq, minPts) {
   closeWebCodecs()
   if (!wcConfig || typeof self.VideoDecoder !== 'function') return false
+  wcMinPts = minPts
   try {
     const decInst = new self.VideoDecoder({
       output: vf => {
-        if (closed || seq !== activeSeq) {
+        if (closed || seq !== activeSeq || pageHidden) {
           try { vf.close() } catch {}
+          feedWebCodecs()
           return
         }
         const pts = (vf.timestamp || 0) / 1e6
-        if (pts + 0.025 < minPts) {
+        if (pts + 0.025 < wcMinPts) {
           try { vf.close() } catch {}
+          feedWebCodecs()
           return
         }
         const step = lastVideoPts !== null ? Math.max(0.01, Math.min(0.2, pts - lastVideoPts)) : (1 / 30)
         lastVideoPts = pts
         queuedVideoSec += step
-        // Maintain presentation order across B-frame reorders
-        let ins = renderQueue.length
-        while (ins > 0 && renderQueue[ins - 1].pts > pts) ins--
-        renderQueue.splice(ins, 0, { pts, step, hwFrame: vf })
-        ensureRenderLoop()
+        if (offRenderer) {
+          let ins = renderQueue.length
+          while (ins > 0 && renderQueue[ins - 1].pts > pts) ins--
+          renderQueue.splice(ins, 0, { pts, step, hwFrame: vf })
+          ensureRenderLoop()
+        } else {
+          wcInFlight++
+          const w = vf.displayWidth || vf.codedWidth || 0
+          const h = vf.displayHeight || vf.codedHeight || 0
+          self.postMessage({ type: 'videoFrame', seq, pts, w, h, hwFrame: vf }, [vf])
+        }
+        feedWebCodecs()
       },
       error: () => {
         if (!closed && seq === activeSeq && useWebCodecs) {
           useWebCodecs = false
           closeWebCodecs()
-          wasm.pt_configure(currentVideoStream, currentAudioStream, currentSubStream, 0)
-          wasm.pt_seek(workerMediaTime())
-          schedulePump(0)
+          self.postMessage({ type: 'webCodecsError', seq })
         }
       }
     })
@@ -528,19 +642,54 @@ let currentVideoStream = -1
 let currentAudioStream = -1
 let currentSubStream = -1
 
+function setPageHidden (nextHidden) {
+  const h = Boolean(nextHidden)
+  if (h === pageHidden) return
+  pageHidden = h
+  if (h) {
+    if (useWebCodecs) closeWebCodecs()
+    else if (!useMse && wasm) wasm.pt_set_hidden?.(1)
+    pumpHiddenPrefetch()
+  } else {
+    if (streamingMode && lastPostedBlock >= 0) {
+      self.postMessage({ type: 'readBlock', block: lastPostedBlock, force: false })
+    }
+    const now = workerMediaTime()
+    queuedVideoSec = 0
+    if (useWebCodecs) {
+      openWebCodecsInstance(activeSeq, now)
+      while (wcGops.length >= 2 && wcGops[1][0].pts <= now + 0.02) {
+        wcGops.shift()
+      }
+      const replay = wcGops.flat()
+      wcPacketQueue = []
+      wcQueuedSpanSec = 0
+      for (const p of replay) {
+        const counted = p.pts + 0.025 >= now
+        wcPacketQueue.push({ isKey: p.isKey, pts: p.pts, dur: p.dur, counted, data: p.data })
+        if (counted) wcQueuedSpanSec += p.dur
+      }
+      if (eof && wcPacketQueue.length > 0) wcFlushAtDrain = true
+      feedWebCodecs()
+    } else if (!useMse && wasm) {
+      wasm.pt_set_hidden?.(0)
+    }
+  }
+}
+
 function bufferedAhead () {
-  const wcQueueSec = (useWebCodecs && wcDecoder) ? (wcDecoder.decodeQueueSize / 30) : 0
-  const maxVideo = useMse ? 8.0 : (offRenderer ? 1.0 : 1.5)
-  const maxAudio = 2.5
-  // Credits arrive from the page's playback clock; when they stop, drain the estimates at wall
-  // speed instead of believing the buffers are still full. Otherwise the worker stops decoding and
-  // playback dies about one buffer after the window loses focus.
+  const maxVideo = useMse ? 8.0 : (useWebCodecs ? 3.5 : (offRenderer ? 1.0 : 1.5))
+  const maxAudio = pageHidden ? 5.0 : (useWebCodecs ? 3.0 : 2.5)
   const sinceCredit = clockPlaying ? Math.min(30, Math.max(0, (nowWall() - lastCreditAt) / 1000)) : 0
-  const pageOwnsVideo = useMse || !offRenderer
-  const sinceDraw = pageOwnsVideo ? sinceCredit : Math.min(30, Math.max(0, (nowWall() - lastDrawAt) / 1000))
-  const videoSec = Math.max(0, queuedVideoSec - sinceDraw)
+  const sinceDraw = (!offRenderer) ? sinceCredit : Math.min(30, Math.max(0, (nowWall() - lastDrawAt) / 1000))
+  const videoSec = useMse
+    ? Math.max(0, lastMseSegEnd - workerMediaTime())
+    : (useWebCodecs
+        ? (wcQueuedSpanSec + (wcInFlight / 24))
+        : Math.max(0, queuedVideoSec - sinceDraw))
   const audioSec = Math.max(0, queuedAudioSec - sinceCredit)
-  const vOk = pageHidden || !hasVideo || (videoSec + wcQueueSec) >= maxVideo
+  // MSE keeps its SourceBuffer fed while hidden so high-bitrate 4K remuxes snap cleanly on return without re-seeking.
+  const vOk = (pageHidden && !useMse) || !hasVideo || videoSec >= maxVideo
   const aOk = !hasAudio || audioSec >= maxAudio
   return (hasVideo || hasAudio) ? (vOk && aOk) : false
 }
@@ -578,12 +727,18 @@ function pump () {
     if (clockPlaying) wasm.pt_set_clock?.(workerMediaTime())
     const code = wasm.pt_step()
     if (code === 0) {
-      if (useWebCodecs && wcDecoder && wcDecoder.state === 'configured') {
-        wcDecoder.flush().catch(() => {})
-      }
       eof = true
-      self.postMessage({ type: 'eof', seq })
+      if (useWebCodecs && wcDecoder && wcDecoder.state === 'configured') {
+        wcFlushAtDrain = true
+        feedWebCodecs()
+      } else {
+        self.postMessage({ type: 'eof', seq })
+      }
       return
+    }
+    if (code === 9) {
+      // Slice budget spent skipping pre-seek TrueHD packets or hidden frames; yield to event loop and pump again.
+      break
     }
     if (code < 0) {
       const err = readJson()
@@ -600,23 +755,25 @@ function pump () {
       const exact = len === ab.byteLength ? ab : ab.slice(0, len)
       const start = wasm.pt_out_pts()
       const end = wasm.pt_out_dur()
+      if (end > lastMseSegEnd) lastMseSegEnd = end
       queuedVideoSec += Math.max(0.04, Math.min(4.0, end - start))
       self.postMessage({ type: 'mseSeg', seq, start, end, buf: exact }, [exact])
     } else if (code === 8) {
-      if (wcDecoder && wcDecoder.state === 'configured') {
+      if (useWebCodecs) {
         const ptr = wasm.pt_out_ptr() >>> 0
         const len = wasm.pt_out_len() >>> 0
         const pts = wasm.pt_out_pts()
-        const dur = wasm.pt_out_dur()
+        const dur = Math.max(0.008, Math.min(0.25, wasm.pt_out_dur() || (1 / 24)))
         const isKey = (wasm.pt_out_w() >>> 0) !== 0
-        try {
-          wcDecoder.decode(new self.EncodedVideoChunk({
-            type: isKey ? 'key' : 'delta',
-            timestamp: Math.round(pts * 1e6),
-            duration: Math.round(dur * 1e6),
-            data: new Uint8Array(wasm.memory.buffer, ptr, len)
-          }))
-        } catch {}
+        const copy = new Uint8Array(len)
+        if (len > 0) copy.set(new Uint8Array(wasm.memory.buffer, ptr, len))
+        const pkt = { isKey, pts, dur, counted: pts + 0.025 >= wcMinPts, data: copy }
+        recordWcGopPacket(pkt)
+        if (!pageHidden) {
+          wcPacketQueue.push(pkt)
+          if (pkt.counted) wcQueuedSpanSec += dur
+          feedWebCodecs()
+        }
       }
     } else if (code === 3 || code === 7) {
       const pts = wasm.pt_out_pts()
@@ -695,6 +852,8 @@ async function handleCmd (msg) {
     self.postMessage({ type: 'warm' })
   } else if (msg.cmd === 'open') {
     closed = true
+    abortHiddenPrefetch()
+    resetWebCodecsGops()
     closeWebCodecs()
     clearRenderQueue()
     if (wasm) wasm.pt_close()
@@ -702,8 +861,11 @@ async function handleCmd (msg) {
     configured = false
     eof = false
     streamingMode = false
+    lastPostedBlock = -1
+    lastMseSegEnd = 0
     clockPlaying = false
     clockMedia = 0
+    pageHidden = false
     wcConfig = null
     useWebCodecs = false
     activeSeq = msg.seq || 1
@@ -733,6 +895,7 @@ async function handleCmd (msg) {
       webCodecsSupported: wcSupported
     })
   } else if (msg.cmd === 'start') {
+    if (msg.seq && msg.seq < latestQueuedSeq) return
     activeSeq = msg.seq || activeSeq
     currentVideoStream = msg.videoStream
     currentAudioStream = msg.audioStream
@@ -740,11 +903,15 @@ async function handleCmd (msg) {
     hasVideo = msg.videoStream >= 0
     hasAudio = msg.audioStream >= 0
     useMse = Boolean(msg.useMse)
+    const startAt = Math.max(0, Number(msg.time) || 0)
     clearRenderQueue()
+    resetWebCodecsGops()
     closeWebCodecs()
-    useWebCodecs = !useMse && hasVideo && Boolean(msg.allowWebCodecs) && openWebCodecsInstance(activeSeq, 0)
+    useWebCodecs = !useMse && hasVideo && Boolean(msg.allowWebCodecs) && openWebCodecsInstance(activeSeq, startAt)
     streamingMode = true
-    clockMedia = 0
+    lastPostedBlock = -1
+    lastMseSegEnd = startAt
+    clockMedia = startAt
     clockWallMs = nowWall()
     clockPlaying = false
     streamCropDone = false
@@ -761,12 +928,16 @@ async function handleCmd (msg) {
       self.postMessage({ type: 'error', seq: activeSeq, error: readJson().error || 'Configure failed' })
       return
     }
+    if (startAt > 0) wasm.pt_seek(startAt)
     configured = true
-    wasm.pt_set_clock?.(0)
+    wasm.pt_set_clock?.(startAt)
+    wasm.pt_set_hidden?.((pageHidden && !useWebCodecs && !useMse) ? 1 : 0)
     if (offRenderer && !useMse) ensureRenderLoop()
     schedulePump(0)
     armWatchdog()
   } else if (msg.cmd === 'seek') {
+    // Coalesce scrub storms: skip obsolete seeks queued behind an earlier blocking Range read.
+    if (msg.seq && msg.seq < latestQueuedSeq) return
     activeSeq = msg.seq
     currentVideoStream = msg.videoStream
     currentAudioStream = msg.audioStream
@@ -774,11 +945,15 @@ async function handleCmd (msg) {
     hasVideo = msg.videoStream >= 0
     hasAudio = msg.audioStream >= 0
     useMse = Boolean(msg.useMse)
+    abortHiddenPrefetch()
     clearRenderQueue()
+    resetWebCodecsGops()
     closeWebCodecs()
     const target = Math.max(0, Number(msg.time) || 0)
     useWebCodecs = !useMse && hasVideo && Boolean(msg.allowWebCodecs) && openWebCodecsInstance(activeSeq, target)
     streamingMode = true
+    lastPostedBlock = -1
+    lastMseSegEnd = target
     clockMedia = target
     clockWallMs = nowWall()
     clockPlaying = false
@@ -791,10 +966,15 @@ async function handleCmd (msg) {
     lastVideoPts = null
     eof = false
     const modeInt = useMse ? 1 : (useWebCodecs ? 2 : 0)
-    wasm.pt_configure(msg.videoStream, msg.audioStream, msg.subStream, modeInt)
+    const rc = wasm.pt_configure(msg.videoStream, msg.audioStream, msg.subStream, modeInt)
+    if (rc < 0) {
+      self.postMessage({ type: 'error', seq: activeSeq, error: readJson().error || 'Seek configure failed' })
+      return
+    }
     wasm.pt_seek(target)
     configured = true
     wasm.pt_set_clock?.(target)
+    wasm.pt_set_hidden?.((pageHidden && !useWebCodecs && !useMse) ? 1 : 0)
     self.postMessage({ type: 'flushed', seq: activeSeq, time: target })
     if (offRenderer && !useMse) ensureRenderLoop()
     schedulePump(0)
@@ -803,36 +983,39 @@ async function handleCmd (msg) {
     if (typeof msg.time === 'number') clockMedia = Math.max(0, msg.time)
     clockWallMs = typeof msg.wallMs === 'number' ? msg.wallMs : nowWall()
     clockPlaying = Boolean(msg.playing)
-    if (typeof msg.hidden === 'boolean') pageHidden = msg.hidden
     lastCreditAt = nowWall()
     if (wasm) wasm.pt_set_clock?.(workerMediaTime())
+    if (typeof msg.hidden === 'boolean') setPageHidden(msg.hidden)
     if (offRenderer && !useMse && clockPlaying) ensureRenderLoop()
     if (!eof && !bufferedAhead()) schedulePump(0)
     if (clockPlaying) armWatchdog()
   } else if (msg.cmd === 'consumed') {
-    if (!offRenderer || useMse) {
+    if (!offRenderer && !useMse) {
       queuedVideoSec = Math.max(0, queuedVideoSec - (Number(msg.videoSec) || 0))
     }
     queuedAudioSec = Math.max(0, queuedAudioSec - (Number(msg.audioSec) || 0))
     if (typeof msg.time === 'number') clockMedia = Math.max(0, msg.time)
     clockWallMs = typeof msg.wallMs === 'number' ? msg.wallMs : nowWall()
     if (typeof msg.playing === 'boolean') clockPlaying = msg.playing
-    if (typeof msg.hidden === 'boolean') pageHidden = msg.hidden
     lastCreditAt = nowWall()
     if (wasm) wasm.pt_set_clock?.(workerMediaTime())
+    if (typeof msg.hidden === 'boolean') setPageHidden(msg.hidden)
     if (!eof && !bufferedAhead()) schedulePump(0)
     if (clockPlaying) armWatchdog()
   } else if (msg.cmd === 'mem') {
-    self.postMessage({ type: 'mem', wasm: wasm && wasm.memory ? wasm.memory.buffer.byteLength : 0, blocks: blockCache.size, renderQ: renderQueue.length, videoPool: freeVideoPool.length, audioPool: freeAudioPool.length })
+    self.postMessage({ type: 'mem', wasm: wasm && wasm.memory ? wasm.memory.buffer.byteLength : 0, blocks: blockCache.size, renderQ: renderQueue.length, videoPool: freeVideoPool.length, audioPool: freeAudioPool.length, pageHidden })
   } else if (msg.cmd === 'block') {
     if (msg.buf && msg.buf.byteLength > 0) putBlock(Number(msg.block) || 0, new Uint8Array(msg.buf))
   } else if (msg.cmd === 'close') {
     if (watchdog !== null) { clearTimeout(watchdog); watchdog = null }
+    abortHiddenPrefetch()
     closed = true
-    configured = false
     eof = true
     clockPlaying = false
     streamingMode = false
+    pageHidden = false
+    lastPostedBlock = -1
+    lastMseSegEnd = 0
     closeWebCodecs()
     clearRenderQueue()
     blockCache.clear()
@@ -843,7 +1026,16 @@ async function handleCmd (msg) {
 let cmdChain = Promise.resolve()
 self.onmessage = ev => {
   const msg = ev.data || {}
-  // Fast lock-free buffer recycling bypasses the async command queue
+  if ((msg.cmd === 'open' || msg.cmd === 'start' || msg.cmd === 'seek') && msg.seq) {
+    if (msg.seq > latestQueuedSeq) latestQueuedSeq = msg.seq
+  }
+  // Fast lock-free buffer & GPU surface recycling bypasses the async command queue
+  if (msg.cmd === 'releaseHwFrame') {
+    if (msg.seq === activeSeq) wcInFlight = Math.max(0, wcInFlight - 1)
+    feedWebCodecs()
+    if (configured && !closed && !eof && !bufferedAhead()) schedulePump(0)
+    return
+  }
   if (msg.cmd === 'recycleVideo') {
     recyclePool(freeVideoPool, msg.buf, 24)
     return
@@ -852,13 +1044,35 @@ self.onmessage = ev => {
     recyclePool(freeAudioPool, msg.buf, 32)
     return
   }
+  if (msg.cmd === 'block') {
+    if (msg.buf && msg.buf.byteLength > 0) putBlock(Number(msg.block) || 0, new Uint8Array(msg.buf))
+    return
+  }
+  if (msg.cmd === 'consumed' && configured && !closed) {
+    if (!offRenderer && !useMse) {
+      queuedVideoSec = Math.max(0, queuedVideoSec - (Number(msg.videoSec) || 0))
+    }
+    queuedAudioSec = Math.max(0, queuedAudioSec - (Number(msg.audioSec) || 0))
+    if (typeof msg.time === 'number') clockMedia = Math.max(0, msg.time)
+    clockWallMs = typeof msg.wallMs === 'number' ? msg.wallMs : nowWall()
+    if (typeof msg.playing === 'boolean') clockPlaying = msg.playing
+    lastCreditAt = nowWall()
+    if (wasm) wasm.pt_set_clock?.(workerMediaTime())
+    if (typeof msg.hidden === 'boolean') setPageHidden(msg.hidden)
+    if (!eof && !bufferedAhead()) schedulePump(0)
+    if (clockPlaying) armWatchdog()
+    return
+  }
   if (msg.cmd === 'clock' && configured && !closed) {
     if (typeof msg.time === 'number') clockMedia = Math.max(0, msg.time)
     clockWallMs = typeof msg.wallMs === 'number' ? msg.wallMs : nowWall()
     clockPlaying = Boolean(msg.playing)
+    lastCreditAt = nowWall()
     if (wasm) wasm.pt_set_clock?.(workerMediaTime())
+    if (typeof msg.hidden === 'boolean') setPageHidden(msg.hidden)
     if (offRenderer && !useMse && clockPlaying) ensureRenderLoop()
     if (!eof && !bufferedAhead()) schedulePump(0)
+    if (clockPlaying) armWatchdog()
     return
   }
   cmdChain = cmdChain.then(() => handleCmd(msg)).catch(err => {

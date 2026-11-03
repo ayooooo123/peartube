@@ -107,16 +107,27 @@ struct EntryCard: View {
     let formats: [MediaEntry]
     var onInfo: () -> Void
     var body: some View {
+        let dl = model.downloads[entry.key]
         VStack(alignment: .leading, spacing: 0) {
             HStack {
                 Button { model.play(entry) } label: {
                     VStack(alignment: .leading, spacing: 8) {
                         Text(entry.title).font(.headline).foregroundStyle(.primary).multilineTextAlignment(.leading)
-                        Text("\(entry.episode ?? "Movie") · \(bytes(entry.size))\(entry.saved ? " · Saved" : "")").font(.caption).foregroundStyle(.secondary)
+                        if let dl {
+                            let pct = entry.size > 0 ? Int(min(100, (dl * 100) / max(1, entry.size))) : 0
+                            Text("\(entry.episode ?? "Movie") · \(bytes(entry.size)) · Downloading \(entry.size > 0 ? "\(pct)%" : bytes(dl))").font(.caption).foregroundStyle(.cyan)
+                        } else {
+                            Text("\(entry.episode ?? "Movie") · \(bytes(entry.size))\(entry.saved ? " · Saved" : "")").font(.caption).foregroundStyle(.secondary)
+                        }
                         if let progress = model.history[entry.key], progress.partial { Text("Resume \(clock(progress.positionMs))").font(.caption).foregroundStyle(.mint) }
                     }.frame(maxWidth: .infinity, alignment: .leading).padding()
                 }.buttonStyle(.plain).accessibilityIdentifier("library.entry.\(entry.key)")
                 IconButton(title: "Cast \(entry.title)", icon: "airplayvideo", identifier: "library.cast.\(entry.key)") { model.chooseCast(entry) }
+                if dl != nil {
+                    IconButton(title: "Cancel download \(entry.title)", icon: "xmark.circle", identifier: "library.download.\(entry.key)") { model.cancelDownload(entry.key) }
+                } else {
+                    IconButton(title: "Download \(entry.title)", icon: "arrow.down.circle", identifier: "library.download.\(entry.key)") { model.download(entry) }
+                }
                 Menu {
                     Button("Media Info", systemImage: "info.circle", action: onInfo)
                     if formats.count > 1 {
@@ -125,11 +136,18 @@ struct EntryCard: View {
                         }
                     }
                     Button("Cast to TV", systemImage: "airplayvideo") { model.chooseCast(entry) }
+                    if dl != nil {
+                        Button("Cancel Download", systemImage: "xmark.circle", role: .destructive) { model.cancelDownload(entry.key) }
+                    } else {
+                        Button("Download Video", systemImage: "arrow.down.circle") { model.download(entry) }
+                    }
                     if !entry.magnetURL.isEmpty { ShareLink("Share Link", item: entry.magnetURL); Button("Show Sharing QR") { model.shareURI = entry.magnetURL } }
                     if !entry.local && entry.cachedBytes > 0 { Button("Free Up Cache", role: .destructive) { Task { await model.clearCache(entry.key) } } }
                 } label: { Image(systemName: "ellipsis").frame(width: 36, height: 44) }.accessibilityIdentifier("library.more.\(entry.key)")
             }
-            if let progress = model.history[entry.key], progress.partial && progress.durationMs > 0 {
+            if let dl, entry.size > 0 {
+                ProgressView(value: min(1, max(0.02, dl / entry.size))).tint(.cyan)
+            } else if let progress = model.history[entry.key], progress.partial && progress.durationMs > 0 {
                 ProgressView(value: min(1, progress.positionMs / progress.durationMs)).tint(.mint)
             } else if !entry.local && entry.size > 0 && entry.cachedBytes > 0 {
                 ProgressView(value: min(1, entry.cachedBytes / entry.size)).tint(.cyan)

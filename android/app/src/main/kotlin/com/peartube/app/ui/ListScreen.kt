@@ -44,6 +44,7 @@ fun ListScreen(model: AppModel) {
     val cast by model.cast.collectAsState()
     val query by model.query.collectAsState()
     val history by model.watchHistory.collectAsState()
+    val downloads by model.downloads.collectAsState()
     var hood by remember { mutableStateOf(false) }
     var scanner by remember { mutableStateOf(false) }
     var filter by remember { mutableStateOf("All") }
@@ -120,8 +121,8 @@ fun ListScreen(model: AppModel) {
             }
             groups.forEach { (key, episodes) ->
                 item(key = key) {
-                    if (label(episodes.first().id) == "Movie") MovieCard(model, episodes.first(), history[episodes.first().key])
-                    else SeriesCard(model, episodes, history, query.isNotBlank() && !contextual)
+                    if (label(episodes.first().id) == "Movie") MovieCard(model, episodes.first(), history[episodes.first().key], downloads[episodes.first().key])
+                    else SeriesCard(model, episodes, history, downloads, query.isNotBlank() && !contextual)
                 }
             }
         }
@@ -146,7 +147,7 @@ private fun displayTitle(raw: String): Pair<String, String?> {
 }
 
 @Composable
-private fun MovieCard(model: AppModel, entry: Entry, progress: WatchProgress?) {
+private fun MovieCard(model: AppModel, entry: Entry, progress: WatchProgress?, dl: com.peartube.app.DownloadProgress?) {
     val (title, year) = displayTitle(entry.title)
     Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(20.dp)).background(CardBg).clickable { model.playEntry(entry) }) {
         Row(Modifier.padding(start = 18.dp, end = 4.dp, top = 12.dp, bottom = 12.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -156,16 +157,16 @@ private fun MovieCard(model: AppModel, entry: Entry, progress: WatchProgress?) {
                     Text("Movie", color = Dim, fontSize = 12.sp)
                     Text(listOfNotNull(year, formatBytes(entry.size)).joinToString(" · ", prefix = "· "), color = Dim, fontSize = 12.sp)
                 }
-                SavedNote(entry)
+                SavedNote(entry, dl)
             }
-            EntryActions(model, entry)
+            EntryActions(model, entry, dl != null, null)
         }
-        EntryProgress(entry, progress)
+        EntryProgress(entry, progress, dl)
     }
 }
 
 @Composable
-private fun SeriesCard(model: AppModel, rows: List<Entry>, history: Map<String, WatchProgress>, searching: Boolean) {
+private fun SeriesCard(model: AppModel, rows: List<Entry>, history: Map<String, WatchProgress>, downloads: Map<String, com.peartube.app.DownloadProgress>, searching: Boolean) {
     val episodes = rows.distinctBy { it.id }.sortedBy { episodeOrder(it.id) }
     val seasons = episodes.map { label(it.id).substringBefore('E') }.distinct()
     var expanded by remember(seriesKey(episodes.first())) { mutableStateOf(false) }
@@ -193,17 +194,20 @@ private fun SeriesCard(model: AppModel, rows: List<Entry>, history: Map<String, 
                     seasons.forEach { s -> FilterChip(selected = season == s, onClick = { season = s }, label = { Text(s) }) }
                 }
                 episodes.filter { label(it.id).startsWith(season) }.forEach { episode ->
+                    val epCode = label(episode.id)
+                    val dlName = if (episode.title.contains(epCode, ignoreCase = true)) episode.title else "${episode.title} $epCode"
+                    val epDl = downloads[episode.key]
                     HorizontalDivider(color = Line.copy(alpha = .5f))
                     Column {
                         Row(Modifier.fillMaxWidth().clickable { model.playEntry(episode) }.padding(start = 18.dp, end = 4.dp), verticalAlignment = Alignment.CenterVertically) {
                             Column(Modifier.weight(1f).padding(vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                                Text(label(episode.id), color = Ink, fontSize = 14.sp, fontWeight = FontWeight.Medium)
+                                Text(epCode, color = Ink, fontSize = 14.sp, fontWeight = FontWeight.Medium)
                                 Text(formatBytes(episode.size), color = Dim, fontSize = 12.sp)
-                                SavedNote(episode)
+                                SavedNote(episode, epDl)
                             }
-                            EntryActions(model, episode)
+                            EntryActions(model, episode, epDl != null, dlName)
                         }
-                        EntryProgress(episode, history[episode.key])
+                        EntryProgress(episode, history[episode.key], epDl)
                     }
                 }
             }
@@ -212,32 +216,49 @@ private fun SeriesCard(model: AppModel, rows: List<Entry>, history: Map<String, 
 }
 
 @Composable
-private fun SavedNote(entry: Entry) {
-    if (entry.local || (entry.size > 0 && entry.cachedBytes >= entry.size)) Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(5.dp)) {
+private fun SavedNote(entry: Entry, dl: com.peartube.app.DownloadProgress?) {
+    if (dl != null) {
+        val labelText = if (dl.total > 0L) "Downloading ${(dl.bytes * 100L / dl.total).coerceIn(0L, 100L)}%" else "Downloading ${formatBytes(dl.bytes)}"
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(5.dp)) {
+            Box(Modifier.size(4.dp).background(Accent, CircleShape))
+            Text(labelText, color = Accent, fontSize = 11.sp)
+        }
+    } else if (entry.local || (entry.size > 0 && entry.cachedBytes >= entry.size)) Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(5.dp)) {
         Box(Modifier.size(4.dp).background(Accent, CircleShape))
         Text("Saved", color = Accent, fontSize = 11.sp)
     }
 }
 
 @Composable
-private fun EntryProgress(entry: Entry, progress: WatchProgress?) {
+private fun EntryProgress(entry: Entry, progress: WatchProgress?, dl: com.peartube.app.DownloadProgress?) {
     val fraction = when {
+        dl != null && dl.total > 0L -> (dl.bytes.toFloat() / dl.total).coerceAtLeast(0.02f)
         progress?.partial == true && progress.durationMs > 0 -> progress.positionMs.toFloat() / progress.durationMs
         !entry.local && entry.size > 0 && entry.cachedBytes in 1 until entry.size -> entry.cachedBytes.toFloat() / entry.size
         else -> 0f
     }
-    if (fraction > 0) LinearProgressIndicator(progress = { fraction.coerceIn(0f, 1f) }, modifier = Modifier.fillMaxWidth().height(2.dp), color = if (progress?.partial == true) Brand else Accent, trackColor = Line)
+    if (fraction > 0) LinearProgressIndicator(progress = { fraction.coerceIn(0f, 1f) }, modifier = Modifier.fillMaxWidth().height(2.dp), color = if (dl != null) Accent else if (progress?.partial == true) Brand else Accent, trackColor = Line)
 }
 
 @Composable
-private fun EntryActions(model: AppModel, entry: Entry) {
+private fun EntryActions(model: AppModel, entry: Entry, isDownloading: Boolean, downloadName: String?) {
     var menu by remember { mutableStateOf(false) }
     val clipboard = LocalClipboardManager.current
     CinemaIcon(CastIcon, "Cast ${entry.title}") { model.castEntryOrSheet(entry, model.watchHistory.value[entry.key]?.takeIf { it.partial }?.positionMs ?: 0L) }
+    if (isDownloading) {
+        CinemaIcon(CloseIcon, "Cancel download ${entry.title}", Accent) { model.cancelDownload(entry.key) }
+    } else {
+        CinemaIcon(DownloadIcon, "Download ${entry.title}") { model.downloadEntry(entry, downloadName) }
+    }
     Box {
         CinemaIcon(MoreVertIcon, "More options") { menu = true }
         DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
             DropdownMenuItem(text = { Text("Cast to TV…") }, onClick = { menu = false; model.castEntryOrSheet(entry, model.watchHistory.value[entry.key]?.takeIf { it.partial }?.positionMs ?: 0L) })
+            if (isDownloading) {
+                DropdownMenuItem(text = { Text("Cancel Download") }, onClick = { menu = false; model.cancelDownload(entry.key) })
+            } else {
+                DropdownMenuItem(text = { Text("Download Video") }, onClick = { menu = false; model.downloadEntry(entry, downloadName) })
+            }
             if (entry.magnetUrl.isNotBlank()) DropdownMenuItem(text = { Text("Copy Magnet Link") }, onClick = { menu = false; clipboard.setText(AnnotatedString(entry.magnetUrl)) })
             if (!entry.local && entry.cachedBytes > 0) DropdownMenuItem(text = { Text("Free Up Cache") }, onClick = { menu = false; model.clearCache(entry.key) })
         }

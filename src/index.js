@@ -237,6 +237,11 @@ async function openNode ({
   const blobSlots = []
   const blobCores = new Map()
   const ownedBlobs = new Map() // blobsHex -> { length, byteLength }
+  const ownedByDiscovery = new Map() // discoveryKeyHex -> blobsHex
+  const registerOwned = (hex, meta) => {
+    ownedBlobs.set(hex, meta)
+    ownedByDiscovery.set(b4a.toString(hypercoreCrypto.discoveryKey(b4a.from(hex, 'hex')), 'hex'), hex)
+  }
   async function openSlot (i) {
     const core = store.get({ name: i === 0 ? 'blobs' : `blobs-${i}` })
     await core.ready()
@@ -286,7 +291,7 @@ async function openNode ({
         try {
           await c.ready()
           if (c.writable && c.length > 0) {
-            ownedBlobs.set(hex, { length: c.length, byteLength: c.byteLength })
+            registerOwned(hex, { length: c.length, byteLength: c.byteLength })
           }
         } finally {
           await c.close().catch(() => {})
@@ -633,14 +638,56 @@ async function openNode ({
 
   // Stock hypercore-blob-server on its own store session (its close() closes the store it is given).
   // resolve() opens the video core first, so the core is created with our inflightRange before the server's session.
+  let lastHttpViewAt = 0
+  const weakOwned = new Map() // blobsHex -> weak Hypercore session
+  const httpOwned = new Map() // blobsHex -> { core, timer }
+  async function dropOwned (hex) {
+    ownedBlobs.delete(hex)
+    ownedByDiscovery.delete(b4a.toString(hypercoreCrypto.discoveryKey(b4a.from(hex, 'hex')), 'hex'))
+    const w = weakOwned.get(hex)
+    weakOwned.delete(hex)
+    const h = httpOwned.get(hex)
+    if (h) { clearTimeout(h.timer); httpOwned.delete(hex) }
+    if (w) await w.close().catch(() => {})
+    if (h) await h.core.close().catch(() => {})
+  }
   const server = new BlobServer(store.session(), {
     host: streamHost,
     port: streamPort,
     token: null,
-    resolve: async key => {
+    resolve: async (key, info) => {
       const hex = b4a.toString(key, 'hex')
       joinContentSwarm(hex)
-      if (!isOwnedBlob(hex)) await blobCore(hex).catch(() => {})
+      if (!isWorklet && !info?.head) lastHttpViewAt = Date.now()
+      if (!isOwnedBlob(hex)) {
+        await blobCore(hex).catch(() => {})
+      } else if (!closing && ownedBlobs.has(hex) && !info?.head) {
+        let rec = httpOwned.get(hex)
+        if (!rec) {
+          if (httpOwned.size >= 4) {
+            const oldest = httpOwned.keys().next().value
+            const ev = httpOwned.get(oldest)
+            clearTimeout(ev.timer)
+            httpOwned.delete(oldest)
+            ev.core.close().catch(() => {})
+          }
+          const core = store.get({ key: b4a.from(hex, 'hex'), active: false })
+          rec = { core, timer: null }
+          httpOwned.set(hex, rec)
+          await core.ready().catch(() => {})
+          attachUploadWarmth(core)
+        }
+        clearTimeout(rec.timer)
+        rec.timer = setTimeout(() => {
+          if (httpOwned.get(hex) !== rec) return
+          httpOwned.delete(hex)
+          rec.core.close().catch(() => {})
+        }, 30_000)
+        rec.timer.unref?.()
+        if (rec.core.opened && info?.blob?.blockOffset === 0) {
+          warmAhead(rec.core, Math.floor((info?.range?.start || 0) / BLOB_BLOCK_SIZE) - 1, 32)
+        }
+      }
       return { key }
     }
   })
@@ -661,6 +708,59 @@ async function openNode ({
   }
   const localBlocks = core => blockCounts.get(core)?.blocks || 0
 
+  // Multi-cursor 16 MiB parallel read-ahead across libuv workers for human viewers (skipped for bulkPeers so HiveRelays never thrash array disks).
+  const bulkPeers = new Set()
+  const warmCursors = new WeakMap()
+  function warmAhead (core, index, lookahead = 32) {
+    if (closing || !core?.opened || core.length <= 0) return
+    let cursors = warmCursors.get(core)
+    if (!cursors) { cursors = []; warmCursors.set(core, cursors) }
+    const stride = lookahead >> 1
+    const now = Date.now()
+    let cur = cursors.find(c => index >= c.from - 2 && index <= c.upTo + 2)
+    if (!cur) {
+      if (cursors.length >= 4) {
+        cursors.sort((a, b) => a.at - b.at)
+        cur = cursors[0]
+      } else {
+        cur = { from: 0, upTo: -1, at: 0 }
+        cursors.push(cur)
+      }
+      cur.from = Math.max(0, index)
+      cur.upTo = index
+    }
+    cur.at = now
+    if (index + (lookahead - stride) < cur.upTo) return
+    const start = Math.max(0, index + 1, cur.upTo + 1)
+    const end = Math.min(core.length, index + 1 + lookahead)
+    if (end <= start) return
+    cur.upTo = end - 1
+    for (let i = start; i < end; i++) core.get(i, { wait: false }).catch(() => {})
+  }
+  const warmAttached = new WeakSet()
+  function attachUploadWarmth (core) {
+    if (!core || warmAttached.has(core)) return
+    warmAttached.add(core)
+    core.on('upload', (index, byteLen, peer) => {
+      if (peer?.remotePublicKey && bulkPeers.has(b4a.toString(peer.remotePublicKey, 'hex'))) return
+      warmAhead(core, index, byteLen > 0 && byteLen <= 131072 ? 128 : 32)
+    })
+  }
+  const onCoreWake = raw => {
+    if (closing || !raw?.discoveryKey) return
+    const hex = ownedByDiscovery.get(b4a.toString(raw.discoveryKey, 'hex'))
+    if (!hex || weakOwned.has(hex)) return
+    queueMicrotask(() => {
+      if (closing || !ownedBlobs.has(hex) || weakOwned.has(hex)) return
+      const s = store.get({ key: b4a.from(hex, 'hex'), weak: true, active: false })
+      weakOwned.set(hex, s)
+      s.once('close', () => { if (weakOwned.get(hex) === s) weakOwned.delete(hex) })
+      s.ready().then(() => { if (!s.closed && !s.closing) attachUploadWarmth(s) }).catch(() => {})
+    })
+  }
+  store.watch(onCoreWake)
+  undo.push(() => store.unwatch(onCoreWake))
+
   function ensureBlockCounter (core) {
     let c = blockCounts.get(core)
     if (c) return c
@@ -669,20 +769,7 @@ async function openNode ({
     c.ready = syncBlockCounter(core).catch(() => {})
     core.on('download', () => { c.blocks++; c.slices.clear() })
     core.on('append', () => { syncBlockCounter(core).catch(() => {}) })
-    // Fan 8 MiB ahead across libuv workers on upload so stock Hypercore's serial receiverQueue hits RAM instead of spinning-disk latency.
-    let warmUpTo = -1
-    core.on('upload', (index, byteLen) => {
-      if (closing) return
-      const lookahead = byteLen > 0 && byteLen <= 131072 ? 128 : 24
-      const stride = lookahead >> 1
-      if (index < warmUpTo - lookahead || index > warmUpTo) warmUpTo = index
-      if (index + (lookahead - stride) < warmUpTo) return
-      const start = Math.max(index + 1, warmUpTo + 1)
-      const end = Math.min(core.length, index + lookahead)
-      if (end <= start) return
-      warmUpTo = end - 1
-      for (let i = start; i < end; i++) core.get(i, { wait: false }).catch(() => {})
-    })
+    attachUploadWarmth(core)
     return c
   }
   for (const s of blobSlots) ensureBlockCounter(s.core)
@@ -954,7 +1041,7 @@ async function openNode ({
         }
       }
       leaveContentSwarm(entry.blobs)
-      ownedBlobs.delete(entry.blobs)
+      await dropOwned(entry.blobs)
       const openSession = blobCores.get(entry.blobs)
       blobCores.delete(entry.blobs)
       if (openSession) await openSession.close().catch(() => {})
@@ -1092,7 +1179,7 @@ async function openNode ({
       await core.ready()
       const keyHex = b4a.toString(core.key, 'hex')
       const blob = writer.id
-      ownedBlobs.set(keyHex, { length: core.length, byteLength: core.byteLength })
+      registerOwned(keyHex, { length: core.length, byteLength: core.byteLength })
       await core.close()
       joinContentSwarm(keyHex)
       return { type: 'announce', id, title: cleanText(title, id), size, sha256: hash.digest('hex'), blobs: keyHex, blob }
@@ -1368,7 +1455,7 @@ async function openNode ({
           }
         })
         if (newOp.sha256 !== g.sha256 || newOp.size !== g.size) {
-          ownedBlobs.delete(newOp.blobs)
+          await dropOwned(newOp.blobs)
           leaveContentSwarm(newOp.blobs)
           const bad = store.get({ key: b4a.from(newOp.blobs, 'hex') })
           await bad.ready().then(() => bad.purge()).catch(() => bad.close().catch(() => {}))
@@ -1570,6 +1657,11 @@ async function openNode ({
       clearInterval(rotateTimer)
       for (const ranges of warmRanges.values()) for (const r of ranges) r.destroy()
       warmRanges.clear()
+      store.unwatch(onCoreWake)
+      for (const rec of httpOwned.values()) { clearTimeout(rec.timer); await rec.core.close().catch(() => {}) }
+      httpOwned.clear()
+      for (const s of weakOwned.values()) await s.close().catch(() => {})
+      weakOwned.clear()
       await lan?.destroy()
       // The private overlay's clear() withdraws its rendezvous routes so readers stop dialing a dead peer.
       // Hyperswarm's would only unannounce each topic; force skips that on the way out.
@@ -1633,6 +1725,8 @@ async function openNode ({
     gcStorage,
     status,
     streamUrl,
+    httpViewing: () => Date.now() - lastHttpViewAt < 3000,
+    markBulkPeer: (hex, on) => { if (hex) on ? bulkPeers.add(hex) : bulkPeers.delete(hex) },
     blobServer: server,
     setLan,
     lanStats: () => (lan ? lan.stats() : null),

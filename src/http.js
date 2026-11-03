@@ -13,8 +13,10 @@ const CORS = {
   'access-control-allow-origin': '*',
   'access-control-allow-methods': 'GET, HEAD, POST, PUT, DELETE, OPTIONS',
   'access-control-allow-headers': 'content-type, authorization, range',
-  'access-control-expose-headers': 'content-length, content-range, accept-ranges'
+  'access-control-expose-headers': 'content-length, content-range, accept-ranges, content-disposition',
+  'cross-origin-resource-policy': 'cross-origin'
 }
+const ISOLATION = { 'cross-origin-opener-policy': 'same-origin', 'cross-origin-embedder-policy': 'credentialless' }
 
 // Caches compiled WASM player flesh in memory on first lick so browser streams open instantly on relays and daemons.
 const webCache = new Map()
@@ -68,12 +70,41 @@ function readStream (port, search, start, end) {
   })
 }
 
+function sniffDownloadFormat (head) {
+  if (!head || head.length < 4) return { ext: '.mkv', mime: 'application/octet-stream' }
+  const magic = ((head[0] << 24) >>> 0) + (head[1] << 16) + (head[2] << 8) + head[3]
+  const ascii4 = off => off + 4 <= head.length ? String.fromCharCode(head[off], head[off + 1], head[off + 2], head[off + 3]) : ''
+  if (magic === 0x1a45dfa3) {
+    return b4a.toString(head.subarray(0, Math.min(head.length, 128)), 'latin1').toLowerCase().includes('webm')
+      ? { ext: '.webm', mime: 'video/webm' }
+      : { ext: '.mkv', mime: 'video/x-matroska' }
+  }
+  if (['ftyp', 'moov', 'mdat', 'free', 'wide', 'skip'].includes(ascii4(4))) {
+    return ascii4(8) === 'qt  ' ? { ext: '.mov', mime: 'video/quicktime' } : { ext: '.mp4', mime: 'video/mp4' }
+  }
+  if (ascii4(0) === 'RIFF' && ascii4(8) === 'AVI ') return { ext: '.avi', mime: 'video/x-msvideo' }
+  if (ascii4(0) === 'OggS') return { ext: '.ogv', mime: 'video/ogg' }
+  if (ascii4(0) === 'fLaC') return { ext: '.flac', mime: 'audio/flac' }
+  if (head[0] === 0x49 && head[1] === 0x44 && head[2] === 0x33) return { ext: '.mp3', mime: 'audio/mpeg' }
+  if (head[0] === 0x47 && (head.length < 189 || head[188] === 0x47)) return { ext: '.ts', mime: 'video/mp2t' }
+  return { ext: '.mkv', mime: 'application/octet-stream' }
+}
+
+function contentDispositionFor (rawTitle, ext) {
+  const base = String(rawTitle || 'video').replace(/[/\\:*?"<>|\x00-\x1f]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 180) || 'video'
+  const hasExt = /\.(mkv|mp4|webm|mov|avi|m4v|ts|m2ts|mpg|mpeg|ogv|ogg|flac|mp3|opus|wav|aac)$/i.test(base)
+  const full = hasExt ? base : base + ext
+  const ascii = full.replace(/[^\x20-\x7e]/g, '_').replace(/["\\]/g, '_')
+  return `attachment; filename="${ascii}"; filename*=UTF-8''${encodeURIComponent(full)}`
+}
+
 // Single HTTP surface for relays AND local client daemons: /v1 API, SSE events, Stremio v3 addon, and M3U playlist.
 export function createApi (state) {
   const sse = new Set()
   // Resolution labels by stream, read once from each file's header. A file that gave none is tried again after
   // 10 minutes: its header may not have been reachable yet.
   const resolutions = new Map()
+  const downloadFormats = new Map()
   function resolutionOf (entry) {
     const port = state.node?.blobServer?.port
     if (!port) return null
@@ -314,7 +345,7 @@ export function createApi (state) {
     }
     const url = new URL(req.url, 'http://127.0.0.1')
     if (req.method === 'GET' && url.pathname === '/') {
-      res.writeHead(200, { ...CORS, 'content-type': 'text/html; charset=utf-8' })
+      res.writeHead(200, { ...CORS, ...ISOLATION, 'cache-control': 'no-cache', 'content-type': 'text/html; charset=utf-8' })
       res.end(page)
       return
     }
@@ -326,24 +357,44 @@ export function createApi (state) {
       if (!asset) { res.writeHead(404, CORS); res.end('not found'); return }
       const etag = '"' + asset.byteLength + '-' + asset[0] + '-' + asset[asset.byteLength - 1] + (gzAsset ? '-gz' : '') + '"'
       if (req.headers['if-none-match'] === etag) {
-        res.writeHead(304, { ...CORS, etag, 'cache-control': 'no-cache' })
+        res.writeHead(304, { ...CORS, ...ISOLATION, etag, 'cache-control': 'no-cache' })
         res.end()
         return
       }
       const mime = name.endsWith('.wasm') ? 'application/wasm' : 'text/javascript; charset=utf-8'
-      const headers = { ...CORS, 'content-type': mime, 'content-length': String(asset.byteLength), 'cache-control': 'no-cache', vary: 'accept-encoding', etag }
+      const headers = { ...CORS, ...ISOLATION, 'content-type': mime, 'content-length': String(asset.byteLength), 'cache-control': 'no-cache', vary: 'accept-encoding', etag }
       if (gzAsset) headers['content-encoding'] = 'gzip'
       res.writeHead(200, headers)
       res.end(req.method === 'HEAD' ? undefined : asset)
       return
     }
     if ((req.method === 'GET' || req.method === 'HEAD') && url.pathname === '/v1/blob' && state.node?.blobServer) {
-      // Same-origin path to the node's hypercore-blob-server for the web player: forward the Range request over loopback.
+      // Same-origin path to the node's hypercore-blob-server for the web player and direct file downloads.
+      const dlTitle = url.searchParams.get('download')
+      const upUrl = new URL(url.href)
+      upUrl.searchParams.delete('download')
+      let dlMeta = null
+      if (dlTitle !== null) {
+        let fmt = downloadFormats.get(upUrl.search)
+        if (!fmt) {
+          const head = await readStream(state.node.blobServer.port, upUrl.search, 0, 255).catch(() => null)
+          fmt = sniffDownloadFormat(head)
+          if (head && head.length >= 4) {
+            if (downloadFormats.size >= 512) downloadFormats.clear()
+            downloadFormats.set(upUrl.search, fmt)
+          }
+        }
+        dlMeta = { mime: fmt.mime, disposition: contentDispositionFor(dlTitle, fmt.ext) }
+      }
       const headers = req.headers.range ? { range: req.headers.range } : {}
-      const up = httpRequest({ host: '127.0.0.1', port: state.node.blobServer.port, path: '/' + url.search, method: req.method, headers }, upRes => {
+      const up = httpRequest({ host: '127.0.0.1', port: state.node.blobServer.port, path: '/' + upUrl.search, method: req.method, headers }, upRes => {
         const out = { ...CORS }
         for (const h of ['content-type', 'content-length', 'content-range', 'accept-ranges']) {
           if (upRes.headers[h] !== undefined) out[h] = upRes.headers[h]
+        }
+        if (dlMeta) {
+          out['content-type'] = dlMeta.mime
+          out['content-disposition'] = dlMeta.disposition
         }
         res.writeHead(upRes.statusCode || 502, out)
         // A player that drops a Range read closes `res` first; the pipe then destroys `upRes` with an error that would
@@ -357,7 +408,7 @@ export function createApi (state) {
       return
     }
     if (req.method === 'GET' && (url.pathname === '/tv' || url.pathname === '/cast/receiver') && state.cast) {
-      res.writeHead(200, { ...CORS, 'content-type': 'text/html; charset=utf-8' })
+      res.writeHead(200, { ...CORS, ...ISOLATION, 'cache-control': 'no-cache', 'content-type': 'text/html; charset=utf-8' })
       res.end(receiverPage({ mode: 'hub', defaultName: 'PearTube Smart TV' }))
       return
     }

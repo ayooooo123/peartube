@@ -279,6 +279,10 @@ pub unsafe extern "C" fn pt_open(ext_ptr: *const u8, ext_len: usize) -> i32 {
             video_seeded: false,
             drop_until_keyframe: false,
             client_clock: 0.0,
+            video_hidden: false,
+            replaying_hidden_gop: false,
+            hidden_gops: VecDeque::new(),
+            hidden_gop_bytes: 0,
             mse_gop: Vec::new(),
             mse_seq: 0,
             mse_min_dts: 0,
@@ -377,6 +381,15 @@ pub extern "C" fn pt_set_clock(clock_secs: f64) {
 }
 
 #[unsafe(no_mangle)]
+pub extern "C" fn pt_set_hidden(hidden: i32) {
+    STATE.with(|cell| {
+        if let Some(sess) = cell.borrow_mut().session.as_mut() {
+            sess.set_hidden(hidden != 0);
+        }
+    });
+}
+
+#[unsafe(no_mangle)]
 pub extern "C" fn pt_step() -> i32 {
     STATE.with(|cell| {
         let mut st = cell.borrow_mut();
@@ -423,7 +436,8 @@ pub extern "C" fn pt_step() -> i32 {
                 }
             }
             match sess.out_queue.pop_front() {
-                None => return 0,
+                // A 4,096-packet slice that skipped pre-seek TrueHD or hidden video is not EOF; yield 9 so the Worker pumps again.
+                None => return if sess.demux_eof { 0 } else { 9 },
                 Some(OutItem::MseInit(data)) => {
                     st.out_buf = data;
                     st.out_pts = 0.0;

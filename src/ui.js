@@ -428,6 +428,7 @@ export const page = `<!doctype html>
       <div class="row">
         <select id="pAudioSel" aria-label="Audio track"></select>
         <select id="pSubSel" aria-label="Subtitles"></select>
+        <a class="btn" id="pDownloadBtn" href="#" download>Download</a>
         <button class="btn" id="pMuteBtn" type="button">Mute</button>
         <input type="range" id="pVol" min="0" max="100" value="100" style="width:80px;padding:0;accent-color:var(--brand)" aria-label="Volume">
       </div>
@@ -502,16 +503,37 @@ async function act (btn, fn, msgId) {
 }
 
 function copyText (text) {
+  if (!text) return
+  let copied = false
+  const onCopy = ev => {
+    if (!ev.clipboardData) return
+    ev.clipboardData.setData('text/plain', text)
+    ev.preventDefault()
+    copied = true
+  }
+  document.addEventListener('copy', onCopy, true)
+  const prev = document.activeElement
+  const dialogs = document.querySelectorAll('dialog[open]')
+  const host = dialogs.length ? dialogs[dialogs.length - 1] : document.body
   const ta = el('textarea')
   ta.value = text
+  ta.setAttribute('inputmode', 'none')
   ta.style.cssText = 'position:fixed;top:0;left:0;width:1px;height:1px;opacity:0'
-  document.body.append(ta)
+  host.append(ta)
+  ta.focus({ preventScroll: true })
   ta.select()
+  ta.setSelectionRange(0, text.length)
   let ok = false
   try { ok = document.execCommand('copy') } catch {}
+  document.removeEventListener('copy', onCopy, true)
   ta.remove()
-  if (!ok && window.isSecureContext && navigator.clipboard) navigator.clipboard.writeText(text).catch(() => {})
-  toast('Link copied')
+  if (prev && prev.focus) { try { prev.focus({ preventScroll: true }) } catch {} }
+  if (ok || copied) { toast('Link copied'); return }
+  if (window.isSecureContext && navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(text).then(() => toast('Link copied'), () => toast('Could not copy link'))
+    return
+  }
+  toast('Could not copy link')
 }
 const copyBtn = (label, text) => h('button', { class: 'btn', disabled: !text, title: text || '', onclick: () => copyText(text) }, label)
 
@@ -984,11 +1006,22 @@ function play (e, at) {
   $('detail').close()
   openPlayer(e, at == null ? resumeAtFor(e) : at)
 }
+function downloadHref (e, nameOverride) {
+  if (!e || !e.streamUrl) return ''
+  const base = resolveStreamUrl(e.streamUrl)
+  const name = nameOverride || e.title || e.id || 'video'
+  return base + (base.includes('?') ? '&' : '?') + 'download=' + encodeURIComponent(name)
+}
+function downloadBtn (e, quiet, nameOverride) {
+  if (!e || !e.streamUrl) return null
+  return h('a', { class: 'btn' + (quiet ? ' quiet' : ''), 'data-download': true, href: downloadHref(e, nameOverride), download: '' }, 'Download')
+}
 function fileRow (label, e) {
   const from = sourceName(e.source)
+  const dlName = /^S\d+E\d+$/i.test(label) && e.title && !/s\d+e\d+/i.test(e.title) ? e.title + ' ' + label : (e.title || label)
   return h('div', { class: 'row-item' },
     h('div', { class: 'grow' }, h('div', { class: 'label' }, label), h('div', { class: 'meta' }, [size(e.size), where(e), from && 'from ' + from].filter(Boolean).join(' · '))),
-    h('div', { class: 'acts' }, h('button', { class: 'btn primary', 'data-play': true, onclick: () => play(e) }, 'Play'), castButton(e), h('button', { class: 'btn quiet', title: e.magnetUrl, onclick: () => copyText(e.magnetUrl) }, 'Copy link')))
+    h('div', { class: 'acts' }, h('button', { class: 'btn primary', 'data-play': true, onclick: () => play(e) }, 'Play'), castButton(e), downloadBtn(e, true, dlName), h('button', { class: 'btn quiet', title: e.magnetUrl, onclick: () => copyText(e.magnetUrl) }, 'Copy link')))
 }
 function renderDetail () {
   const t = libraryTiles().find(x => x.key === detailKey)
@@ -1012,7 +1045,7 @@ function renderDetail () {
     const e = t.items[0].e
     const from = sourceName(e.source)
     body = [h('div', { class: 'meta' }, [where(e), from && 'from ' + from].filter(Boolean).join(' · ')),
-      h('div', { class: 'row', style: 'margin-top:14px' }, h('button', { class: 'btn primary', 'data-play': true, onclick: () => play(e) }, 'Play'), castButton(e), copyBtn('Copy link', e.magnetUrl))]
+      h('div', { class: 'row', style: 'margin-top:14px;flex-wrap:wrap' }, h('button', { class: 'btn primary', 'data-play': true, onclick: () => play(e) }, 'Play'), castButton(e), downloadBtn(e), copyBtn('Copy link', e.magnetUrl))]
   }
   box.replaceChildren(head, ...body)
 }
@@ -1539,13 +1572,14 @@ let yuvGl = null
 function getYuvGl () {
   if (yuvGl !== null) return yuvGl
   const c = $('pGlCanvas')
-  const gl = c.getContext('webgl', { alpha: false, antialias: false, depth: false, stencil: false, preserveDrawingBuffer: false })
+  const gl = c.getContext('webgl2', { alpha: false, antialias: false, depth: false, stencil: false, preserveDrawingBuffer: false }) ||
+    c.getContext('webgl', { alpha: false, antialias: false, depth: false, stencil: false, preserveDrawingBuffer: false })
   if (!gl) { yuvGl = false; return false }
   const vs = gl.createShader(gl.VERTEX_SHADER)
   gl.shaderSource(vs, 'attribute vec2 a_pos;varying vec2 v_uv;uniform vec4 u_crop;void main(){vec2 uv=vec2(a_pos.x*0.5+0.5,0.5-a_pos.y*0.5);v_uv=mix(u_crop.xy,u_crop.zw,uv);gl_Position=vec4(a_pos,0.0,1.0);}')
   gl.compileShader(vs)
   const fs = gl.createShader(gl.FRAGMENT_SHADER)
-  gl.shaderSource(fs, 'precision mediump float;varying vec2 v_uv;uniform sampler2D u_y;uniform sampler2D u_u;uniform sampler2D u_v;void main(){float y=(texture2D(u_y,v_uv).r-0.062745)*1.164384;float u=texture2D(u_u,v_uv).r-0.5;float v=texture2D(u_v,v_uv).r-0.5;gl_FragColor=vec4(y+1.792741*v,y-0.213249*u-0.532909*v,y+2.112402*u,1.0);}')
+  gl.shaderSource(fs, 'precision mediump float;varying vec2 v_uv;uniform int u_mode;uniform sampler2D u_y;uniform sampler2D u_u;uniform sampler2D u_v;void main(){if(u_mode==1){gl_FragColor=vec4(texture2D(u_y,v_uv).rgb,1.0);return;}float y=(texture2D(u_y,v_uv).r-0.062745)*1.164384;float u=texture2D(u_u,v_uv).r-0.5;float v=texture2D(u_v,v_uv).r-0.5;gl_FragColor=vec4(y+1.792741*v,y-0.213249*u-0.532909*v,y+2.112402*u,1.0);}')
   gl.compileShader(fs)
   const prog = gl.createProgram()
   gl.attachShader(prog, vs); gl.attachShader(prog, fs); gl.linkProgram(prog); gl.useProgram(prog)
@@ -1570,9 +1604,11 @@ function getYuvGl () {
   gl.uniform1i(gl.getUniformLocation(prog, 'u_y'), 0)
   gl.uniform1i(gl.getUniformLocation(prog, 'u_u'), 1)
   gl.uniform1i(gl.getUniformLocation(prog, 'u_v'), 2)
+  const modeLoc = gl.getUniformLocation(prog, 'u_mode')
   const cropLoc = gl.getUniformLocation(prog, 'u_crop')
+  gl.uniform1i(modeLoc, 0)
   gl.uniform4f(cropLoc, 0, 0, 1, 1)
-  yuvGl = { gl, canvas: c, texY, texU, texV, cropLoc, w: 0, h: 0 }
+  yuvGl = { gl, canvas: c, texY, texU, texV, modeLoc, cropLoc, mode: 0, w: 0, h: 0 }
   return yuvGl
 }
 
@@ -1582,7 +1618,7 @@ function audioOutTime (ctx) {
   return (ts && ts.contextTime > 0) ? ts.contextTime : ctx.currentTime
 }
 // One shared WASM Worker, compiled when a Play button is about to be used, so playback opens without a compile wait.
-const ASSET_VER = '?v=6'
+const ASSET_VER = '?v=11'
 let sharedWorker = null
 let workerCanvasTransferred = false
 let workerOffscreenReady = false
@@ -1614,7 +1650,10 @@ function closePlayer () {
   $('playerModal').classList.remove('open')
   cancelAnimationFrame(p.raf)
   clearInterval(p.creditTimer)
+  clearInterval(p.frameTimer)
+  if (p.prefetchInFlight) { for (const ctl of p.prefetchInFlight.values()) { try { ctl.abort() } catch {} } p.prefetchInFlight.clear() }
   try { p.worker?.postMessage({ cmd: 'close' }) } catch {}
+  while (p.swFrames?.length > 0) p.releaseFrame?.(p.swFrames.shift())
   for (const s of p.audioNodes) { try { s.node.stop(); s.node.disconnect() } catch {} }
   try { p.audioCtx?.close() } catch {}
   const v = $('pVideo')
@@ -1634,6 +1673,7 @@ function openPlayer (entry, at = 0) {
   const streamUrl = resolveStreamUrl(entry.streamUrl)
   const worker = getWorker()
   $('pTitle').textContent = entry.title || entry.id
+  $('pDownloadBtn').href = downloadHref(entry)
   $('pBadge').textContent = 'Opening…'
   $('pRawLink').href = streamUrl
   $('pStatus').style.display = ''
@@ -1661,9 +1701,10 @@ function openPlayer (entry, at = 0) {
   const { audioCtx, gainNode } = makeAudio(48000)
 
   const seq = ++openCounter
+  const initialAt = Math.max(0, Number(at) || 0)
   const p = {
     entry,
-    startAt: Math.max(0, Number(at) || 0),
+    startAt: initialAt,
     streamUrl,
     worker,
     audioCtx,
@@ -1671,10 +1712,10 @@ function openPlayer (entry, at = 0) {
     pendingAudio: [],
     audioNodes: [],
     nextAudioCtxTime: 0,
-    audioBaseMedia: 0,
+    audioBaseMedia: initialAt,
     audioBaseCtx: 0,
     audioStarted: false,
-    freeBaseMedia: 0,
+    freeBaseMedia: initialAt,
     freeBasePerf: performance.now(),
     primed: false,
     paused: false,
@@ -1723,7 +1764,14 @@ function openPlayer (entry, at = 0) {
     if (!p.primed || p.paused) return p.freeBaseMedia
     if (p.audioStream >= 0 && p.audioCtx && p.audioStarted && p.audioCtx.state === 'running') {
       const outT = audioOutTime(p.audioCtx)
-      if (outT > p.audioBaseCtx + 0.01) {
+      for (const a of p.audioNodes) {
+        if (outT >= a.startCtx && outT <= a.endCtx) {
+          p.audioBaseMedia = a.pts + (outT - a.startCtx)
+          p.audioBaseCtx = outT
+          break
+        }
+      }
+      if (outT >= p.audioBaseCtx) {
         const t = p.audioBaseMedia + (outT - p.audioBaseCtx)
         p.freeBaseMedia = t
         p.freeBasePerf = performance.now()
@@ -1737,17 +1785,30 @@ function openPlayer (entry, at = 0) {
     }
     return p.freeBaseMedia + Math.max(0, (performance.now() - p.freeBasePerf) / 1000)
   }
+  p.currentMediaTime = currentMediaTime
 
   function recycleVideoBuf (buf) {
     if (buf && buf.byteLength > 0) {
       try { worker.postMessage({ cmd: 'recycleVideo', buf }, [buf]) } catch {}
     }
   }
+  function releaseFrame (f) {
+    if (!f) return
+    if (f.hwFrame) {
+      try { f.hwFrame.close() } catch {}
+      f.hwFrame = null
+      try { worker.postMessage({ cmd: 'releaseHwFrame', seq: f.seq }) } catch {}
+    }
+    if (f.buf) { recycleVideoBuf(f.buf); f.buf = null }
+  }
+  p.releaseFrame = releaseFrame
+  function effectiveHidden () {
+    return document.visibilityState !== 'visible' || Boolean(p.windowOccluded)
+  }
   function syncWorkerClock (timeSecs, playing) {
-    try { worker.postMessage({ cmd: 'clock', time: timeSecs, wallMs: nowWallMs(), playing, hidden: document.visibilityState !== 'visible' }) } catch {}
+    try { worker.postMessage({ cmd: 'clock', time: timeSecs, wallMs: nowWallMs(), playing, hidden: effectiveHidden() }) } catch {}
   }
   p.syncWorkerClock = syncWorkerClock
-
   function scheduleAudioChunk (m) {
     if (p.audioCtx && !p.audioStarted && m.rate > 0 && m.rate !== p.audioCtx.sampleRate) {
       const prev = p.audioCtx
@@ -1792,7 +1853,7 @@ function openPlayer (entry, at = 0) {
 
   function tryPrime () {
     if (p.primed || !p.manifest) return
-    const vReady = p.videoStream < 0 || (p.useMse ? (p.mseReady && video.readyState >= 2) : (p.workerGlPrimed || p.swFrames.length >= 2)) || p.eof
+    const vReady = p.videoStream < 0 || (p.useMse ? (p.mseReady && video.readyState >= 2) : (p.workerGlPrimed || p.drawnFrames >= 1 || p.swFrames.length >= 2)) || p.eof
     const aReady = p.audioStream < 0 || p.pendingAudio.length >= 1 || p.eof
     if (!vReady || !aReady) return
     p.primed = true
@@ -1819,9 +1880,11 @@ function openPlayer (entry, at = 0) {
     p.audioBaseMedia = targetSecs
     p.freeBaseMedia = targetSecs
     p.freeBasePerf = performance.now()
-    while (p.swFrames.length > 0) recycleVideoBuf(p.swFrames.shift().buf)
+    while (p.swFrames.length > 0) releaseFrame(p.swFrames.shift())
     p.workerGlPrimed = false
     p.lastSwPts = null
+    p.lastDrawWall = 0
+    p.lastHardSync = 0
     p.consumedVideoSec = 0
     p.consumedAudioSec = 0
     p.subCues.length = 0
@@ -1831,6 +1894,22 @@ function openPlayer (entry, at = 0) {
   }
   p.resetMediaOutputs = resetMediaOutputs
 
+  function finalizeMsePrimeIfReady () {
+    if (!p.useMse || p.mseReady || !p.sb || p.ms?.readyState !== 'open' || p.sb.buffered.length === 0) return
+    const bStart = p.sb.buffered.start(0)
+    const bEnd = p.sb.buffered.end(p.sb.buffered.length - 1)
+    // Wait until buffered segments actually reach the target timestamp inside a long GOP (or EOF)
+    // instead of snapping backward to the keyframe 6–10 s earlier and desyncing from audio.
+    if (bEnd >= p.mseStartAt + 0.04 || (p.eof && !p.sb.updating && p.mseQueue.length === 0)) {
+      p.mseReady = true
+      const snap = Math.max(bStart, Math.min(p.mseStartAt, bEnd > bStart + 0.02 ? bEnd - 0.02 : bStart))
+      video.currentTime = snap
+      p.lastMseTime = snap
+      p.lastHardSync = 0
+      tryPrime()
+    }
+  }
+
   function setupMse (startAt) {
     video.pause()
     video.playbackRate = 1
@@ -1838,6 +1917,7 @@ function openPlayer (entry, at = 0) {
     p.mseQueue.length = 0
     p.sb = null
     p.mseReady = false
+    p.mseStartAt = startAt
     const MS = window.MediaSource || window.ManagedMediaSource
     if (!MS || !p.manifest?.mseType) { fallbackSw(startAt); return }
     const mime = p.manifest.mseType
@@ -1857,16 +1937,12 @@ function openPlayer (entry, at = 0) {
         p.sb = sb
         sb.addEventListener('updateend', () => {
           if (player !== p || p.sb !== sb || p.ms?.readyState !== 'open') return
-          if (!p.mseReady && sb.buffered.length > 0) {
-            p.mseReady = true
-            const bStart = sb.buffered.start(0)
-            const bEnd = sb.buffered.end(0)
-            const snap = Math.max(bStart, Math.min(startAt, bEnd > bStart + 0.05 ? bEnd - 0.05 : bStart))
-            video.currentTime = snap
-            p.lastMseTime = snap
-            tryPrime()
-          }
+          finalizeMsePrimeIfReady()
           drainMseQueue()
+          if (p.pendingReturnSnap && !p.sb.updating && p.mseQueue.length === 0) {
+            p.pendingReturnSnap = false
+            resyncOnReturn()
+          }
         })
         drainMseQueue()
       } catch {
@@ -1877,16 +1953,50 @@ function openPlayer (entry, at = 0) {
 
   function drainMseQueue () {
     if (!p.sb || p.ms?.readyState !== 'open' || p.sb.updating) return
+    const now = p.primed ? currentMediaTime() : p.mseStartAt
+    // Trim behind now - 6 once 10 s trails the playhead so 60+ Mbps 4K remuxes stay well below Chromium's 150 MB SourceBuffer cap.
+    if (p.sb.buffered.length > 0 && now - p.sb.buffered.start(0) > 10 && now - 6 > p.sb.buffered.start(0) + 1) {
+      const b0 = p.sb.buffered.start(0)
+      const bEnd = p.sb.buffered.end(p.sb.buffered.length - 1)
+      const cut = now - 6
+      if (video.currentTime < cut + 0.5) {
+        try { video.currentTime = Math.min(Math.max(b0, bEnd - 0.5), Math.max(cut + 0.5, now - 1)) } catch {}
+      }
+      try { p.sb.remove(0, cut); return } catch {}
+    }
     if (p.mseQueue.length > 0) {
       const buf = p.mseQueue.shift()
-      try { p.sb.appendBuffer(buf) } catch { fallbackSw(currentMediaTime()) }
-      return
-    }
-    const now = currentMediaTime()
-    if (p.sb.buffered.length > 0 && now - p.sb.buffered.start(0) > 20) {
-      try { p.sb.remove(0, now - 12) } catch {}
+      try {
+        p.sb.appendBuffer(buf)
+      } catch (err) {
+        // High-bitrate 4K remuxes can brush SourceBuffer QuotaExceededError on bitrate spikes; advance a stalled background <video>
+        // past the cut point and evict progressively instead of killing hardware MSE onto 4K software decode.
+        if (err?.name === 'QuotaExceededError') {
+          buf.__retries = (buf.__retries || 0) + 1
+          if (p.sb.buffered.length > 0 && buf.__retries <= 4) {
+            p.mseQueue.unshift(buf)
+            const b0 = p.sb.buffered.start(0)
+            const bEnd = p.sb.buffered.end(p.sb.buffered.length - 1)
+            const keepBehind = Math.max(1.5, 5 - buf.__retries)
+            const cut = Math.min(bEnd - 0.5, Math.max(b0 + Math.max(1, (bEnd - b0) * 0.35), now - keepBehind))
+            if (cut > b0 + 0.1) {
+              if (video.currentTime < cut + 0.5) {
+                try { video.currentTime = Math.min(Math.max(b0, bEnd - 0.25), Math.max(cut + 0.5, now - 0.5)) } catch {}
+              }
+              try { p.sb.remove(0, cut); return } catch {}
+            }
+          }
+          if (p.primed) {
+            if (p.mseQueue.length < 24) p.mseQueue.unshift(buf)
+            setTimeout(() => { if (player === p) drainMseQueue() }, 250)
+            return
+          }
+        }
+        fallbackSw(currentMediaTime())
+      }
     }
   }
+  p.drainMseQueue = drainMseQueue
 
   function fallbackSw (atSecs) {
     if (!p.useMse && (canvas.style.display === 'block' || glCanvas.style.display === 'block')) return
@@ -1900,10 +2010,11 @@ function openPlayer (entry, at = 0) {
     video.load()
     if (p.msUrl) { try { URL.revokeObjectURL(p.msUrl) } catch {} p.msUrl = '' }
     video.style.display = 'none'
+    p.allowWebCodecs = Boolean(p.manifest?.webCodecs && p.webCodecsSupported)
+    p.usingWebCodecs = p.allowWebCodecs
     updateBadge()
     p.seq = ++openCounter
     resetMediaOutputs(atSecs)
-    p.allowWebCodecs = Boolean(p.manifest?.webCodecs && p.webCodecsSupported)
     p.worker.postMessage({ cmd: 'seek', seq: p.seq, time: atSecs, videoStream: p.videoStream, audioStream: p.audioStream, subStream: p.subStream, useMse: false, allowWebCodecs: p.allowWebCodecs })
   }
   video.onerror = () => { if (player === p && p.useMse) fallbackSw(currentMediaTime()) }
@@ -1914,12 +2025,14 @@ function openPlayer (entry, at = 0) {
     const at = p.manifest.tracks.find(t => t.stream === p.audioStream)
     const parts = [p.manifest.container]
     if (vt) {
-      const tag = p.useMse ? ' (MSE+WASM)' : (p.usingWebCodecs ? ' (WebCodecs+WASM)' : (workerOffscreenReady ? ' (WASM+GPU)' : ' (WASM)'))
+      const hasGpu = workerOffscreenReady || Boolean(getYuvGl())
+      const tag = p.useMse ? ' (MSE+WASM)' : (p.usingWebCodecs ? ' (WebCodecs+WASM)' : (hasGpu ? ' (WASM+GPU)' : ' (WASM)'))
       parts.push(vt.codec + tag)
     }
     if (at) parts.push(at.codec)
     $('pBadge').textContent = parts.join(' \\u00b7 ')
   }
+  p.updateBadge = updateBadge
 
   worker.onerror = err => {
     if (player !== p) return
@@ -1971,18 +2084,34 @@ function openPlayer (entry, at = 0) {
       if (typeof m.offscreen === 'boolean') workerOffscreenReady = m.offscreen
       p.webCodecsSupported = Boolean(m.webCodecsSupported)
       const MS = window.MediaSource || window.ManagedMediaSource
-      p.useMse = Boolean(p.videoStream >= 0 && mf.mseType && MS && MS.isTypeSupported(mf.mseType))
-      p.allowWebCodecs = Boolean(!p.useMse && p.videoStream >= 0 && p.webCodecsSupported)
+      p.mseSupported = Boolean(p.videoStream >= 0 && mf.mseType && MS && MS.isTypeSupported(mf.mseType))
+      // Prefer WebCodecs VideoDecoder first whenever available: we own every VideoFrame and draw call,
+      // bypassing Chromium's silent-<video> background/occlusion throttling. Plain-HTTP LAN pages fall back to MSE.
+      p.allowWebCodecs = Boolean(p.videoStream >= 0 && p.webCodecsSupported)
+      p.useMse = Boolean(!p.allowWebCodecs && p.mseSupported)
       p.usingWebCodecs = p.allowWebCodecs
       if (p.useMse) {
         setupMse(p.startAt)
       } else {
         video.style.display = 'none'
-        glCanvas.style.display = workerOffscreenReady ? 'block' : 'none'
+        glCanvas.style.display = (workerOffscreenReady || Boolean(getYuvGl())) ? 'block' : 'none'
         canvas.style.display = 'none'
       }
       updateBadge()
-      worker.postMessage({ cmd: 'start', seq: p.seq, videoStream: p.videoStream, audioStream: p.audioStream, subStream: p.subStream, useMse: p.useMse, allowWebCodecs: p.allowWebCodecs })
+      if (p.startAt > 0) {
+        for (const ctl of p.prefetchInFlight.values()) { try { ctl.abort() } catch {} }
+        p.prefetchInFlight.clear()
+        p.prefetchDone.clear()
+        p.lastReadBlock = -1
+      }
+      worker.postMessage({ cmd: 'start', seq: p.seq, time: p.startAt, videoStream: p.videoStream, audioStream: p.audioStream, subStream: p.subStream, useMse: p.useMse, allowWebCodecs: p.allowWebCodecs })
+    } else if (m.type === 'webCodecsError') {
+      p.webCodecsSupported = false
+      p.allowWebCodecs = false
+      p.usingWebCodecs = false
+      p.useMse = Boolean(p.mseSupported)
+      updateBadge()
+      seekTo(currentMediaTime())
     } else if (m.type === 'mseInit' || m.type === 'mseSeg') {
       p.mseQueue.push(m.buf)
       drainMseQueue()
@@ -1993,14 +2122,19 @@ function openPlayer (entry, at = 0) {
       updateBadge()
       tryPrime()
     } else if (m.type === 'videoFrame') {
-      // Hidden pictures are kept in a small ring, not dropped: the newest is the live one, so the
-      // first tick after return draws instantly instead of waiting seconds for future frames.
-      // Cap it at ~3 s so a long hidden stretch cannot pile up gigabytes of YUV.
-      if (document.visibilityState !== 'visible' && p.swFrames.length >= 72) {
-        recycleVideoBuf(p.swFrames.shift().buf)
+      if (m.hwFrame && !p.usingWebCodecs) {
+        p.usingWebCodecs = true
+        updateBadge()
       }
-      p.swFrames.push(m)
-      if (p.drawnFrames === 0) drawSwFrame(m)
+      // Worker MAX_WC_ACTIVE paces future frames; here only trim already-past-due frames when hidden, and keep PTS sorted across B-frames.
+      if (effectiveHidden() && p.swFrames.length >= (m.hwFrame ? 6 : 72)) {
+        const now = currentMediaTime()
+        while (p.swFrames.length > 0 && p.swFrames[0].pts <= now) releaseFrame(p.swFrames.shift())
+      }
+      let ins = p.swFrames.length
+      while (ins > 0 && p.swFrames[ins - 1].pts > m.pts) ins--
+      p.swFrames.splice(ins, 0, m)
+      if (p.drawnFrames === 0) drawSwFrame(p.swFrames[0])
       tryPrime()
     } else if (m.type === 'audioChunk' && m.samples > 0) {
       if (!p.primed) {
@@ -2021,11 +2155,11 @@ function openPlayer (entry, at = 0) {
     } else if (m.type === 'videoCrop') {
       p.videoCrop = m.full ? null : { x: m.left, y: m.top, w: m.right - m.left, h: m.bottom - m.top, cw: m.w, ch: m.h }
     } else if (m.type === 'flushed') {
-      // A seek with the same streams (audio or subtitle switch) does not re-prime, so clear the
-      // buffering notice here instead of leaving "Seeking…" over a playing picture forever.
-      if (player === p) $('pStatus').style.display = 'none'
+      // Only clear Seeking… if already primed; otherwise tryPrime() clears it once target audio+video land.
+      if (player === p && p.primed) $('pStatus').style.display = 'none'
     } else if (m.type === 'eof') {
       p.eof = true
+      finalizeMsePrimeIfReady()
       tryPrime()
     }
   }
@@ -2035,11 +2169,17 @@ function openPlayer (entry, at = 0) {
   const BLOCK_BYTES = 2 * 1024 * 1024
   function pumpPrefetch (p) {
     if (!p || player !== p || !p.worker || !p.streamUrl) return
+    // While hidden or occluded, let any already-started page fetches finish into blockCache, then yield new ones to the Worker.
+    if (effectiveHidden()) return
     const base = p.lastReadBlock
-    if (!Number.isFinite(base)) return
-    // The block the demuxer is on plus a deep window: a relay range can stall for seconds on a cold
-    // block, and the Worker's fallback read is synchronous, so the next blocks must already be here.
-    for (let i = 0; i <= 12; i++) {
+    if (!Number.isFinite(base) || base < 0) return
+    if (p.prefetchDone.size > 96) {
+      for (const k of p.prefetchDone) {
+        if (k < base - 4) p.prefetchDone.delete(k)
+      }
+    }
+    // Keep 18 x 2 MiB (36 MiB) warm inside the 64 MiB Worker ring without wiping ahead-of-base marks on rollover.
+    for (let i = 0; i <= 18; i++) {
       if (p.prefetchInFlight.size >= 4) break
       const idx = base + i
       if (idx < 0) continue
@@ -2048,8 +2188,6 @@ function openPlayer (entry, at = 0) {
       const end = start + BLOCK_BYTES - 1
       const ctl = new AbortController()
       p.prefetchInFlight.set(idx, ctl)
-      // A fetch that never settles holds a slot forever; with every slot stuck the Worker falls back
-      // to its blocking sync read, which freezes the whole frame clock. Cut it loose and retry.
       const killTimer = setTimeout(() => { try { ctl.abort() } catch {} }, 6000)
       const settle = () => { clearTimeout(killTimer); p.prefetchInFlight.delete(idx) }
       fetch(p.streamUrl, { headers: { range: 'bytes=' + start + '-' + end }, signal: ctl.signal })
@@ -2059,34 +2197,62 @@ function openPlayer (entry, at = 0) {
           p.prefetchInFlight.delete(idx)
           if (!ab || player !== p) return
           p.prefetchDone.add(idx)
-          if (p.prefetchDone.size > 96) p.prefetchDone.clear()
           try { p.worker.postMessage({ cmd: 'block', block: idx, buf: ab }, [ab]) } catch {}
           pumpPrefetch(p)
         })
         .catch(() => {
           settle()
-          if (player === p) setTimeout(() => { if (player === p) pumpPrefetch(p) }, 400)
+          if (player === p && !effectiveHidden()) setTimeout(() => { if (player === p) pumpPrefetch(p) }, 400)
         })
     }
   }
+  p.pumpPrefetch = pumpPrefetch
 
   function drawSwFrame (f) {
     p.lastDrawWall = performance.now()
     if ($('pStatus').textContent === 'Buffering…') $('pStatus').style.display = 'none'
-    const r = (f.yuv && !workerCanvasTransferred) ? getYuvGl() : false
+    const r = ((f.yuv || f.hwFrame) && !workerCanvasTransferred) ? getYuvGl() : false
+    if (f.hwFrame) {
+      const fw = f.w || f.hwFrame.displayWidth || f.hwFrame.codedWidth || 0
+      const fh = f.h || f.hwFrame.displayHeight || f.hwFrame.codedHeight || 0
+      if (fw <= 0 || fh <= 0) return
+      if (r) {
+        if (glCanvas.style.display !== 'block') { glCanvas.style.display = 'block'; canvas.style.display = 'none' }
+        const { gl } = r
+        if (r.w !== fw || r.h !== fh) {
+          r.w = fw; r.h = fh
+          glCanvas.width = fw; glCanvas.height = fh
+          gl.viewport(0, 0, fw, fh)
+        }
+        if (r.mode !== 1) { r.mode = 1; gl.uniform1i(r.modeLoc, 1) }
+        gl.uniform4f(r.cropLoc, 0, 0, 1, 1)
+        gl.activeTexture(gl.TEXTURE0)
+        gl.bindTexture(gl.TEXTURE_2D, r.texY)
+        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, f.hwFrame)
+        gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4)
+      } else {
+        if (canvas.style.display !== 'block') { canvas.style.display = 'block'; glCanvas.style.display = 'none' }
+        if (canvas.width !== fw || canvas.height !== fh) { canvas.width = fw; canvas.height = fh }
+        ctx2d.drawImage(f.hwFrame, 0, 0, fw, fh)
+      }
+      p.drawnFrames++
+      return
+    }
     const crop = p.videoCrop && p.videoCrop.w > 0 && p.videoCrop.cw === f.w && p.videoCrop.ch === f.h ? p.videoCrop : null
     const ow = crop ? crop.w : f.w, oh = crop ? crop.h : f.h
     if (r) {
       if (glCanvas.style.display !== 'block') { glCanvas.style.display = 'block'; canvas.style.display = 'none' }
       const { gl } = r
+      const modeChanged = r.mode !== 0
+      if (modeChanged) { r.mode = 0; gl.uniform1i(r.modeLoc, 0) }
       const cw = (f.w + 1) >> 1, ch = (f.h + 1) >> 1
       const u8 = new Uint8Array(f.buf, 0, f.byteLen || f.buf.byteLength)
       const yLen = f.w * f.h, cLen = cw * ch
       const ySub = u8.subarray(0, yLen)
       const uSub = u8.subarray(yLen, yLen + cLen)
       const vSub = u8.subarray(yLen + cLen, yLen + cLen * 2)
-      const resized = (r.w !== ow || r.h !== oh)
-      if (resized) {
+      const resized = (r.w !== ow || r.h !== oh) || modeChanged
+      if (r.w !== ow || r.h !== oh) {
         r.w = ow; r.h = oh
         glCanvas.width = ow; glCanvas.height = oh
         gl.viewport(0, 0, ow, oh)
@@ -2117,7 +2283,6 @@ function openPlayer (entry, at = 0) {
     ctx2d.putImageData(p.imgData, 0, 0)
     p.drawnFrames++
   }
-
   function tick () {
     if (player !== p) return
     p.raf = requestAnimationFrame(tick)
@@ -2139,54 +2304,37 @@ function openPlayer (entry, at = 0) {
       }
     }
 
-    if (p.primed && p.audioCtx && p.audioNodes.length > 0) {
-      const ct = audioOutTime(p.audioCtx)
-      for (const a of p.audioNodes) {
-        if (ct >= a.startCtx && ct <= a.endCtx) {
-          p.audioBaseMedia = a.pts + (ct - a.startCtx)
-          p.audioBaseCtx = ct
-          break
-        }
-      }
-    }
-
     if (p.primed && p.useMse && p.mseReady && !p.paused) {
       const vt = video.currentTime
       if (vt > p.lastMseTime) {
         p.consumedVideoSec += Math.min(1.0, vt - p.lastMseTime)
         p.lastMseTime = vt
+        if (!video.seeking && video.readyState >= 2 && $('pStatus').textContent === 'Buffering…') {
+          $('pStatus').style.display = 'none'
+        }
       }
-      if (p.audioStarted && !video.seeking && video.readyState >= 2) {
+      if (p.audioStarted && !video.seeking) {
         const drift = vt - now
-        if (Math.abs(drift) > 1.2 && video.readyState >= 3 && (pf - p.lastHardSync) > 2500) {
+        if (Math.abs(drift) > 1.2 && (p.lastHardSync === 0 || (pf - p.lastHardSync) > 2500)) {
           for (let i = 0; i < video.buffered.length; i++) {
             if (now >= video.buffered.start(i) && now + 0.25 <= video.buffered.end(i)) {
               p.lastHardSync = pf
               p.lastMseTime = now
               video.currentTime = now
+              if (video.paused) video.play().catch(() => {})
               break
             }
           }
-        } else if (drift > 0.20) video.playbackRate = 0.95
-        else if (drift > 0.025) video.playbackRate = 0.98
-        else if (drift < -0.20) video.playbackRate = 1.05
-        else if (drift < -0.025) video.playbackRate = 1.02
-        else if (video.playbackRate !== 1) video.playbackRate = 1
+        } else if (video.readyState >= 2) {
+          if (drift > 0.20) video.playbackRate = 0.95
+          else if (drift > 0.025) video.playbackRate = 0.98
+          else if (drift < -0.20) video.playbackRate = 1.05
+          else if (drift < -0.025) video.playbackRate = 1.02
+          else if (video.playbackRate !== 1) video.playbackRate = 1
+        }
       }
     } else if (p.primed && !p.useMse && p.swFrames.length > 0 && !p.paused) {
-      let pick = null
-      while (p.swFrames.length > 0 && p.swFrames[0].pts <= now + 0.015) {
-        const f = p.swFrames.shift()
-        if (pick) recycleVideoBuf(pick.buf)
-        const step = p.lastSwPts !== null ? Math.max(0.01, Math.min(0.2, f.pts - p.lastSwPts)) : (1 / 30)
-        p.lastSwPts = f.pts
-        p.consumedVideoSec += step
-        pick = f
-      }
-      if (pick) {
-        drawSwFrame(pick)
-        recycleVideoBuf(pick.buf)
-      }
+      stepCanvasFrames(now, true)
     }
     if (p.subCues.length > 0) {
       p.subCues = p.subCues.filter(c => c.end >= now - 2)
@@ -2226,20 +2374,60 @@ function openPlayer (entry, at = 0) {
       lastResumeSave = Date.now()
       saveResume(playerEntry, now, p.duration)
     }
-    if (p.primed && !p.paused && !p.seeking && document.visibilityState === 'visible' &&
-        p.lastDrawWall && performance.now() - p.lastDrawWall > 1200 &&
+    const prevTickGap = p.lastTickWall ? (pf - p.lastTickWall) : 0
+    if (prevTickGap > 200) {
+      p.lastDrawWall = pf
+    }
+    p.lastTickWall = pf
+    // macOS throttles covered windows to ~0.5 Hz rAF (~1.8 s gap); only clear occlusion on real 60 Hz cadence or focus.
+    if (p.windowOccluded && (document.hasFocus() || (prevTickGap > 0 && prevTickGap < 250))) {
+      p.windowOccluded = false
+      resyncOnReturn()
+    }
+    if (p.primed && !p.paused && !p.seeking && !p.useMse && !p.eof && p.swFrames.length === 0 &&
+        document.visibilityState === 'visible' && !p.windowOccluded &&
+        p.lastDrawWall && pf - p.lastDrawWall > 1500 &&
         $('pStatus').style.display === 'none') {
-      // The clock keeps running off the audio clock even while the picture stalls; say so instead of
-      // leaving a frozen frame with no explanation. A drawn frame (or a playing video element) clears it.
       $('pStatus').textContent = 'Buffering…'
       $('pStatus').style.display = 'block'
     }
   }
+  function stepCanvasFrames (now, draw) {
+    let pick = null
+    while (p.swFrames.length > 0 && p.swFrames[0].pts <= now + 0.015) {
+      const f = p.swFrames.shift()
+      if (pick) releaseFrame(pick)
+      const step = p.lastSwPts !== null ? Math.max(0.01, Math.min(0.2, f.pts - p.lastSwPts)) : (1 / 30)
+      p.lastSwPts = f.pts
+      p.consumedVideoSec += step
+      pick = f
+    }
+    if (pick) {
+      if (draw) drawSwFrame(pick)
+      releaseFrame(pick)
+    }
+  }
+  p.lastTickWall = performance.now()
   p.raf = requestAnimationFrame(tick)
-  // Visibility, credits and the worker's clock must not ride requestAnimationFrame: a hidden or
-  // unfocused window stops that loop, so the Worker never learns it is hidden and keeps posting
-  // pictures nobody consumes until the tab balloons and freezes. A 250 ms timer (Clamped to ~1 s
-  // while hidden) reports instead; the Worker still owns decode and the audio-only switch.
+  // Backup 50 ms frame stepper: keeps WebCodecs/WASM drawing during macOS window drags (where rAF stalls)
+  // and pauses invisible GPU/CPU video decode once macOS occludes an unfocused window for >1.5 s.
+  p.frameTimer = setInterval(() => {
+    if (player !== p) { clearInterval(p.frameTimer); return }
+    if (!p.primed || p.paused) return
+    const pf = performance.now()
+    const rafGap = pf - (p.lastTickWall || pf)
+    if (rafGap <= 65) return
+    p.lastDrawWall = pf
+    const now = currentMediaTime()
+    if (!p.useMse && p.swFrames.length > 0) {
+      const shouldDraw = document.visibilityState === 'visible' && rafGap < 1500
+      stepCanvasFrames(now, shouldDraw)
+    }
+    if (rafGap >= 1500 && !p.windowOccluded) {
+      p.windowOccluded = true
+      syncWorkerClock(now, true)
+    }
+  }, 50)
   p.creditTimer = setInterval(() => {
     if (player !== p) { clearInterval(p.creditTimer); return }
     if (!p.primed || !p.worker) return
@@ -2247,13 +2435,18 @@ function openPlayer (entry, at = 0) {
     const aSec = p.consumedAudioSec
     p.consumedVideoSec = 0
     p.consumedAudioSec = 0
-    p.worker.postMessage({ cmd: 'consumed', videoSec: vSec, audioSec: aSec, time: currentMediaTime(), wallMs: nowWallMs(), playing: !p.paused, hidden: document.visibilityState !== 'visible' })
+    p.worker.postMessage({ cmd: 'consumed', videoSec: vSec, audioSec: aSec, time: currentMediaTime(), wallMs: nowWallMs(), playing: !p.paused, hidden: effectiveHidden() })
   }, 250)
 
   const vid = $('pVideo')
   if (vid) {
     vid.addEventListener('waiting', () => {
-      if (player !== p) return
+      if (player !== p || !p.useMse || effectiveHidden()) return
+      if (p.lastTickWall && performance.now() - p.lastTickWall > 200) return
+      const now = currentMediaTime()
+      for (let i = 0; i < vid.buffered.length; i++) {
+        if (now >= vid.buffered.start(i) && now + 0.4 <= vid.buffered.end(i)) return
+      }
       $('pStatus').textContent = 'Buffering…'
       $('pStatus').style.display = 'block'
     })
@@ -2263,11 +2456,12 @@ function openPlayer (entry, at = 0) {
   }
   const extMatch = (entry.streamUrl || '').split('?')[0].split('.').pop() || ''
   worker.postMessage({ cmd: 'open', seq: p.seq, streamUrl, wasmUrl: location.origin + '/web/peartube_web.wasm' + ASSET_VER, ext: extMatch.length <= 5 ? extMatch : '' })
-  // Start the page fetch before the demuxer reaches its first block edge: waiting for the Worker to
-  // miss a block means the miss is already costing a blocking read.
-  p.lastReadBlock = 0
-  p.prefetchDone.clear()
-  pumpPrefetch(p)
+  // When starting from 0:00, warm the first 2 MiB blocks immediately; when resuming mid-film, wait for pt_seek's target block.
+  if (p.startAt === 0) {
+    p.lastReadBlock = 0
+    p.prefetchDone.clear()
+    pumpPrefetch(p)
+  }
   return p
 }
 
@@ -2281,7 +2475,7 @@ function togglePlay () {
     seekTo(0)
     return
   }
-  const now = player.freeBaseMedia
+  const now = player.currentMediaTime ? player.currentMediaTime() : player.freeBaseMedia
   player.paused = !player.paused
   player.freeBaseMedia = now
   player.freeBasePerf = performance.now()
@@ -2309,9 +2503,18 @@ function seekTo (targetSecs) {
   if (!player) return
   if (player.ended) {
     player.ended = false
-    $('pPlayBtn').textContent = 'Play'
+    $('pPlayBtn').textContent = 'Pause'
   }
   const clamped = Math.max(0, player.duration > 0 ? Math.min(player.duration, targetSecs) : targetSecs)
+  // If open is still probing the container before manifest lands, update startAt in place instead of dropping manifest's seq.
+  if (!player.manifest) {
+    player.startAt = clamped
+    player.freeBaseMedia = clamped
+    player.audioBaseMedia = clamped
+    $('pStatus').style.display = ''
+    $('pStatus').textContent = 'Seeking…'
+    return
+  }
   player.seq = ++openCounter
   player.eof = false
   $('pStatus').style.display = ''
@@ -2322,6 +2525,7 @@ function seekTo (targetSecs) {
   player.prefetchInFlight.clear()
   player.prefetchDone.clear()
   player.lastReadBlock = -1
+  player.updateBadge?.()
   player.resetMediaOutputs(clamped)
   player.worker.postMessage({
     cmd: 'seek',
@@ -2350,7 +2554,8 @@ let seekTimer = 0
 let seekTarget = null
 function nudge (deltaSecs) {
   if (!player) return
-  const from = seekTarget ?? (player.freeBaseMedia || 0)
+  const liveNow = player.currentMediaTime ? player.currentMediaTime() : (player.freeBaseMedia || 0)
+  const from = seekTarget ?? liveNow
   seekTarget = Math.max(0, player.duration > 0 ? Math.min(player.duration, from + deltaSecs) : from + deltaSecs)
   $('pStatus').style.display = ''
   $('pStatus').textContent = 'Seeking to ' + fmtClock(seekTarget)
@@ -2373,12 +2578,12 @@ $('pSeek').onchange = () => {
 $('pAudioSel').onchange = () => {
   if (!player) return
   player.audioStream = Number($('pAudioSel').value)
-  seekTo(player.freeBaseMedia || 0)
+  seekTo(player.currentMediaTime ? player.currentMediaTime() : (player.freeBaseMedia || 0))
 }
 $('pSubSel').onchange = () => {
   if (!player) return
   player.subStream = Number($('pSubSel').value)
-  seekTo(player.freeBaseMedia || 0)
+  seekTo(player.currentMediaTime ? player.currentMediaTime() : (player.freeBaseMedia || 0))
 }
 $('pMuteBtn').onclick = () => {
   const muted = $('pMuteBtn').dataset.muted === '1' ? '0' : '1'
@@ -2404,36 +2609,49 @@ addEventListener('keydown', ev => {
 // the clock). On return, make the browser's video element play again if it paused it in the
 // background; the GL path restarts its render loop from the first clock message of the next frame.
 function resyncOnReturn () {
-  if (!player || player.paused) return
+  if (!player || player.paused || !player.primed || player.seeking) return
   const p = player
-  const audio = p.freeBaseMedia || 0
+  const audio = p.currentMediaTime ? p.currentMediaTime() : (p.freeBaseMedia || 0)
   // The first click that brings the window back is a focus click, not a play/pause command.
   p.suppressStageClickUntil = performance.now() + 900
   if (p.audioCtx?.state === 'suspended') p.audioCtx.resume().catch(() => {})
   if (p.useMse) {
     const v = $('pVideo')
     v.playbackRate = 1
+    p.drainMseQueue?.()
     if (v.paused) v.play().catch(() => {})
     // Hard A/V sync after any absence. The SourceBuffer keeps filling while hidden, so if the live
-    // position is buffered we can snap the element there instantly; only a real hole needs a seek.
+    // position is buffered we snap the element there instantly; if segments are mid-append, wait for updateend.
     let buffered = false
     for (let i = 0; i < v.buffered.length; i++) {
-      if (audio >= v.buffered.start(i) && audio + 0.25 <= v.buffered.end(i)) { buffered = true; break }
+      if (audio >= v.buffered.start(i) - 0.15 && audio + 0.15 <= v.buffered.end(i)) { buffered = true; break }
     }
-    if (!buffered) seekTo(audio)
-    else if (Math.abs(v.currentTime - audio) > 0.2) { try { v.currentTime = audio } catch {} }
+    if (!buffered) {
+      if (p.sb?.updating || p.mseQueue.length > 0) {
+        p.pendingReturnSnap = true
+        p.syncWorkerClock?.(audio, true)
+        return
+      }
+      seekTo(audio)
+      return
+    }
+    p.pendingReturnSnap = false
+    if (Math.abs(v.currentTime - audio) > 0.2) { try { v.currentTime = audio } catch {} }
     p.lastMseTime = audio
     p.lastHardSync = performance.now()
   } else {
-    // The tick draws from the ring on the next frame; the stale ones are dropped by its due loop.
+    // Reset the stall timer so returning from a hidden tab never flashes Buffering… before the replayed GOP frame draws.
+    p.lastDrawWall = performance.now()
     p.lastSwPts = null
   }
   p.syncWorkerClock?.(audio, true)
+  p.pumpPrefetch?.(p)
 }
 addEventListener('visibilitychange', () => {
   if (!player) return
   const hidden = document.visibilityState !== 'visible'
-  player.syncWorkerClock?.(player.freeBaseMedia || 0, !player.paused)
+  const liveNow = player.currentMediaTime ? player.currentMediaTime() : (player.freeBaseMedia || 0)
+  player.syncWorkerClock?.(liveNow, !player.paused)
   if (!hidden) resyncOnReturn()
 })
 addEventListener('focus', () => {

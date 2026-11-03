@@ -111,7 +111,7 @@ sources() {
     git -C "$work/src/quickjs" apply "$patch"
   done
   git -C "$work/src/quickjs" apply "$here/patches/quickjs-weakmap-ephemeron.patch"
-  for patch in function-source deferred-release; do
+  for patch in function-source deferred-release weak-reference-delete; do
     git -C "$work/src/libqjs" apply "$here/patches/libqjs-$patch.patch"
   done
   touch "$work/src/ready"

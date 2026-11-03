@@ -138,9 +138,9 @@ async function launchBrowser () {
   const exe = process.env.PUPPETEER_EXECUTABLE_PATH
   assert.ok(exe && existsSync(exe), 'PUPPETEER_EXECUTABLE_PATH must point at a Chromium-family browser')
   const dir = mkdtempSync(join(tmpdir(), 'peartube-ui-browser-'))
-  // `--use-mock-keychain` keeps macOS from asking the login keychain for Brave's storage key on every
-  // throwaway profile; an automation run must never put a system dialog in front of the machine.
-  const proc = spawn(exe, ['--headless=new', '--remote-debugging-port=0', '--user-data-dir=' + dir, '--no-first-run', '--no-default-browser-check', '--disable-gpu', '--disable-extensions', '--use-mock-keychain', 'about:blank'], { stdio: 'ignore' })
+  // `--use-mock-keychain` + `--password-store=basic` + `--disable-sync` keep macOS from ever prompting
+  // SecurityAgent for Brave's storage/sync/wallet keys on throwaway profiles during unattended runs.
+  const proc = spawn(exe, ['--headless=new', '--remote-debugging-port=0', '--user-data-dir=' + dir, '--no-first-run', '--no-default-browser-check', '--disable-gpu', '--disable-extensions', '--use-mock-keychain', '--password-store=basic', '--disable-sync', '--disable-features=BraveWallet,BraveRewards,BraveNews', 'about:blank'], { stdio: 'ignore' })
   const portFile = join(dir, 'DevToolsActivePort')
   for (let i = 0; i < 200 && !existsSync(portFile); i++) await sleep(100)
   const port = readFileSync(portFile, 'utf8').split('\n')[0]
@@ -428,6 +428,17 @@ test('relay web UI: settings, plugins as intents, identification, and taste gate
     await waitApi(async () => (await getJson('/v1/jobs/' + clipJob.jobId)).status === 'done', 'clip stored')
     await waitFor(`[...document.querySelectorAll('.tile')].some(t => t.textContent.includes('Playable Clip'))`, 'clip tile')
     await click(`[data-tile="v:clip:playable/${(await entries()).find(e => e.id === 'clip:playable').sha256}"]`)
+    const dlHref = await evaluate(`document.querySelector('#detail [data-download]')?.getAttribute('href') || ''`)
+    assert.ok(dlHref.includes('/v1/blob?') && dlHref.includes('download='), 'detail sheet exposes streaming Download link: ' + dlHref)
+    const dlRes = await fetch(new URL(dlHref, base), { headers: { Range: 'bytes=0-15' } })
+    assert.equal(dlRes.status, 206)
+    assert.match(dlRes.headers.get('content-disposition') || '', /attachment; filename="Playable Clip\.mkv"/)
+    assert.equal(dlRes.headers.get('content-type'), 'video/x-matroska')
+    await dlRes.arrayBuffer()
+    await evaluate(`(() => { window.__modalCopied = ''; document.addEventListener('copy', ev => { window.__modalCopied = ev.clipboardData?.getData('text/plain') || '' }, false); return true })()`)
+    await clickText('Copy link', '#detail')
+    const modalCopied = await evaluate(`window.__modalCopied`)
+    assert.match(modalCopied, /^peartube:\/\/watch\//, 'Copy link inside open <dialog> must populate clipboardData over plain HTTP')
     await click('#detail [data-play]')
     const clockSecs = `Number($('pClock').textContent.split(' / ')[0].split(':').pop())`
     await waitFor(`!!player && player.primed && ${clockSecs} >= 1`, 'clip playing', 30_000)

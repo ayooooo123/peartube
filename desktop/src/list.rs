@@ -573,8 +573,16 @@ impl PearTube {
         let play_entry = entry.clone();
         let cast_entry = entry.clone();
         let menu_cast = entry.clone();
+        let dl_entry = entry.clone();
+        let menu_dl = entry.clone();
         let magnet = (!entry.magnet_url.is_empty()).then(|| entry.magnet_url.clone());
         let clear_key = (!entry.local && entry.cached_bytes > 0).then(|| entry.key.clone());
+        let active_dl = self.downloads.get(&entry.key).map(|d| {
+            let got = d.downloaded.load(std::sync::atomic::Ordering::Relaxed);
+            let tot = d.total.max(entry.size);
+            let pct = if tot > 0 { ((got as f64 / tot as f64) * 100.0).clamp(0.0, 100.0) } else { 0.0 };
+            (got, tot, pct as f32 / 100.0)
+        });
 
         let resume_ms = self.resume_position_for(entry);
         let watch_ratio = self
@@ -582,6 +590,7 @@ impl PearTube {
             .get(&entry.id)
             .filter(|w| w.duration_ms > 0 && resume_ms > 0)
             .map(|w| (w.position_ms as f32 / w.duration_ms as f32).clamp(0.02, 1.0));
+        let dl_ratio = active_dl.map(|(_, _, r)| r.clamp(0.02, 1.0));
         let cache_ratio = (!entry.local && entry.size > 0 && entry.cached_bytes > 0 && entry.cached_bytes < entry.size)
             .then(|| (entry.cached_bytes as f32 / entry.size as f32).clamp(0.02, 1.0));
 
@@ -590,7 +599,13 @@ impl PearTube {
             meta_parts.push(y);
         }
         meta_parts.push(format_bytes(entry.size));
-        if entry.local || (entry.size > 0 && entry.cached_bytes >= entry.size) {
+        if let Some((got, tot, _)) = active_dl {
+            if tot > 0 {
+                meta_parts.push(format!("Downloading {:.0}%", (got as f64 / tot as f64 * 100.0).min(100.0)));
+            } else {
+                meta_parts.push(format!("Downloading {}", format_bytes(got)));
+            }
+        } else if entry.local || (entry.size > 0 && entry.cached_bytes >= entry.size) {
             meta_parts.push("Saved".into());
         } else if entry.cached_bytes > 0 {
             meta_parts.push(format!("{} buffered", format_bytes(entry.cached_bytes)));
@@ -601,9 +616,12 @@ impl PearTube {
 
         let card_id = SharedString::from(format!("movie-{}", entry.key));
         let cast_btn_id = SharedString::from(format!("cast-{}", entry.key));
+        let dl_btn_id = SharedString::from(format!("dl-{}", entry.key));
         let more_btn_id = SharedString::from(format!("more-{}", entry.key));
+        let is_downloading = active_dl.is_some();
+        let cancel_key = entry.key.clone();
+        let menu_cancel_key = entry.key.clone();
         let weak = cx.entity().downgrade();
-
         v_flex()
             .id(card_id)
             .rounded(px(16.))
@@ -672,10 +690,29 @@ impl PearTube {
                                     .tooltip("Play on TV")
                                     .on_click(cx.listener(move |this, _, window, cx| this.cast_entry_or_sheet(cast_entry.clone(), 0, window, cx))),
                             )
+                            .child(
+                                if is_downloading {
+                                    Button::new(dl_btn_id)
+                                        .ghost()
+                                        .small()
+                                        .icon(Icon::new(Lucide::X))
+                                        .tooltip("Cancel download")
+                                        .on_click(cx.listener(move |this, _, _, cx| this.cancel_download(&cancel_key, cx)))
+                                } else {
+                                    Button::new(dl_btn_id)
+                                        .ghost()
+                                        .small()
+                                        .icon(Icon::new(Lucide::Download))
+                                        .tooltip("Download to Downloads")
+                                        .on_click(cx.listener(move |this, _, _, cx| this.download_entry(dl_entry.clone(), None, cx)))
+                                },
+                            )
                             .child({
                                 let (mag, clr) = (magnet.clone(), clear_key.clone());
                                 let w = weak.clone();
                                 let c_item = menu_cast.clone();
+                                let d_item = menu_dl.clone();
+                                let m_cancel = menu_cancel_key.clone();
                                 Button::new(more_btn_id)
                                     .ghost()
                                     .small()
@@ -686,6 +723,18 @@ impl PearTube {
                                         menu = menu.item(PopupMenuItem::new("Play on TV…").on_click(move |_, window, cx| {
                                             let _ = w_cast.update(cx, |this, cx| this.open_cast_sheet(Some((ci.key.clone(), ci.title.clone(), 0)), window, cx));
                                         }));
+                                        let w_dl = w.clone();
+                                        if is_downloading {
+                                            let ck = m_cancel.clone();
+                                            menu = menu.item(PopupMenuItem::new("Cancel Download").on_click(move |_, _, cx| {
+                                                let _ = w_dl.update(cx, |this, cx| this.cancel_download(&ck, cx));
+                                            }));
+                                        } else {
+                                            let di = d_item.clone();
+                                            menu = menu.item(PopupMenuItem::new("Download Video").on_click(move |_, _, cx| {
+                                                let _ = w_dl.update(cx, |this, cx| this.download_entry(di.clone(), None, cx));
+                                            }));
+                                        }
                                         if let Some(url) = mag.clone() {
                                             menu = menu.item(PopupMenuItem::new("Copy Stream Link").on_click(move |_, _, cx| {
                                                 cx.write_to_clipboard(ClipboardItem::new_string(url.clone()));
@@ -702,8 +751,8 @@ impl PearTube {
                             }),
                     ),
             )
-            .when_some(watch_ratio.or(cache_ratio), |this, ratio| {
-                let bar_col = if watch_ratio.is_some() { rgb(BRAND) } else { rgb(ACCENT) };
+            .when_some(dl_ratio.or(watch_ratio).or(cache_ratio), |this, ratio| {
+                let bar_col = if dl_ratio.is_some() { rgb(ACCENT) } else if watch_ratio.is_some() { rgb(BRAND) } else { rgb(ACCENT) };
                 this.child(
                     div()
                         .w_full()
@@ -854,8 +903,34 @@ impl PearTube {
         let ep_play = entry.clone();
         let ep_cast = entry.clone();
         let ep_menu_cast = entry.clone();
+        let ep_dl = entry.clone();
+        let ep_menu_dl = entry.clone();
+        let ep_code = label(&entry.id);
+        let ep_dl_name = if entry.title.to_ascii_lowercase().contains(&ep_code.to_ascii_lowercase()) {
+            entry.title.clone()
+        } else {
+            format!("{} {}", entry.title, ep_code)
+        };
+        let ep_menu_dl_name = ep_dl_name.clone();
         let magnet = (!entry.magnet_url.is_empty()).then(|| entry.magnet_url.clone());
         let clear_key = (!entry.local && entry.cached_bytes > 0).then(|| entry.key.clone());
+        let active_dl = self.downloads.get(&entry.key).map(|d| {
+            let got = d.downloaded.load(std::sync::atomic::Ordering::Relaxed);
+            let tot = d.total.max(entry.size);
+            (got, tot)
+        });
+        let is_downloading = active_dl.is_some();
+        let ep_cancel_key = entry.key.clone();
+        let ep_menu_cancel_key = entry.key.clone();
+        let status_label = if let Some((got, tot)) = active_dl {
+            if tot > 0 {
+                format!("{} · Downloading {:.0}%", format_bytes(entry.size), (got as f64 / tot as f64 * 100.0).min(100.0))
+            } else {
+                format!("{} · Downloading {}", format_bytes(entry.size), format_bytes(got))
+            }
+        } else {
+            format!("{} · {}", format_bytes(entry.size), origin(entry))
+        };
         let resume = self.resume_position_for(entry) > 0;
         let weak = cx.entity().downgrade();
 
@@ -883,9 +958,9 @@ impl PearTube {
                             .bg(rgb(CARD_ELEVATED))
                             .text_xs()
                             .font_weight(FontWeight::BOLD)
-                            .child(label(&entry.id)),
+                            .child(ep_code),
                     )
-                    .child(div().text_sm().text_color(rgb(DIM)).child(format!("{} · {}", format_bytes(entry.size), origin(entry))))
+                    .child(div().text_sm().text_color(rgb(DIM)).child(status_label))
                     .when(resume, |this| this.child(div().text_xs().font_weight(FontWeight::MEDIUM).text_color(rgb(BRAND)).child("In Progress"))),
             )
             .child(
@@ -902,6 +977,23 @@ impl PearTube {
                             .on_click(cx.listener(move |this, _, window, cx| this.cast_entry_or_sheet(ep_cast.clone(), 0, window, cx))),
                     )
                     .child(
+                        if is_downloading {
+                            Button::new(SharedString::from(format!("ep-dl-{}", entry.key)))
+                                .ghost()
+                                .small()
+                                .icon(Icon::new(Lucide::X))
+                                .tooltip("Cancel download")
+                                .on_click(cx.listener(move |this, _, _, cx| this.cancel_download(&ep_cancel_key, cx)))
+                        } else {
+                            Button::new(SharedString::from(format!("ep-dl-{}", entry.key)))
+                                .ghost()
+                                .small()
+                                .icon(Icon::new(Lucide::Download))
+                                .tooltip("Download episode")
+                                .on_click(cx.listener(move |this, _, _, cx| this.download_entry(ep_dl.clone(), Some(ep_dl_name.clone()), cx)))
+                        },
+                    )
+                    .child(
                         Button::new(SharedString::from(format!("ep-more-{}", entry.key)))
                             .ghost()
                             .small()
@@ -912,6 +1004,19 @@ impl PearTube {
                                 menu = menu.item(PopupMenuItem::new("Play on TV…").on_click(move |_, window, cx| {
                                     let _ = w_cast.update(cx, |this, cx| this.open_cast_sheet(Some((ci.key.clone(), ci.title.clone(), 0)), window, cx));
                                 }));
+                                let w_dl = weak.clone();
+                                if is_downloading {
+                                    let ck = ep_menu_cancel_key.clone();
+                                    menu = menu.item(PopupMenuItem::new("Cancel Download").on_click(move |_, _, cx| {
+                                        let _ = w_dl.update(cx, |this, cx| this.cancel_download(&ck, cx));
+                                    }));
+                                } else {
+                                    let di = ep_menu_dl.clone();
+                                    let dn = ep_menu_dl_name.clone();
+                                    menu = menu.item(PopupMenuItem::new("Download Episode").on_click(move |_, _, cx| {
+                                        let _ = w_dl.update(cx, |this, cx| this.download_entry(di.clone(), Some(dn.clone()), cx));
+                                    }));
+                                }
                                 if let Some(url) = magnet.clone() {
                                     menu = menu.item(PopupMenuItem::new("Copy Stream Link").on_click(move |_, _, cx| {
                                         cx.write_to_clipboard(ClipboardItem::new_string(url.clone()));

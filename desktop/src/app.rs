@@ -2,7 +2,12 @@
 //! "Under the Hood" progressive disclosure, seamless Cast handoff, and fullscreen cinema playback.
 
 use std::collections::{HashMap, HashSet};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::io::{BufWriter, Read, Write};
+use std::net::TcpStream;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use futures_channel::mpsc::UnboundedReceiver;
 use futures_util::StreamExt;
@@ -53,6 +58,19 @@ pub struct Bank {
     pub task: Option<Task<()>>,
 }
 
+#[derive(Clone)]
+pub struct ActiveDownload {
+    pub downloaded: Arc<AtomicU64>,
+    pub total: u64,
+    pub cancel: Arc<AtomicBool>,
+}
+
+#[derive(Clone)]
+pub struct DownloadNotice {
+    pub message: SharedString,
+    pub saved_path: Option<PathBuf>,
+}
+
 pub struct PearTube {
     pub settings: Settings,
     pub status: Option<Status>,
@@ -69,6 +87,8 @@ pub struct PearTube {
     pub hood_open: bool,
     pub hood_engine_open: bool,
     pub watch_history: HashMap<String, WatchProgress>,
+    pub downloads: HashMap<String, ActiveDownload>,
+    pub notice: Option<DownloadNotice>,
     pending_watch: Option<(Entry, u64)>,
     pending_cast_target: Option<(String, String, u64)>,
     start: Option<Task<()>>,
@@ -157,6 +177,8 @@ impl PearTube {
             hood_open: false,
             hood_engine_open: false,
             watch_history,
+            downloads: HashMap::new(),
+            notice: None,
             pending_watch: None,
             pending_cast_target: None,
             start: None,
@@ -575,6 +597,97 @@ impl PearTube {
         })
         .detach();
     }
+
+    pub fn download_entry(&mut self, entry: Entry, label_override: Option<String>, cx: &mut Context<Self>) {
+        if self.downloads.contains_key(&entry.key) {
+            return;
+        }
+        if entry.stream_url.is_empty() {
+            self.fail("This video has no local stream URL yet".into(), cx);
+            return;
+        }
+        let downloaded = Arc::new(AtomicU64::new(0));
+        let cancel = Arc::new(AtomicBool::new(false));
+        self.downloads.insert(
+            entry.key.clone(),
+            ActiveDownload {
+                downloaded: Arc::clone(&downloaded),
+                total: entry.size,
+                cancel: Arc::clone(&cancel),
+            },
+        );
+        let title = label_override.unwrap_or_else(|| entry.title.clone());
+        self.notice = Some(DownloadNotice {
+            message: format!("Downloading “{title}” to Downloads…").into(),
+            saved_path: None,
+        });
+        cx.notify();
+
+        let warm_key = entry.key.clone();
+        let dl_key = entry.key.clone();
+        let stream_url = entry.stream_url.clone();
+        let expected_size = entry.size;
+        let (done_tx, mut done_rx) = futures_channel::mpsc::unbounded::<Result<PathBuf, String>>();
+
+        std::thread::spawn(move || {
+            let res = stream_entry_to_downloads(&stream_url, &title, expected_size, &downloaded, &cancel);
+            let _ = done_tx.unbounded_send(res);
+        });
+
+        cx.spawn(async move |this, cx| {
+            if let Ok(w) = worker() {
+                let _ = w.warm(&warm_key).await;
+            }
+            loop {
+                match done_rx.try_recv() {
+                    Ok(outcome) => {
+                        let _ = this.update(cx, |this, cx| {
+                            this.downloads.remove(&dl_key);
+                            match outcome {
+                                Ok(path) => {
+                                    let file_name = path.file_name().and_then(|n| n.to_str()).unwrap_or("video");
+                                    this.notice = Some(DownloadNotice {
+                                        message: format!("Saved {file_name} to Downloads").into(),
+                                        saved_path: Some(path),
+                                    });
+                                }
+                                Err(err) if err == "cancelled" => {
+                                    this.notice = None;
+                                }
+                                Err(err) => {
+                                    this.notice = None;
+                                    this.fail(format!("Download failed: {err}"), cx);
+                                }
+                            }
+                            cx.notify();
+                        });
+                        break;
+                    }
+                    Err(_) => {
+                        let still_active = this
+                            .update(cx, |this, cx| {
+                                cx.notify();
+                                this.downloads.contains_key(&dl_key)
+                            })
+                            .unwrap_or(false);
+                        if !still_active {
+                            break;
+                        }
+                        cx.background_executor().timer(Duration::from_millis(250)).await;
+                    }
+                }
+            }
+        })
+        .detach();
+    }
+
+    pub fn cancel_download(&mut self, key: &str, cx: &mut Context<Self>) {
+        if let Some(active) = self.downloads.remove(key) {
+            active.cancel.store(true, Ordering::SeqCst);
+            self.notice = None;
+            cx.notify();
+        }
+    }
 }
 
 async fn follow(this: WeakEntity<PearTube>, cx: &mut AsyncApp) {
@@ -684,6 +797,174 @@ async fn refresh(this: &WeakEntity<PearTube>, cx: &mut AsyncApp) {
     });
 }
 
+fn sniff_container_ext(head: &[u8]) -> &'static str {
+    if head.len() >= 4 && head[..4] == [0x1a, 0x45, 0xdf, 0xa3] {
+        let probe = &head[..head.len().min(128)];
+        if probe.windows(4).any(|w| w.eq_ignore_ascii_case(b"webm")) {
+            return ".webm";
+        }
+        return ".mkv";
+    }
+    if head.len() >= 12 && matches!(&head[4..8], b"ftyp" | b"moov" | b"mdat" | b"free" | b"wide" | b"skip") {
+        return if &head[8..12] == b"qt  " { ".mov" } else { ".mp4" };
+    }
+    if head.len() >= 12 && &head[0..4] == b"RIFF" && &head[8..12] == b"AVI " {
+        return ".avi";
+    }
+    if head.len() >= 4 && &head[0..4] == b"OggS" {
+        return ".ogv";
+    }
+    if head.len() >= 4 && &head[0..4] == b"fLaC" {
+        return ".flac";
+    }
+    if head.len() >= 3 && &head[0..3] == b"ID3" {
+        return ".mp3";
+    }
+    if !head.is_empty() && head[0] == 0x47 && (head.len() < 189 || head[188] == 0x47) {
+        return ".ts";
+    }
+    ".mkv"
+}
+
+fn sanitize_download_stem(raw: &str) -> String {
+    let cleaned: String = raw
+        .chars()
+        .map(|c| if matches!(c, '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|') || c.is_control() { ' ' } else { c })
+        .collect();
+    let collapsed = cleaned.split_whitespace().collect::<Vec<_>>().join(" ");
+    if collapsed.is_empty() { "PearTube Video".into() } else { collapsed.chars().take(160).collect() }
+}
+
+fn unique_download_path(dir: &Path, stem: &str, ext: &str) -> PathBuf {
+    let lower = stem.to_ascii_lowercase();
+    let known = [".mkv", ".mp4", ".webm", ".mov", ".avi", ".m4v", ".ts", ".ogv", ".ogg", ".flac", ".mp3"];
+    let (base, suffix) = known
+        .iter()
+        .find(|e| lower.ends_with(*e))
+        .map(|e| (&stem[..stem.len() - e.len()], *e))
+        .unwrap_or((stem, ext));
+    let first = dir.join(format!("{base}{suffix}"));
+    if !first.exists() && !dir.join(format!("{base}{suffix}.part")).exists() {
+        return first;
+    }
+    for n in 2..1000 {
+        let candidate = dir.join(format!("{base} ({n}){suffix}"));
+        if !candidate.exists() && !dir.join(format!("{base} ({n}){suffix}.part")).exists() {
+            return candidate;
+        }
+    }
+    dir.join(format!("{base}-{}{suffix}", std::process::id()))
+}
+
+fn stream_entry_to_downloads(
+    stream_url: &str,
+    title: &str,
+    expected_size: u64,
+    downloaded: &AtomicU64,
+    cancel: &AtomicBool,
+) -> Result<PathBuf, String> {
+    let rest = stream_url.strip_prefix("http://").ok_or_else(|| "Unsupported stream URL scheme".to_string())?;
+    let (authority, path_q) = match rest.find('/') {
+        Some(idx) => (&rest[..idx], &rest[idx..]),
+        None => (rest, "/"),
+    };
+    let mut sock = TcpStream::connect(authority).map_err(|e| format!("Connect {authority}: {e}"))?;
+    sock.set_read_timeout(Some(Duration::from_secs(45))).ok();
+    let req = format!("GET {path_q} HTTP/1.1\r\nHost: {authority}\r\nConnection: close\r\n\r\n");
+    sock.write_all(req.as_bytes()).map_err(|e| format!("Send request: {e}"))?;
+
+    let mut hdr = Vec::with_capacity(1024);
+    let mut byte = [0u8; 1];
+    while !hdr.ends_with(b"\r\n\r\n") {
+        if cancel.load(Ordering::SeqCst) {
+            return Err("cancelled".into());
+        }
+        let n = sock.read(&mut byte).map_err(|e| format!("Read headers: {e}"))?;
+        if n == 0 {
+            return Err("Stream closed before HTTP headers completed".into());
+        }
+        hdr.push(byte[0]);
+        if hdr.len() > 32 * 1024 {
+            return Err("HTTP response headers too large".into());
+        }
+    }
+    let header_str = String::from_utf8_lossy(&hdr);
+    let status_line = header_str.lines().next().unwrap_or("");
+    if !status_line.contains(" 200 ") && !status_line.contains(" 206 ") {
+        return Err(format!("Stream server answered {status_line}"));
+    }
+
+    let mut head_buf = Vec::with_capacity(256);
+    let mut chunk = vec![0u8; 256 * 1024];
+    while head_buf.len() < 256 {
+        if cancel.load(Ordering::SeqCst) {
+            return Err("cancelled".into());
+        }
+        let want = (256 - head_buf.len()).min(chunk.len());
+        let n = sock.read(&mut chunk[..want]).map_err(|e| format!("Read stream header: {e}"))?;
+        if n == 0 {
+            break;
+        }
+        head_buf.extend_from_slice(&chunk[..n]);
+    }
+
+    let home = std::env::var_os("HOME").map(PathBuf::from).ok_or_else(|| "HOME directory unavailable".to_string())?;
+    let downloads_dir = home.join("Downloads");
+    std::fs::create_dir_all(&downloads_dir).map_err(|e| format!("Create Downloads folder: {e}"))?;
+    let ext = sniff_container_ext(&head_buf);
+    let stem = sanitize_download_stem(title);
+    let final_path = unique_download_path(&downloads_dir, &stem, ext);
+    let part_path = downloads_dir.join(format!(
+        "{}.part",
+        final_path.file_name().and_then(|s| s.to_str()).unwrap_or("video.mkv")
+    ));
+
+    let write_res = (|| -> Result<u64, String> {
+        let file = std::fs::File::create(&part_path).map_err(|e| format!("Create {}: {e}", part_path.display()))?;
+        let mut out = BufWriter::with_capacity(512 * 1024, file);
+        let mut total_written = 0u64;
+        if !head_buf.is_empty() {
+            out.write_all(&head_buf).map_err(|e| format!("Write file: {e}"))?;
+            total_written += head_buf.len() as u64;
+            downloaded.store(total_written, Ordering::Relaxed);
+        }
+        loop {
+            if cancel.load(Ordering::SeqCst) {
+                return Err("cancelled".into());
+            }
+            let n = sock.read(&mut chunk).map_err(|e| format!("Stream read: {e}"))?;
+            if n == 0 {
+                break;
+            }
+            out.write_all(&chunk[..n]).map_err(|e| format!("Write file: {e}"))?;
+            total_written += n as u64;
+            downloaded.store(total_written, Ordering::Relaxed);
+        }
+        out.flush().map_err(|e| format!("Flush file: {e}"))?;
+        let inner = out.into_inner().map_err(|e| format!("Flush buffer: {e}"))?;
+        let _ = inner.sync_data();
+        Ok(total_written)
+    })();
+
+    match write_res {
+        Ok(written) => {
+            if expected_size > 0 && written != expected_size {
+                let _ = std::fs::remove_file(&part_path);
+                return Err(format!("Incomplete transfer ({written} of {expected_size} bytes)"));
+            }
+            std::fs::rename(&part_path, &final_path).map_err(|e| {
+                let _ = std::fs::remove_file(&part_path);
+                format!("Finalize download: {e}")
+            })?;
+            Ok(final_path)
+        }
+        Err(err) => {
+            let _ = std::fs::remove_file(&part_path);
+            Err(err)
+        }
+    }
+}
+
 impl Render for PearTube {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         if let Some((entry, pos)) = self.pending_watch.take() {
@@ -723,6 +1004,41 @@ impl Render for PearTube {
                             .child(div().flex_1().child(error))
                             .child(Button::new("dismiss-error").ghost().small().icon(IconName::Close).on_click(cx.listener(|this, _, _, cx| {
                                 this.error = None;
+                                cx.notify();
+                            }))),
+                    ),
+                )
+            })
+            .when_some(self.notice.clone(), |this, notice| {
+                let saved = notice.saved_path.clone();
+                this.child(
+                    div().bg(rgb(BG)).px_4().pt_3().child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap_3()
+                            .px_4()
+                            .py_2()
+                            .rounded(px(12.))
+                            .bg(rgb(0x132620))
+                            .border_1()
+                            .border_color(rgb(0x1f513f))
+                            .text_color(rgb(0xa7f3d0))
+                            .text_sm()
+                            .child(div().flex_1().child(notice.message))
+                            .when_some(saved, |row, path| {
+                                row.child(
+                                    Button::new("reveal-download")
+                                        .ghost()
+                                        .small()
+                                        .label("Show in Finder")
+                                        .on_click(move |_, _, _| {
+                                            let _ = std::process::Command::new("open").arg("-R").arg(&path).spawn();
+                                        }),
+                                )
+                            })
+                            .child(Button::new("dismiss-notice").ghost().small().icon(IconName::Close).on_click(cx.listener(|this, _, _, cx| {
+                                this.notice = None;
                                 cx.notify();
                             }))),
                     ),

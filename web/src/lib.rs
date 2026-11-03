@@ -1654,6 +1654,10 @@ struct WebSession {
     video_seeded: bool,
     drop_until_keyframe: bool,
     client_clock: f64,
+    video_hidden: bool,
+    replaying_hidden_gop: bool,
+    hidden_gops: VecDeque<Vec<Packet>>,
+    hidden_gop_bytes: usize,
     mse_gop: Vec<GopPacket>,
     mse_seq: u32,
     mse_min_dts: i64,
@@ -1784,9 +1788,11 @@ impl WebSession {
         self.video_seeded = false;
         self.drop_until_keyframe = false;
         self.client_clock = self.seek_target.unwrap_or(0.0);
+        self.replaying_hidden_gop = false;
+        self.hidden_gops.clear();
+        self.hidden_gop_bytes = 0;
         self.mse_gop.clear();
         self.mse_started = false;
-
         if let Some(vi) = self.video_idx
             && let Some(s) = self.stream_info(vi).cloned()
         {
@@ -1861,6 +1867,111 @@ impl WebSession {
                 .ok()
                 .and_then(Result::ok);
             self.sub_meta = Some((s.time_base, s.params.codec_id.as_str().to_string()));
+        }
+    }
+
+    // Holds the current GOP's raw packets un-decoded while the tab is hidden, then replays them cleanly on return.
+    fn set_hidden(&mut self, hidden: bool) {
+        if self.video_hidden == hidden {
+            return;
+        }
+        self.video_hidden = hidden;
+        if hidden {
+            self.hidden_gops.clear();
+            self.hidden_gop_bytes = 0;
+            return;
+        }
+        while self.hidden_gops.len() >= 2
+            && self.hidden_gops[1]
+                .first()
+                .and_then(|p| self.pkt_secs(p))
+                .is_some_and(|s| s <= self.client_clock + 0.02)
+        {
+            self.hidden_gops.pop_front();
+        }
+        let mut gop: Vec<Packet> = std::mem::take(&mut self.hidden_gops).into_iter().flatten().collect();
+        self.hidden_gop_bytes = 0;
+        if gop.is_empty() {
+            if self.video_mode == VideoOutputMode::Software {
+                self.drop_until_keyframe = true;
+                self.video_seeded = false;
+            } else if self.video_mode == VideoOutputMode::WebCodecs {
+                self.mse_started = false;
+            }
+            return;
+        }
+        if self.video_mode == VideoOutputMode::Software {
+            if let Some(dec) = self.video_dec.as_mut() {
+                let _ = catch_unwind(AssertUnwindSafe(|| dec.flush()));
+            }
+            self.drop_until_keyframe = false;
+            self.video_seeded = false;
+            self.replaying_hidden_gop = true;
+            for pkt in gop.drain(..) {
+                self.handle_video_packet(pkt);
+            }
+            self.replaying_hidden_gop = false;
+        } else if self.video_mode == VideoOutputMode::WebCodecs {
+            self.mse_started = false;
+            for pkt in gop.drain(..) {
+                self.handle_video_packet(pkt);
+            }
+        }
+    }
+
+    fn pkt_secs(&self, pkt: &Packet) -> Option<f64> {
+        let tb = self.video_meta.as_ref()?.time_base;
+        pkt.pts.or(pkt.dts).filter(|_| tb.is_valid()).map(|t| tb.seconds_of(t).max(0.0))
+    }
+
+    fn stash_hidden_gop_packet(&mut self, pkt: Packet) {
+        const MAX_HIDDEN_GOPS: usize = 12;
+        const MAX_GOP_PKTS: usize = 320;
+        const MAX_HIDDEN_BYTES: usize = 48 * 1024 * 1024;
+        if pkt.flags.keyframe {
+            // Audio buffers up to 5 s ahead while hidden; on 1 s Blu-ray GOPs that spans several keyframes,
+            // so keep every GOP from the active keyframe at client_clock forward and drop only spent ones.
+            while self.hidden_gops.len() >= 2
+                && self.hidden_gops[1]
+                    .first()
+                    .and_then(|p| self.pkt_secs(p))
+                    .is_some_and(|s| s <= self.client_clock + 0.02)
+            {
+                if let Some(old) = self.hidden_gops.pop_front() {
+                    let dropped: usize = old.iter().map(|p| p.data.len()).sum();
+                    self.hidden_gop_bytes = self.hidden_gop_bytes.saturating_sub(dropped);
+                }
+            }
+            if self.pkt_secs(&pkt).is_some_and(|s| s <= self.client_clock + 0.02) {
+                self.hidden_gops.clear();
+                self.hidden_gop_bytes = 0;
+            }
+            while self.hidden_gops.len() >= MAX_HIDDEN_GOPS
+                || (self.hidden_gops.len() >= 2 && self.hidden_gop_bytes + pkt.data.len() > MAX_HIDDEN_BYTES)
+            {
+                if let Some(old) = self.hidden_gops.pop_front() {
+                    let dropped: usize = old.iter().map(|p| p.data.len()).sum();
+                    self.hidden_gop_bytes = self.hidden_gop_bytes.saturating_sub(dropped);
+                }
+            }
+            self.hidden_gop_bytes += pkt.data.len();
+            self.hidden_gops.push_back(vec![pkt]);
+        } else if let Some(cur) = self.hidden_gops.back()
+            && cur.len() < MAX_GOP_PKTS
+            && self.hidden_gop_bytes + pkt.data.len() <= MAX_HIDDEN_BYTES
+        {
+            self.hidden_gop_bytes += pkt.data.len();
+            if let Some(last) = self.hidden_gops.back_mut() {
+                last.push(pkt);
+            }
+        } else {
+            self.hidden_gops.clear();
+            self.hidden_gop_bytes = 0;
+            self.drop_until_keyframe = true;
+            self.video_seeded = false;
+            if self.video_mode == VideoOutputMode::WebCodecs {
+                self.mse_started = false;
+            }
         }
     }
 
@@ -1997,7 +2108,7 @@ impl WebSession {
                     data_4byte,
                 });
             }
-            let (emit_n, need_n) = if self.mse_seq == 0 { (8usize, 12usize) } else { (16usize, 24usize) };
+            let (emit_n, need_n) = if self.mse_seq == 0 { (8usize, 16usize) } else { (16usize, 24usize) };
             if self.mse_gop.len() >= need_n {
                 let chunk: Vec<GopPacket> = self.mse_gop.drain(..emit_n).collect();
                 self.mse_seq = self.mse_seq.wrapping_add(1);
@@ -2008,6 +2119,11 @@ impl WebSession {
                     self.out_queue.push_back(OutItem::MseSegment { data: seg, start, end });
                 }
             }
+            return;
+        }
+
+        if self.video_hidden {
+            self.stash_hidden_gop_packet(pkt);
             return;
         }
 
@@ -2050,11 +2166,12 @@ impl WebSession {
                 return;
             }
             self.drop_until_keyframe = false;
+            self.video_seeded = false;
             if let Some(dec) = self.video_dec.as_mut() {
                 let _ = catch_unwind(AssertUnwindSafe(|| dec.flush()));
             }
         } else if let Some(est) = pkt_pts_secs {
-            if self.client_clock > 0.5 && est + 1.50 < self.client_clock && !pkt.flags.keyframe {
+            if !self.replaying_hidden_gop && self.client_clock > 0.5 && est + 1.50 < self.client_clock && !pkt.flags.keyframe {
                 self.drop_until_keyframe = true;
                 return;
             }
@@ -2088,8 +2205,12 @@ impl WebSession {
                     continue;
                 }
                 let seed_pkt = pkt_pts_secs.take();
+                let vf_pts = vf
+                    .pts
+                    .filter(|_| tb.is_valid())
+                    .map(|t| tb.seconds_of(t).max(0.0));
                 if !self.video_seeded {
-                    self.video_next_pts = seed_pkt.unwrap_or_else(|| self.seek_target.unwrap_or(0.0));
+                    self.video_next_pts = vf_pts.or(seed_pkt).unwrap_or_else(|| self.seek_target.unwrap_or(0.0));
                     self.video_seeded = true;
                 }
                 let pts_secs = if is_avi {
@@ -2098,9 +2219,7 @@ impl WebSession {
                         _ => self.video_next_pts,
                     }
                 } else {
-                    vf.pts
-                        .filter(|_| tb.is_valid())
-                        .map(|t| tb.seconds_of(t).max(0.0))
+                    vf_pts
                         .filter(|&s| (s - self.video_next_pts).abs() < 2.0)
                         .or_else(|| seed_pkt.filter(|&s| (s - self.video_next_pts).abs() < 0.5))
                         .unwrap_or(self.video_next_pts)

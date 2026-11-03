@@ -22,6 +22,8 @@ final class AppModel: ObservableObject {
     @Published var shareURI: String?
     @Published var error: String?
     @Published var notice: String?
+    @Published var downloads: [String: Double] = [:]
+    private var downloadTasks: [String: Task<Void, Never>] = [:]
     @Published var busy = false
     @Published var soundfontBusy = false
     @Published var soundfontPresent = false
@@ -338,8 +340,122 @@ final class AppModel: ObservableObject {
         }
     }
     private func reconcileBackground() {
-        if background && session.isEmpty && !workerSuspended { worker?.suspend(); workerSuspended = true }
-        else if !session.isEmpty && workerSuspended { worker?.resume(); workerSuspended = false }
+        let keepAwake = !session.isEmpty || !downloads.isEmpty
+        if background && !keepAwake && !workerSuspended { worker?.suspend(); workerSuspended = true }
+        else if keepAwake && workerSuspended { worker?.resume(); workerSuspended = false }
+    }
+    func download(_ entry: MediaEntry) {
+        guard downloadTasks[entry.key] == nil, let url = URL(string: entry.streamURL) else { return }
+        downloads[entry.key] = 0
+        notice = "Downloading \(entry.title) to Files…"
+        let key = entry.key
+        let rawTitle = entry.episode.map { entry.title.localizedCaseInsensitiveContains($0) ? entry.title : "\(entry.title) \($0)" } ?? entry.title
+        downloadTasks[key] = Task { [weak self] in
+            guard let self else { return }
+            _ = try? await self.worker?.request("warm", ["key": key])
+            do {
+                let savedName = try await Self.streamToDocuments(url: url, title: rawTitle, expectedSize: Int64(entry.size)) { written in
+                    await MainActor.run { self.downloads[key] = Double(written) }
+                }
+                self.notice = "Saved \(savedName) to Files"
+            } catch is CancellationError {
+                self.notice = nil
+            } catch {
+                self.error = "Download failed: \(error.localizedDescription)"
+            }
+            self.downloads.removeValue(forKey: key)
+            self.downloadTasks.removeValue(forKey: key)
+            self.reconcileBackground()
+        }
+    }
+    func cancelDownload(_ key: String) {
+        downloadTasks.removeValue(forKey: key)?.cancel()
+        downloads.removeValue(forKey: key)
+        reconcileBackground()
+    }
+    nonisolated private static func streamToDocuments(url: URL, title: String, expectedSize: Int64, onProgress: @Sendable @escaping (Int64) async -> Void) async throws -> String {
+        let (bytes, response) = try await URLSession.shared.bytes(from: url)
+        if let http = response as? HTTPURLResponse, http.statusCode != 200 && http.statusCode != 206 {
+            throw AppFailure("Stream answered HTTP \(http.statusCode)")
+        }
+        var iterator = bytes.makeAsyncIterator()
+        var head = Data()
+        head.reserveCapacity(256)
+        while head.count < 256, let b = try await iterator.next() {
+            try Task.checkCancellation()
+            head.append(b)
+        }
+        let ext = sniffExtension(head)
+        let clean = title.replacingOccurrences(of: "[/\\\\:*?\"<>|\\x00-\\x1f]+", with: " ", options: .regularExpression)
+            .split(whereSeparator: \.isWhitespace).joined(separator: " ")
+        let stem = clean.isEmpty ? "PearTube Video" : String(clean.prefix(160))
+        let fileName = stem.range(of: "\\.(mkv|mp4|webm|mov|avi|m4v|ts|ogv|ogg|flac|mp3)$", options: [.regularExpression, .caseInsensitive]) != nil ? stem : "\(stem)\(ext)"
+        let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!.appendingPathComponent("Downloads", isDirectory: true)
+        try FileManager.default.createDirectory(at: docs, withIntermediateDirectories: true)
+        let finalURL = docs.appendingPathComponent(fileName)
+        let partURL = docs.appendingPathComponent(".\(fileName).part")
+        try? FileManager.default.removeItem(at: partURL)
+        FileManager.default.createFile(atPath: partURL.path, contents: nil)
+        let handle = try FileHandle(forWritingTo: partURL)
+        var written: Int64 = 0
+        do {
+            if !head.isEmpty {
+                try handle.write(contentsOf: head)
+                written += Int64(head.count)
+                await onProgress(written)
+            }
+            var buf = Data()
+            buf.reserveCapacity(262_144)
+            var lastUpdate = Date.distantPast
+            while let b = try await iterator.next() {
+                buf.append(b)
+                if buf.count >= 262_144 {
+                    try Task.checkCancellation()
+                    try handle.write(contentsOf: buf)
+                    written += Int64(buf.count)
+                    buf.removeAll(keepingCapacity: true)
+                    if Date().timeIntervalSince(lastUpdate) >= 0.2 {
+                        lastUpdate = Date()
+                        await onProgress(written)
+                    }
+                }
+            }
+            if !buf.isEmpty {
+                try Task.checkCancellation()
+                try handle.write(contentsOf: buf)
+                written += Int64(buf.count)
+            }
+            try handle.synchronize()
+            try handle.close()
+            if expectedSize > 0 && written != expectedSize {
+                throw AppFailure("Incomplete download (\(written) of \(expectedSize) bytes)")
+            }
+            if FileManager.default.fileExists(atPath: finalURL.path) { try FileManager.default.removeItem(at: finalURL) }
+            try FileManager.default.moveItem(at: partURL, to: finalURL)
+            return fileName
+        } catch {
+            try? handle.close()
+            try? FileManager.default.removeItem(at: partURL)
+            throw error
+        }
+    }
+    nonisolated private static func sniffExtension(_ head: Data) -> String {
+        let bytes = [UInt8](head)
+        func ascii(_ off: Int, _ len: Int) -> String {
+            off + len <= bytes.count ? String(bytes: bytes[off..<(off + len)], encoding: .isoLatin1) ?? "" : ""
+        }
+        if bytes.count >= 4 && bytes[0] == 0x1a && bytes[1] == 0x45 && bytes[2] == 0xdf && bytes[3] == 0xa3 {
+            return ascii(0, min(bytes.count, 128)).lowercased().contains("webm") ? ".webm" : ".mkv"
+        }
+        if bytes.count >= 12 && ["ftyp", "moov", "mdat", "free", "wide", "skip"].contains(ascii(4, 4)) {
+            return ascii(8, 4) == "qt  " ? ".mov" : ".mp4"
+        }
+        if bytes.count >= 12 && ascii(0, 4) == "RIFF" && ascii(8, 4) == "AVI " { return ".avi" }
+        if bytes.count >= 4 && ascii(0, 4) == "OggS" { return ".ogv" }
+        if bytes.count >= 4 && ascii(0, 4) == "fLaC" { return ".flac" }
+        if bytes.count >= 3 && ascii(0, 3) == "ID3" { return ".mp3" }
+        if !bytes.isEmpty && bytes[0] == 0x47 && (bytes.count < 189 || bytes[188] == 0x47) { return ".ts" }
+        return ".mkv"
     }
     func importSoundfont(_ url: URL) async {
         guard let storage, !soundfontBusy else { return }

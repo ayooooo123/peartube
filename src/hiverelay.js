@@ -374,7 +374,7 @@ export function createHiverelaySeeder ({
       viewerSent.set(conn, now)
       if (prev !== undefined) viewerBytes += Math.max(0, now - prev)
     }
-    if (viewerBytes >= VIEWER_BYTES_PER_TICK) viewersUntil = Date.now() + VIEWER_HOLD_MS
+    if (viewerBytes >= VIEWER_BYTES_PER_TICK || node.httpViewing?.()) viewersUntil = Date.now() + VIEWER_HOLD_MS
     const nowViewing = Date.now() < viewersUntil
     if (nowViewing !== viewing) {
       viewing = nowViewing
@@ -383,12 +383,19 @@ export function createHiverelaySeeder ({
     if (!bulkBytesPerTick) return
     let sent = 0
     for (const [conn, prev] of bulkConns) {
-      if (conn.destroyed) { bulkConns.delete(conn); continue }
+      if (conn.destroyed) {
+        bulkConns.delete(conn)
+        if (conn.remotePublicKey) node.markBulkPeer?.(b4a.toString(conn.remotePublicKey, 'hex'), false)
+        continue
+      }
       const now = rawWritten(conn)
       if (!busyChannels.has(conn)) sent += Math.max(0, now - prev)
       bulkConns.set(conn, now)
     }
-    bulkTokens = Math.min(bulkBytesPerTick * 2, bulkTokens + bulkBytesPerTick - sent)
+    // While human viewers stream (P2P or /v1/blob), pulse non-bulk-busy HiveRelays at <= 0.5 Mbps (<= 6 s pause, under Protomux's 10 s timeout).
+    const tickBudget = viewing ? Math.min(bulkBytesPerTick, 15_625) : bulkBytesPerTick
+    const nextTokens = Math.min(tickBudget * 2, bulkTokens + tickBudget - sent)
+    bulkTokens = viewing ? Math.max(-tickBudget * 24, nextTokens) : nextTokens
     const pause = bulkTokens < 0
     if (pause === bulkPaused) return
     bulkPaused = pause
@@ -400,11 +407,15 @@ export function createHiverelaySeeder ({
   function markBulk (conn) {
     if (closed || conn.destroyed || bulkConns.has(conn)) return
     bulkConns.set(conn, rawWritten(conn))
+    if (conn.remotePublicKey) node.markBulkPeer?.(b4a.toString(conn.remotePublicKey, 'hex'), true)
     if (bulkPaused && !busyChannels.has(conn)) conn.pause()
   }
   // A publisher (another PearTube relay) opens the same channel but sends seed requests; HiveRelays never do.
   function unmarkBulk (conn) {
     if (!bulkConns.delete(conn)) return
+    if (conn.remotePublicKey && ![...bulkConns.keys()].some(c => c.remotePublicKey && b4a.equals(c.remotePublicKey, conn.remotePublicKey))) {
+      node.markBulkPeer?.(b4a.toString(conn.remotePublicKey, 'hex'), false)
+    }
     if (bulkPaused) conn.resume()
   }
   function attachBusy (conn, mux) {

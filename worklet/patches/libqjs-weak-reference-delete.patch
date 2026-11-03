@@ -1,0 +1,26 @@
+libqjs attaches each weak native reference (js_ref_t at count 0, including every
+jstl js_persistent_t::reset() in rocksdb-native and udx-native) as a symbol
+property [Symbol("__native_reference")] -> External(js_finalizer_t) on the
+referenced JS object with flags = 0 (non-configurable), then calls
+JS_DeleteProperty(..., 0) in js__clear_weak_reference. QuickJS delete_property
+returns FALSE (0) on non-configurable properties, which satisfies assert(err >= 0)
+while leaving the Symbol, External object, 64-byte js_finalizer_t, and growing
+JSShape slot pinned on long-lived objects (such as RocksDB's State and onread
+callback) forever (~4 KB leaked per RocksDB read/write, swelling PearTube.app to
+2+ GB). Define the weak-reference property with JS_PROP_CONFIGURABLE so
+js__clear_weak_reference actually deletes it, frees the External and finalizer on
+the spot, and lets QuickJS compact the object's shape. Apply in libqjs, after
+libqjs-deferred-release.patch.
+
+diff --git a/src/js.c b/src/js.c
+--- a/src/js.c
++++ b/src/js.c
+@@ -2127,7 +2127,7 @@ js__set_weak_reference(js_env_t *env, js_ref_t *reference) {
+ 
+     JSAtom atom = JS_ValueToAtom(env->context, reference->symbol);
+ 
+-    err = JS_DefinePropertyValue(env->context, reference->value, atom, external, 0);
++    err = JS_DefinePropertyValue(env->context, reference->value, atom, external, JS_PROP_CONFIGURABLE);
+     assert(err >= 0);
+ 
+     JS_FreeAtom(env->context, atom);

@@ -39,6 +39,7 @@ val ShareIcon = icon("Share", "M18 16a3 3 0 0 0-2.38 1.17L8.91 13.3a3 3 0 0 0 0-
 val DeleteSweepIcon = icon("Free up cache", "M3 6h11v2H3V6zm2 3h7v12H5V9zm2-6h3v2H7V3zm9 6h6v2h-6V9zm0 4h5v2h-5v-2zm0 4h4v2h-4v-2z")
 val AddIcon = icon("Add", "M19 11h-6V5h-2v6H5v2h6v6h2v-6h6z")
 val InfoIcon = icon("Content info", "M11 17h2v-6h-2v6zm1-15a10 10 0 1 0 0 20 10 10 0 0 0 0-20zm0 18a8 8 0 1 1 0-16 8 8 0 0 1 0 16zM11 9h2V7h-2v2z")
+val DownloadIcon = icon("Download", "M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z")
 
 private fun icon(name: String, path: String) =
     ImageVector.Builder(name, 24.dp, 24.dp, 24f, 24f)

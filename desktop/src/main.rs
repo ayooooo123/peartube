@@ -26,7 +26,7 @@ actions!(peartube, [Quit]);
 // Cinema UI & player icons from Lucide.
 icon_assets!(PlayerIcons, [
     Captions, Volume2, RotateCcw, Cast, Tv, TvMinimalPlay, QrCode, Info,
-    Ellipsis, ChevronDown, ChevronRight, Sparkles, Share2, SlidersHorizontal, Check, Plus, Search
+    Ellipsis, ChevronDown, ChevronRight, Sparkles, Share2, SlidersHorizontal, Check, Plus, Search, Download, X
 ]);
 /// gpui-component's icons plus the player's.
 struct AppAssets;

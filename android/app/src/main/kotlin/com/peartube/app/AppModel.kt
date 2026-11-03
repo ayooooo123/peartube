@@ -1,19 +1,28 @@
 package com.peartube.app
 
 import android.app.Application
+import android.content.ContentValues
 import android.net.Uri
+import android.os.Environment
+import android.provider.MediaStore
+import android.util.AtomicFile
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
 import java.io.File
-import android.util.AtomicFile
+import java.net.HttpURLConnection
+import java.net.URL
+import java.util.concurrent.ConcurrentHashMap
 
 sealed interface Screen {
     data object List : Screen
@@ -21,6 +30,8 @@ sealed interface Screen {
     data object Cast : Screen
     data class Play(val entry: Entry, val startPositionMs: Long? = null) : Screen
 }
+
+data class DownloadProgress(val bytes: Long, val total: Long)
 
 /** The app's state. Lives with the process, so it outlasts the activity. */
 class AppModel(private val app: Application) {
@@ -40,6 +51,8 @@ class AppModel(private val app: Application) {
     val pendingCast = MutableStateFlow<PendingCast?>(null)
     val selectedCastReceiver = MutableStateFlow<CastReceiver?>(null)
     val notice = MutableStateFlow<String?>(null)
+    val downloads = MutableStateFlow<Map<String, DownloadProgress>>(emptyMap())
+    private val downloadJobs = ConcurrentHashMap<String, Job>()
     private val historyFile = AtomicFile(File(dataDir, "watch-history.json"))
     val watchHistory = MutableStateFlow(loadWatchHistory())
     private val historyWrites = Channel<Map<String, WatchProgress>>(Channel.CONFLATED)
@@ -171,7 +184,7 @@ class AppModel(private val app: Application) {
         starts.trySend(next)
     }
 
-    fun shouldKeepWorkerAwake(): Boolean = cast.value.session != null
+    fun shouldKeepWorkerAwake(): Boolean = cast.value.session != null || downloads.value.isNotEmpty()
 
     fun openUriOrKey(raw: String) {
         val trimmed = raw.trim()
@@ -342,6 +355,120 @@ class AppModel(private val app: Application) {
                 error.value = e.message
             }
         }
+    }
+
+    fun downloadEntry(entry: Entry, nameOverride: String? = null) {
+        if (downloadJobs.containsKey(entry.key)) return
+        if (entry.streamUrl.isBlank()) {
+            error.value = "This video has no local stream URL yet"
+            return
+        }
+        val rawTitle = (nameOverride ?: entry.title).ifBlank { entry.id }
+        downloads.value = downloads.value + (entry.key to DownloadProgress(0L, entry.size))
+        notice.value = "Downloading $rawTitle to Downloads…"
+        val job = scope.launch(Dispatchers.IO) {
+            var itemUri: Uri? = null
+            var conn: HttpURLConnection? = null
+            try {
+                conn = (URL(entry.streamUrl).openConnection() as HttpURLConnection).apply {
+                    connectTimeout = 15_000
+                    readTimeout = 45_000
+                    requestMethod = "GET"
+                }
+                val status = conn.responseCode
+                if (status != 200 && status != 206) error("Stream answered HTTP $status")
+                val input = conn.inputStream
+                val head = ByteArray(256)
+                var headLen = 0
+                while (headLen < head.size) {
+                    ensureActive()
+                    val n = input.read(head, headLen, head.size - headLen)
+                    if (n < 0) break
+                    headLen += n
+                }
+                val (ext, mime) = sniffContainer(head, headLen)
+                val cleanBase = rawTitle.replace(Regex("[/\\\\:*?\"<>|\\x00-\\x1f]+"), " ").replace(Regex("\\s+"), " ").trim().take(160).ifEmpty { "PearTube Video" }
+                val knownExt = Regex("\\.(mkv|mp4|webm|mov|avi|m4v|ts|ogv|ogg|flac|mp3)$", RegexOption.IGNORE_CASE)
+                val fileName = if (knownExt.containsMatchIn(cleanBase)) cleanBase else "$cleanBase$ext"
+
+                val values = ContentValues().apply {
+                    put(MediaStore.MediaColumns.DISPLAY_NAME, fileName)
+                    put(MediaStore.MediaColumns.MIME_TYPE, mime)
+                    put(MediaStore.MediaColumns.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS)
+                    put(MediaStore.MediaColumns.IS_PENDING, 1)
+                }
+                val resolver = app.contentResolver
+                val uri = resolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
+                    ?: error("Cannot create file in Downloads")
+                itemUri = uri
+                var written = 0L
+                var lastTick = 0L
+                val buf = ByteArray(256 * 1024)
+                resolver.openOutputStream(uri)?.use { out ->
+                    if (headLen > 0) {
+                        out.write(head, 0, headLen)
+                        written += headLen
+                        downloads.value = downloads.value + (entry.key to DownloadProgress(written, entry.size))
+                    }
+                    while (true) {
+                        ensureActive()
+                        val n = input.read(buf)
+                        if (n < 0) break
+                        out.write(buf, 0, n)
+                        written += n
+                        val now = System.currentTimeMillis()
+                        if (now - lastTick >= 200L) {
+                            lastTick = now
+                            downloads.value = downloads.value + (entry.key to DownloadProgress(written, entry.size))
+                        }
+                    }
+                    out.flush()
+                } ?: error("Cannot open Downloads output stream")
+
+                if (entry.size > 0L && written != entry.size) {
+                    error("Incomplete download ($written of ${entry.size} bytes)")
+                }
+                resolver.update(uri, ContentValues().apply { put(MediaStore.MediaColumns.IS_PENDING, 0) }, null, null)
+                itemUri = null
+                notice.value = "Saved $fileName to Downloads"
+            } catch (ce: CancellationException) {
+                itemUri?.let { runCatching { app.contentResolver.delete(it, null, null) } }
+                throw ce
+            } catch (e: Exception) {
+                itemUri?.let { runCatching { app.contentResolver.delete(it, null, null) } }
+                error.value = "Download failed: ${e.message ?: e}"
+            } finally {
+                runCatching { conn?.disconnect() }
+                downloadJobs.remove(entry.key)
+                downloads.value = downloads.value - entry.key
+                if (!inForeground && !shouldKeepWorkerAwake()) {
+                    withContext(Dispatchers.Main) { worker.suspend() }
+                }
+            }
+        }
+        downloadJobs[entry.key] = job
+    }
+
+    fun cancelDownload(key: String) {
+        downloadJobs.remove(key)?.cancel()
+        downloads.value = downloads.value - key
+    }
+
+    private fun sniffContainer(b: ByteArray, len: Int): Pair<String, String> {
+        fun ascii(off: Int, n: Int) = if (off + n <= len) String(b, off, n, Charsets.ISO_8859_1) else ""
+        if (len >= 4 && b[0] == 0x1a.toByte() && b[1] == 0x45.toByte() && b[2] == 0xdf.toByte() && b[3] == 0xa3.toByte()) {
+            return if (ascii(0, minOf(len, 128)).lowercase().contains("webm")) ".webm" to "video/webm"
+            else ".mkv" to "video/x-matroska"
+        }
+        if (len >= 12 && ascii(4, 4) in setOf("ftyp", "moov", "mdat", "free", "wide", "skip")) {
+            return if (ascii(8, 4) == "qt  ") ".mov" to "video/quicktime" else ".mp4" to "video/mp4"
+        }
+        if (len >= 12 && ascii(0, 4) == "RIFF" && ascii(8, 4) == "AVI ") return ".avi" to "video/x-msvideo"
+        if (len >= 4 && ascii(0, 4) == "OggS") return ".ogv" to "video/ogg"
+        if (len >= 4 && ascii(0, 4) == "fLaC") return ".flac" to "audio/flac"
+        if (len >= 3 && ascii(0, 3) == "ID3") return ".mp3" to "audio/mpeg"
+        if (len >= 1 && b[0] == 0x47.toByte() && (len < 189 || b[188] == 0x47.toByte())) return ".ts" to "video/mp2t"
+        return ".mkv" to "application/octet-stream"
     }
     fun importSoundFont(uri: Uri) = soundFontJob { SoundFont.import(app.contentResolver, uri, dataDir) }
 

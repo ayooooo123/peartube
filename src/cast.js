@@ -9,7 +9,7 @@ import os from 'node:os'
 import { randomBytes } from 'node:crypto'
 import Corestore from 'corestore'
 import HyperDHT from 'hyperdht'
-import BlobServer from 'hypercore-blob-server'
+import { createBlobRangeServer } from './blob-server.js'
 import ByteStream from 'hypercore-byte-stream'
 import b4a from 'b4a'
 import { createNode, formatWatchUri, parseUri } from './index.js'
@@ -1542,8 +1542,8 @@ export function createCastController ({
     if (castBlobServer) return castBlobServer
     const node = getNode()
     if (!node) throw new Error('Node not started')
-    // Stock hypercore-blob-server; its default random token keeps LAN links unguessable.
-    const srv = new BlobServer(node.store.session(), {
+    // Token-guarded LAN Range server over ByteStream; kills active download ranges the instant a receiver drops the socket.
+    const srv = createBlobRangeServer(node.store.session(), {
       host: getLanHost() || '127.0.0.1',
       address: '0.0.0.0',
       port: 0,

@@ -201,7 +201,10 @@ impl PearTube {
                 Err(err) => Err(err),
             };
             match started {
-                Ok(()) => refresh(&this, cx).await,
+                Ok(()) => {
+                    refresh(&this, cx).await;
+                    peartube::worker::release_unused_memory();
+                }
                 Err(err) => {
                     let _ = this.update(cx, |this, cx| this.fail(err, cx));
                 }
@@ -854,12 +857,14 @@ async fn refresh(this: &WeakEntity<PearTube>, cx: &mut AsyncApp) {
         return;
     }
     let result = futures_util::join!(w.status(), w.search(None), w.identity(false));
+    let mut count_changed = false;
     let _ = this.update(cx, |this, cx| {
         if let Ok(ident) = result.2 {
             this.identity = Some(ident);
         }
         match (result.0, result.1) {
             (Ok(status), Ok(entries)) => {
+                count_changed = this.entries.len() != entries.len();
                 this.status = Some(status);
                 this.entries = entries;
             }
@@ -867,6 +872,9 @@ async fn refresh(this: &WeakEntity<PearTube>, cx: &mut AsyncApp) {
         }
         cx.notify();
     });
+    if count_changed {
+        std::thread::spawn(peartube::worker::release_unused_memory);
+    }
 }
 
 fn sniff_container_ext(head: &[u8]) -> &'static str {

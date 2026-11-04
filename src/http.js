@@ -68,6 +68,7 @@ function readStream (port, search, start, end) {
       res.on('data', chunk => chunks.push(chunk))
       res.once('end', () => { clearTimeout(timer); resolve(b4a.concat(chunks)) })
       res.once('error', fail)
+      res.once('close', () => { if (!res.complete) fail(new Error('Stream closed early')) })
     })
     req.once('error', fail)
     req.end()
@@ -438,6 +439,7 @@ export function createApi (state) {
         }
         dlMeta = { mime: fmt.mime, disposition: contentDispositionFor(dlTitle, fmt.ext) }
       }
+      if (res.destroyed) return
       const headers = req.headers.range ? { range: req.headers.range } : {}
       const up = httpRequest({ host: '127.0.0.1', port: state.node.blobServer.port, path: '/' + upUrl.search, method: req.method, headers }, upRes => {
         const out = { ...CORS }
@@ -449,12 +451,15 @@ export function createApi (state) {
           out['content-disposition'] = dlMeta.disposition
         }
         res.writeHead(upRes.statusCode || 502, out)
-        // A player that drops a Range read closes `res` first; the pipe then destroys `upRes` with an error that would
-        // otherwise go uncaught and take the whole relay down.
+        // A player that drops a Range read closes `res` first; if upstream aborts mid-body (`clearCache`), tear `res` down too so it never hangs.
         upRes.once('error', () => res.destroy())
+        upRes.once('close', () => { if (!upRes.complete && !res.writableEnded && !res.destroyed) res.destroy() })
         upRes.pipe(res)
       })
-      up.once('error', () => { if (!res.headersSent) res.writeHead(502, CORS); res.end() })
+      up.once('error', () => {
+        if (!res.headersSent) { res.writeHead(502, CORS); res.end() }
+        else if (!res.destroyed) res.destroy()
+      })
       res.once('close', () => up.destroy())
       up.end()
       return

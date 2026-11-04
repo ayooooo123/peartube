@@ -1,17 +1,5 @@
-QuickJS marks every WeakMap value unconditionally during gc_scan and only
-reaps WeakMap entries whose key ref_count was already zero before gc_decref, so
-every slutty socket<->connection pair stuffed into bare-http1's _connections
-(along with bare-https's _secureSockets, bare-url's URLSearchParams, and
-blind-relay's _clients) stayed pinned forever with its 64 KiB read buffer
-throbbing in RAM. On top of that, libqjs allocates ArrayBuffer backing stores
-outside js_mallocz, leaving js_trigger_gc blind to external ArrayBuffer bytes.
-Walk live WeakMaps as true ephemerons to a fixed point in gc_scan, sever dead
-edges, reap cyclic weak targets at the tail of JS_RunGCInternal, and count
-non-arena ArrayBuffer bytes toward malloc_gc_threshold. Apply in quickjs, after
-libqjs's patches.
-
 diff --git a/quickjs.c b/quickjs.c
-index a870743..c90d2f8 100644
+index a870743..027df02 100644
 --- a/quickjs.c
 +++ b/quickjs.c
 @@ -358,6 +358,7 @@ struct JSRuntime {
@@ -30,13 +18,11 @@ index a870743..c90d2f8 100644
  } JSArrayBuffer;
  
  typedef struct JSTypedArray {
-@@ -1106,7 +1108,8 @@ struct JSObject {
- 
+@@ -1107,6 +1109,7 @@ struct JSObject {
  typedef struct JSMapRecord {
      int ref_count; /* used during enumeration to avoid freeing the record */
--    BOOL empty : 8; /* TRUE if the record is deleted */
-+    BOOL empty : 4; /* TRUE if the record is deleted */
-+    BOOL gc_marked : 4; /* TRUE if ephemeron value was marked in gc_scan */
+     BOOL empty : 8; /* TRUE if the record is deleted */
++    BOOL gc_marked : 8; /* TRUE if ephemeron value was marked in gc_scan */
      struct list_head link;
      struct JSMapRecord *hash_next;
      JSValue key;
@@ -60,22 +46,20 @@ index a870743..c90d2f8 100644
  static void weakref_delete_weakref(JSRuntime *rt, JSWeakRefHeader *wh);
  static void finrec_delete_weakref(JSRuntime *rt, JSWeakRefHeader *wh);
  static void JS_RunGCInternal(JSRuntime *rt, BOOL remove_weak_objects);
-@@ -1826,17 +1833,20 @@ static void js_trigger_gc(JSRuntime *rt, size_t size)
+@@ -1826,17 +1833,18 @@ static void js_trigger_gc(JSRuntime *rt, size_t size)
  #ifdef FORCE_GC_AT_MALLOC
      force_gc = TRUE;
  #else
 -    force_gc = ((rt->malloc_ctx.malloc_state.malloc_size + size) >
--                rt->malloc_gc_threshold);
-+    {
-+        size_t total = rt->malloc_ctx.malloc_state.malloc_size + rt->ab_malloc_size;
-+        force_gc = ((total + size) > rt->malloc_gc_threshold);
-+    }
++    force_gc = ((rt->malloc_ctx.malloc_state.malloc_size + rt->ab_malloc_size + size) >
+                 rt->malloc_gc_threshold);
  #endif
      if (force_gc) {
 +        size_t total;
  #ifdef DUMP_GC
          printf("GC: size=%" PRIu64 "\n",
-                (uint64_t)rt->malloc_ctx.malloc_state.malloc_size);
+-               (uint64_t)rt->malloc_ctx.malloc_state.malloc_size);
++               (uint64_t)(rt->malloc_ctx.malloc_state.malloc_size + rt->ab_malloc_size));
  #endif
          JS_RunGC(rt);
 -        rt->malloc_gc_threshold = rt->malloc_ctx.malloc_state.malloc_size +
@@ -85,7 +69,7 @@ index a870743..c90d2f8 100644
      }
  }
  
-@@ -7024,15 +7034,35 @@ static void gc_scan_incref_child2(JSRuntime *rt, JSGCObjectHeader *p)
+@@ -7024,15 +7032,35 @@ static void gc_scan_incref_child2(JSRuntime *rt, JSGCObjectHeader *p)
  
  static void gc_scan(JSRuntime *rt)
  {
@@ -128,7 +112,7 @@ index a870743..c90d2f8 100644
      }
  
      /* restore the refcount of the objects to be deleted. */
-@@ -7119,6 +7149,12 @@ static void JS_RunGCInternal(JSRuntime *rt, BOOL remove_weak_objects)
+@@ -7119,6 +7147,12 @@ static void JS_RunGCInternal(JSRuntime *rt, BOOL remove_weak_objects)
  
      /* free the GC objects in a cycle */
      gc_free_cycles(rt);
@@ -141,7 +125,7 @@ index a870743..c90d2f8 100644
  }
  
  void JS_RunGC(JSRuntime *rt)
-@@ -54790,6 +54826,7 @@ static JSMapRecord *map_add_record(JSContext *ctx, JSMapState *s,
+@@ -54790,6 +54824,7 @@ static JSMapRecord *map_add_record(JSContext *ctx, JSMapState *s,
          return NULL;
      mr->ref_count = 1;
      mr->empty = FALSE;
@@ -149,7 +133,7 @@ index a870743..c90d2f8 100644
      if (s->is_weak) {
          mr->key = js_weakref_new(ctx, key);
      } else {
-@@ -54883,6 +54920,51 @@ static void map_delete_weakrefs(JSRuntime *rt, JSWeakRefHeader *wh)
+@@ -54883,6 +54918,51 @@ static void map_delete_weakrefs(JSRuntime *rt, JSWeakRefHeader *wh)
      }
  }
  
@@ -201,7 +185,7 @@ index a870743..c90d2f8 100644
  static JSValue js_map_set(JSContext *ctx, JSValueConst this_val,
                            int argc, JSValueConst *argv, int magic)
  {
-@@ -55251,6 +55333,10 @@ static void js_map_mark(JSRuntime *rt, JSValueConst val, JS_MarkFunc *mark_func)
+@@ -55251,6 +55331,10 @@ static void js_map_mark(JSRuntime *rt, JSValueConst val, JS_MarkFunc *mark_func)
  
      s = p->u.map_state;
      if (s) {
@@ -212,7 +196,7 @@ index a870743..c90d2f8 100644
          list_for_each(el, &s->records) {
              mr = list_entry(el, JSMapRecord, link);
              if (!s->is_weak)
-@@ -60541,6 +60627,19 @@ static uint8_t const typed_array_size_log2[JS_TYPED_ARRAY_COUNT] = {
+@@ -60541,6 +60625,19 @@ static uint8_t const typed_array_size_log2[JS_TYPED_ARRAY_COUNT] = {
      1, 2, 3                 // Float16Array, Float32Array, Float64Array
  };
  
@@ -232,7 +216,7 @@ index a870743..c90d2f8 100644
  static JSValue js_array_buffer_constructor3(JSContext *ctx,
                                              JSValueConst new_target,
                                              uint64_t len, uint64_t *max_len,
-@@ -60578,6 +60677,7 @@ static JSValue js_array_buffer_constructor3(JSContext *ctx,
+@@ -60578,6 +60675,7 @@ static JSValue js_array_buffer_constructor3(JSContext *ctx,
          goto fail;
      abuf->byte_length = len;
      abuf->max_byte_length = max_len ? *max_len : -1;
@@ -240,7 +224,7 @@ index a870743..c90d2f8 100644
      if (alloc_flag) {
          if (class_id == JS_CLASS_SHARED_ARRAY_BUFFER &&
              rt->sab_funcs.sab_alloc) {
-@@ -60617,6 +60717,17 @@ static JSValue js_array_buffer_constructor3(JSContext *ctx,
+@@ -60617,7 +60715,22 @@ static JSValue js_array_buffer_constructor3(JSContext *ctx,
      abuf->free_func = free_func;
      if (alloc_flag && buf)
          memcpy(abuf->data, buf, len);
@@ -250,15 +234,20 @@ index a870743..c90d2f8 100644
 +        else if (rt->ab_funcs.ab_alloc)
 +            js_abuf_track(rt, abuf, len);
 +    } else if (class_id == JS_CLASS_SHARED_ARRAY_BUFFER) {
-+        if (rt->sab_funcs.sab_free)
-+            js_abuf_track(rt, abuf, len);
++        if (rt->sab_funcs.sab_free) {
++            sab_alloc_len = max_len ? *max_len : len;
++            js_abuf_track(rt, abuf, sab_alloc_len);
++        }
 +    } else if (free_func && (free_func != js_array_buffer_free || rt->ab_funcs.ab_alloc)) {
 +        js_abuf_track(rt, abuf, len);
 +    }
      JS_SetOpaque(obj, abuf);
++    if (abuf->tracked_bytes)
++        js_trigger_gc(rt, 0);
      return obj;
   fail:
-@@ -60766,6 +60877,7 @@ static void js_array_buffer_finalizer(JSRuntime *rt, JSValue val)
+     JS_FreeValue(ctx, obj);
+@@ -60766,6 +60879,7 @@ static void js_array_buffer_finalizer(JSRuntime *rt, JSValue val)
              if (abuf->free_func)
                  abuf->free_func(rt, abuf->opaque, abuf->data);
          }
@@ -266,7 +255,7 @@ index a870743..c90d2f8 100644
          js_free_rt(rt, abuf);
      }
  }
-@@ -60898,6 +61010,7 @@ void JS_DetachArrayBuffer(JSContext *ctx, JSValueConst obj)
+@@ -60898,6 +61012,7 @@ void JS_DetachArrayBuffer(JSContext *ctx, JSValueConst obj)
          return;
      if (abuf->free_func)
          abuf->free_func(ctx->rt, abuf->opaque, abuf->data);
@@ -274,7 +263,7 @@ index a870743..c90d2f8 100644
      abuf->data = NULL;
      abuf->byte_length = 0;
      abuf->detached = TRUE;
-@@ -61036,6 +61149,8 @@ static JSValue js_array_buffer_transfer(JSContext *ctx,
+@@ -61036,6 +61151,8 @@ static JSValue js_array_buffer_transfer(JSContext *ctx,
                  js_array_buffer_free(ctx->rt, NULL, new_abuf->data);
                  new_abuf->data = new_bs;
                  new_abuf->byte_length = new_len;
@@ -283,7 +272,7 @@ index a870743..c90d2f8 100644
              }
          } else {
              /* can keep the custom free function */
-@@ -61048,6 +61163,7 @@ static JSValue js_array_buffer_transfer(JSContext *ctx,
+@@ -61048,6 +61165,7 @@ static JSValue js_array_buffer_transfer(JSContext *ctx,
          }
          /* neuter the backing buffer */
          abuf->data = NULL;
@@ -291,7 +280,7 @@ index a870743..c90d2f8 100644
          abuf->byte_length = 0;
          abuf->detached = TRUE;
          js_array_buffer_update_typed_arrays(abuf);
-@@ -61100,6 +61216,9 @@ static JSValue js_array_buffer_resize(JSContext *ctx, JSValueConst this_val,
+@@ -61100,6 +61218,9 @@ static JSValue js_array_buffer_resize(JSContext *ctx, JSValueConst this_val,
              memset(&data[abuf->byte_length], 0, len - abuf->byte_length);
          abuf->byte_length = len;
          abuf->data = data;

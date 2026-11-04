@@ -1,26 +1,245 @@
-libqjs attaches each weak native reference (js_ref_t at count 0, including every
-jstl js_persistent_t::reset() in rocksdb-native and udx-native) as a symbol
-property [Symbol("__native_reference")] -> External(js_finalizer_t) on the
-referenced JS object with flags = 0 (non-configurable), then calls
-JS_DeleteProperty(..., 0) in js__clear_weak_reference. QuickJS delete_property
-returns FALSE (0) on non-configurable properties, which satisfies assert(err >= 0)
-while leaving the Symbol, External object, 64-byte js_finalizer_t, and growing
-JSShape slot pinned on long-lived objects (such as RocksDB's State and onread
-callback) forever (~4 KB leaked per RocksDB read/write, swelling PearTube.app to
-2+ GB). Define the weak-reference property with JS_PROP_CONFIGURABLE so
-js__clear_weak_reference actually deletes it, frees the External and finalizer on
-the spot, and lets QuickJS compact the object's shape. Apply in libqjs, after
-libqjs-deferred-release.patch.
-
 diff --git a/src/js.c b/src/js.c
+index 8ed1d6e..bf34cb9 100644
 --- a/src/js.c
 +++ b/src/js.c
-@@ -2127,7 +2127,7 @@ js__set_weak_reference(js_env_t *env, js_ref_t *reference) {
+@@ -95,6 +95,8 @@ struct js_env_s {
+   JSValue default_module_id;
+   JSAtom function_id_key;
+   JSAtom function_bytecode_key;
++  JSValue weakref_ctor;
++  JSValue weakref_deref;
  
-     JSAtom atom = JS_ValueToAtom(env->context, reference->symbol);
+   int64_t external_memory;
  
+@@ -195,7 +197,7 @@ struct js_context_s {
+ 
+ struct js_ref_s {
+   JSValue value;
+-  JSValue symbol;
++  JSValue weakref;
+   uint32_t count;
+   bool finalized;
+ };
+@@ -925,13 +927,18 @@ js__close_env(js_env_t *env) {
+     free(deferred);
+   }
+ 
++  js__drain_released(env);
++
++  env->closing = true;
++
+   JS_FreeValue(env->context, env->default_module_id);
+   JS_FreeAtom(env->context, env->function_id_key);
+   JS_FreeAtom(env->context, env->function_bytecode_key);
++  JS_FreeValue(env->context, env->weakref_ctor);
++  JS_FreeValue(env->context, env->weakref_deref);
++  env->weakref_ctor = JS_NULL;
++  env->weakref_deref = JS_NULL;
+   JS_FreeValue(env->context, env->bindings);
+-  js__drain_released(env);
+-
+-  env->closing = true;
+ 
+   JSContext *context = env->context;
+   env->context = NULL;
+@@ -1040,6 +1047,17 @@ js_create_env(uv_loop_t *loop, js_platform_t *platform, const js_env_options_t *
+ 
+   JS_FreeValue(env->context, function_bytecode_key);
+ 
++  JSValue global = JS_GetGlobalObject(env->context);
++
++  env->weakref_ctor = JS_GetPropertyStr(env->context, global, "WeakRef");
++
++  JSValue weakref_proto = JS_GetPropertyStr(env->context, env->weakref_ctor, "prototype");
++
++  env->weakref_deref = JS_GetPropertyStr(env->context, weakref_proto, "deref");
++
++  JS_FreeValue(env->context, weakref_proto);
++  JS_FreeValue(env->context, global);
++
+   env->external_memory = 0;
+ 
+   env->resolvers = NULL;
+@@ -2086,77 +2104,57 @@ js_run_module(js_env_t *env, js_module_t *module, js_value_t **result) {
+   return 0;
+ }
+ 
+-static void
+-js__on_reference_finalize(js_env_t *env, void *data, void *finalize_hint) {
+-  js_ref_t *reference = (js_ref_t *) data;
+-
+-  JS_FreeValue(env->context, reference->symbol);
+-
+-  reference->value = JS_NULL;
+-  reference->count = 0;
+-  reference->symbol = JS_NULL;
+-  reference->finalized = true;
+-}
+-
+ static inline void
+ js__set_weak_reference(js_env_t *env, js_ref_t *reference) {
+-  if (reference->finalized) return;
+-
+-  if (JS_IsObject(reference->value)) {
+-    int err;
+-
+-    js_finalizer_t *finalizer = malloc(sizeof(js_finalizer_t));
+-
+-    finalizer->data = reference;
+-    finalizer->finalize_cb = js__on_reference_finalize;
+-    finalizer->finalize_hint = NULL;
+-    finalizer->tracked = false;
++  if (reference->finalized || env->closing || !JS_IsObject(reference->value)) return;
+ 
+-    reference->symbol = JS_NewSymbol(env->context, "__native_reference", false);
++  bool has_exception = JS_HasException(env->context);
++  JSValue exception = has_exception ? JS_GetException(env->context) : JS_UNDEFINED;
+ 
+-    JSValue external = JS_NewObjectClass(env->context, js__external_class_id);
+-
+-    JS_SetOpaque(external, finalizer);
+-
+-    JSAtom atom = JS_ValueToAtom(env->context, reference->symbol);
+-
 -    err = JS_DefinePropertyValue(env->context, reference->value, atom, external, 0);
-+    err = JS_DefinePropertyValue(env->context, reference->value, atom, external, JS_PROP_CONFIGURABLE);
-     assert(err >= 0);
+-    assert(err >= 0);
++  JSValueConst arg = reference->value;
++  JSValue weakref = JS_CallConstructor(env->context, env->weakref_ctor, 1, &arg);
  
-     JS_FreeAtom(env->context, atom);
+-    JS_FreeAtom(env->context, atom);
++  if (JS_IsException(weakref)) {
++    JS_FreeValue(env->context, JS_GetException(env->context));
++  } else {
++    reference->weakref = weakref;
+ 
+     js__release_later(env, reference->value);
++
++    reference->value = JS_NULL;
+   }
++
++  if (has_exception) JS_Throw(env->context, exception);
+ }
+ 
+ static inline void
+ js__clear_weak_reference(js_env_t *env, js_ref_t *reference) {
+-  if (reference->finalized || env->context == NULL) return;
+-
+-  if (JS_IsObject(reference->value)) {
+-    int err;
++  if (JS_IsNull(reference->weakref)) return;
+ 
+-    JS_DupValue(env->context, reference->value);
+-
+-    JSAtom atom = JS_ValueToAtom(env->context, reference->symbol);
+-
+-    JSValue external = JS_GetProperty(env->context, reference->value, atom);
+-
+-    js_finalizer_t *finalizer = (js_finalizer_t *) JS_GetOpaque(external, js__external_class_id);
++  if (env->closing) {
++    reference->finalized = true;
++  } else {
++    bool has_exception = JS_HasException(env->context);
++    JSValue exception = has_exception ? JS_GetException(env->context) : JS_UNDEFINED;
+ 
+-    JS_FreeValue(env->context, external);
++    JSValue value = JS_Call(env->context, env->weakref_deref, reference->weakref, 0, NULL);
+ 
+-    finalizer->finalize_cb = NULL;
++    if (JS_IsException(value)) {
++      JS_FreeValue(env->context, JS_GetException(env->context));
+ 
+-    err = JS_DeleteProperty(env->context, reference->value, atom, 0);
+-    assert(err >= 0);
++      reference->finalized = true;
++    } else if (JS_IsUndefined(value)) {
++      reference->finalized = true;
++    } else {
++      reference->value = value;
++    }
+ 
+-    JS_FreeAtom(env->context, atom);
++    if (has_exception) JS_Throw(env->context, exception);
++  }
+ 
+-    JS_FreeValue(env->context, reference->symbol);
++  JS_FreeValueRT(env->runtime, reference->weakref);
+ 
+-    reference->symbol = JS_NULL;
+-  }
++  reference->weakref = JS_NULL;
+ }
+ 
+ int
+@@ -2166,8 +2164,8 @@ js_create_reference(js_env_t *env, js_value_t *value, uint32_t count, js_ref_t *
+   js_ref_t *reference = malloc(sizeof(js_ref_t));
+ 
+   reference->value = JS_DupValue(env->context, value->value);
++  reference->weakref = JS_NULL;
+   reference->count = count;
+-  reference->symbol = JS_NULL;
+   reference->finalized = false;
+ 
+   if (reference->count == 0) js__set_weak_reference(env, reference);
+@@ -2181,7 +2179,7 @@ int
+ js_delete_reference(js_env_t *env, js_ref_t *reference) {
+   // Allow continuing even with a pending exception
+ 
+-  if (reference->count == 0) js__clear_weak_reference(env, reference);
++  JS_FreeValueRT(env->runtime, reference->weakref);
+ 
+   js__release_later(env, reference->value);
+ 
+@@ -2222,15 +2220,48 @@ int
+ js_get_reference_value(js_env_t *env, js_ref_t *reference, js_value_t **result) {
+   // Allow continuing even with a pending exception
+ 
+-  if (reference->finalized) *result = NULL;
+-  else {
+-    js_value_t *wrapper = js__create_handle(env, env->scope);
++  if (reference->finalized || env->closing) {
++    *result = NULL;
+ 
+-    wrapper->value = JS_DupValue(env->context, reference->value);
++    return 0;
++  }
+ 
+-    *result = wrapper;
++  if (!JS_IsNull(reference->weakref)) {
++    bool has_exception = JS_HasException(env->context);
++    JSValue exception = has_exception ? JS_GetException(env->context) : JS_UNDEFINED;
++
++    JSValue value = JS_Call(env->context, env->weakref_deref, reference->weakref, 0, NULL);
++
++    if (JS_IsException(value)) {
++      JS_FreeValue(env->context, JS_GetException(env->context));
++
++      *result = NULL;
++    } else if (JS_IsUndefined(value)) {
++      JS_FreeValueRT(env->runtime, reference->weakref);
++
++      reference->weakref = JS_NULL;
++      reference->finalized = true;
++
++      *result = NULL;
++    } else {
++      js_value_t *wrapper = js__create_handle(env, env->scope);
++
++      wrapper->value = value;
++
++      *result = wrapper;
++    }
++
++    if (has_exception) JS_Throw(env->context, exception);
++
++    return 0;
+   }
+ 
++  js_value_t *wrapper = js__create_handle(env, env->scope);
++
++  wrapper->value = JS_DupValue(env->context, reference->value);
++
++  *result = wrapper;
++
+   return 0;
+ }
+ 

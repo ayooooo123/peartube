@@ -45,7 +45,7 @@ and the pieces.
   lists each file once and plays MKV, AVI, MP4 and TS through `peartube-media` compiled to
   WebAssembly — DTS, AC-3 and TrueHD surround, PGS/ASS/SRT subtitles — or casts to a TV.
 - **Add without guessing.** Paste a direct file URL or a video page (YouTube, Vimeo and the
-  sites `yt-dlp` supports). The relay parses the name or reads the page, offers Cinemeta
+  sites `ubit` supports). The relay parses the name or reads the page, offers Cinemeta
   suggestions, and announces a Stremio-shaped id (`imdb:tt…` or `imdb:tt…:s01e02`) only when
   the title and year match exactly.
 - **Share quietly.** Relays and viewers fetch the pieces they need from whichever peers hold
@@ -73,8 +73,8 @@ and the pieces.
    HiveRelay seeding) yields to viewers through `peartube/bulk-busy` instead of pausing
    connections.
 4. **Acquisition.** Imports are a private job queue (`jobs.json`): fetch, store, announce, append durably.
-   A page is resolved again on every attempt because its media URLs expire. `yt-dlp` is only
-   needed for page links, and only on the relay — the apps never run an HTTP acquirer.
+   Page links download and mux natively on every attempt through `ubit get --json`, so adaptive DASH/HLS streams
+   never depend on expiring media URLs. `ubit` is only needed for page links, and only on the relay — the apps never run an HTTP acquirer.
 5. **Privacy.** The Corestore holds public data only. Source URLs, headers, feed tokens,
    HiveRelay keys and relay settings never leave private files in the data directory.
 
@@ -346,7 +346,7 @@ and control) and **Settings**. Plugins appear only as user intents.
 | `POST /v1/restart` | Reopens the node, jobs, plugins and cast stack in the running process; same auth and origin rules as settings |
 | `POST /v1/identify` `{url}` | Link contents: parsed name, Cinemeta `candidates` and `match`, or a plain `clip:` fallback |
 | `GET /v1/search?id=imdb:tt…`, `GET /v1/entries` | Tracker entries with `streamUrl`; one result per file (`id` + `sha256`), picking a copy that plays |
-| `POST /v1/acquire` `{id, title, source}` | Fetch, store and announce; `page: true` resolves a page through `yt-dlp` on every attempt |
+| `POST /v1/acquire` `{id, title, source}` | Fetch, store and announce; `page: true` downloads and muxes a page through `ubit` on every attempt |
 | `GET/DELETE /v1/jobs[/:id]` | Acquire jobs; sources are never returned. `DELETE` cancels or removes |
 | `GET /v1/status` | Keys, stored bytes, peers and per-transport traffic, `lan`, `privateRouting`, `privateGuard` (`publicKey`, `port`, circuit counts, or `null`), `tokenRequired`, `settingsOpen` |
 | `GET/POST /v1/sources`, `DELETE /v1/sources/:key` | Follow or remove a tracker or channel |

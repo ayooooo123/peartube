@@ -5,9 +5,9 @@ import { send } from './art.js'
 
 export { posterUrl, backdropUrl } from './art.js'
 
-// Tells what a link holds before it is acquired: a direct media file (named by its filename) or a
-// web page that yt-dlp can read (YouTube, Vimeo, ...). Movie and episode names get Cinemeta
-// suggestions; an accepted one becomes the entry's `imdb:tt…` id, the id MediaStorm searches by.
+// Licks a link before acquiring it so Master knows what is inside: a direct media file (parsed from its name) or a
+// web page cracked open by `ubit` (YouTube, Vimeo, and 30+ extractors). Movie and episode names get Cinemeta
+// suggestions; an accepted match becomes the `imdb:tt…` id MediaStorm searches for.
 const MEDIA_EXT = /\.(mp4|m4v|mkv|webm|avi|mov|ts|m2ts|mts|mpg|mpeg|wmv|flv|ogv|3gp)$/i
 const NOISE = /\b(2160p|1080p|720p|576p|480p|4k|uhd|hdr10?|dv|bluray|blu-ray|bdrip|brrip|web-?dl|webrip|web|hdtv|dvdrip|remux|proper|repack|extended|unrated|x26[45]|h\.?26[45]|hevc|avc|av1|xvid|divx|aac|ac3|e?ac-?3|ddp?|dts|truehd|atmos|flac|opus|mp3)\b/i
 
@@ -38,25 +38,47 @@ export function parseName (raw) {
 }
 
 
-function ytdlp (url, timeoutMs = 45_000) {
+function ubitEnv (configDir) {
+  if (!configDir) return undefined
+  const out = {}
+  for (const [k, v] of Object.entries(process.env)) if (v != null) out[k] = String(v)
+  out.UBIT_CONFIG_DIR = configDir
+  return out
+}
+
+function missing () {
+  return Object.assign(new Error('Install ubit to add page links'), { status: 501, code: 'UBIT_MISSING' })
+}
+
+function tagStatus (msg) {
+  if (/\bdrm\b/i.test(msg)) return { status: 451 }
+  const m = msg.match(/\b(401|403|404|410|451)\b/)
+  return m ? { status: Number(m[1]) } : {}
+}
+
+function ubitInfo (url, { configDir = '', timeoutMs = 45_000 } = {}) {
   return new Promise((resolve, reject) => {
     let child
-    // One progressive HTTP file with audio and video: the acquirer stores a single stream.
-    const args = ['-J', '--no-playlist', '--no-warnings', '-f', 'b[vcodec!=none][acodec!=none][protocol^=http]/b[protocol^=http]', url]
-    try { child = spawn('yt-dlp', args, { stdio: ['ignore', 'pipe', 'pipe'] }) } catch { return reject(missing()) }
+    try { child = spawn('ubit', ['info', url, '--json'], { env: ubitEnv(configDir), stdio: ['ignore', 'pipe', 'pipe'] }) } catch { return reject(missing()) }
     const out = []
     const err = []
     let exited = null
     let ended = false
     const timer = setTimeout(() => { try { child.kill() } catch {} }, timeoutMs)
+    timer.unref?.()
     const finish = () => {
       if (exited === null || !ended) return
       clearTimeout(timer)
       if (exited !== 0) {
-        const msg = b4a.toString(b4a.concat(err), 'utf8').split('\n').find(l => l.startsWith('ERROR:')) || 'This page has no video yt-dlp can read'
-        return reject(new Error(msg.replace(/^ERROR:\s*(\[[^\]]+\]\s*)?/, '').slice(0, 200)))
+        const raw = b4a.toString(b4a.concat(err), 'utf8').trim()
+        const line = raw.split('\n').find(l => /^error:/i.test(l.trim())) || raw.split('\n')[0] || 'This page has no video ubit can read'
+        const msg = line.replace(/^error:\s*/i, '').trim().slice(0, 200) || 'This page has no video ubit can read'
+        return reject(Object.assign(new Error(msg), tagStatus(msg)))
       }
-      try { resolve(JSON.parse(b4a.toString(b4a.concat(out), 'utf8'))) } catch { reject(new Error('yt-dlp returned no metadata')) }
+      let info
+      try { info = JSON.parse(b4a.toString(b4a.concat(out), 'utf8')) } catch { return reject(new Error('ubit returned no metadata')) }
+      if (info.isDRM) return reject(Object.assign(new Error('This video is DRM-protected'), { status: 451 }))
+      resolve(info)
     }
     child.on('error', () => { clearTimeout(timer); reject(missing()) })
     child.stdout.on('data', c => out.push(c))
@@ -66,18 +88,84 @@ function ytdlp (url, timeoutMs = 45_000) {
   })
 }
 
-function missing () {
-  return Object.assign(new Error('Install yt-dlp to add page links'), { status: 501, code: 'YTDLP_MISSING' })
+// Drains a page link through `ubit get` into a private scratch hole, muxing split DASH/HLS streams natively with live NDJSON progress.
+export function downloadPage (pageUrl, outDir, { configDir = '', stallTimeout = 30_000, controller = null, onProgress = null } = {}) {
+  return new Promise((resolve, reject) => {
+    if (controller?.aborted) return reject(new Error('Cancelled'))
+    let child
+    const args = ['get', pageUrl, '--no-library', '--no-playlist', '--json', '-o', outDir]
+    try { child = spawn('ubit', args, { env: ubitEnv(configDir), stdio: ['ignore', 'pipe', 'pipe'] }) } catch { return reject(missing()) }
+    const err = []
+    let buf = ''
+    let donePath = null
+    let doneSize = null
+    let eventErr = null
+    let exited = null
+    let ended = false
+    let timedOut = false
+    let timer = null
+    const arm = ms => {
+      clearTimeout(timer)
+      timer = setTimeout(() => { timedOut = true; try { child.kill() } catch {} }, ms)
+      timer.unref?.()
+    }
+    arm(Math.max(stallTimeout, 45_000))
+    const onAbort = () => { try { child.kill() } catch {} }
+    if (controller) controller.onabort = onAbort
+    const parseLine = line => {
+      const trimmed = line.trim()
+      if (!trimmed) return
+      let ev
+      try { ev = JSON.parse(trimmed) } catch { return }
+      if (ev.event === 'progress') {
+        arm(stallTimeout)
+        onProgress?.({ bytes: Number(ev.downloaded) || 0, total: Number(ev.total) > 0 ? Number(ev.total) : null })
+      } else if (ev.event === 'process') {
+        arm(Math.max(stallTimeout * 4, 120_000))
+      } else if (ev.event === 'done') {
+        donePath = typeof ev.path === 'string' ? ev.path : null
+        doneSize = Number(ev.size)
+      } else if (ev.event === 'error' && ev.error) {
+        eventErr = String(ev.error)
+      } else {
+        arm(stallTimeout)
+      }
+    }
+    const finish = () => {
+      if (exited === null || !ended) return
+      clearTimeout(timer)
+      if (controller?.onabort === onAbort) controller.onabort = null
+      if (controller?.aborted) return reject(new Error('Cancelled'))
+      if (timedOut) return reject(new Error('Source stalled'))
+      if (exited !== 0 || !donePath) {
+        const raw = eventErr || b4a.toString(b4a.concat(err), 'utf8').trim()
+        const line = raw.split('\n').find(l => /^error:/i.test(l.trim())) || raw.split('\n')[0] || 'ubit failed to download this page'
+        const msg = line.replace(/^error:\s*/i, '').trim().slice(0, 200) || 'ubit failed to download this page'
+        return reject(Object.assign(new Error(msg), tagStatus(msg)))
+      }
+      resolve({ path: donePath, size: Number.isSafeInteger(doneSize) && doneSize >= 0 ? doneSize : null })
+    }
+    child.on('error', () => {
+      clearTimeout(timer)
+      if (controller?.onabort === onAbort) controller.onabort = null
+      reject(missing())
+    })
+    child.stdout.on('data', c => {
+      buf += b4a.toString(c, 'utf8')
+      let nl
+      while ((nl = buf.indexOf('\n')) !== -1) {
+        const line = buf.slice(0, nl)
+        buf = buf.slice(nl + 1)
+        parseLine(line)
+      }
+    })
+    child.stderr.on('data', c => { arm(stallTimeout); err.push(c) })
+    child.stdout.on('end', () => { if (buf) { parseLine(buf); buf = '' } ended = true; finish() })
+    child.on('exit', code => { exited = code ?? 1; finish() })
+  })
 }
 
-// The file a page link plays, resolved again on every attempt: page media URLs expire.
-export async function resolvePage (pageUrl) {
-  const info = await ytdlp(pageUrl)
-  if (!info.url) throw new Error('This page has no single-file video')
-  return { url: info.url, headers: info.http_headers || {} }
-}
-
-async function probe (url) {
+async function probe (url, opts) {
   let head = null
   try { head = await send(url, { method: 'HEAD' }) } catch {}
   const type = String(head?.headers['content-type'] || '').toLowerCase()
@@ -87,17 +175,20 @@ async function probe (url) {
     return { kind: 'file', name: decodeURIComponent(new URL(finalUrl).pathname.split('/').pop() || ''), size: Number(head.headers['content-length']) || null, contentType: type || null }
   }
   if (head && head.status >= 400 && MEDIA_EXT.test(new URL(url).pathname)) throw new Error(`The link answered ${head.status}`)
-  const info = await ytdlp(url)
+  const info = await ubitInfo(url, opts)
+  const formats = Array.isArray(info.formats) ? info.formats : []
+  const height = Math.max(0, ...formats.map(f => Number(f.height) || 0)) || Number(info.height) || 0
+  const size = Number(info.filesize) || Math.max(0, ...formats.map(f => Number(f.filesize) || 0)) || null
   return {
     kind: 'page',
     name: info.title || '',
-    site: info.extractor_key || info.extractor || '',
-    uploader: info.uploader || info.channel || '',
+    site: info.site || '',
+    uploader: info.author || info.uploader || '',
     duration: Number(info.duration) || null,
     thumbnail: info.thumbnail || null,
-    size: Number(info.filesize || info.filesize_approx) || null,
-    resolution: info.height ? info.height + 'p' : '',
-    pageId: String(info.webpage_url || url)
+    size,
+    resolution: height ? height + 'p' : '',
+    pageId: String(info.webpageURL || url)
   }
 }
 
@@ -141,8 +232,8 @@ export function candidateEntry (c, parsed) {
   return { id: `imdb:${c.imdb}`, title: c.year ? `${c.name} ${c.year}` : c.name }
 }
 
-export async function identify (url, { cinemetaUrl = '' } = {}) {
-  const link = await probe(url)
+export async function identify (url, { cinemetaUrl = '', configDir = '' } = {}) {
+  const link = await probe(url, { configDir })
   const parsed = parseName(link.name)
   if (link.resolution) parsed.resolution = link.resolution
   // Page titles are free text; only ones that read like a release (a year or an episode) get movie suggestions.

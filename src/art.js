@@ -1,6 +1,6 @@
 // Cinemeta artwork without a subprocess: posters, backdrops and the shared metadata lookup.
-// Split out of identify.js so the apps' Bare worklet can serve /v1/poster and /v1/backdrop from its
-// own loopback API without dragging `bare-subprocess` (yt-dlp) into the app bundle.
+// Split out of identify.js so the apps' Bare worklet serves /v1/poster and /v1/backdrop on its
+// own loopback hole without dragging `bare-subprocess` (`ubit`) into the app bundle.
 import { request as httpRequest } from 'node:http'
 import { request as httpsRequest } from 'node:https'
 import b4a from 'b4a'

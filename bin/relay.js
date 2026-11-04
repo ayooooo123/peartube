@@ -95,7 +95,7 @@ const state = {
   cast: null,
   apiToken: env.PEARTUBE_API_TOKEN || null,
   settings,
-  identify: link => identify(link, { cinemetaUrl: cfg('cinemetaUrl') }),
+  identify: link => identify(link, { cinemetaUrl: cfg('cinemetaUrl'), configDir: env.UBIT_CONFIG_DIR || join(storage, 'ubit') }),
   posterUrl: imdb => posterUrl(cfg('cinemetaUrl'), imdb),
   backdropUrl: imdb => backdropUrl(cfg('cinemetaUrl'), imdb),
   onSourcesChanged: saveSources,

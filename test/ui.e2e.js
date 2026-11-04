@@ -3,9 +3,9 @@
 //      round-trip from the UI with every change applied in the running relay, and the Restart relay action.
 //   2. Every plugin as a user intent from the first screen, counting clicks: add from URL, import a folder,
 //      follow a feed, copy a channel, keep copies, ask a HiveRelay to seed; legacy migration hidden when there is none.
-//   3. Content identification against a stubbed Cinemeta and a stub `yt-dlp` on PATH: an exact match is
+//   3. Content identification against a stubbed Cinemeta and a stub `ubit` on PATH: an exact match is
 //      published as `imdb:tt…` (the id MediaStorm searches by), an unknown file as a plain clip, a page link
-//      through yt-dlp's metadata.
+//      through ubit's metadata and NDJSON downloader.
 //   4. Taste gates on every tab at 1440×900 and 390×844 in light and dark: no console errors or warnings, no
 //      sideways scroll, no internal plugin ids in visible text, no hint over 12 words, every field labelled
 //      with an example placeholder.
@@ -102,21 +102,43 @@ function startStub () {
   return new Promise(resolve => srv.listen(0, '127.0.0.1', () => { stub.base = 'http://127.0.0.1:' + srv.address().port; resolve(stub) }))
 }
 
-// A `yt-dlp` that answers for the stub page the way the real one answers for YouTube.
-function fakeYtdlp (dir, stubBase) {
+// A `ubit` stub that speaks the real `ubit info --json` and `ubit get --json` contracts for the stub page.
+function fakeUbit (dir, stubBase) {
   const info = {
+    id: 'aqz-KE-bpKQ',
     title: 'Big Buck Bunny 60fps 4K - Official Blender Foundation Short Film',
-    uploader: 'Blender',
+    author: 'Blender',
     duration: 635,
     thumbnail: stubBase + '/thumb.png',
-    url: stubBase + '/page-video.mp4',
-    http_headers: { 'user-agent': 'stub' },
-    extractor_key: 'Youtube',
-    webpage_url: stubBase + '/watch?v=aqz-KE-bpKQ',
-    height: 360
+    site: 'YouTube',
+    webpageURL: stubBase + '/watch?v=aqz-KE-bpKQ',
+    isDRM: false,
+    isLive: false,
+    formats: [{ id: '22', ext: 'mp4', proto: 'http', url: stubBase + '/page-video.mp4', vcodec: 'avc1', acodec: 'mp4a', height: 360 }]
   }
-  const bin = join(dir, 'yt-dlp')
-  writeFileSync(bin, '#!/bin/sh\ncat <<\'EOF\'\n' + JSON.stringify(info) + '\nEOF\n')
+  const bin = join(dir, 'ubit')
+  const script = [
+    '#!/usr/bin/env node',
+    'const fs = require("node:fs"), path = require("node:path");',
+    `const info = ${JSON.stringify(info)};`,
+    `const mediaUrl = ${JSON.stringify(stubBase + '/page-video.mp4')};`,
+    'const args = process.argv.slice(2);',
+    'if (args[0] === "info") { console.log(JSON.stringify(info)); process.exit(0); }',
+    'if (args[0] === "get") {',
+    '  const o = args.indexOf("-o");',
+    '  const outDir = o !== -1 ? args[o + 1] : process.cwd();',
+    '  fs.mkdirSync(outDir, { recursive: true });',
+    '  fetch(mediaUrl).then(r => r.arrayBuffer()).then(ab => {',
+    '    const buf = Buffer.from(ab);',
+    '    const dst = path.join(outDir, "page-video.mp4");',
+    '    fs.writeFileSync(dst, buf);',
+    '    console.log(JSON.stringify({ event: "start", url: args[1] }));',
+    '    console.log(JSON.stringify({ event: "progress", downloaded: buf.length, total: buf.length, fraction: 1, speed: buf.length }));',
+    '    console.log(JSON.stringify({ event: "done", path: dst, seconds: 0.01, size: buf.length }));',
+    '  }).catch(err => { console.log(JSON.stringify({ event: "error", error: err.message })); process.exit(1); });',
+    '} else { process.exit(2); }'
+  ].join('\n') + '\n'
+  writeFileSync(bin, script)
   chmodSync(bin, 0o755)
   return info
 }
@@ -200,7 +222,7 @@ test('relay web UI: settings, plugins as intents, identification, and taste gate
   const watchDir = mkdtempSync(join(tmpdir(), 'peartube-ui-watch-'))
   writeFileSync(join(watchDir, 'Watched.Clip.2019.mp4'), bytesFor('watched'))
   const stub = await startStub()
-  const page = fakeYtdlp(binDir, stub.base)
+  const page = fakeUbit(binDir, stub.base)
   const apiPort = await freePort()
   const streamPort = await freePort()
   // A settings.json from an earlier run: its concurrency wins over the default.
@@ -439,6 +461,7 @@ test('relay web UI: settings, plugins as intents, identification, and taste gate
     await clickText('Copy link', '#detail')
     const modalCopied = await evaluate(`window.__modalCopied`)
     assert.match(modalCopied, /^peartube:\/\/watch\//, 'Copy link inside open <dialog> must populate clipboardData over plain HTTP')
+    assert.equal(modalCopied.includes((await getJson('/v1/status')).tracker) || modalCopied.includes('kind=tracker'), false, 'copied watch link never leaks the tracker key')
     await click('#detail [data-play]')
     const clockSecs = `Number($('pClock').textContent.split(' / ')[0].split(':').pop())`
     await waitFor(`!!player && player.primed && ${clockSecs} >= 1`, 'clip playing', 30_000)
@@ -504,7 +527,7 @@ test('relay web UI: settings, plugins as intents, identification, and taste gate
     const clip = await waitApi(async () => (await entries()).find(e => e.title === 'Random Clip Name'), 'plain entry')
     assert.match(clip.id, /^clip:[0-9a-f]{16}$/)
 
-    // A page link goes through yt-dlp for both its metadata and its file.
+    // A page link goes through `ubit` for both its metadata and its muxed download.
     await type('#addInput', stub.base + '/watch?v=aqz-KE-bpKQ')
     await clickText('Add', '#addForm')
     await waitFor(`!document.querySelector('#preview').hidden && document.querySelector('#preview h3')`, 'page preview')

@@ -1282,7 +1282,7 @@ const GROUPS = [
     { key: 'tracker', label: 'Join a tracker', hint: '64-hex tracker key; this relay writes its own channel.', ph: 'bc7d85ea0eec017d3f6875b4c06c3c16091a50337b4d1709425e3bd35122fbeb' },
     { key: 'publishChannel', label: 'Publish new videos to my channel', hint: 'Off keeps this relay’s library private to itself.' },
     { key: 'directory', label: 'List followed channels in my directory', hint: 'Lets others discover the channels you follow.' },
-    { key: 'acquireConcurrency', label: 'Concurrent downloads', hint: 'Each one is a yt-dlp process; higher costs CPU.', ph: '4' },
+    { key: 'acquireConcurrency', label: 'Concurrent downloads', hint: 'Each page download runs a ubit process; higher costs CPU.', ph: '4' },
     { key: 'cinemetaUrl', label: 'Title lookup service', hint: 'Matches titles to IMDb ids; supplies posters and backdrops.', ph: 'https://v3-cinemeta.strem.io' },
     { key: 'watchDir', label: 'Import folder', hint: 'Absolute path on the relay; new files are added automatically.', ph: '/data/import' },
     { key: 'feeds', label: 'Mirrored catalogs (feeds)', hint: 'JSON list of titles and sources; another relay’s /v1/entries works.', ph: 'https://example.org/catalog.json' },

@@ -329,7 +329,7 @@ export function createApi (state) {
             title: `${label}\n${(e.size / 1048576).toFixed(1)} MB · ${e.source.slice(0, 8)}…`,
             url: origin ? origin + new URL(e.streamUrl).search : e.streamUrl,
             // Plain http and mostly MKV: Stremio must route it through its streaming server rather than a web <video>.
-            behaviorHints: { bingeGroup: `peartube-${e.source}`, notWebReady: true, videoSize: e.size }
+            behaviorHints: { bingeGroup: `peartube-${e.source.slice(0, 12)}`, notWebReady: true, videoSize: e.size }
           }
         })
       }

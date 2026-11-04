@@ -1,9 +1,10 @@
-import { readFileSync, writeFileSync, renameSync } from 'node:fs'
+import { createReadStream, mkdtempSync, readdirSync, readFileSync, writeFileSync, renameSync, rmSync, statSync } from 'node:fs'
 import { randomUUID } from 'node:crypto'
 import { request as httpRequest } from 'node:http'
 import { request as httpsRequest } from 'node:https'
+import { dirname, join } from 'node:path'
 import { Readable } from 'streamx'
-import { resolvePage } from './identify.js'
+import { downloadPage } from './identify.js'
 
 const TERMINAL_STATUS = new Set([400, 401, 403, 404, 410, 451])
 const DEFAULT_HEADERS = { 'user-agent': 'VLC/3.0.18 LibVLC/3.0.18', accept: '*/*', 'accept-encoding': 'identity' }
@@ -36,6 +37,13 @@ export function createAcquirer (node, file, {
   defaultChannel = Boolean(process.env.PEARTUBE_PUBLISH_CHANNEL),
   onDone = null
 } = {}) {
+  const workRoot = dirname(file)
+  const ubitConfigDir = process.env.UBIT_CONFIG_DIR || join(workRoot, 'ubit')
+  try {
+    for (const entry of readdirSync(workRoot)) {
+      if (entry.startsWith('ubit-dl-')) rmSync(join(workRoot, entry), { recursive: true, force: true })
+    }
+  } catch {}
   let jobs = []
   try { jobs = JSON.parse(readFileSync(file, 'utf8')) } catch {}
   for (const job of jobs) {
@@ -179,16 +187,39 @@ export function createAcquirer (node, file, {
     running.set(job, controller)
     try {
       if (!job.announce) {
-        // A page link (YouTube, …) is resolved to its media file on every attempt: those URLs expire.
-        const media = job.source.page ? await resolvePage(job.source.url) : { url: job.source.url, headers: {} }
-        if (job.status === 'cancelled') throw new Error('Cancelled')
-        const baseHeaders = mergeHeaders(media.headers, job.source.headers)
-        const first = await openSource(media.url, baseHeaders, controller)
-        const cl = Number(first.headers['content-length'])
-        job.total = Number.isSafeInteger(cl) && cl >= 0 ? cl : null
-        job.bytes = 0
-        const stream = readResumable(job, media.url, baseHeaders, first, job.total, controller)
-        const op = await node.put({ id: job.id, title: job.title, expectedSize: job.total }, stream, bytes => { job.bytes = bytes })
+        let op
+        if (job.source.page) {
+          // Page links run through `ubit get` on every attempt so adaptive DASH/HLS tracks mux cleanly without expiring URLs.
+          const tmpDir = mkdtempSync(join(workRoot, 'ubit-dl-'))
+          try {
+            job.total = null
+            job.bytes = 0
+            const dl = await downloadPage(job.source.url, tmpDir, {
+              configDir: ubitConfigDir,
+              stallTimeout,
+              controller,
+              onProgress ({ bytes, total }) {
+                job.bytes = bytes
+                if (total != null) job.total = total
+              }
+            })
+            if (job.status === 'cancelled') throw new Error('Cancelled')
+            if (closed) throw new Error('Closed')
+            const total = dl.size ?? statSync(dl.path).size
+            job.total = total
+            op = await node.put({ id: job.id, title: job.title, expectedSize: total }, createReadStream(dl.path), bytes => { job.bytes = bytes })
+          } finally {
+            rmSync(tmpDir, { recursive: true, force: true })
+          }
+        } else {
+          const baseHeaders = mergeHeaders(job.source.headers)
+          const first = await openSource(job.source.url, baseHeaders, controller)
+          const cl = Number(first.headers['content-length'])
+          job.total = Number.isSafeInteger(cl) && cl >= 0 ? cl : null
+          job.bytes = 0
+          const stream = readResumable(job, job.source.url, baseHeaders, first, job.total, controller)
+          op = await node.put({ id: job.id, title: job.title, expectedSize: job.total }, stream, bytes => { job.bytes = bytes })
+        }
         if (job.status === 'cancelled') throw new Error('Cancelled')
         // Closed for a reopen: the next acquirer runs this job again from jobs.json, so this one must not announce it.
         if (closed) throw new Error('Closed')

@@ -45,14 +45,13 @@ const parseQuery = raw => {
   return out
 }
 
-// Formats a zero-subscription magnet URI so any client can stream a blob swarm on sight.
+// Formats a sourceless magnet URI for Master's swarm, tucking in only read-only channel attribution and never leaking a writable tracker key.
 export function formatWatchUri (entry, source = '', sourceKind = '') {
   const b = entry.blob || {}
   const q = [`id=${encodeURIComponent(entry.id)}`, `title=${encodeURIComponent(cleanText(entry.title, entry.id))}`]
   if (str(entry.sha256, HEX64)) q.push(`sha256=${entry.sha256}`)
-  if (str(source, HEX64)) {
-    q.push(`source=${source}`)
-    if (sourceKind === 'channel' || sourceKind === 'tracker') q.push(`kind=${sourceKind}`)
+  if (sourceKind === 'channel' && str(source, HEX64)) {
+    q.push(`source=${source}`, 'kind=channel')
   }
   return `peartube://watch/${entry.blobs}:${b.blockOffset}:${b.blockLength}:${b.byteOffset}:${b.byteLength}?${q.join('&')}`
 }
@@ -86,8 +85,8 @@ export function parseUri (input, defaultKind = 'tracker') {
     const fallbackId = `clip:${(q.sha256 || blobs).toLowerCase().slice(0, 12)}`
     const id = str(q.id?.toLowerCase(), ID) ? q.id.toLowerCase() : fallbackId
     const title = cleanText(q.title, id)
-    const sourceKey = q.source && HEX64.test(q.source.toLowerCase()) ? q.source.toLowerCase() : null
-    const sourceKind = q.kind === 'tracker' ? 'tracker' : 'channel'
+    const sourceKey = q.kind !== 'tracker' && q.source && HEX64.test(q.source.toLowerCase()) ? q.source.toLowerCase() : null
+    const sourceKind = 'channel'
     return {
       action: 'watch',
       sourceKey,
@@ -1192,7 +1191,7 @@ async function openNode ({
   async function publish (meta, source) {
     const op = await put(meta, source)
     await append(op)
-    return { ...op, streamUrl: streamUrl(op), magnetUrl: formatWatchUri(op, primaryKey, 'tracker') }
+    return { ...op, streamUrl: streamUrl(op), magnetUrl: formatWatchUri(op) }
   }
 
   // Writes an announce op (either freshly streamed or re-curated) into this node's single-writer Hyperbee channel.

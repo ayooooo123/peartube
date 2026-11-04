@@ -14,7 +14,7 @@ import b4a from 'b4a'
 import os from 'bare-os'
 import { createNode } from '../src/index.js'
 import { createApi } from '../src/http.js'
-// Artwork lookups without yt-dlp: the app's own loopback API serves /v1/poster and /v1/backdrop.
+// Artwork lookups without `ubit`: the app's own loopback API serves /v1/poster and /v1/backdrop.
 import { posterUrl, backdropUrl } from '../src/art.js'
 
 const CINEMETA = 'https://v3-cinemeta.strem.io'

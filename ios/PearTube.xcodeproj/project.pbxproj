@@ -16,11 +16,11 @@
 		6307F6EB476C9997D3D69F28 /* SettingsScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = 12739CFFE5A96DF56DD4CABA /* SettingsScreen.swift */; };
 		7697EF2095410E4EF09D22F5 /* LibraryScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4B9A628BC8CD14A5C6927275 /* LibraryScreen.swift */; };
 		78C1EB0B2C42A71745635785 /* IPC.swift in Sources */ = {isa = PBXBuildFile; fileRef = AF6B7542A184D795B5C17274 /* IPC.swift */; };
-		7D9BEFE1CC1F2904D36AC265 /* fixture.json in Resources */ = {isa = PBXBuildFile; fileRef = 4B41DD505764153D52629DA0 /* fixture.json */; };
 		7EEB25C38B66467FCFED418D /* Worklet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5FA6CE8EB5341FC9958CDC55 /* Worklet.swift */; };
 		821C4A891261A36BE749F134 /* PearTubeApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 94E6D71617B610AF449664AC /* PearTubeApp.swift */; };
 		96E31373BBFD672AD23B5513 /* ParityTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1229757358D33156CBE95036 /* ParityTests.swift */; };
 		A96DCCB47FE96CA902AD0C41 /* QRCode.swift in Sources */ = {isa = PBXBuildFile; fileRef = CA794DF05DA630E07BD6E746 /* QRCode.swift */; };
+		C0E96F8AD43935E19A78AFFA /* fixture.json in Resources */ = {isa = PBXBuildFile; fileRef = 8279B03476355072A7231F11 /* fixture.json */; };
 		F310B67A309312AF626D7E76 /* Bonjour.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1CADB987189272EBD0B66D6B /* Bonjour.swift */; };
 /* End PBXBuildFile section */
 
@@ -41,10 +41,10 @@
 		2819498E04189DE028CFDEBA /* Models.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Models.swift; sourceTree = "<group>"; };
 		3716ED4FBC67F1A0D2FFC3B9 /* PearTube-Bridging-Header.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = "PearTube-Bridging-Header.h"; sourceTree = "<group>"; };
 		4857A864DAC2831EC6814560 /* CastScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CastScreen.swift; sourceTree = "<group>"; };
-		4B41DD505764153D52629DA0 /* fixture.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = fixture.json; sourceTree = "<group>"; };
 		4B9A628BC8CD14A5C6927275 /* LibraryScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LibraryScreen.swift; sourceTree = "<group>"; };
 		5FA6CE8EB5341FC9958CDC55 /* Worklet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Worklet.swift; sourceTree = "<group>"; };
 		6B785159FD2F01F89A06C325 /* Worker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Worker.swift; sourceTree = "<group>"; };
+		8279B03476355072A7231F11 /* fixture.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = fixture.json; sourceTree = "<group>"; };
 		94E6D71617B610AF449664AC /* PearTubeApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PearTubeApp.swift; sourceTree = "<group>"; };
 		9DB09FF22D2272D8328B6694 /* PearTubeUITests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = PearTubeUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		A8B51B81E7C4A61511DDCF7C /* PearTube.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = PearTube.app; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -83,15 +83,6 @@
 			path = App;
 			sourceTree = "<group>";
 		};
-		2D75AF2AD4FCBF1D845B9F2B /* peartube-ios-e2e-PpCMBc */ = {
-			isa = PBXGroup;
-			children = (
-				4B41DD505764153D52629DA0 /* fixture.json */,
-			);
-			name = "peartube-ios-e2e-PpCMBc";
-			path = "../../../../../var/folders/1y/hd_twrb12g708y80z4y73jv80000gn/T/peartube-ios-e2e-PpCMBc";
-			sourceTree = "<group>";
-		};
 		339D7E5F165F545289057D49 /* Products */ = {
 			isa = PBXGroup;
 			children = (
@@ -109,6 +100,15 @@
 			path = UITests;
 			sourceTree = "<group>";
 		};
+		854FF30EC412B01A78307593 /* private-e2e */ = {
+			isa = PBXGroup;
+			children = (
+				8279B03476355072A7231F11 /* fixture.json */,
+			);
+			name = "private-e2e";
+			path = "build/private-e2e";
+			sourceTree = "<group>";
+		};
 		937C0C7FD35989A8A2231F51 /* BareKit */ = {
 			isa = PBXGroup;
 			children = (
@@ -122,7 +122,7 @@
 			isa = PBXGroup;
 			children = (
 				1BC790C69E73276D17D957BD /* App */,
-				2D75AF2AD4FCBF1D845B9F2B /* peartube-ios-e2e-PpCMBc */,
+				854FF30EC412B01A78307593 /* private-e2e */,
 				12547AA51447B2FBE1604210 /* Runtime */,
 				4711163FE2FBA3DF32F032C4 /* UITests */,
 				339D7E5F165F545289057D49 /* Products */,
@@ -213,7 +213,7 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				7D9BEFE1CC1F2904D36AC265 /* fixture.json in Resources */,
+				C0E96F8AD43935E19A78AFFA /* fixture.json in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

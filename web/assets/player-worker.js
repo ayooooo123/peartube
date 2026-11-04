@@ -609,17 +609,10 @@ function openWebCodecsInstance (seq, minPts) {
         const step = lastVideoPts !== null ? Math.max(0.01, Math.min(0.2, pts - lastVideoPts)) : (1 / 30)
         lastVideoPts = pts
         queuedVideoSec += step
-        if (offRenderer) {
-          let ins = renderQueue.length
-          while (ins > 0 && renderQueue[ins - 1].pts > pts) ins--
-          renderQueue.splice(ins, 0, { pts, step, hwFrame: vf })
-          ensureRenderLoop()
-        } else {
-          wcInFlight++
-          const w = vf.displayWidth || vf.codedWidth || 0
-          const h = vf.displayHeight || vf.codedHeight || 0
-          self.postMessage({ type: 'videoFrame', seq, pts, w, h, hwFrame: vf }, [vf])
-        }
+        wcInFlight++
+        const w = vf.displayWidth || vf.codedWidth || 0
+        const h = vf.displayHeight || vf.codedHeight || 0
+        self.postMessage({ type: 'videoFrame', seq, pts, w, h, hwFrame: vf }, [vf])
         feedWebCodecs()
       },
       error: () => {
@@ -638,9 +631,6 @@ function openWebCodecsInstance (seq, minPts) {
   }
 }
 
-let currentVideoStream = -1
-let currentAudioStream = -1
-let currentSubStream = -1
 
 function setPageHidden (nextHidden) {
   const h = Boolean(nextHidden)
@@ -897,9 +887,6 @@ async function handleCmd (msg) {
   } else if (msg.cmd === 'start') {
     if (msg.seq && msg.seq < latestQueuedSeq) return
     activeSeq = msg.seq || activeSeq
-    currentVideoStream = msg.videoStream
-    currentAudioStream = msg.audioStream
-    currentSubStream = msg.subStream
     hasVideo = msg.videoStream >= 0
     hasAudio = msg.audioStream >= 0
     useMse = Boolean(msg.useMse)
@@ -939,9 +926,6 @@ async function handleCmd (msg) {
     // Coalesce scrub storms: skip obsolete seeks queued behind an earlier blocking Range read.
     if (msg.seq && msg.seq < latestQueuedSeq) return
     activeSeq = msg.seq
-    currentVideoStream = msg.videoStream
-    currentAudioStream = msg.audioStream
-    currentSubStream = msg.subStream
     hasVideo = msg.videoStream >= 0
     hasAudio = msg.audioStream >= 0
     useMse = Boolean(msg.useMse)

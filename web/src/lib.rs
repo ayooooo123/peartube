@@ -1895,8 +1895,6 @@ impl WebSession {
             if self.video_mode == VideoOutputMode::Software {
                 self.drop_until_keyframe = true;
                 self.video_seeded = false;
-            } else if self.video_mode == VideoOutputMode::WebCodecs {
-                self.mse_started = false;
             }
             return;
         }
@@ -1911,11 +1909,6 @@ impl WebSession {
                 self.handle_video_packet(pkt);
             }
             self.replaying_hidden_gop = false;
-        } else if self.video_mode == VideoOutputMode::WebCodecs {
-            self.mse_started = false;
-            for pkt in gop.drain(..) {
-                self.handle_video_packet(pkt);
-            }
         }
     }
 
@@ -1969,9 +1962,6 @@ impl WebSession {
             self.hidden_gop_bytes = 0;
             self.drop_until_keyframe = true;
             self.video_seeded = false;
-            if self.video_mode == VideoOutputMode::WebCodecs {
-                self.mse_started = false;
-            }
         }
     }
 

@@ -207,7 +207,7 @@ export function createAcquirer (node, file, {
             if (closed) throw new Error('Closed')
             const total = dl.size ?? statSync(dl.path).size
             job.total = total
-            op = await node.put({ id: job.id, title: job.title, expectedSize: total }, createReadStream(dl.path), bytes => { job.bytes = bytes })
+            op = await node.put({ id: job.id, title: job.title, expectedSize: total, private: Boolean(job.private) }, createReadStream(dl.path), bytes => { job.bytes = bytes })
           } finally {
             rmSync(tmpDir, { recursive: true, force: true })
           }
@@ -218,7 +218,7 @@ export function createAcquirer (node, file, {
           job.total = Number.isSafeInteger(cl) && cl >= 0 ? cl : null
           job.bytes = 0
           const stream = readResumable(job, job.source.url, baseHeaders, first, job.total, controller)
-          op = await node.put({ id: job.id, title: job.title, expectedSize: job.total }, stream, bytes => { job.bytes = bytes })
+          op = await node.put({ id: job.id, title: job.title, expectedSize: job.total, private: Boolean(job.private) }, stream, bytes => { job.bytes = bytes })
         }
         if (job.status === 'cancelled') throw new Error('Cancelled')
         // Closed for a reopen: the next acquirer runs this job again from jobs.json, so this one must not announce it.
@@ -227,7 +227,6 @@ export function createAcquirer (node, file, {
         save()
       }
       await node.append(job.announce)
-      if (job.channel ?? defaultChannel) await node.publishChannel?.(job.announce)
       Object.assign(job, { status: 'done', size: job.announce.size, sha256: job.announce.sha256 })
       onDone?.(view(job), job.announce)
     } catch (err) {
@@ -261,9 +260,9 @@ export function createAcquirer (node, file, {
       run(job)
     }
   }
-  function add ({ id, title, source, channel = defaultChannel, plugin = 'http-acquire' }) {
+  function add ({ id, title, source, channel = defaultChannel, private: isPrivate = false, plugin = 'http-acquire' }) {
     if (typeof source?.url !== 'string' || !/^https?:\/\//.test(source.url)) throw new Error('source.url must be http(s)')
-    const job = { jobId: randomUUID(), id, title, plugin, channel: Boolean(channel), status: 'queued', created: Date.now(), source: { url: source.url, headers: source.headers || {}, page: Boolean(source.page) } }
+    const job = { jobId: randomUUID(), id, title, plugin, channel: Boolean(channel), private: Boolean(isPrivate || source.private), status: 'queued', created: Date.now(), source: { url: source.url, headers: source.headers || {}, page: Boolean(source.page) } }
     jobs.push(job)
     save()
     next()

@@ -74,6 +74,7 @@ pub struct DownloadNotice {
 pub struct PearTube {
     pub settings: Settings,
     pub status: Option<Status>,
+    pub identity: Option<peartube::worker::IdentityInfo>,
     pub entries: Vec<Entry>,
     pub error: Option<SharedString>,
     pub screen: Screen,
@@ -129,7 +130,10 @@ pub fn detect_smart_action(raw: &str) -> Option<(&'static str, String)> {
         return Some(("Add Channel", trimmed.to_string()));
     }
     if lower.starts_with("peartube://tracker/") || lower.starts_with("peartube:tracker/") || lower.starts_with("peartube://add/") || lower.starts_with("peartube://source/") {
-        return Some(("Connect Source", trimmed.to_string()));
+        return Some(("Add Channel", trimmed.to_string()));
+    }
+    if lower.starts_with("peartube://access/") || lower.starts_with("peartube:access/") {
+        return Some(("Unlock Channel", trimmed.to_string()));
     }
     if lower.starts_with("peartube://watch/") || lower.starts_with("peartube:watch/") {
         return Some(("Play Stream", trimmed.to_string()));
@@ -164,6 +168,7 @@ impl PearTube {
         PearTube {
             settings,
             status: None,
+            identity: None,
             entries: Vec::new(),
             error: None,
             screen,
@@ -330,6 +335,66 @@ impl PearTube {
         .detach();
     }
 
+    pub fn remove_channel_entry(&mut self, key: String, cx: &mut Context<Self>) {
+        cx.spawn(async move |this, cx| {
+            if let Ok(w) = worker() {
+                if let Err(err) = w.remove_entry(&key).await {
+                    let _ = this.update(cx, |this, cx| this.fail(err, cx));
+                } else {
+                    refresh(&this, cx).await;
+                }
+            }
+        })
+        .detach();
+    }
+
+    pub fn rotate_subscriber_pass(&mut self, cx: &mut Context<Self>) {
+        cx.spawn(async move |this, cx| {
+            if let Ok(w) = worker() {
+                match w.rotate_epoch().await {
+                    Ok(_) => refresh(&this, cx).await,
+                    Err(err) => {
+                        let _ = this.update(cx, |this, cx| this.fail(err, cx));
+                    }
+                }
+            }
+        })
+        .detach();
+    }
+
+    pub fn revoke_linked_writer(&mut self, writer_key: String, cx: &mut Context<Self>) {
+        cx.spawn(async move |this, cx| {
+            if let Ok(w) = worker() {
+                let _ = w.revoke_writer(&writer_key, false).await;
+                refresh(&this, cx).await;
+            }
+        })
+        .detach();
+    }
+
+    pub fn copy_recovery_phrase(&mut self, cx: &mut Context<Self>) {
+        cx.spawn(async move |this, cx| {
+            if let Ok(w) = worker() {
+                match w.identity(true).await {
+                    Ok(ident) if !ident.mnemonic.is_empty() => {
+                        let _ = this.update(cx, |this, cx| {
+                            cx.write_to_clipboard(ClipboardItem::new_string(ident.mnemonic));
+                            this.notice = Some(DownloadNotice { message: "Copied 12-word recovery phrase".into(), saved_path: None });
+                            cx.notify();
+                        });
+                    }
+                    Ok(_) => {
+                        let _ = this.update(cx, |this, cx| this.fail("No recovery phrase saved on this Mac.".into(), cx));
+                    }
+                    Err(err) => {
+                        let _ = this.update(cx, |this, cx| this.fail(err, cx));
+                    }
+                }
+            }
+        })
+        .detach();
+    }
+
     pub fn open_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.hood_open = false;
         self.cast_modal = None;
@@ -364,6 +429,10 @@ impl PearTube {
     }
     /// Destination-first activation: plays on the active TV if connected, else immediately opens fullscreen cinema on this Mac.
     pub fn activate_entry(&mut self, entry: Entry, explicit_pos_ms: Option<u64>, window: &mut Window, cx: &mut Context<Self>) {
+        if entry.locked {
+            self.fail("Subscriber pass needed: paste this channel's peartube://access/… pass in the search bar.".into(), cx);
+            return;
+        }
         let start_pos = explicit_pos_ms.unwrap_or_else(|| self.resume_position_for(&entry));
         if self.cast.session.is_some() {
             self.cast_entry_or_sheet(entry, start_pos, window, cx);
@@ -784,9 +853,12 @@ async fn refresh(this: &WeakEntity<PearTube>, cx: &mut AsyncApp) {
         });
         return;
     }
-    let result = futures_util::join!(w.status(), w.search(None));
+    let result = futures_util::join!(w.status(), w.search(None), w.identity(false));
     let _ = this.update(cx, |this, cx| {
-        match result {
+        if let Ok(ident) = result.2 {
+            this.identity = Some(ident);
+        }
+        match (result.0, result.1) {
             (Ok(status), Ok(entries)) => {
                 this.status = Some(status);
                 this.entries = entries;

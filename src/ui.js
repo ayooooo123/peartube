@@ -322,18 +322,46 @@ export const page = `<!doctype html>
   </section>
 
   <section id="tab-channels" data-panel="channels" hidden>
-    <h2>This relay</h2>
+    <h2>This channel</h2>
     <div class="list" id="mine"></div>
+    <div id="devicesWrap" hidden>
+      <h2>Devices &amp; writers</h2>
+      <div class="list" id="devices"></div>
+      <form id="writerForm" class="card" style="margin-top:12px">
+        <div class="field">
+          <label for="writerInput">Add device or writer key</label>
+          <input id="writerInput" type="text" spellcheck="false" placeholder="6049da41fd86a20f4883255bd6120bd6b580e19aa209693eb1f3f8c649c76d70" required>
+        </div>
+        <div class="field">
+          <label for="writerRole">Role</label>
+          <select id="writerRole"><option value="owner">My device (owner)</option><option value="mod">Moderator</option><option value="writer">Contributor</option></select>
+        </div>
+        <div class="field">
+          <label for="writerName">Label</label>
+          <input id="writerName" type="text" placeholder="Phone">
+        </div>
+        <button class="btn primary" type="submit">Add</button>
+        <div class="msg" id="writerMsg" role="status"></div>
+      </form>
+      <form id="recoverForm" class="card" style="margin-top:12px">
+        <div class="field">
+          <label for="recoverInput">Link with 12-word recovery phrase</label>
+          <input id="recoverInput" type="text" spellcheck="false" placeholder="abandon ability able about above absent absorb abstract absurd abuse access accident" required>
+          <span class="hint">Links this relay to an existing recovery phrase.</span>
+        </div>
+        <div class="row">
+          <button class="btn primary" type="submit">Link channel</button>
+          <button class="btn quiet" type="button" id="revealPhraseBtn">Copy my 12-word phrase</button>
+        </div>
+        <div class="msg" id="recoverMsg" role="status"></div>
+      </form>
+    </div>
     <h2>Following <span class="count" id="followCount"></span></h2>
     <div class="list" id="following"></div>
     <form id="followForm" class="card" style="margin-top:12px">
       <div class="field">
-        <label for="followInput">Follow a channel or tracker</label>
+        <label for="followInput">Follow a channel or subscriber pass</label>
         <input id="followInput" type="text" spellcheck="false" placeholder="peartube://channel/6049da41fd86a20f4883255bd6120bd6b580e19aa209693eb1f3f8c649c76d70" required>
-      </div>
-      <div class="field" id="followKindWrap" hidden>
-        <label for="followKind">This key is a</label>
-        <select id="followKind"><option value="channel">Channel</option><option value="tracker">Tracker</option></select>
       </div>
       <div class="field">
         <label for="followName">Name</label>
@@ -548,7 +576,7 @@ for (const evName of ['pointerup', 'pointercancel', 'blur']) {
   })
 }
 
-const S = { status: {}, sources: { sources: [], discovered: [], published: [] }, entries: [], jobs: [], plugins: [], cast: null, settings: null }
+const S = { status: {}, sources: { sources: [], discovered: [], published: [] }, entries: [], jobs: [], plugins: [], cast: null, settings: null, identity: null }
 const plugin = name => S.plugins.find(p => p.name === name) || {}
 const setting = key => S.settings && S.settings.settings[key]
 const sval = key => setting(key) ? setting(key).value : undefined
@@ -570,14 +598,16 @@ addEventListener('hashchange', showTab)
 async function refresh () {
   if (pressing || player) { refreshQueued = true; return }
   try {
-    const [st, src, ent, jb, pl, set] = await Promise.all([
+    const [st, src, ent, jb, pl, set, ident] = await Promise.all([
       api('/v1/status'), api('/v1/sources'), api('/v1/entries'), api('/v1/jobs'),
       api('/v1/plugins').catch(() => ({ plugins: [] })),
       // Another tab, a reopen or the relay itself can change settings; reload them once this page may see them.
-      S.settings ? api('/v1/settings').catch(() => S.settings) : null
+      S.settings ? api('/v1/settings').catch(() => S.settings) : null,
+      S.settings ? api('/v1/identity').catch(() => S.identity) : null
     ])
     Object.assign(S, { status: st, sources: src, entries: ent.results || [], jobs: jb.jobs || [], plugins: pl.plugins || [], offline: false })
     if (set) S.settings = set
+    if (ident) S.identity = ident
   } catch (err) {
     S.offline = !needsToken
   }
@@ -595,6 +625,7 @@ function refreshSettingsView () {
 let settingsLoaded = false
 async function loadSettings () {
   try { S.settings = await api('/v1/settings') } catch { S.settings = null }
+  try { S.identity = S.settings ? await api('/v1/identity') : null } catch { S.identity = null }
   settingsLoaded = true
   if (tab === 'settings') renderSettings()
   render()
@@ -659,9 +690,10 @@ $('addForm').onsubmit = async ev => {
   if (/^peartube:/i.test(val)) {
     return act($('addBtn'), async () => {
       const watch = /^peartube:(?:[/][/])?watch[/]/i.test(val)
-      const r = await api(watch ? '/v1/open' : '/v1/sources', { body: { uri: val } })
+      const access = /^peartube:(?:[/][/])?access[/]/i.test(val)
+      const r = await api((watch || access) ? '/v1/open' : '/v1/sources', { body: { uri: val } })
       $('addInput').value = ''
-      say('addMsg', watch ? 'Opened. It is in your library now.' : 'Following ' + ((r.source && r.source.alias) || 'the channel') + '.')
+      say('addMsg', watch ? 'Opened. It is in your library now.' : access ? 'Pass saved. Subscriber videos are unlocked.' : 'Following ' + ((r.source && r.source.alias) || 'the channel') + '.')
       refresh()
     }, 'addMsg')
   }
@@ -699,6 +731,10 @@ function renderPreview (url, r) {
     { id: r.plain.id, title: r.plain.title, label: r.candidates.length ? 'None of these' : r.plain.title, sub: link.kind === 'page' ? 'Video' : 'Video file' }]
   const chosen = r.match || r.plain.id
   const titleInput = h('input', { id: 'addTitle', type: 'text', value: (choices.find(c => c.id === chosen) || choices[0]).title, placeholder: 'Big Buck Bunny 2008', required: true })
+  let privOnly = false
+  const privToggle = h('label', { class: 'switch' },
+    h('input', { type: 'checkbox', role: 'switch', onchange: ev => { privOnly = ev.target.checked } }),
+    h('span', null, 'Subscribers only'))
   const radios = choices.map(c => h('label', { class: 'cand' },
     h('input', { type: 'radio', name: 'cand', value: c.id, checked: c.id === chosen, onchange: () => { titleInput.value = c.title } }),
     c.poster !== undefined ? posterBox(c.poster, c.label) : null,
@@ -709,6 +745,7 @@ function renderPreview (url, r) {
       h('div', { class: 'grow' }, h('h3', null, link.name || r.parsed.title), h('div', { class: 'meta' }, facts.join(' · ')))),
     r.candidates.length ? h('fieldset', { class: 'cands' }, h('legend', null, 'Is this one of these?'), radios) : null,
     h('div', { class: 'field' }, h('label', { for: 'addTitle' }, 'Title in your library'), titleInput),
+    privToggle,
     h('div', { class: 'row' },
       h('button', { class: 'btn primary', type: 'submit', id: 'confirmAdd' }, 'Add to library'),
       h('button', { class: 'btn quiet', onclick: () => { p.hidden = true } }, 'Cancel')))
@@ -717,7 +754,7 @@ function renderPreview (url, r) {
     const picked = p.querySelector('input[name=cand]:checked')
     const id = picked ? picked.value : r.plain.id
     await act($('confirmAdd'), async () => {
-      await api('/v1/acquire', { body: { id, title: titleInput.value.trim() || r.plain.title, source: { url, page: link.kind === 'page' } } })
+      await api('/v1/acquire', { body: { id, title: titleInput.value.trim() || r.plain.title, private: privOnly, source: { url, page: link.kind === 'page' } } })
       p.hidden = true
       $('addInput').value = ''
       say('addMsg', 'Adding “' + (titleInput.value.trim() || r.plain.title) + '”.')
@@ -1016,12 +1053,26 @@ function downloadBtn (e, quiet, nameOverride) {
   if (!e || !e.streamUrl) return null
   return h('a', { class: 'btn' + (quiet ? ' quiet' : ''), 'data-download': true, href: downloadHref(e, nameOverride), download: '' }, 'Download')
 }
+function deleteBtn (e, quiet) {
+  if (!S.settings || !e || e.source !== S.status.channel) return null
+  return h('button', { class: 'btn' + (quiet ? ' quiet' : ''), onclick: ev => act(ev.currentTarget, async () => {
+    await api('/v1/entries/remove', { body: { key: e.key } })
+    toast('Removed from channel')
+    await refresh()
+  }) }, 'Delete')
+}
 function fileRow (label, e) {
   const from = sourceName(e.source)
   const dlName = /^S\d+E\d+$/i.test(label) && e.title && !/s\d+e\d+/i.test(e.title) ? e.title + ' ' + label : (e.title || label)
+  const accessNote = e.locked ? 'Subscriber pass needed' : (e.private ? 'Subscribers only' : '')
   return h('div', { class: 'row-item' },
-    h('div', { class: 'grow' }, h('div', { class: 'label' }, label), h('div', { class: 'meta' }, [size(e.size), where(e), from && 'from ' + from].filter(Boolean).join(' · '))),
-    h('div', { class: 'acts' }, h('button', { class: 'btn primary', 'data-play': true, onclick: () => play(e) }, 'Play'), castButton(e), downloadBtn(e, true, dlName), h('button', { class: 'btn quiet', title: e.magnetUrl, onclick: () => copyText(e.magnetUrl) }, 'Copy link')))
+    h('div', { class: 'grow' }, h('div', { class: 'label' }, label), h('div', { class: 'meta' }, [size(e.size), where(e), accessNote, from && 'from ' + from].filter(Boolean).join(' · '))),
+    h('div', { class: 'acts' },
+      e.locked ? null : h('button', { class: 'btn primary', 'data-play': true, onclick: () => play(e) }, 'Play'),
+      e.locked ? null : castButton(e),
+      e.locked ? null : downloadBtn(e, true, dlName),
+      h('button', { class: 'btn quiet', title: e.magnetUrl, onclick: () => copyText(e.magnetUrl) }, 'Copy link'),
+      deleteBtn(e, true)))
 }
 function renderDetail () {
   const t = libraryTiles().find(x => x.key === detailKey)
@@ -1044,8 +1095,14 @@ function renderDetail () {
   } else {
     const e = t.items[0].e
     const from = sourceName(e.source)
-    body = [h('div', { class: 'meta' }, [where(e), from && 'from ' + from].filter(Boolean).join(' · ')),
-      h('div', { class: 'row', style: 'margin-top:14px;flex-wrap:wrap' }, h('button', { class: 'btn primary', 'data-play': true, onclick: () => play(e) }, 'Play'), castButton(e), downloadBtn(e), copyBtn('Copy link', e.magnetUrl))]
+    const accessNote = e.locked ? 'Subscriber pass needed' : (e.private ? 'Subscribers only' : '')
+    body = [h('div', { class: 'meta' }, [where(e), accessNote, from && 'from ' + from].filter(Boolean).join(' · ')),
+      h('div', { class: 'row', style: 'margin-top:14px;flex-wrap:wrap' },
+        e.locked ? null : h('button', { class: 'btn primary', 'data-play': true, onclick: () => play(e) }, 'Play'),
+        e.locked ? null : castButton(e),
+        e.locked ? null : downloadBtn(e),
+        copyBtn('Copy link', e.magnetUrl),
+        deleteBtn(e, false))]
   }
   box.replaceChildren(head, ...body)
 }
@@ -1053,21 +1110,48 @@ $('detailClose').onclick = () => $('detail').close()
 $('detail').addEventListener('click', ev => { if (ev.target === $('detail')) $('detail').close() })
 
 // ---- Channels
-$('followInput').oninput = () => { $('followKindWrap').hidden = !HEX.test($('followInput').value.trim()) }
 $('followForm').onsubmit = async ev => {
   ev.preventDefault()
   const val = $('followInput').value.trim()
   const alias = $('followName').value.trim()
   await act(ev.submitter, async () => {
-    const body = HEX.test(val) ? { key: val.toLowerCase(), kind: $('followKind').value, alias } : { uri: val, alias }
-    const r = await api('/v1/sources', { body })
+    const access = /^peartube:(?:[/][/])?access[/]/i.test(val)
+    const body = HEX.test(val) ? { key: val.toLowerCase(), kind: 'channel', alias } : { uri: val, alias }
+    const r = await api(access ? '/v1/open' : '/v1/sources', { body })
     $('followInput').value = ''
     $('followName').value = ''
-    $('followKindWrap').hidden = true
-    say('followMsg', 'Following ' + (r.source.alias || short(r.source.key)) + '.')
+    say('followMsg', access ? 'Pass saved and channel followed.' : 'Following ' + ((r.source && r.source.alias) || short((r.source && r.source.key) || '')) + '.')
     refresh()
   }, 'followMsg')
 }
+$('writerForm').onsubmit = async ev => {
+  ev.preventDefault()
+  const writer = $('writerInput').value.trim().toLowerCase()
+  const role = $('writerRole').value
+  const alias = $('writerName').value.trim()
+  await act(ev.submitter, async () => {
+    S.identity = await api('/v1/identity/writers', { body: { writer, role, alias } })
+    $('writerInput').value = ''
+    $('writerName').value = ''
+    say('writerMsg', 'Added ' + (alias || short(writer)) + '.')
+    refresh()
+  }, 'writerMsg')
+}
+$('recoverForm').onsubmit = async ev => {
+  ev.preventDefault()
+  const mnemonic = $('recoverInput').value.trim()
+  await act(ev.submitter, async () => {
+    S.identity = await api('/v1/identity/recover', { body: { mnemonic } })
+    $('recoverInput').value = ''
+    say('recoverMsg', 'Channel linked.')
+    refresh()
+  }, 'recoverMsg')
+}
+$('revealPhraseBtn').onclick = ev => act(ev.currentTarget, async () => {
+  const ident = await api('/v1/identity?reveal=1')
+  if (!ident.mnemonic) throw new Error('No recovery phrase saved on this relay')
+  copyText(ident.mnemonic)
+}, 'recoverMsg')
 
 function copying (key) {
   if (!sval('replicate')) return false
@@ -1100,35 +1184,56 @@ function switchRow (label, checked, onchange, { disabled = false, note = '' } = 
 function renderChannels () {
   const st = S.status
   const src = S.sources
+  const ident = S.identity
+  const canEdit = Boolean(S.settings)
   const published = new Set((src.published || []).map(p => p.key))
-  const tracker = (src.sources || []).find(s => s.primary && s.kind === 'tracker')?.key || (st.tracker || '')
-  $('mine').replaceChildren(
-    h('div', { class: 'item' }, h('div', { class: 'info' }, h('div', { class: 'name' }, 'Tracker'), h('div', { class: 'meta' }, 'Everything this relay announces · ' + short(tracker))),
-      h('div', { class: 'acts' }, copyBtn('Copy link', tracker ? 'peartube://tracker/' + tracker : ''))),
-    h('div', { class: 'item' }, h('div', { class: 'info' }, h('div', { class: 'name' }, 'Channel'), h('div', { class: 'meta' }, 'Videos you publish · ' + short(st.channel))),
-      h('div', { class: 'acts' }, copyBtn('Copy link', st.channel ? 'peartube://channel/' + st.channel : ''))))
+  const mineRows = [
+    h('div', { class: 'item' }, h('div', { class: 'info' }, h('div', { class: 'name' }, 'Channel'), h('div', { class: 'meta' }, 'Share publicly · ' + short(st.channel))),
+      h('div', { class: 'acts' }, copyBtn('Copy link', st.channel ? 'peartube://channel/' + st.channel : '')))
+  ]
+  if (canEdit && st.writer) {
+    mineRows.push(h('div', { class: 'item' }, h('div', { class: 'info' }, h('div', { class: 'name' }, 'This device'), h('div', { class: 'meta' }, 'Device writer key · ' + short(st.writer))),
+      h('div', { class: 'acts' }, copyBtn('Copy key', st.writer))))
+  }
+  if (canEdit && ident && ident.accessUri) {
+    mineRows.push(h('div', { class: 'item' }, h('div', { class: 'info' }, h('div', { class: 'name' }, 'Subscriber pass'), h('div', { class: 'meta' }, 'Epoch ' + ident.epoch + ' · unlocks subscriber videos')),
+      h('div', { class: 'acts' },
+        copyBtn('Copy pass', ident.accessUri),
+        h('button', { class: 'btn quiet', onclick: e => act(e.currentTarget, async () => { S.identity = await api('/v1/identity/epoch', { body: {} }); toast('Rotated to epoch ' + S.identity.epoch); render() }) }, 'Rotate pass'))))
+  }
+  $('mine').replaceChildren(...mineRows)
+  $('devicesWrap').hidden = !canEdit
+  if (canEdit) {
+    const writers = (ident && ident.writers) || []
+    $('devices').replaceChildren(...(writers.length ? writers.map(w => h('div', { class: 'item' },
+      h('div', { class: 'info' },
+        h('div', { class: 'name' }, (w.alias || short(w.key)) + (w.self ? ' (this relay)' : '')),
+        h('div', { class: 'meta' }, w.role + ' · ' + short(w.key))),
+      h('div', { class: 'acts' },
+        w.key === st.channel ? null : h('button', { class: 'btn quiet', onclick: e => act(e.currentTarget, async () => { S.identity = await api('/v1/identity/writers/' + w.key, { method: 'DELETE' }); render() }) }, 'Remove'))))
+      : [h('div', { class: 'empty' }, 'Only this relay writes to your channel.')]))
+  }
   const following = (src.sources || []).filter(s => !s.writable)
   $('followCount').textContent = following.length ? String(following.length) : ''
-  const canEdit = Boolean(S.settings)
   $('following').replaceChildren(...(following.length ? following.map(s => {
     const listed = published.has(s.key)
     return h('div', { class: 'item' },
       h('div', { class: 'info' },
-        h('div', { class: 'name' }, s.alias || (s.kind === 'channel' ? 'Channel ' : 'Tracker ') + short(s.key)),
-        h('div', { class: 'meta' }, (s.kind === 'channel' ? 'Channel' : 'Tracker') + (listed ? ' · In your directory' : '')),
+        h('div', { class: 'name' }, s.alias || 'Channel ' + short(s.key)),
+        h('div', { class: 'meta' }, 'Channel' + (listed ? ' · In your directory' : '')),
         canEdit ? switchRow('Keep a copy here', copying(s.key), on => keepCopy(s.key, on)) : null),
       h('div', { class: 'acts' },
-        copyBtn('Copy link', 'peartube://' + s.kind + '/' + s.key),
+        copyBtn('Copy link', 'peartube://channel/' + s.key),
         listed
           ? h('button', { class: 'btn quiet', onclick: e => act(e.currentTarget, async () => { await api('/v1/channel/sources/' + s.key, { method: 'DELETE' }); refresh() }) }, 'Remove from directory')
-          : h('button', { class: 'btn quiet', onclick: e => act(e.currentTarget, async () => { await api('/v1/channel/publish', { body: { type: 'source', sourceKey: s.key, kind: s.kind, title: s.alias || short(s.key), target: 'both' } }); refresh() }) }, 'Add to directory'),
+          : h('button', { class: 'btn quiet', onclick: e => act(e.currentTarget, async () => { await api('/v1/channel/publish', { body: { type: 'source', sourceKey: s.key, kind: 'channel', title: s.alias || short(s.key) } }); refresh() }) }, 'Add to directory'),
         h('button', { class: 'btn quiet', onclick: e => act(e.currentTarget, async () => { await api('/v1/sources/' + s.key, { method: 'DELETE' }); refresh() }) }, 'Unfollow')))
   }) : [h('div', { class: 'empty' }, 'You are not following anything yet.')]))
   const found = (src.discovered || []).filter(d => !(src.sources || []).some(s => s.key === d.key))
   $('foundWrap').hidden = !found.length
   $('found').replaceChildren(...found.map(d => h('div', { class: 'item' },
-    h('div', { class: 'info' }, h('div', { class: 'name' }, d.title), h('div', { class: 'meta' }, d.kind === 'channel' ? 'Channel' : 'Tracker')),
-    h('div', { class: 'acts' }, h('button', { class: 'btn', onclick: e => act(e.currentTarget, async () => { await api('/v1/sources', { body: { key: d.key, kind: d.kind, alias: d.title } }); refresh() }) }, 'Follow')))))
+    h('div', { class: 'info' }, h('div', { class: 'name' }, d.title), h('div', { class: 'meta' }, 'Channel')),
+    h('div', { class: 'acts' }, h('button', { class: 'btn', onclick: e => act(e.currentTarget, async () => { await api('/v1/sources', { body: { key: d.key, kind: 'channel', alias: d.title } }); refresh() }) }, 'Follow')))))
 }
 
 // ---- Sharing
@@ -1254,7 +1359,7 @@ function renderCast () {
     h('div', { class: 'acts' }, h('button', { class: 'btn quiet', onclick: e => act(e.currentTarget, async () => { await api('/v1/cast/receivers/' + encodeURIComponent(tv.id), { method: 'DELETE' }); loadCast() }) }, 'Forget')))) : [h('div', { class: 'empty' }, c ? 'No TVs yet. Pair one with its code.' : 'Casting is not available on this relay.')]))
   // A relay serves the TV page on its own address; apps run a separate hub.
   const lanHost = S.status.lan && S.status.lan.host
-  const web = (c && c.webReceiverUrl) || (c ? location.protocol + '//' + (lanHost && /^(127[.]|localhost)/.test(location.hostname) ? lanHost + ':' + location.port : location.host) + '/tv' : '')
+  const web = (location.protocol === 'https:' ? '' : (c && c.webReceiverUrl)) || (c ? location.protocol + '//' + (lanHost && /^(127[.]|localhost)/.test(location.hostname) ? lanHost + ':' + location.port : location.host) + '/tv' : '')
   $('webTv').replaceChildren(...(web ? [
     h('div', { class: 'row', style: 'align-items:flex-start;gap:16px' },
       c.webReceiverQrSvg ? h('img', { class: 'qr', alt: 'QR code for ' + web, src: 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(c.webReceiverQrSvg) }) : null,
@@ -1279,7 +1384,7 @@ const GROUPS = [
     { key: 'allowedPeers', label: 'Only connect to these peers', hint: 'Allowlist of peer keys; empty means anyone.', ph: '3a8f0c1e5b7d92f4a6c0e8b1d3f5a7c9e2b4d6f8a0c2e4b6d8f0a2c4e6b8d0f2' }
   ] },
   { title: 'Library', hint: 'What it collects and publishes.', items: [
-    { key: 'tracker', label: 'Join a tracker', hint: '64-hex tracker key; this relay writes its own channel.', ph: 'bc7d85ea0eec017d3f6875b4c06c3c16091a50337b4d1709425e3bd35122fbeb' },
+    { key: 'tracker', label: 'Primary channel key', hint: '64-hex channel key this relay serves.', ph: 'bc7d85ea0eec017d3f6875b4c06c3c16091a50337b4d1709425e3bd35122fbeb' },
     { key: 'publishChannel', label: 'Publish new videos to my channel', hint: 'Off keeps this relay’s library private to itself.' },
     { key: 'directory', label: 'List followed channels in my directory', hint: 'Lets others discover the channels you follow.' },
     { key: 'acquireConcurrency', label: 'Concurrent downloads', hint: 'Each page download runs a ubit process; higher costs CPU.', ph: '4' },

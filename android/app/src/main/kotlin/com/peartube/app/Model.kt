@@ -28,22 +28,24 @@ data class SourceSpec(
 
 data class Settings(
     val tracker: String = "",
+    val mnemonic: String = "",
     val sources: List<SourceSpec> = emptyList(),
     val relayThrough: List<String> = emptyList(),
     val bootstrap: List<String> = emptyList(),
     val lanDiscovery: Boolean = true,
     val privateRouting: Boolean = false,
 ) {
-    val hasSources: Boolean get() = tracker.isNotEmpty() || sources.isNotEmpty()
+    val hasSources: Boolean get() = tracker.isNotEmpty() || mnemonic.isNotEmpty() || sources.isNotEmpty()
 
     fun formatSources(): String = sources.joinToString("\n") { s ->
-        if (s.alias.isEmpty()) "peartube://${s.kind}/${s.key}"
-        else "peartube://${s.kind}/${s.key}?name=${s.alias}"
+        if (s.alias.isEmpty()) "peartube://channel/${s.key}"
+        else "peartube://channel/${s.key}?name=${s.alias}"
     }
 
     fun withSource(spec: SourceSpec): Settings {
-        if (spec.kind == "tracker" && tracker == spec.key) return this
-        val updated = sources.filterNot { it.key == spec.key } + spec
+        if (tracker == spec.key) return this
+        val clean = spec.copy(kind = "channel")
+        val updated = sources.filterNot { it.key == clean.key } + clean
         return copy(sources = updated)
     }
 
@@ -52,6 +54,7 @@ data class Settings(
         val srcArray = JSONArray().apply { sources.forEach { put(it.toJson()) } }
         val json = JSONObject()
             .put("tracker", tracker)
+            .apply { if (mnemonic.isNotEmpty()) put("mnemonic", mnemonic) }
             .put("sources", srcArray)
             .put("relayThrough", JSONArray(relayThrough))
             .put("bootstrap", JSONArray(bootstrap))
@@ -69,6 +72,7 @@ data class Settings(
             val parsedSources = if (srcArr == null) emptyList() else List(srcArr.length()) { SourceSpec.from(srcArr.getJSONObject(it)) }.filter { isKey(it.key) }
             Settings(
                 tracker = json.optString("tracker"),
+                mnemonic = json.optString("mnemonic"),
                 sources = parsedSources,
                 relayThrough = json.optJSONArray("relayThrough").strings(),
                 bootstrap = json.optJSONArray("bootstrap").strings(),
@@ -102,11 +106,9 @@ data class Settings(
             val verb = path.substring(0, slash).lowercase()
             val key = path.substring(slash + 1).trim().lowercase()
             require(isKey(key)) { "Source key in $trimmed is not 64 hex characters." }
-            var kind = when (verb) {
-                "channel" -> "channel"
-                "tracker" -> "tracker"
-                "add", "source" -> defaultKind
-                else -> throw IllegalArgumentException("Expected peartube://channel/... or peartube://tracker/..., got $verb")
+            val kind = when (verb) {
+                "channel", "tracker", "add", "source" -> defaultKind
+                else -> throw IllegalArgumentException("Expected peartube://channel/..., got $verb")
             }
             var alias = ""
             for (pair in query.split('&').filter { it.isNotEmpty() }) {
@@ -114,31 +116,33 @@ data class Settings(
                 if (eq > 0) {
                     val k = pair.substring(0, eq)
                     val v = runCatching { URLDecoder.decode(pair.substring(eq + 1), "UTF-8") }.getOrDefault(pair.substring(eq + 1))
-                    if (k == "kind" && (v == "channel" || v == "tracker")) kind = v
-                    else if (k == "name" || k == "alias") alias = v
+                    if (k == "name" || k == "alias") alias = v
                 }
             }
             return SourceSpec(key, kind, alias)
         }
 
-        fun parse(tracker: String, sourcesRaw: String, relayThrough: String, bootstrap: String, lan: Boolean, privateRouting: Boolean = false): Settings {
+        fun parse(tracker: String, sourcesRaw: String, relayThrough: String, bootstrap: String, lan: Boolean, privateRouting: Boolean = false, mnemonicRaw: String = ""): Settings {
             var primary = ""
             val sources = mutableListOf<SourceSpec>()
             if (tracker.isNotBlank()) {
-                val spec = parseSourceToken(tracker, "tracker")
-                if (spec.kind == "tracker") primary = spec.key else sources += spec
+                primary = parseSourceToken(tracker, "channel").key
             }
+            val words = mnemonicRaw.trim().lowercase(Locale.US).split(Regex("\\s+")).filter { it.isNotEmpty() }
+            if (words.isNotEmpty() && (words.size != 12 && words.size != 24 || words.any { w -> w.any { ch -> ch !in 'a'..'z' } })) {
+                throw IllegalArgumentException("Recovery phrase must be 12 or 24 lowercase English words.")
+            }
+            val cleanMnemonic = words.joinToString(" ")
             for (token in sourcesRaw.split('\n', '\r', ',').map { it.trim() }.filter { it.isNotEmpty() }) {
-                val spec = parseSourceToken(token, "channel")
-                if (spec.kind == "tracker" && primary.isEmpty() && sources.isEmpty()) primary = spec.key
-                else if (spec.key != primary && sources.none { it.key == spec.key }) sources += spec
+                val spec = parseSourceToken(token, "channel").copy(kind = "channel")
+                if (spec.key != primary && sources.none { it.key == spec.key }) sources += spec
             }
-            require(primary.isNotEmpty() || sources.isNotEmpty()) { "Add at least one tracker key or peartube:// channel." }
+            require(primary.isNotEmpty() || cleanMnemonic.isNotEmpty() || sources.isNotEmpty()) { "Add a channel key, a 12-word recovery phrase, or a peartube://channel/ link." }
             val relays = split(relayThrough).map { it.lowercase() }
             relays.firstOrNull { !isKey(it) }?.let { throw IllegalArgumentException("Relay key $it is not 64 hex characters.") }
             val nodes = split(bootstrap)
             nodes.firstOrNull { !isHostPort(it) }?.let { throw IllegalArgumentException("Bootstrap node $it is not host:port.") }
-            return Settings(primary, sources, relays, nodes, lan, privateRouting)
+            return Settings(primary, cleanMnemonic, sources, relays, nodes, lan, privateRouting)
         }
 
         private fun split(list: String) = list.split(',', ' ', '\t', '\n', '\r').filter { it.isNotEmpty() }
@@ -240,6 +244,7 @@ data class Status(
     val tracker: String,
     val channel: String = "",
     val writer: String,
+    val writable: Boolean = false,
     val blobs: String,
     val blobBytes: Long,
     val cachedBytes: Long = 0,
@@ -267,6 +272,7 @@ data class Status(
                 tracker = json.optString("tracker"),
                 channel = json.optString("channel"),
                 writer = json.optString("writer"),
+                writable = json.optBoolean("writable"),
                 blobs = json.optString("blobs"),
                 blobBytes = json.optLong("blobBytes"),
                 cachedBytes = json.optLong("cachedBytes"),
@@ -298,6 +304,9 @@ data class Entry(
     val sha256: String,
     val local: Boolean,
     val cachedBytes: Long = 0,
+    val isPrivate: Boolean = false,
+    val epoch: Long = 0,
+    val locked: Boolean = false,
     val streamUrl: String,
     val magnetUrl: String = "",
     val source: String = "",
@@ -312,11 +321,59 @@ data class Entry(
             sha256 = json.optString("sha256"),
             local = json.optBoolean("local"),
             cachedBytes = json.optLong("cachedBytes"),
+            isPrivate = json.optBoolean("private"),
+            epoch = json.optLong("epoch"),
+            locked = json.optBoolean("locked"),
             streamUrl = json.getString("streamUrl"),
             magnetUrl = json.optString("magnetUrl"),
             source = json.optString("source"),
             sourceKind = json.optString("sourceKind"),
         )
+    }
+}
+
+data class WriterInfo(
+    val key: String,
+    val role: String = "writer",
+    val alias: String = "",
+    val selfDevice: Boolean = false,
+) {
+    companion object {
+        fun from(json: JSONObject) = WriterInfo(
+            key = json.optString("key"),
+            role = json.optString("role", "writer"),
+            alias = json.optString("alias"),
+            selfDevice = json.optBoolean("self"),
+        )
+    }
+}
+
+data class IdentityInfo(
+    val channel: String = "",
+    val writer: String = "",
+    val role: String? = null,
+    val writable: Boolean = false,
+    val mnemonicSet: Boolean = false,
+    val mnemonic: String = "",
+    val writers: List<WriterInfo> = emptyList(),
+    val epoch: Long = 1L,
+    val accessUri: String = "",
+) {
+    companion object {
+        fun from(json: JSONObject): IdentityInfo {
+            val arr = json.optJSONArray("writers")
+            return IdentityInfo(
+                channel = json.optString("channel"),
+                writer = json.optString("writer"),
+                role = json.optString("role").takeUnless { json.isNull("role") || it.isEmpty() },
+                writable = json.optBoolean("writable"),
+                mnemonicSet = json.optBoolean("mnemonicSet"),
+                mnemonic = json.optString("mnemonic"),
+                writers = if (arr == null) emptyList() else List(arr.length()) { WriterInfo.from(arr.getJSONObject(it)) },
+                epoch = json.optLong("epoch", 1L),
+                accessUri = json.optString("accessUri"),
+            )
+        }
     }
 }
 

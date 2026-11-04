@@ -116,7 +116,7 @@ fun PlayScreen(model: AppModel, host: PlayerHost, entry: Entry, startPositionMs:
     val view = LocalView.current
     val status by model.status.collectAsState()
     val entries by model.entries.collectAsState()
-    val liveEntry = remember(entries, entry) { entries.firstOrNull { it.key == entry.key } ?: entry }
+    val liveEntry = remember(entries, entry) { entries.firstOrNull { it.key == entry.key } ?: entries.firstOrNull { it.id == entry.id } ?: entry }
     var handle by remember { mutableLongStateOf(0L) }
     var openError by remember { mutableStateOf<String?>(null) }
     var state by remember { mutableStateOf(PlayerState()) }
@@ -138,18 +138,24 @@ fun PlayScreen(model: AppModel, host: PlayerHost, entry: Entry, startPositionMs:
     var resumePending by remember(entry.key) { mutableStateOf(resumePosition > 0) }
     val latestState by rememberUpdatedState(state)
 
-    DisposableEffect(entry.streamUrl) {
+    LaunchedEffect(liveEntry.key) {
+        runCatching { model.worker.warm(liveEntry.key) }
+    }
+
+    DisposableEffect(liveEntry.streamUrl) {
+        model.playStarted = false
         host.open()
         val soundfont = File(context.filesDir, "soundfont.sf2").takeIf { it.isFile }?.path
         val opened = try {
-            NativePlayer.open(entry.streamUrl, soundfont)
+            NativePlayer.open(liveEntry.streamUrl, soundfont)
         } catch (e: Throwable) {
             openError = "The player did not start: ${e.message ?: e}"
             0L
         }
         handle = opened
         onDispose {
-            model.recordWatchProgress(entry, latestState.positionMs, latestState.durationMs)
+            model.playStarted = false
+            model.recordWatchProgress(liveEntry, latestState.positionMs, latestState.durationMs)
             handle = 0L
             host.close()
             if (opened != 0L) NativePlayer.close(opened)
@@ -183,6 +189,7 @@ fun PlayScreen(model: AppModel, host: PlayerHost, entry: Entry, startPositionMs:
             st.videoFps?.let { host.matchFrameRate(it) }
             host.shown(st.positionMs)
             state = st
+            if (st.positionMs > 0) model.playStarted = true
             if (resumePending && st.durationMs != null) {
                 resumePending = false
                 NativePlayer.seek(h, resumePosition.coerceAtMost(st.durationMs))

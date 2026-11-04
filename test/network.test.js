@@ -27,12 +27,13 @@ async function until (fn, ms = 120000) {
   }
 }
 
-async function network (t) {
+async function network (t, role = 'writer') {
   const testnet = await createTestnet(3)
   const a = await createNode({ storage: tmp(), bootstrap: testnet.bootstrap })
   const b = await createNode({ storage: tmp(), bootstrap: testnet.bootstrap, tracker: a.status().tracker })
+  await a.grantWriter(b.status().writer, { role })
   t.after(async () => { await a.close(); await b.close(); await testnet.destroy() })
-  return { a, b }
+  return { a, b, testnet }
 }
 
 test('a relay acquires a source; another relay finds it and streams exact bytes', async t => {
@@ -77,18 +78,39 @@ test('a relay acquires a source; another relay finds it and streams exact bytes'
   assert.equal(received.rxBytes, received.routes.public.rxBytes, 'the path counters account for all received bytes')
 })
 
-test('a writer cannot remove another writer\'s entry', async t => {
-  const { a, b } = await network(t)
+test('channel ACL blocks ungranted strangers, stops co-writers deleting peers, and lets owners delete & revoke', async t => {
+  const { a, b, testnet } = await network(t, 'writer')
+  const c = await createNode({ storage: tmp(), bootstrap: testnet.bootstrap, tracker: a.status().tracker })
+  const stranger = await createNode({ storage: tmp(), bootstrap: testnet.bootstrap, tracker: a.status().tracker })
+  t.after(async () => { await c.close(); await stranger.close() })
+  await a.grantWriter(c.status().writer, { role: 'writer' })
+
+  // Ungranted stranger with the public channel key tries an optimistic write -> ignored by every peer!
+  const zero = '0'.repeat(64)
+  await stranger.tracker.append(Buffer.from(JSON.stringify({ type: 'announce', id: 'imdb:tt9999991', title: 'Spam', size: 1, sha256: zero, blobs: zero, blob: { blockOffset: 0, blockLength: 1, byteOffset: 0, byteLength: 1 } })), { optimistic: true })
+
   await b.publish({ id: 'imdb:tt0068646', title: 'Kept' }, Readable.from([randomBytes(1000)]))
   const [entry] = await until(async () => (await a.search('imdb:tt0068646')).length && a.search('imdb:tt0068646'))
+  assert.equal((await a.search('imdb:tt9999991')).length, 0, 'ungranted optimistic write rejected')
+  assert.equal(stranger.tracker.writable, false, 'stranger never becomes writable')
 
-  await a.remove(entry.key)
+  // Co-writer `c` (`role: 'writer'`) cannot delete `b`'s entry.
+  await c.remove(entry.key)
   await new Promise(resolve => setTimeout(resolve, 1000))
   assert.equal((await a.search('imdb:tt0068646')).length, 1)
   assert.equal((await b.search('imdb:tt0068646')).length, 1)
 
+  // `b` can delete its own entry; and Channel owner `a` can delete `b`'s entry and revoke `b` with purgeEntries.
   await b.remove(entry.key)
   await until(async () => (await a.search('imdb:tt0068646')).length === 0)
+
+  const kept2 = await b.publish({ id: 'imdb:tt0068647', title: 'Owner Deletable' }, Readable.from([randomBytes(800)]))
+  await b.publish({ id: 'imdb:tt0068648', title: 'Purged On Revoke' }, Readable.from([randomBytes(800)]))
+  await until(async () => (await a.search('imdb:tt0068647')).length === 1 && (await a.search('imdb:tt0068648')).length === 1)
+  await a.remove(kept2.key)
+  await until(async () => (await a.search('imdb:tt0068647')).length === 0, 30000)
+  await a.revokeWriter(b.status().writer, { purgeEntries: true })
+  await until(async () => (await a.search('imdb:tt0068648')).length === 0, 30000)
 })
 
 test('a source that dies mid-transfer fails its job and does not block the next one', async t => {
@@ -131,6 +153,8 @@ test('relays keep publishing and converging after the founder goes offline', asy
   const tracker = a.status().tracker
   const b = await createNode({ storage: tmp(), bootstrap: testnet.bootstrap, tracker })
   const c = await createNode({ storage: tmp(), bootstrap: testnet.bootstrap, tracker })
+  await a.grantWriter(b.status().writer)
+  await a.grantWriter(c.status().writer)
   t.after(async () => { await b.close(); await c.close(); await testnet.destroy() })
 
   await a.publish({ id: 'imdb:tt0000010', title: 'Founder' }, Readable.from([randomBytes(100)]))
@@ -158,15 +182,15 @@ test('an acquire finished before first sync survives a restart and is announced'
   const net = await createTestnet(3)
   const isolated = await createTestnet(3)
   const a = await createNode({ storage: tmp(), bootstrap: net.bootstrap })
-  const tracker = a.status().tracker
+  const { mnemonic } = await a.identity({ revealMnemonic: true })
   const bytes = randomBytes(200 * 1024)
   const source = createServer((req, res) => res.end(bytes))
   await new Promise(resolve => source.listen(0, '127.0.0.1', resolve))
   const dir = tmp()
   const jobsFile = join(dir, 'jobs.json')
 
-  // B joins but cannot reach anyone: the file is stored, the announce cannot be durable yet.
-  let b = await createNode({ storage: dir, bootstrap: isolated.bootstrap, tracker })
+  // B links via the 12-word phrase while completely isolated: the file is stored, the claimed announce waits for first sync.
+  let b = await createNode({ storage: dir, bootstrap: isolated.bootstrap, mnemonic, join: true })
   let acquirer = createAcquirer(b, jobsFile)
   const job = acquirer.add({ id: 'imdb:tt0000031', title: 'Offline', source: { url: `http://127.0.0.1:${source.address().port}/` } })
   await until(() => acquirer.get(job.jobId).status === 'announcing')
@@ -174,7 +198,7 @@ test('an acquire finished before first sync survives a restart and is announced'
   await b.close()
   source.close()
 
-  b = await createNode({ storage: dir, bootstrap: net.bootstrap, tracker })
+  b = await createNode({ storage: dir, bootstrap: net.bootstrap, mnemonic, join: true })
   t.after(async () => { await a.close(); await b.close(); await net.destroy(); await isolated.destroy() })
   acquirer = createAcquirer(b, jobsFile)
   await until(() => acquirer.get(job.jobId).status === 'done')
@@ -205,6 +229,7 @@ test('a peer far ahead with a forging apply cannot hand its view to a new relay'
   const mStore = new Corestore(tmp())
   const m = new Autobee(mStore.namespace('tracker'), Buffer.from(tracker, 'hex'), { apply: forgingApply, optimistic: true })
   await m.ready()
+  await a.grantWriter(m.local.key.toString('hex'), { role: 'writer' })
   const mSwarm = new Hyperswarm({ bootstrap: testnet.bootstrap })
   mSwarm.on('connection', conn => m.replicate(conn))
   mSwarm.join(m.discoveryKey)
@@ -247,6 +272,7 @@ test('ten peers with 2-hop private routing sync the tracker and stream exact byt
   const bytes = randomBytes(2 * 1024 * 1024 + 13)
   const expectedSha = createHash('sha256').update(bytes).digest('hex')
   const chunks = Array.from({ length: Math.ceil(bytes.length / 8192) }, (_, i) => bytes.subarray(i * 8192, (i + 1) * 8192))
+  await founder.grantWriter(nodes[9].status().writer)
   const published = await nodes[9].publish({ id: 'imdb:tt0133093', title: 'Private Matrix' }, Readable.from(chunks))
   assert.equal(published.blob.blockLength, 5, 'small source chunks are coalesced into 512 KiB Hypercore blocks')
 
@@ -382,6 +408,7 @@ test('acquirer strips cross-origin auth on redirect, resumes mid-stream resets a
   const bDir = tmp()
   const a = await createNode({ storage: aDir, bootstrap: testnet.bootstrap })
   const b = await createNode({ storage: bDir, bootstrap: testnet.bootstrap, tracker: a.status().tracker })
+  await a.grantWriter(b.status().writer)
   t.after(async () => { await a.close(); await b.close(); await testnet.destroy() })
 
   // Seed a foreign clip on `a` and pull it into `b`'s cache first so we prove `acquire` never wipes peer cache

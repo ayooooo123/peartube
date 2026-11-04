@@ -319,7 +319,7 @@ export function createHiverelaySeeder ({
   // Dedicated domain-separated Ed25519 publisher keypair so Blindspark allowlists never touch raw channel keys.
   const seedMaterial = createHash('sha256')
     .update('peartube/hiverelay-publisher/v1')
-    .update(node.localChannel.core.keyPair.secretKey)
+    .update(node.channel.local.keyPair.secretKey)
     .digest()
   const publisherPubkey = b4a.alloc(32)
   const publisherSecret = b4a.alloc(64)

@@ -84,14 +84,43 @@ class Worker(context: Context) {
     }
 
     suspend fun start(settings: Settings): Status {
-        val folder = settings.tracker.ifEmpty { "default" }
-        val srcArray = JSONArray().apply { settings.sources.forEach { put(it.toJson()) } }
+        val legacyPreSynced = settings.tracker.isEmpty() && settings.mnemonic.isEmpty() && settings.sources.size == 1 &&
+            File(storeDir, "trackers/${settings.sources[0].key}").isDirectory
+        val effectiveTracker = if (legacyPreSynced) settings.sources[0].key else settings.tracker
+        val effectiveSources = if (legacyPreSynced) emptyList() else settings.sources
+        val folder = when {
+            effectiveTracker.isNotEmpty() -> effectiveTracker
+            settings.mnemonic.isNotEmpty() -> "linked"
+            else -> {
+                runCatching { File(storeDir, "trackers/default").deleteRecursively() }
+                runCatching { File(storeDir, "trackers/channels").deleteRecursively() }
+                "channels-v2"
+            }
+        }
+        val effectiveBootstrap = if (settings.bootstrap.isNotEmpty()) {
+            settings.bootstrap
+        } else {
+            kotlinx.coroutines.withContext(Dispatchers.IO) {
+                listOf("bootstrap1.hyperdht.org", "bootstrap2.hyperdht.org", "bootstrap3.hyperdht.org")
+                    .flatMap { host ->
+                        runCatching {
+                            java.net.InetAddress.getAllByName(host)
+                                .filterIsInstance<java.net.Inet4Address>()
+                                .mapNotNull { it.hostAddress?.let { ip -> "$ip:49737" } }
+                        }.getOrDefault(emptyList())
+                    }
+                    .distinct()
+            }
+        }
+        val srcArray = JSONArray().apply { effectiveSources.forEach { put(it.toJson()) } }
         val params = JSONObject()
             .put("storage", File(storeDir, "trackers/$folder").path)
-            .put("tracker", if (settings.tracker.isEmpty()) JSONObject.NULL else settings.tracker)
+            .put("tracker", if (effectiveTracker.isEmpty()) JSONObject.NULL else effectiveTracker)
+            .put("mnemonic", if (settings.mnemonic.isEmpty()) JSONObject.NULL else settings.mnemonic)
+            .put("join", settings.mnemonic.isNotEmpty() && effectiveTracker.isEmpty())
             .put("sources", srcArray)
             .put("relayThrough", if (settings.relayThrough.isEmpty()) JSONObject.NULL else JSONArray(settings.relayThrough))
-            .put("bootstrap", if (settings.bootstrap.isEmpty()) JSONObject.NULL else JSONArray(settings.bootstrap))
+            .put("bootstrap", if (effectiveBootstrap.isEmpty()) JSONObject.NULL else JSONArray(effectiveBootstrap))
             .put("lan", settings.lanDiscovery)
             .put("privateRouting", settings.privateRouting)
         return Status.from(call("start", params) as JSONObject)
@@ -105,6 +134,10 @@ class Worker(context: Context) {
         return List(list.length()) { Entry.from(list.getJSONObject(it)) }
     }
 
+    suspend fun warm(key: String) {
+        call("warm", JSONObject().put("key", key))
+    }
+
     private val castDir: String get() = File(storeDir, "cast").path
 
     suspend fun openUri(uri: String): OpenUriResult =
@@ -113,6 +146,20 @@ class Worker(context: Context) {
     suspend fun removeSource(key: String) {
         call("removeSource", JSONObject().put("key", key))
     }
+
+    suspend fun removeEntry(key: String) {
+        call("remove", JSONObject().put("key", key))
+    }
+
+    suspend fun identity(revealMnemonic: Boolean = false): IdentityInfo =
+        IdentityInfo.from(call("identity", JSONObject().put("revealMnemonic", revealMnemonic)) as JSONObject)
+
+    suspend fun revokeWriter(writer: String, purgeEntries: Boolean = false) {
+        call("revokeWriter", JSONObject().put("writer", writer).put("purgeEntries", purgeEntries))
+    }
+
+    suspend fun rotateEpoch(): JSONObject =
+        call("rotateEpoch", JSONObject()) as JSONObject
 
     suspend fun clearCache(key: String? = null): Pair<Long, Long> {
         val res = call("clearCache", JSONObject().put("key", key ?: JSONObject.NULL)) as? JSONObject

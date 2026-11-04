@@ -226,7 +226,7 @@ test('saved relay data survives in-place upgrade, backfills channel with zero bl
   const oldJob = oldAcquirer.add({ id: 'imdb:tt0076759', title: 'Saved Before Upgrade', source: { url: `${originBase}/legacy.mp4` }, channel: false })
   await until(() => oldAcquirer.get(oldJob.jobId)?.status === 'done', 60000, 'legacy acquire')
   const preUpgradeBlobBytes = oldRelay.status().blobBytes
-  assert.equal(oldRelay.localChannel.core.length, 0, 'legacy relay had not populated single-writer channel')
+  assert.equal(oldRelay.status().channel, savedTracker, 'unified channel key matches primary key')
   await oldRelay.close()
 
   // Prepare watch-dir media file + custom drop-in user plugin in /data/plugins before booting upgraded relay!
@@ -352,5 +352,136 @@ export default {
     zeroCopyBackfillVerified: true,
     pluginsRegistered: pluginList,
     syncedChannelIds: expected.map(([id]) => id)
+  }, null, 2) + '\n')
+})
+
+test('12-word recovery phrase links multi-device writers fork-free and paid epoch rotation gates blind-seeded media', { timeout: 240000 }, async t => {
+  const testnet = await createTestnet(3)
+  const nodes = []
+  const apis = []
+  t.after(async () => {
+    for (const api of apis) api.close()
+    await Promise.allSettled(nodes.map(n => n.close()))
+    await testnet.destroy()
+  })
+
+  // 1. Creator Device 1 (Relay) founds a Channel with an automatic 12-word BIP-39 phrase; Device 2 (Phone) links with ONLY those 12 words.
+  const d1Dir = tmp('creator-relay')
+  const d1 = await createNode({ storage: d1Dir, bootstrap: testnet.bootstrap })
+  nodes.push(d1)
+  const d1Ident = await d1.identity({ revealMnemonic: true })
+  assert.equal(d1Ident.mnemonic.split(' ').length, 12, 'generated 12-word BIP-39 phrase')
+  const channelKey = d1.status().channel
+
+  const d2 = await createNode({ storage: tmp('creator-phone'), bootstrap: testnet.bootstrap, mnemonic: d1Ident.mnemonic, join: true })
+  nodes.push(d2)
+  assert.equal(d2.status().channel, channelKey, '12-word phrase deterministically resolves exact Channel key')
+  assert.notEqual(d2.status().writer, d1.status().writer, 'linked devices never share a Hypercore writer keypair (fork-proof)')
+
+  // Device 2 (Phone) publishes a Subscribers-Only video in Epoch 1!
+  const ep1Bytes = randomBytes(1100 * 1024 + 29)
+  const pubEp1 = await d2.publish({ id: 'imdb:tt0133093', title: 'Epoch 1 Subscriber Cut', private: true }, Readable.from([ep1Bytes]))
+  assert.equal(pubEp1.epoch, 1)
+  assert.ok(pubEp1.wrappedKey?.length === 144, 'video key wrapped with XSalsa20-Poly1305')
+  await until(async () => (await d1.search('imdb:tt0133093')).length === 1, 60000, 'Device 1 synced Phone private publish')
+
+  // 2. Blind Replica mirrors the Channel & caches all encrypted 512 KiB blocks WITHOUT holding any decryption key!
+  const blindDir = tmp('blind-replica')
+  const blind = await createNode({
+    storage: blindDir,
+    bootstrap: testnet.bootstrap,
+    sources: [{ key: channelKey, kind: 'channel', alias: 'Creator Paid Feed' }]
+  })
+  nodes.push(blind)
+  const blindMirror = await createMirrorHost({
+    node: blind,
+    storage: blindDir,
+    acquirer: null,
+    replicate: [channelKey],
+    replicateMinFreeBytes: 0,
+    pollIntervalMs: 0
+  })
+  t.after(() => blindMirror.close())
+  await until(async () => (await blind.search('imdb:tt0133093')).length === 1, 60000, 'Blind replica synced encrypted entry')
+  await blindMirror.run('p2p-replicate')
+  await until(() => blind.status().cachedBytes >= ep1Bytes.length, 60000, 'Blind replica cached 100% of ciphertext blocks')
+  const [blindHit] = await blind.search('imdb:tt0133093')
+  assert.equal(blindHit.private, true)
+  assert.equal(blindHit.locked, true, 'Blind replica cannot decrypt subscriber video')
+  assert.equal((await fetch(blindHit.streamUrl)).status, 404, 'Blind replica HTTP BlobServer refuses locked ciphertext')
+
+  // Shut down BOTH Creator devices so ONLY the Blind Replica serves the swarm!
+  await d2.close()
+  await d1.close()
+
+  // 3. Subscriber 1 follows the Channel: locked before pass, then redeems Epoch 1 pass via /v1/open and streams decrypted 206 Range from Blind Replica!
+  const sub1 = await createNode({
+    storage: tmp('sub-1'),
+    bootstrap: testnet.bootstrap,
+    sources: [{ key: channelKey, kind: 'channel' }]
+  })
+  nodes.push(sub1)
+  const apiSub1 = createApi({ node: sub1, acquirer: null })
+  await new Promise(resolve => apiSub1.listen(0, '127.0.0.1', resolve))
+  apis.push(apiSub1)
+  const baseSub1 = `http://127.0.0.1:${apiSub1.address().port}`
+
+  const [lockedSub1] = await until(async () => { const r = await sub1.search('imdb:tt0133093'); return r.length && r }, 60000, 'Sub 1 synced locked entry from Blind Replica')
+  assert.equal(lockedSub1.locked, true)
+  assert.equal((await fetch(lockedSub1.streamUrl)).status, 404)
+
+  const openPass = await (await fetch(`${baseSub1}/v1/open`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ uri: d1Ident.accessUri })
+  })).json()
+  assert.equal(openPass.action, 'access')
+  assert.equal(openPass.epoch, 1)
+
+  const [unlockedSub1] = await sub1.search('imdb:tt0133093')
+  assert.equal(unlockedSub1.locked, false, 'Epoch 1 pass unlocked entry')
+  const rangeSub1 = await fetch(unlockedSub1.streamUrl, { headers: { Range: 'bytes=500000-950000' } })
+  assert.equal(rangeSub1.status, 206)
+  assert.deepEqual(Buffer.from(await rangeSub1.arrayBuffer()), ep1Bytes.subarray(500000, 950001), 'exact HTTP 206 Range decrypted from Blind Replica')
+  const fullSub1 = Buffer.from(await (await fetch(unlockedSub1.streamUrl)).arrayBuffer())
+  assert.equal(sha256(fullSub1), sha256(ep1Bytes))
+
+  // 4. Creator Relay reopens, rotates to Epoch 2 (Sub 1 stopped paying!), and publishes an Epoch 2 video!
+  const d1Reopen = await createNode({ storage: d1Dir, bootstrap: testnet.bootstrap })
+  nodes.push(d1Reopen)
+  const rotated = await d1Reopen.rotateEpoch()
+  assert.equal(rotated.epoch, 2)
+  const ep2Bytes = randomBytes(640 * 1024 + 7)
+  await d1Reopen.publish({ id: 'imdb:tt0816692', title: 'Epoch 2 Exclusive', private: true }, Readable.from([ep2Bytes]))
+
+  // Ex-subscriber 1 sees the new Epoch 2 video as LOCKED (404), while keeping access to Epoch 1!
+  const [sub1Ep2] = await until(async () => { const r = await sub1.search('imdb:tt0816692'); return r.length && r }, 60000, 'Sub 1 synced Epoch 2 entry')
+  assert.equal(sub1Ep2.epoch, 2)
+  assert.equal(sub1Ep2.locked, true, 'Canceled Epoch 1 subscriber cannot decrypt new Epoch 2 video')
+  assert.equal((await fetch(sub1Ep2.streamUrl)).status, 404)
+  assert.equal((await fetch(unlockedSub1.streamUrl)).status, 200, 'Epoch 1 archive remains playable for Epoch 1 pass holder')
+
+  // Active Subscriber 2 redeems Epoch 2 pass and streams Epoch 2 video cleanly!
+  const sub2 = await createNode({ storage: tmp('sub-2'), bootstrap: testnet.bootstrap })
+  nodes.push(sub2)
+  await sub2.openUri(rotated.accessUri)
+  const [sub2Ep2] = await until(async () => { const r = await sub2.search('imdb:tt0816692'); return r.length && r }, 60000, 'Sub 2 synced Epoch 2 entry')
+  assert.equal(sub2Ep2.locked, false)
+  const fullSub2 = Buffer.from(await (await fetch(sub2Ep2.streamUrl)).arrayBuffer())
+  assert.equal(sha256(fullSub2), sha256(ep2Bytes))
+
+  const artifactDir = join('desktop', 'target', 'e2e')
+  mkdirSync(artifactDir, { recursive: true })
+  writeFileSync(join(artifactDir, 'unified-channel-result.json'), JSON.stringify({
+    test: 'unified channel mnemonic + blind-seeded epoch encryption e2e',
+    at: new Date().toISOString(),
+    channelKey,
+    device1Writer: d1Ident.writer,
+    device2Writer: d2.status().writer,
+    distinctWriterCores: d1Ident.writer !== d2.status().writer,
+    blindReplicaLockedStatus: 404,
+    epoch1RangeVerified: true,
+    epoch2ExSubscriberCutoffStatus: 404,
+    epoch2ActiveSubscriberVerified: true
   }, null, 2) + '\n')
 })

@@ -268,6 +268,7 @@ test('standalone bin/private-relay.js forwarders: zero disk writes, fresh-boot 2
   // discovers both live seeders and streams from the second seeder without any pre-shared peer keys.
   const seeder2 = await createNode({ storage: tmp(), bootstrap: testnet.bootstrap, tracker, privateRouting: true })
   nodes.push(seeder2)
+  await seeder.grantWriter(seeder2.status().writer)
   const secondSeederBytes = randomBytes(300 * 1024 + 19)
   await seeder2.publish({ id: 'imdb:tt0100077', title: 'Second private seeder' }, Readable.from([secondSeederBytes]))
   const coldJoiner = await createNode({ storage: tmp(), bootstrap: testnet.bootstrap, tracker, privateRouting: true })
@@ -315,7 +316,7 @@ test('adversarial scanPeers outbound joinPeer trap and wrong inner Noise key rej
   const tracker = seeder.status().tracker
   const reader = await createNode({ storage: tmp(), bootstrap: testnet.bootstrap, tracker, privateRouting: true })
   nodes.push(reader)
-
+  await seeder.grantWriter(reader.status().writer)
   await seeder.publish({ id: 'imdb:tt0100009', title: 'Warmup sync' }, Readable.from([randomBytes(32768)]))
   await until(async () => (await reader.search('imdb:tt0100009')).length > 0, 60_000, 'initial sync before outbound trap')
 

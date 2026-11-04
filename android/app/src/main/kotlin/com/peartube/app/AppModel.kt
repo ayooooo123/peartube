@@ -41,6 +41,7 @@ class AppModel(private val app: Application) {
     val worker = Worker(app)
     val settings = MutableStateFlow(Settings.load(dataDir))
     val status = MutableStateFlow<Status?>(null)
+    val identity = MutableStateFlow<IdentityInfo?>(null)
     val entries = MutableStateFlow<List<Entry>>(emptyList())
     val error = MutableStateFlow<String?>(null)
     val query = MutableStateFlow("")
@@ -70,6 +71,10 @@ class AppModel(private val app: Application) {
     }
 
     fun playEntry(entry: Entry) {
+        if (entry.locked) {
+            error.value = "Subscriber pass needed: paste this channel's peartube://access/… pass in the search bar."
+            return
+        }
         val receiver = cast.value.session?.receiverId ?: selectedCastReceiver.value?.id
         val start = watchHistory.value[entry.key]?.takeIf { it.partial }?.positionMs ?: 0L
         if (receiver != null) castToReceiver(receiver, entry.key, "auto", start)
@@ -162,7 +167,10 @@ class AppModel(private val app: Application) {
             }
         }
         scope.launch {
-            for (unit in refreshes) refresh()
+            for (unit in refreshes) {
+                refresh()
+                kotlinx.coroutines.delay(250)
+            }
         }
         scope.launch {
             var wasPlaying = false
@@ -330,7 +338,46 @@ class AppModel(private val app: Application) {
 
 
     fun subscribeDiscovered(disc: DiscoveredSource) {
-        openUriOrKey("peartube://${disc.kind}/${disc.key}?name=${disc.title}")
+        openUriOrKey("peartube://channel/${disc.key}?name=${disc.title}")
+    }
+
+    fun removeChannelEntry(key: String) {
+        scope.launch {
+            runCatching { worker.removeEntry(key) }
+                .onSuccess { notice.value = "Removed from channel"; refresh() }
+                .onFailure { error.value = it.message }
+        }
+    }
+
+    fun rotateSubscriberPass() {
+        scope.launch {
+            runCatching { worker.rotateEpoch() }
+                .onSuccess { res -> notice.value = "Rotated to epoch ${res.optLong("epoch", 1L)}"; refresh() }
+                .onFailure { error.value = it.message }
+        }
+    }
+
+    fun revokeLinkedWriter(writerKey: String) {
+        scope.launch {
+            runCatching { worker.revokeWriter(writerKey) }
+                .onSuccess { refresh() }
+                .onFailure { error.value = it.message }
+        }
+    }
+
+    fun copyRecoveryPhrase(onPhrase: (String) -> Unit) {
+        scope.launch {
+            runCatching { worker.identity(true) }
+                .onSuccess { ident ->
+                    if (ident.mnemonic.isNotBlank()) {
+                        onPhrase(ident.mnemonic)
+                        notice.value = "Copied 12-word recovery phrase"
+                    } else {
+                        error.value = "No recovery phrase saved on this phone"
+                    }
+                }
+                .onFailure { error.value = it.message }
+        }
     }
     fun clearCache(key: String? = null) {
         scope.launch {
@@ -370,6 +417,7 @@ class AppModel(private val app: Application) {
             var itemUri: Uri? = null
             var conn: HttpURLConnection? = null
             try {
+                runCatching { worker.warm(entry.key) }
                 conn = (URL(entry.streamUrl).openConnection() as HttpURLConnection).apply {
                     connectTimeout = 15_000
                     readTimeout = 45_000
@@ -488,18 +536,23 @@ class AppModel(private val app: Application) {
         }
     }
 
+    @Volatile
+    var playStarted: Boolean = false
+
     private suspend fun refresh() {
         if (!settings.value.hasSources) return
         try {
-            // Keep the worklet's QuickJS thread wide open for block streaming while a video plays.
-            if (screen.value is Screen.Play) {
+            // Keep the worklet's QuickJS thread wide open once video frames are flowing.
+            if (screen.value is Screen.Play && playStarted) {
                 status.value = worker.status()
             } else {
                 coroutineScope {
                     val st = async { worker.status() }
                     val en = async { worker.search() }
+                    val id = async { runCatching { worker.identity(false) }.getOrNull() }
                     status.value = st.await()
                     entries.value = en.await()
+                    id.await()?.let { identity.value = it }
                 }
             }
         } catch (e: Exception) {

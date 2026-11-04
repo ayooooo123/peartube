@@ -610,10 +610,16 @@ impl PearTube {
         } else if entry.cached_bytes > 0 {
             meta_parts.push(format!("{} buffered", format_bytes(entry.cached_bytes)));
         }
+        if entry.locked {
+            meta_parts.push("Subscriber pass needed".into());
+        } else if entry.is_private {
+            meta_parts.push("Subscribers only".into());
+        }
         if alt_count > 1 {
             meta_parts.push(format!("{alt_count} versions"));
         }
-
+        let can_delete = self.status.as_ref().is_some_and(|st| st.writable && !st.channel.is_empty() && st.channel == entry.source);
+        let del_key = can_delete.then(|| entry.key.clone());
         let card_id = SharedString::from(format!("movie-{}", entry.key));
         let cast_btn_id = SharedString::from(format!("cast-{}", entry.key));
         let dl_btn_id = SharedString::from(format!("dl-{}", entry.key));
@@ -708,32 +714,35 @@ impl PearTube {
                                 },
                             )
                             .child({
-                                let (mag, clr) = (magnet.clone(), clear_key.clone());
+                                let (mag, clr, del) = (magnet.clone(), clear_key.clone(), del_key.clone());
                                 let w = weak.clone();
                                 let c_item = menu_cast.clone();
                                 let d_item = menu_dl.clone();
                                 let m_cancel = menu_cancel_key.clone();
+                                let is_locked = entry.locked;
                                 Button::new(more_btn_id)
                                     .ghost()
                                     .small()
                                     .icon(Icon::new(Lucide::Ellipsis))
                                     .dropdown_menu(move |mut menu, _, _| {
-                                        let w_cast = w.clone();
-                                        let ci = c_item.clone();
-                                        menu = menu.item(PopupMenuItem::new("Play on TV…").on_click(move |_, window, cx| {
-                                            let _ = w_cast.update(cx, |this, cx| this.open_cast_sheet(Some((ci.key.clone(), ci.title.clone(), 0)), window, cx));
-                                        }));
-                                        let w_dl = w.clone();
-                                        if is_downloading {
-                                            let ck = m_cancel.clone();
-                                            menu = menu.item(PopupMenuItem::new("Cancel Download").on_click(move |_, _, cx| {
-                                                let _ = w_dl.update(cx, |this, cx| this.cancel_download(&ck, cx));
+                                        if !is_locked {
+                                            let w_cast = w.clone();
+                                            let ci = c_item.clone();
+                                            menu = menu.item(PopupMenuItem::new("Play on TV…").on_click(move |_, window, cx| {
+                                                let _ = w_cast.update(cx, |this, cx| this.open_cast_sheet(Some((ci.key.clone(), ci.title.clone(), 0)), window, cx));
                                             }));
-                                        } else {
-                                            let di = d_item.clone();
-                                            menu = menu.item(PopupMenuItem::new("Download Video").on_click(move |_, _, cx| {
-                                                let _ = w_dl.update(cx, |this, cx| this.download_entry(di.clone(), None, cx));
-                                            }));
+                                            let w_dl = w.clone();
+                                            if is_downloading {
+                                                let ck = m_cancel.clone();
+                                                menu = menu.item(PopupMenuItem::new("Cancel Download").on_click(move |_, _, cx| {
+                                                    let _ = w_dl.update(cx, |this, cx| this.cancel_download(&ck, cx));
+                                                }));
+                                            } else {
+                                                let di = d_item.clone();
+                                                menu = menu.item(PopupMenuItem::new("Download Video").on_click(move |_, _, cx| {
+                                                    let _ = w_dl.update(cx, |this, cx| this.download_entry(di.clone(), None, cx));
+                                                }));
+                                            }
                                         }
                                         if let Some(url) = mag.clone() {
                                             menu = menu.item(PopupMenuItem::new("Copy Stream Link").on_click(move |_, _, cx| {
@@ -744,6 +753,12 @@ impl PearTube {
                                             let w_clr = w.clone();
                                             menu = menu.item(PopupMenuItem::new("Free Up Downloaded Data").on_click(move |_, _, cx| {
                                                 let _ = w_clr.update(cx, |this, cx| this.clear_cache(Some(k.clone()), cx));
+                                            }));
+                                        }
+                                        if let Some(dk) = del.clone() {
+                                            let w_del = w.clone();
+                                            menu = menu.item(PopupMenuItem::new("Delete from Channel").on_click(move |_, _, cx| {
+                                                let _ = w_del.update(cx, |this, cx| this.remove_channel_entry(dk.clone(), cx));
                                             }));
                                         }
                                         menu
@@ -922,15 +937,19 @@ impl PearTube {
         let is_downloading = active_dl.is_some();
         let ep_cancel_key = entry.key.clone();
         let ep_menu_cancel_key = entry.key.clone();
+        let lock_tag = if entry.locked { " · Subscriber pass needed" } else if entry.is_private { " · Subscribers only" } else { "" };
         let status_label = if let Some((got, tot)) = active_dl {
             if tot > 0 {
-                format!("{} · Downloading {:.0}%", format_bytes(entry.size), (got as f64 / tot as f64 * 100.0).min(100.0))
+                format!("{} · Downloading {:.0}%{lock_tag}", format_bytes(entry.size), (got as f64 / tot as f64 * 100.0).min(100.0))
             } else {
-                format!("{} · Downloading {}", format_bytes(entry.size), format_bytes(got))
+                format!("{} · Downloading {}{lock_tag}", format_bytes(entry.size), format_bytes(got))
             }
         } else {
-            format!("{} · {}", format_bytes(entry.size), origin(entry))
+            format!("{} · {}{lock_tag}", format_bytes(entry.size), origin(entry))
         };
+        let can_delete = self.status.as_ref().is_some_and(|st| st.writable && !st.channel.is_empty() && st.channel == entry.source);
+        let ep_del_key = can_delete.then(|| entry.key.clone());
+        let ep_locked = entry.locked;
         let resume = self.resume_position_for(entry) > 0;
         let weak = cx.entity().downgrade();
 
@@ -999,23 +1018,25 @@ impl PearTube {
                             .small()
                             .icon(Icon::new(Lucide::Ellipsis))
                             .dropdown_menu(move |mut menu, _, _| {
-                                let w_cast = weak.clone();
-                                let ci = ep_menu_cast.clone();
-                                menu = menu.item(PopupMenuItem::new("Play on TV…").on_click(move |_, window, cx| {
-                                    let _ = w_cast.update(cx, |this, cx| this.open_cast_sheet(Some((ci.key.clone(), ci.title.clone(), 0)), window, cx));
-                                }));
-                                let w_dl = weak.clone();
-                                if is_downloading {
-                                    let ck = ep_menu_cancel_key.clone();
-                                    menu = menu.item(PopupMenuItem::new("Cancel Download").on_click(move |_, _, cx| {
-                                        let _ = w_dl.update(cx, |this, cx| this.cancel_download(&ck, cx));
+                                if !ep_locked {
+                                    let w_cast = weak.clone();
+                                    let ci = ep_menu_cast.clone();
+                                    menu = menu.item(PopupMenuItem::new("Play on TV…").on_click(move |_, window, cx| {
+                                        let _ = w_cast.update(cx, |this, cx| this.open_cast_sheet(Some((ci.key.clone(), ci.title.clone(), 0)), window, cx));
                                     }));
-                                } else {
-                                    let di = ep_menu_dl.clone();
-                                    let dn = ep_menu_dl_name.clone();
-                                    menu = menu.item(PopupMenuItem::new("Download Episode").on_click(move |_, _, cx| {
-                                        let _ = w_dl.update(cx, |this, cx| this.download_entry(di.clone(), Some(dn.clone()), cx));
-                                    }));
+                                    let w_dl = weak.clone();
+                                    if is_downloading {
+                                        let ck = ep_menu_cancel_key.clone();
+                                        menu = menu.item(PopupMenuItem::new("Cancel Download").on_click(move |_, _, cx| {
+                                            let _ = w_dl.update(cx, |this, cx| this.cancel_download(&ck, cx));
+                                        }));
+                                    } else {
+                                        let di = ep_menu_dl.clone();
+                                        let dn = ep_menu_dl_name.clone();
+                                        menu = menu.item(PopupMenuItem::new("Download Episode").on_click(move |_, _, cx| {
+                                            let _ = w_dl.update(cx, |this, cx| this.download_entry(di.clone(), Some(dn.clone()), cx));
+                                        }));
+                                    }
                                 }
                                 if let Some(url) = magnet.clone() {
                                     menu = menu.item(PopupMenuItem::new("Copy Stream Link").on_click(move |_, _, cx| {
@@ -1026,6 +1047,12 @@ impl PearTube {
                                     let w_clr = weak.clone();
                                     menu = menu.item(PopupMenuItem::new("Free Up Downloaded Data").on_click(move |_, _, cx| {
                                         let _ = w_clr.update(cx, |this, cx| this.clear_cache(Some(k.clone()), cx));
+                                    }));
+                                }
+                                if let Some(dk) = ep_del_key.clone() {
+                                    let w_del = weak.clone();
+                                    menu = menu.item(PopupMenuItem::new("Delete from Channel").on_click(move |_, _, cx| {
+                                        let _ = w_del.update(cx, |this, cx| this.remove_channel_entry(dk.clone(), cx));
                                     }));
                                 }
                                 menu
@@ -1133,37 +1160,125 @@ impl PearTube {
                         )
                     })
                     // Share My Channel Card with QR
+                    // Share My Channel, Device Key, Recovery Phrase & Paid Subscriber Pass
                     .when(!channel.is_empty(), |this| {
                         let ch_uri = format!("peartube://channel/{channel}");
                         let copy_uri = ch_uri.clone();
+                        let writer_key = status.map(|s| s.writer.clone()).unwrap_or_default();
+                        let ident = self.identity.as_ref();
+                        let access_uri = ident.map(|i| i.access_uri.clone()).unwrap_or_default();
+                        let epoch = ident.map_or(1, |i| i.epoch);
+                        let has_mnemonic = ident.is_some_and(|i| i.mnemonic_set);
+                        let writers = ident.map(|i| i.writers.clone()).unwrap_or_default();
                         this.child(
-                            h_flex()
-                                .gap_4()
-                                .items_center()
+                            v_flex()
+                                .gap_3()
                                 .p_3p5()
                                 .rounded(px(14.))
                                 .bg(rgb(BG))
                                 .border_1()
                                 .border_color(rgb(LINE))
-                                .child(qr_card(&ch_uri, 88.))
                                 .child(
-                                    v_flex()
-                                        .flex_1()
-                                        .gap_1()
-                                        .child(div().text_sm().font_weight(FontWeight::SEMIBOLD).child("Share Your Channel"))
-                                        .child(div().text_xs().text_color(rgb(DIM)).child("Anyone who scans or opens your link gets your feed with zero servers in between."))
+                                    h_flex()
+                                        .gap_4()
+                                        .items_center()
+                                        .child(qr_card(&ch_uri, 88.))
                                         .child(
-                                            h_flex().mt_1().child(
-                                                Button::new("hood-copy-channel")
-                                                    .small()
-                                                    .icon(Icon::new(Lucide::Share2))
-                                                    .label("Copy Channel Link")
-                                                    .on_click(cx.listener(move |_, _, _, cx| {
-                                                        cx.write_to_clipboard(ClipboardItem::new_string(copy_uri.clone()));
-                                                    })),
-                                            ),
+                                            v_flex()
+                                                .flex_1()
+                                                .gap_1()
+                                                .child(div().text_sm().font_weight(FontWeight::SEMIBOLD).child("Share Your Channel"))
+                                                .child(div().text_xs().text_color(rgb(DIM)).child("Read-only public feed; only your linked devices can publish or delete."))
+                                                .child(
+                                                    h_flex()
+                                                        .mt_1()
+                                                        .gap_2()
+                                                        .flex_wrap()
+                                                        .child(
+                                                            Button::new("hood-copy-channel")
+                                                                .small()
+                                                                .icon(Icon::new(Lucide::Share2))
+                                                                .label("Copy Channel Link")
+                                                                .on_click(cx.listener(move |_, _, _, cx| {
+                                                                    cx.write_to_clipboard(ClipboardItem::new_string(copy_uri.clone()));
+                                                                })),
+                                                        )
+                                                        .when(!writer_key.is_empty(), |row| {
+                                                            let wk = writer_key.clone();
+                                                            row.child(
+                                                                Button::new("hood-copy-writer")
+                                                                    .ghost()
+                                                                    .small()
+                                                                    .label("Copy Device Key")
+                                                                    .on_click(cx.listener(move |_, _, _, cx| {
+                                                                        cx.write_to_clipboard(ClipboardItem::new_string(wk.clone()));
+                                                                    })),
+                                                            )
+                                                        })
+                                                        .when(has_mnemonic, |row| {
+                                                            row.child(
+                                                                Button::new("hood-copy-mnemonic")
+                                                                    .ghost()
+                                                                    .small()
+                                                                    .label("Copy 12-Word Phrase")
+                                                                    .on_click(cx.listener(|this, _, _, cx| this.copy_recovery_phrase(cx))),
+                                                            )
+                                                        }),
+                                                ),
                                         ),
-                                ),
+                                )
+                                .when(!access_uri.is_empty(), |card| {
+                                    let pass = access_uri.clone();
+                                    card.child(
+                                        h_flex()
+                                            .justify_between()
+                                            .items_center()
+                                            .gap_2()
+                                            .pt_2()
+                                            .border_t_1()
+                                            .border_color(rgb(LINE))
+                                            .child(div().text_xs().text_color(rgb(DIM)).child(format!("Subscriber pass · Epoch {epoch}")))
+                                            .child(
+                                                h_flex()
+                                                    .gap_2()
+                                                    .child(
+                                                        Button::new("hood-copy-pass")
+                                                            .ghost()
+                                                            .small()
+                                                            .label("Copy Pass")
+                                                            .on_click(cx.listener(move |_, _, _, cx| {
+                                                                cx.write_to_clipboard(ClipboardItem::new_string(pass.clone()));
+                                                            })),
+                                                    )
+                                                    .child(
+                                                        Button::new("hood-rotate-pass")
+                                                            .ghost()
+                                                            .small()
+                                                            .label("Rotate Pass")
+                                                            .on_click(cx.listener(|this, _, _, cx| this.rotate_subscriber_pass(cx))),
+                                                    ),
+                                            ),
+                                    )
+                                })
+                                .when(writers.len() > 1, |card| {
+                                    let ch_hex = channel.clone();
+                                    let chips: Vec<_> = writers
+                                        .into_iter()
+                                        .map(|w| {
+                                            let name = if !w.alias.is_empty() { w.alias } else { format!("{}…", &w.key[..8.min(w.key.len())]) };
+                                            let tag = if w.self_device { format!("{name} (this Mac)") } else { format!("{name} · {}", w.role) };
+                                            let can_rm = w.key != ch_hex;
+                                            let wk = w.key.clone();
+                                            let btn = Button::new(SharedString::from(format!("hood-writer-{}", w.key))).ghost().small();
+                                            if can_rm {
+                                                btn.label(format!("{tag} ×")).on_click(cx.listener(move |this, _, _, cx| this.revoke_linked_writer(wk.clone(), cx)))
+                                            } else {
+                                                btn.label(tag)
+                                            }
+                                        })
+                                        .collect();
+                                    card.child(h_flex().gap_1p5().flex_wrap().children(chips))
+                                }),
                         )
                     })
                     // Collapsed Engine Room toggle for raw telemetry

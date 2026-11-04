@@ -1,11 +1,13 @@
 import SwiftUI
 import UniformTypeIdentifiers
+import UIKit
 
 @MainActor
 struct SettingsScreen: View {
     @ObservedObject var model: AppModel
     @Environment(\.dismiss) private var dismiss
     @State private var tracker: String
+    @State private var mnemonic: String
     @State private var sources: String
     @State private var relay: String
     @State private var bootstrap: String
@@ -18,6 +20,7 @@ struct SettingsScreen: View {
     init(model: AppModel) {
         self.model = model
         _tracker = State(initialValue: model.settings.tracker)
+        _mnemonic = State(initialValue: model.settings.mnemonic)
         _sources = State(initialValue: model.settings.sources.map(\.uri).joined(separator: "\n"))
         _relay = State(initialValue: model.settings.relayThrough.joined(separator: "\n"))
         _bootstrap = State(initialValue: model.settings.bootstrap.joined(separator: "\n"))
@@ -45,9 +48,10 @@ struct SettingsScreen: View {
                     }
                 }
                 Section {
-                    TextField("Primary tracker key or URI", text: $tracker, axis: .vertical).lineLimit(1...3).textInputAutocapitalization(.never).autocorrectionDisabled().accessibilityIdentifier("settings.tracker")
-                    TextField("Channels / trackers, one per line", text: $sources, axis: .vertical).lineLimit(3...8).textInputAutocapitalization(.never).autocorrectionDisabled().accessibilityIdentifier("settings.sources")
-                } header: { Text("Subscriptions") } footer: { Text("Use 64-hex keys or peartube://channel/<key>?name=Alias and peartube://tracker/<key> links. Channel keys are the default in the sources list.") }
+                    TextField("Primary channel key or URI", text: $tracker, axis: .vertical).lineLimit(1...3).textInputAutocapitalization(.never).autocorrectionDisabled().accessibilityIdentifier("settings.tracker")
+                    TextField("Channels, one per line", text: $sources, axis: .vertical).lineLimit(3...8).textInputAutocapitalization(.never).autocorrectionDisabled().accessibilityIdentifier("settings.sources")
+                    TextField("12-word recovery phrase (link account)", text: $mnemonic, axis: .vertical).lineLimit(2...4).textInputAutocapitalization(.never).autocorrectionDisabled().accessibilityIdentifier("settings.mnemonic")
+                } header: { Text("Channels & Account") } footer: { Text("Use 64-hex channel keys, peartube://channel/<key>?name=Alias links, or your 12-word recovery phrase.") }
                 if !model.sources.isEmpty || !model.discovered.isEmpty {
                     Section("Channels & Sources") {
                         ForEach(model.sources, id: \.selfKey) { source in
@@ -84,7 +88,7 @@ struct SettingsScreen: View {
                 Section {
                     Button {
                         do {
-                            let next = try Settings.parse(tracker: tracker, sources: sources, relays: relay, bootstrap: bootstrap, lan: lan, privateRouting: privateRouting)
+                            let next = try Settings.parse(tracker: tracker, sources: sources, relays: relay, bootstrap: bootstrap, lan: lan, privateRouting: privateRouting, mnemonic: mnemonic)
                             Task { await model.save(next) }
                         } catch { model.error = error.localizedDescription }
                     } label: { HStack { Spacer(); if model.busy { ProgressView() }; Text("Save & Connect").bold(); Spacer() } }
@@ -100,7 +104,7 @@ struct SettingsScreen: View {
         .sheet(isPresented: $scanner) { QRScanner { uri in scanner = false; Task { await model.openURI(uri); syncFields() } } }
         .sheet(isPresented: Binding(get: { share != nil }, set: { if !$0 { share = nil } })) { if let share { ShareQR(uri: share) } }
     }
-    private func syncFields() { tracker = model.settings.tracker; sources = model.settings.sources.map(\.uri).joined(separator: "\n") }
+    private func syncFields() { tracker = model.settings.tracker; mnemonic = model.settings.mnemonic; sources = model.settings.sources.map(\.uri).joined(separator: "\n") }
 }
 
 struct SourceRow: View {
@@ -113,7 +117,7 @@ struct SourceRow: View {
             Text(SourceSpec(source).name).font(.headline)
             Text(source.string("key")).font(.caption.monospaced()).foregroundStyle(.secondary).textSelection(.enabled)
             HStack {
-                Text(source.flag("primary") ? "Primary tracker" : source.flag("writable") ? "Your channel" : source.string("kind").capitalized).font(.caption)
+                Text(source.flag("primary") ? "Primary channel" : source.flag("writable") ? "Your channel" : "Channel").font(.caption)
                 Spacer()
                 Button("Share QR", action: share).accessibilityIdentifier("sources.share.\(source.string("key"))")
                 if canRemove { Button("Remove", role: .destructive, action: remove).accessibilityIdentifier("sources.remove.\(source.string("key"))") }
@@ -169,6 +173,19 @@ struct DiagnosticsScreen: View {
                         }
                     }
                     if !model.status.string("channel").isEmpty { Button("Share My Channel") { share = "peartube://channel/\(model.status.string("channel"))" }.accessibilityIdentifier("hood.shareChannel") }
+                    if !model.status.string("writer").isEmpty { Button("Copy Device Key") { UIPasteboard.general.string = model.status.string("writer"); model.notice = "Copied device key" }.accessibilityIdentifier("hood.copyWriter") }
+                    if model.identity.flag("mnemonicSet") { Button("Copy 12-Word Recovery Phrase") { Task { await model.copyRecoveryPhrase() } }.accessibilityIdentifier("hood.copyMnemonic") }
+                    if !model.identity.string("accessUri").isEmpty {
+                        Button("Copy Subscriber Pass (Epoch \(Int(model.identity.number("epoch"))))") { UIPasteboard.general.string = model.identity.string("accessUri"); model.notice = "Copied subscriber pass" }.accessibilityIdentifier("hood.copyPass")
+                        Button("Rotate Subscriber Pass") { Task { await model.rotateSubscriberPass() } }.accessibilityIdentifier("hood.rotatePass")
+                    }
+                    ForEach(model.identity.objects("writers").filter { $0.string("key") != model.status.string("channel") }, id: \.selfKey) { w in
+                        HStack {
+                            Text("\(w.string("alias").isEmpty ? String(w.string("key").prefix(8)) : w.string("alias")) · \(w.string("role"))").font(.caption)
+                            Spacer()
+                            Button("Remove", role: .destructive) { Task { await model.revokeLinkedWriter(w.string("key")) } }
+                        }
+                    }
                     Button("Add Channel or Link") { dismiss(); model.showSettings = true }.accessibilityIdentifier("hood.addSource")
                 }
                 Section("Storage") { Button("Clear Downloaded Cache", role: .destructive) { Task { await model.clearCache() } }.accessibilityIdentifier("hood.cache.clear") }

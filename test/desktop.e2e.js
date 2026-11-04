@@ -102,6 +102,41 @@ test('the app worklet streams and decodes over 2-hop stateless guards in private
   save('private-result.json', { test: 'app worklet streams and decodes over 2-hop stateless guards in privateRouting mode', published, relay, stages })
 })
 
+test('the QuickJS app worklet links via 12-word recovery phrase and decodes an epoch-encrypted video frame-exact', async t => {
+  const testnet = await createTestnet(3)
+  const relay = await createNode({ storage: tmp('mnemonic-relay'), bootstrap: testnet.bootstrap })
+  t.after(async () => { await relay.close(); await testnet.destroy() })
+  const { mnemonic } = await relay.identity({ revealMnemonic: true })
+  const bytes = media(tmp('enc-media'))
+  const published = await relay.publish({ id: 'imdb:tt0816692', title: 'Encrypted QuickJS E2E', private: true }, Readable.from([bytes]))
+  assert.equal(published.epoch, 1)
+  assert.equal(published.wrappedKey.length, 144)
+
+  const bootstrap = testnet.bootstrap.map(node => `localhost:${node.port}`)
+  const storage = tmp('mnemonic-app')
+  writeFileSync(join(storage, 'settings.json'), JSON.stringify({ mnemonic, bootstrap }))
+  const cargo = ['run', '--quiet', '--manifest-path', 'desktop/Cargo.toml', '--example', 'smoke', '--', published.id]
+  const smoke = spawn('cargo', cargo, { env: { ...process.env, PEARTUBE_PLAY: '1', PEARTUBE_STORAGE: storage }, stdio: ['ignore', 'pipe', 'inherit'] })
+  t.after(() => smoke.kill())
+
+  let streamed = null
+  for await (const line of createInterface({ input: smoke.stdout })) {
+    const stage = JSON.parse(line)
+    if (stage.stage === 'streamed') {
+      streamed = stage
+      smoke.kill()
+      break
+    }
+  }
+  assert.ok(streamed, 'QuickJS worklet linked via 12-word phrase and streamed encrypted entry')
+  assert.equal(streamed.channel, relay.status().channel, '12-word phrase resolved exact Channel key in QuickJS')
+  assert.notEqual(streamed.writer, relay.status().writer, 'QuickJS device uses distinct fork-proof writer core')
+  assert.equal(streamed.mnemonicWords, 12, 'QuickJS worklet persisted 12-word phrase')
+  assert.equal(streamed.fullSha256, sha256(bytes), 'QuickJS worklet decrypted exact bytes')
+  verifyPlayed(streamed.played, bytes)
+  save('mnemonic-encrypted-result.json', { test: 'QuickJS 12-word recovery + epoch-encrypted decode', published, relay, stages: { streamed } })
+})
+
 // Runs the app's P2P stack against relay with these settings. When the app has
 // streamed the entry, the relay publishes a second one under the same id; when
 // the app lists that, the relay removes it. Returns every stage the app reported.

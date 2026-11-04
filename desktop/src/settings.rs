@@ -18,9 +18,12 @@ pub struct SourceSpec {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct Settings {
-    /// Primary open tracker key, 64 hex characters. May be empty when `sources` is non-empty.
+    /// Primary channel key, 64 hex characters. May be empty when `sources` or `mnemonic` is set.
     pub tracker: String,
-    /// Subscribed channels (`kind: "channel"`) and additional trackers (`kind: "tracker"`).
+    /// Optional 12/24-word recovery phrase linking this Mac as an authorized multi-device writer.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub mnemonic: String,
+    /// Followed channels (`kind: "channel"`).
     pub sources: Vec<SourceSpec>,
     /// Blind relay keys, for peers behind two randomized NATs.
     pub relay_through: Vec<String>,
@@ -36,6 +39,7 @@ impl Default for Settings {
     fn default() -> Self {
         Settings {
             tracker: String::new(),
+            mnemonic: String::new(),
             sources: Vec::new(),
             relay_through: Vec::new(),
             bootstrap: Vec::new(),
@@ -51,6 +55,8 @@ struct RawSettings {
     #[serde(default)]
     tracker: String,
     #[serde(default)]
+    mnemonic: String,
+    #[serde(default)]
     sources: Vec<SourceSpec>,
     #[serde(default)]
     relay_through: Vec<String>,
@@ -64,7 +70,7 @@ struct RawSettings {
 
 impl Settings {
     pub fn has_sources(&self) -> bool {
-        !self.tracker.is_empty() || !self.sources.is_empty()
+        !self.tracker.is_empty() || !self.mnemonic.is_empty() || !self.sources.is_empty()
     }
 
     pub fn load() -> Settings {
@@ -73,6 +79,7 @@ impl Settings {
             .and_then(|bytes| serde_json::from_slice::<RawSettings>(&bytes).ok())
             .map(|r| Settings {
                 tracker: r.tracker,
+                mnemonic: r.mnemonic,
                 sources: r.sources,
                 relay_through: r.relay_through,
                 bootstrap: r.bootstrap,
@@ -95,21 +102,22 @@ impl Settings {
             .iter()
             .map(|s| {
                 if s.alias.is_empty() {
-                    format!("peartube://{}/{}", s.kind, s.key)
+                    format!("peartube://channel/{}", s.key)
                 } else {
-                    format!("peartube://{}/{}?name={}", s.kind, s.key, s.alias)
+                    format!("peartube://channel/{}?name={}", s.key, s.alias)
                 }
             })
             .collect::<Vec<_>>()
             .join("\n")
     }
 
-    pub fn add_or_update_source(&mut self, spec: SourceSpec) {
-        if spec.kind == "tracker" && self.tracker == spec.key {
+    pub fn add_or_update_source(&mut self, mut spec: SourceSpec) {
+        spec.kind = "channel".to_string();
+        if self.tracker == spec.key {
             return;
         }
         if let Some(existing) = self.sources.iter_mut().find(|s| s.key == spec.key) {
-            existing.kind = spec.kind;
+            existing.kind = "channel".to_string();
             if !spec.alias.is_empty() {
                 existing.alias = spec.alias;
             }
@@ -118,29 +126,25 @@ impl Settings {
         }
     }
 
-    /// Settings from the form's fields. Accepts raw 64-hex keys and `peartube://` URIs.
-    pub fn parse(tracker: &str, sources_raw: &str, relay_through: &str, bootstrap: &str, lan_discovery: bool, private_routing: bool) -> Result<Settings, String> {
+    /// Settings from the form's fields. Accepts raw 64-hex keys, `peartube://` URIs, and 12/24-word recovery phrases.
+    pub fn parse(tracker: &str, mnemonic_raw: &str, sources_raw: &str, relay_through: &str, bootstrap: &str, lan_discovery: bool, private_routing: bool) -> Result<Settings, String> {
         let mut primary = String::new();
         let mut sources: Vec<SourceSpec> = Vec::new();
         let tr = tracker.trim();
         if !tr.is_empty() {
-            let parsed = parse_source_token(tr, "tracker")?;
-            if parsed.kind == "tracker" {
-                primary = parsed.key;
-            } else {
-                sources.push(parsed);
-            }
+            let parsed = parse_source_token(tr, "channel")?;
+            primary = parsed.key;
         }
+        let mnemonic = normalize_mnemonic(mnemonic_raw)?;
         for token in split_lines_or_commas(sources_raw) {
-            let spec = parse_source_token(token, "channel")?;
-            if spec.kind == "tracker" && primary.is_empty() && sources.is_empty() {
-                primary = spec.key;
-            } else if spec.key != primary && !sources.iter().any(|s| s.key == spec.key) {
+            let mut spec = parse_source_token(token, "channel")?;
+            spec.kind = "channel".to_string();
+            if spec.key != primary && !sources.iter().any(|s| s.key == spec.key) {
                 sources.push(spec);
             }
         }
-        if primary.is_empty() && sources.is_empty() {
-            return Err("Add at least one tracker key or peartube:// channel.".into());
+        if primary.is_empty() && mnemonic.is_empty() && sources.is_empty() {
+            return Err("Add a channel key, a 12-word recovery phrase, or a peartube://channel/ link.".into());
         }
         let relay_through: Vec<String> = split(relay_through).map(str::to_lowercase).collect();
         if let Some(bad) = relay_through.iter().find(|key| !is_key(key)) {
@@ -150,7 +154,7 @@ impl Settings {
         if let Some(bad) = bootstrap.iter().find(|node| !is_host_port(node)) {
             return Err(format!("Bootstrap node {bad} is not host:port."));
         }
-        Ok(Settings { tracker: primary, sources, relay_through, bootstrap, lan_discovery, private_routing })
+        Ok(Settings { tracker: primary, mnemonic, sources, relay_through, bootstrap, lan_discovery, private_routing })
     }
 }
 
@@ -181,24 +185,31 @@ pub fn parse_source_token(raw: &str, default_kind: &str) -> Result<SourceSpec, S
     if !is_key(&key) {
         return Err(format!("Source key in {trimmed} is not 64 hex characters."));
     }
-    let mut kind = match verb.as_str() {
-        "channel" => "channel".to_string(),
-        "tracker" => "tracker".to_string(),
-        "add" | "source" => default_kind.to_string(),
-        _ => return Err(format!("Expected peartube://channel/... or peartube://tracker/..., got {verb}")),
+    let kind = match verb.as_str() {
+        "channel" | "tracker" | "add" | "source" => default_kind.to_string(),
+        _ => return Err(format!("Expected peartube://channel/..., got {verb}")),
     };
     let mut alias = String::new();
     for pair in query.split('&').filter(|s| !s.is_empty()) {
         if let Some((k, v)) = pair.split_once('=') {
             let val = percent_decode(v);
-            if k == "kind" && (val == "channel" || val == "tracker") {
-                kind = val;
-            } else if k == "name" || k == "alias" {
+            if k == "name" || k == "alias" {
                 alias = val;
             }
         }
     }
     Ok(SourceSpec { key, kind, alias })
+}
+
+fn normalize_mnemonic(raw: &str) -> Result<String, String> {
+    let words: Vec<String> = raw.split_whitespace().map(str::to_lowercase).collect();
+    if words.is_empty() {
+        return Ok(String::new());
+    }
+    if (words.len() != 12 && words.len() != 24) || !words.iter().all(|w| w.bytes().all(|b| b.is_ascii_lowercase())) {
+        return Err("Recovery phrase must be 12 or 24 lowercase English words.".into());
+    }
+    Ok(words.join(" "))
 }
 
 fn percent_decode(input: &str) -> String {

@@ -82,6 +82,8 @@ pub struct Status {
     #[serde(default)]
     pub channel: String,
     pub writer: String,
+    #[serde(default)]
+    pub writable: bool,
     pub blobs: String,
     pub blob_bytes: u64,
     #[serde(default)]
@@ -126,6 +128,12 @@ pub struct Entry {
     pub local: bool,
     #[serde(default)]
     pub cached_bytes: u64,
+    #[serde(rename = "private", default)]
+    pub is_private: bool,
+    #[serde(default)]
+    pub epoch: u64,
+    #[serde(default)]
+    pub locked: bool,
     pub stream_url: String,
     #[serde(default)]
     pub magnet_url: String,
@@ -135,6 +143,40 @@ pub struct Entry {
     pub source_kind: String,
 }
 
+#[derive(Clone, Debug, Default, PartialEq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WriterInfo {
+    pub key: String,
+    #[serde(default)]
+    pub role: String,
+    #[serde(default)]
+    pub alias: String,
+    #[serde(rename = "self", default)]
+    pub self_device: bool,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct IdentityInfo {
+    #[serde(default)]
+    pub channel: String,
+    #[serde(default)]
+    pub writer: String,
+    #[serde(default)]
+    pub role: Option<String>,
+    #[serde(default)]
+    pub writable: bool,
+    #[serde(default)]
+    pub mnemonic_set: bool,
+    #[serde(default)]
+    pub mnemonic: String,
+    #[serde(default)]
+    pub writers: Vec<WriterInfo>,
+    #[serde(default)]
+    pub epoch: u64,
+    #[serde(default)]
+    pub access_uri: String,
+}
 #[derive(Clone, Debug, PartialEq, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct OpenUriResult {
@@ -530,12 +572,22 @@ impl Worker {
     }
 
     pub async fn start(&self, settings: &Settings) -> Result<Status, String> {
-        let folder = if settings.tracker.is_empty() { "default" } else { settings.tracker.as_str() };
+        let folder = if !settings.tracker.is_empty() {
+            settings.tracker.as_str()
+        } else if !settings.mnemonic.is_empty() {
+            "linked"
+        } else {
+            "default"
+        };
         let storage = STORE_DIR.join("trackers").join(folder);
         let tracker = if settings.tracker.is_empty() { Value::Null } else { json!(settings.tracker) };
+        let mnemonic = if settings.mnemonic.is_empty() { Value::Null } else { json!(settings.mnemonic) };
+        let join = !settings.mnemonic.is_empty() && settings.tracker.is_empty();
         let params = json!({
             "storage": storage.to_string_lossy(),
             "tracker": tracker,
+            "mnemonic": mnemonic,
+            "join": join,
             "sources": settings.sources,
             "relayThrough": non_empty(&settings.relay_through),
             "bootstrap": non_empty(&settings.bootstrap),
@@ -572,10 +624,24 @@ impl Worker {
     pub async fn warm(&self, key: &str) -> Result<(), String> {
         self.call("warm", json!({ "key": key })).await.map(drop)
     }
+    pub async fn remove_entry(&self, key: &str) -> Result<(), String> {
+        self.call("remove", json!({ "key": key })).await.map(drop)
+    }
+    pub async fn identity(&self, reveal_mnemonic: bool) -> Result<IdentityInfo, String> {
+        parse(self.call("identity", json!({ "revealMnemonic": reveal_mnemonic })).await?)
+    }
+    pub async fn grant_writer(&self, writer: &str, role: &str, alias: &str) -> Result<(), String> {
+        self.call("grantWriter", json!({ "writer": writer, "role": role, "alias": alias })).await.map(drop)
+    }
+    pub async fn revoke_writer(&self, writer: &str, purge_entries: bool) -> Result<(), String> {
+        self.call("revokeWriter", json!({ "writer": writer, "purgeEntries": purge_entries })).await.map(drop)
+    }
+    pub async fn rotate_epoch(&self) -> Result<Value, String> {
+        self.call("rotateEpoch", json!({})).await
+    }
     pub async fn clear_cache(&self, key: Option<&str>) -> Result<(), String> {
         self.call("clearCache", json!({ "key": key })).await.map(drop)
     }
-
     fn cast_dir() -> String {
         STORE_DIR.join("cast").to_string_lossy().to_string()
     }

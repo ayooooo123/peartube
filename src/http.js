@@ -1,4 +1,5 @@
 import { createServer, request as httpRequest } from 'node:http'
+import { createServer as createHttpsServer } from 'node:https'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import b4a from 'b4a'
@@ -9,6 +10,9 @@ import { videoSize, resolutionLabel } from './resolution.js'
 const MAX_BODY = 64 * 1024
 // Loopback, RFC 1918, CGNAT/Tailscale (100.64/10), link-local, and IPv6 ULA/link-local, plain or IPv4-mapped.
 const PRIVATE_ADDR = /^(::ffff:)?(127\.|10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\.|169\.254\.)|^(::1$|f[cd][0-9a-f]{2}:|fe80:)/i
+// bare-https wraps bare-tcp in HTTPSSocket without forwarding remoteAddress; unwrap .socket so LAN settings work over TLS.
+const remoteAddr = req => req.socket?.remoteAddress || req.socket?.socket?.remoteAddress || ''
+const reqProto = req => (req.socket?.encrypted || (PRIVATE_ADDR.test(remoteAddr(req)) && req.headers['x-forwarded-proto'] === 'https')) ? 'https' : 'http'
 const CORS = {
   'access-control-allow-origin': '*',
   'access-control-allow-methods': 'GET, HEAD, POST, PUT, DELETE, OPTIONS',
@@ -142,14 +146,14 @@ export function createApi (state) {
     if (state.cast && req.method === 'POST' && path === '/v1/cast/web-register') return state.cast.registerWebReceiver(await body(req))
     if (state.cast && req.method === 'POST' && path === '/v1/cast/web-state') return state.cast.updateWebReceiverState(await body(req))
     // Writes, and the settings themselves, need the token; reads of public state do not.
-    if (state.apiToken && (req.method === 'POST' || req.method === 'PUT' || req.method === 'DELETE' || path === '/v1/settings')) {
+    if (state.apiToken && (req.method === 'POST' || req.method === 'PUT' || req.method === 'DELETE' || path === '/v1/settings' || path.startsWith('/v1/identity'))) {
       if (req.headers.authorization !== `Bearer ${state.apiToken}`) {
         throw Object.assign(new Error('Unauthorized'), { status: 401 })
       }
     }
     // An open relay already trusts its local network (anyone there can queue downloads), so its settings do too.
     // Clients from public addresses need the token: settings can point the relay at folders on its disk.
-    const settingsOpen = Boolean(state.apiToken) || PRIVATE_ADDR.test(req.socket?.remoteAddress || '')
+    const settingsOpen = Boolean(state.apiToken) || PRIVATE_ADDR.test(remoteAddr(req))
     if (req.method === 'GET' && path === '/v1/status') {
       const st = node ? { ...node.status(), ...(state.extraStatus?.() || {}) } : state.fallbackStatus
       return { ...st, tokenRequired: Boolean(state.apiToken), settingsOpen }
@@ -176,6 +180,41 @@ export function createApi (state) {
         return state.settings.view()
       }
     }
+    if (path === '/v1/identity' || path.startsWith('/v1/identity/')) {
+      if (!settingsOpen) throw Object.assign(new Error('Set PEARTUBE_API_TOKEN to manage channel identity over the internet'), { status: 403 })
+      const origin = req.headers.origin
+      if (origin && (() => { try { return new URL(origin).host !== req.headers.host } catch { return true } })()) {
+        throw Object.assign(new Error('Channel identity can only be managed from the relay’s own page'), { status: 403 })
+      }
+      const n = requireNode(node)
+      if (req.method === 'GET' && path === '/v1/identity') {
+        return n.identity({ revealMnemonic: url.searchParams.get('reveal') === '1' })
+      }
+      if (req.method === 'POST' && path === '/v1/identity/writers') {
+        const { writer, role = 'writer', alias = '' } = await body(req)
+        const res = await n.grantWriter(writer, { role, alias })
+        srv.notify('update')
+        return { ...res, ...(await n.identity()) }
+      }
+      const writerDel = path.match(/^\/v1\/identity\/writers\/([0-9a-f]{64})$/i)
+      if (writerDel && req.method === 'DELETE') {
+        const res = await n.revokeWriter(writerDel[1], { purgeEntries: url.searchParams.get('purge') === '1' })
+        srv.notify('update')
+        return { ...res, ...(await n.identity()) }
+      }
+      if (req.method === 'POST' && path === '/v1/identity/epoch') {
+        const res = await n.rotateEpoch()
+        srv.notify('update')
+        return { ...res, ...(await n.identity()) }
+      }
+      if (req.method === 'POST' && path === '/v1/identity/recover') {
+        const { mnemonic, alias = '' } = await body(req)
+        if (state.recoverMnemonic) return state.recoverMnemonic(mnemonic, alias)
+        const res = await n.claimWithMnemonic(mnemonic, { alias })
+        srv.notify('update')
+        return { ...res, ...(await n.identity()) }
+      }
+    }
     if (req.method === 'POST' && path === '/v1/identify' && state.identify) {
       const { url: link } = await body(req)
       if (typeof link !== 'string' || !/^https?:\/\//i.test(link.trim())) throw Object.assign(new Error('Paste an http(s) link'), { status: 400 })
@@ -190,6 +229,14 @@ export function createApi (state) {
     if (req.method === 'GET' && path === '/v1/entries') {
       const source = url.searchParams.get('source') || null
       return { results: node ? await node.search(null, { source }) : [] }
+    }
+    if (req.method === 'POST' && path === '/v1/entries/remove') {
+      const n = requireNode(node)
+      const { key } = await body(req)
+      if (typeof key !== 'string' || !key.trim()) throw Object.assign(new Error('key is required'), { status: 400 })
+      await n.remove(key.trim())
+      srv.notify('update')
+      return { removed: true, key: key.trim() }
     }
     if (req.method === 'GET' && path === '/v1/sources') {
       if (!node) return { tracker: state.fallbackStatus?.tracker || '', channel: '', sources: [], discovered: [], published: [] }
@@ -229,7 +276,7 @@ export function createApi (state) {
       }
       const n = requireNode(node)
       const res = await n.openUri(uri)
-      if (res.action === 'source') await state.onSourcesChanged?.(n.listSources())
+      if (res.action === 'source' || res.action === 'access') await state.onSourcesChanged?.(n.listSources())
       return res
     }
     if (req.method === 'POST' && path === '/v1/cache/clear') {
@@ -239,8 +286,8 @@ export function createApi (state) {
     }
     if (req.method === 'POST' && path === '/v1/acquire') {
       if (!acquirer) throw Object.assign(new Error('Acquire unavailable on read-only peer'), { status: 404 })
-      const { id, title, source, channel } = await body(req)
-      return acquirer.add({ id, title, source, channel })
+      const { id, title, source, channel, private: isPrivate = false } = await body(req)
+      return acquirer.add({ id, title, source, channel, private: isPrivate })
     }
     if (req.method === 'GET' && path === '/v1/jobs') return { jobs: acquirer ? acquirer.list() : (state.fallbackJobs?.() || []) }
     const match = path.match(/^\/v1\/jobs\/([0-9a-f-]{36})$/)
@@ -307,7 +354,7 @@ export function createApi (state) {
       }
       // Stremio requires a poster on every catalog item; /v1/poster redirects to Cinemeta's.
       const host = req.headers.host
-      if (state.posterUrl && host) for (const meta of seen.values()) meta.poster = `http://${host}/v1/poster/${meta.id}`
+      if (state.posterUrl && host) for (const meta of seen.values()) meta.poster = `${reqProto(req)}://${host}/v1/poster/${meta.id}`
       return { metas: [...seen.values()] }
     }
     const streamMatch = req.method === 'GET' && path.match(/^\/stream\/[^/]+\/(.+)\.json$/)
@@ -317,7 +364,7 @@ export function createApi (state) {
       const resolutions = await Promise.all(entries.map(resolutionOf))
       // Streams go through /v1/blob on the address the client reached the add-on at. Clients that admit private
       // addresses only for their configured add-on (MediaStorm refuses the blob server's own port) can then play them.
-      const origin = req.headers.host && node?.blobServer ? `http://${req.headers.host}/v1/blob` : null
+      const origin = req.headers.host && node?.blobServer ? `${reqProto(req)}://${req.headers.host}/v1/blob` : null
       return {
         streams: entries.map((e, i) => {
           // Release-name matchers read the episode from the title, as they do from other add-ons' release names.
@@ -337,7 +384,7 @@ export function createApi (state) {
     return undefined
   }
 
-  const srv = createServer(async (req, res) => {
+  async function handle (req, res) {
     if (req.method === 'OPTIONS') {
       res.writeHead(204, CORS)
       res.end()
@@ -347,6 +394,11 @@ export function createApi (state) {
     if (req.method === 'GET' && url.pathname === '/') {
       res.writeHead(200, { ...CORS, ...ISOLATION, 'cache-control': 'no-cache', 'content-type': 'text/html; charset=utf-8' })
       res.end(page)
+      return
+    }
+    if ((req.method === 'GET' || req.method === 'HEAD') && url.pathname === '/ca.crt' && state.tls?.ca) {
+      res.writeHead(200, { ...CORS, 'content-type': 'application/x-x509-ca-cert', 'content-disposition': 'attachment; filename="peartube-ca.crt"', 'content-length': String(state.tls.ca.byteLength) })
+      res.end(req.method === 'HEAD' ? undefined : state.tls.ca)
       return
     }
     if ((req.method === 'GET' || req.method === 'HEAD') && (url.pathname === '/web/peartube_web.wasm' || url.pathname === '/web/player-worker.js')) {
@@ -458,13 +510,16 @@ export function createApi (state) {
     }
     res.writeHead(status, { ...CORS, 'content-type': 'application/json' })
     res.end(JSON.stringify(payload))
-  })
+  }
+  const srv = createServer(handle)
+  srv.https = state.tls?.cert && state.tls?.key ? createHttpsServer({ cert: state.tls.cert, key: state.tls.key }, handle) : null
 
   srv.notify = (event = 'update') => {
     const frame = `data: ${JSON.stringify({ event })}\n\n`
     for (const res of sse) res.write(frame)
   }
   srv.once('close', () => {
+    srv.https?.close()
     for (const res of sse) res.end()
     sse.clear()
   })

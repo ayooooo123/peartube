@@ -52,6 +52,7 @@ fun SettingsScreen(model: AppModel) {
     val settings by model.settings.collectAsState()
     var tracker by rememberSaveable { mutableStateOf(settings.tracker) }
     var sources by rememberSaveable { mutableStateOf(settings.formatSources()) }
+    var mnemonic by rememberSaveable { mutableStateOf(settings.mnemonic) }
     var relays by rememberSaveable { mutableStateOf(settings.relayThrough.joinToString(", ")) }
     var bootstrap by rememberSaveable { mutableStateOf(settings.bootstrap.joinToString(", ")) }
     var lan by rememberSaveable { mutableStateOf(settings.lanDiscovery) }
@@ -79,16 +80,19 @@ fun SettingsScreen(model: AppModel) {
             verticalArrangement = Arrangement.spacedBy(20.dp),
         ) {
             problem?.let { Text(it, color = Danger) }
-            Text("Sources & Channels", color = Ink, fontSize = 20.sp, fontWeight = FontWeight.SemiBold)
+            Text("Channels & Account", color = Ink, fontSize = 20.sp, fontWeight = FontWeight.SemiBold)
             Text("A home for everything you love watching.", color = Dim, fontSize = 14.sp)
-            Field("Tracker key (optional)", "The 64-character key of a tracker to write into. Leave empty to follow channels only — a channel key belongs below.") {
+            Field("Primary channel key (optional)", "64-character channel key to connect directly. Leave empty if following channels below or linking with your 12-word phrase.") {
                 KeyField(tracker, singleLine = true) { tracker = it }
             }
             settings.sources.forEach { source ->
                 Text(source.alias.ifBlank { "Channel ${source.key.take(8)}" }, color = Ink)
             }
-            Field("Follow channels or trackers", "One peartube:// channel or tracker link per line. Your library brings them together.") {
+            Field("Follow channels", "One peartube://channel/… link per line. Your library brings them together.") {
                 KeyField(sources, singleLine = false) { sources = it }
+            }
+            Field("12-word recovery phrase (link account)", "Optional: paste your 12-word recovery phrase to link this phone as an owner device on your channel.") {
+                KeyField(mnemonic, singleLine = false) { mnemonic = it }
             }
             HorizontalDivider(color = Line)
             Text("Playback & MIDI", color = Ink, fontSize = 20.sp, fontWeight = FontWeight.SemiBold)
@@ -146,7 +150,7 @@ fun SettingsScreen(model: AppModel) {
             Button(
                 onClick = {
                     problem = try {
-                        model.save(Settings.parse(tracker, sources, relays, bootstrap, lan, privateRouting))
+                        model.save(Settings.parse(tracker, sources, relays, bootstrap, lan, privateRouting, mnemonic))
                         null
                     } catch (e: Exception) {
                         e.message

@@ -96,6 +96,7 @@ fn main() {
         let full = read(ureq::get(&entry.stream_url).call().expect("full read").into_body());
         let titles: Vec<String> = worker.search(None).await.expect("list the tracker").into_iter().map(|entry| entry.title).collect();
         let api_url = status.api_url.clone().expect("loopback /v1 daemon url");
+        let ident = worker.identity(true).await.expect("worklet identity");
         let manifest: serde_json::Value = serde_json::from_slice(&read(
             ureq::get(&format!("{api_url}/manifest.json")).call().expect("stremio manifest").into_body(),
         ))
@@ -114,6 +115,8 @@ fn main() {
             "manifestId": manifest["id"],
             "writer": status.writer,
             "lan": status.lan,
+            "writable": status.writable,
+            "mnemonicWords": ident.mnemonic.split_whitespace().count(),
             "entry": { "key": entry.key, "title": entry.title, "size": entry.size, "sha256": entry.sha256, "local": entry.local, "magnetUrl": entry.magnet_url },
             "foundMs": found_ms,
             "rangeStatus": range_status,

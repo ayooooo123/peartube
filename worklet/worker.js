@@ -34,9 +34,17 @@ let lifecycle = Promise.resolve()
 // Any peer can publish a title with a lone surrogate, which serde_json rejects.
 const wellFormed = (key, value) => typeof value === 'string' ? value.toWellFormed() : value
 const send = msg => ipc.write(JSON.stringify(msg, wellFormed) + '\n')
+let updateTimer = null
+let lastUpdateAt = 0
 const update = () => {
   api?.notify('update')
-  send({ event: 'update' })
+  if (updateTimer) return
+  const delay = Date.now() - lastUpdateAt < 3000 ? 1500 : 200
+  updateTimer = setTimeout(() => {
+    updateTimer = null
+    lastUpdateAt = Date.now()
+    send({ event: 'update' })
+  }, delay)
 }
 const sendCast = () => {
   api?.notify('cast')
@@ -53,6 +61,7 @@ function serial (fn) {
 // The old swarm's listener goes first: closing it fires 'update' per connection.
 // A closed tracker stops calling onchange on its own.
 async function close () {
+  if (updateTimer) { clearTimeout(updateTimer); updateTimer = null }
   const open = node
   const openApi = api
   const openCast = cast
@@ -201,12 +210,15 @@ function listenLoopback (srv, preferredPort) {
 }
 
 const methods = {
-  start: ({ storage, tracker = null, sources = [], relayThrough = null, bootstrap = null, lan = false, privateRouting = false, apiPort = 8174, apiToken = null }) => serial(async () => {
+  start: ({ storage, channel = null, tracker = null, mnemonic = null, join = false, sources = [], relayThrough = null, bootstrap = null, lan = false, privateRouting = false, apiPort = 8174, apiToken = null }) => serial(async () => {
     await close()
     castStorage = storage
     node = await createNode({
       storage,
+      channel: channel || null,
       tracker: tracker || null,
+      mnemonic: mnemonic || null,
+      join: Boolean(join),
       sources,
       relayThrough,
       bootstrap: bootstrap ? bootstrap.map(hostPort) : undefined,
@@ -267,7 +279,15 @@ const methods = {
     }
     return (await current()).openUri(uri)
   },
-  publishSource: async params => (await current()).publishSource(params, { target: params.target || 'channel' }),
+  publishSource: async params => (await current()).publishSource(params),
+  remove: async ({ key }) => { await (await current()).remove(key); update(); return { removed: true, key } },
+  identity: async ({ revealMnemonic = false } = {}) => (await current()).identity({ revealMnemonic }),
+  grantWriter: async ({ writer, role = 'writer', alias = '' }) => { const res = await (await current()).grantWriter(writer, { role, alias }); update(); return res },
+  revokeWriter: async ({ writer, purgeEntries = false }) => { const res = await (await current()).revokeWriter(writer, { purgeEntries }); update(); return res },
+  rotateEpoch: async () => { const res = await (await current()).rotateEpoch(); update(); return res },
+  claimWithMnemonic: async ({ mnemonic, alias = '' }) => { const res = await (await current()).claimWithMnemonic(mnemonic, { alias }); update(); return res },
+  addAccessKey: async params => { const res = await (await current()).addAccessKey(params); update(); return res },
+  removeAccessKey: async ({ channel, epoch = null }) => { const res = await (await current()).removeAccessKey(channel, epoch); update(); return res },
   clearCache: async ({ key = null } = {}) => { const res = await (await current()).clearCache(key); update(); return res },
   castStatus: async ({ storage = null } = {}) => (await ensureCast(storage)).status(),
   castPair: async params => { const c = await ensureCast(params.storage); await c.pairReceiver(params); return c.status() },

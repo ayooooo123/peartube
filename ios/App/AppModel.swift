@@ -1,10 +1,12 @@
 import Foundation
 import SwiftUI
+import UIKit
 
 @MainActor
 final class AppModel: ObservableObject {
     @Published var settings = Settings()
     @Published var status: [String: Any] = [:]
+    @Published var identity: [String: Any] = [:]
     @Published var entries: [MediaEntry] = []
     @Published var history: [String: WatchProgress] = [:]
     @Published var cast: [String: Any] = [:]
@@ -80,10 +82,19 @@ final class AppModel: ObservableObject {
         busy = true; started = false
         defer { busy = false; writeEvidence(force: true) }
         do {
-            let folder = try storage.trackerStore(settings.tracker)
-            let params: [String: Any] = ["storage": folder.path, "tracker": settings.tracker.isEmpty ? NSNull() : settings.tracker as Any,
-                "sources": settings.sources.map(\.json), "relayThrough": settings.relayThrough.isEmpty ? NSNull() : settings.relayThrough as Any,
-                "bootstrap": settings.bootstrap.isEmpty ? NSNull() : settings.bootstrap as Any, "lan": settings.lanDiscovery, "privateRouting": settings.privateRouting]
+            let storeKey = !settings.tracker.isEmpty ? settings.tracker : (settings.mnemonic.isEmpty ? "" : "linked")
+            let folder = try storage.trackerStore(storeKey)
+            let params: [String: Any] = [
+                "storage": folder.path,
+                "tracker": settings.tracker.isEmpty ? NSNull() : settings.tracker as Any,
+                "mnemonic": settings.mnemonic.isEmpty ? NSNull() : settings.mnemonic as Any,
+                "join": !settings.mnemonic.isEmpty && settings.tracker.isEmpty,
+                "sources": settings.sources.map(\.json),
+                "relayThrough": settings.relayThrough.isEmpty ? NSNull() : settings.relayThrough as Any,
+                "bootstrap": settings.bootstrap.isEmpty ? NSNull() : settings.bootstrap as Any,
+                "lan": settings.lanDiscovery,
+                "privateRouting": settings.privateRouting
+            ]
             status = try await worker.request("start", params) as? [String: Any] ?? [:]
             started = true
             await refreshCast()
@@ -123,6 +134,7 @@ final class AppModel: ObservableObject {
                 guard let worker else { return }
                 status = try await worker.request("status") as? [String: Any] ?? [:]
                 let rows = try await worker.request("search", ["id": NSNull()]) as? [[String: Any]] ?? []
+                if let ident = try? await worker.request("identity", ["revealMnemonic": false]) as? [String: Any] { identity = ident }
                 var seen = Set<String>()
                 entries = rows.map(MediaEntry.init).filter { !$0.key.isEmpty && seen.insert($0.key).inserted }
                 if showCast || showRemote || !session.isEmpty { await refreshCast() }
@@ -140,6 +152,7 @@ final class AppModel: ObservableObject {
         let q = query.lowercased()
         if q.contains("receiver/") || q.contains("cast/") { return "Connect TV" }
         if q.contains("watch/") || q.contains("stream/") { return "Play Stream" }
+        if q.contains("access/") { return "Unlock Channel" }
         return "Connect Channel"
     }
     var visibleEntries: [MediaEntry] {
@@ -161,11 +174,17 @@ final class AppModel: ObservableObject {
     }
     func resumePosition(_ entry: MediaEntry) -> Double { history[entry.key].flatMap { $0.partial ? $0.positionMs : nil } ?? 0 }
     func play(_ entry: MediaEntry, at position: Double? = nil, localOnly: Bool = false) {
+        if entry.locked {
+            error = "Subscriber pass needed: paste this channel's peartube://access/… pass to unlock."
+            return
+        }
         let start = position ?? resumePosition(entry)
         if !localOnly, let receiver = session["receiverId"] as? String ?? selectedReceiver {
             Task { await castPlay(receiver: receiver, entry: entry, position: start) }; return
         }
         recordProgress(force: true)
+        let warmKey = entry.key
+        Task { _ = try? await self.worker?.request("warm", ["key": warmKey]) }
         let sf2 = soundfontPresent ? storage?.soundfont.path : nil
         player.open(entry, at: start, soundfont: sf2)
         showSettings = false
@@ -175,6 +194,8 @@ final class AppModel: ObservableObject {
         let position = player.state.positionMs
         let paused = !player.state.playing
         recordProgress(force: true)
+        let warmKey = entry.key
+        Task { _ = try? await self.worker?.request("warm", ["key": warmKey]) }
         player.open(entry, at: position, paused: paused, soundfont: soundfontPresent ? storage?.soundfont.path : nil)
     }
     func closePlayback() { recordProgress(force: true); player.close(); writeEvidence(force: true) }
@@ -235,6 +256,33 @@ final class AppModel: ObservableObject {
         do {
             let result = try await worker?.request("clearCache", ["key": key as Any? ?? NSNull()]) as? [String: Any] ?? [:]
             notice = "Cache compacted · \(bytes(result.number("clearedBytes"))) freed"; await refresh()
+        } catch { self.error = error.localizedDescription }
+    }
+    func removeChannelEntry(_ key: String) async {
+        do {
+            _ = try await worker?.request("remove", ["key": key])
+            notice = "Removed from channel"; await refresh()
+        } catch { self.error = error.localizedDescription }
+    }
+    func rotateSubscriberPass() async {
+        do {
+            let res = try await worker?.request("rotateEpoch", [:]) as? [String: Any] ?? [:]
+            notice = "Rotated to epoch \(Int(res.number("epoch")))"; await refresh()
+        } catch { self.error = error.localizedDescription }
+    }
+    func revokeLinkedWriter(_ writerKey: String) async {
+        do {
+            _ = try await worker?.request("revokeWriter", ["writer": writerKey, "purgeEntries": false])
+            await refresh()
+        } catch { self.error = error.localizedDescription }
+    }
+    func copyRecoveryPhrase() async {
+        do {
+            let res = try await worker?.request("identity", ["revealMnemonic": true]) as? [String: Any] ?? [:]
+            let phrase = res.string("mnemonic")
+            guard !phrase.isEmpty else { throw AppFailure("No recovery phrase saved on this iPhone.") }
+            UIPasteboard.general.string = phrase
+            notice = "Copied 12-word recovery phrase"
         } catch { self.error = error.localizedDescription }
     }
 

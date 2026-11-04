@@ -27,9 +27,9 @@ COPY bin ./bin
 COPY web/assets ./web/assets
 # Load every native add-on the relay uses, so a dependency update that needs a library this base lacks (as
 # rocksdb-native 3.18 needed libatomic) fails the build instead of the relay's first start.
-RUN ["/usr/local/bin/bare", "-e", "import('bare-process/global').then(() => import('./src/index.js')).then(() => import('./src/lan.js')).then(() => import('./src/private-overlay.js')).then(() => console.log('native add-ons load'), err => { console.error(err); Bare.exitCode = 1 })"]
+RUN ["/usr/local/bin/bare", "-e", "import('bare-process/global').then(() => import('./src/index.js')).then(() => import('./src/lan.js')).then(() => import('./src/private-overlay.js')).then(() => import('./src/http.js')).then(() => console.log('native add-ons load'), err => { console.error(err); Bare.exitCode = 1 })"]
 ENV PEARTUBE_STORAGE=/data UV_THREADPOOL_SIZE=16
 VOLUME /data
-EXPOSE 8174 8175
+EXPOSE 8174 8175 8443
 # Bare is PID 1 and gets SIGTERM itself on `docker stop`; run with `--restart unless-stopped` to come back after a crash.
 ENTRYPOINT ["/usr/local/bin/bare", "bin/relay.js"]

@@ -126,17 +126,15 @@ export async function createMirrorHost ({
         onchange?.()
         return job
       },
-      async ingestStream ({ id, title, stream, channel = mirrorChannel }) {
-        const op = await node.put({ id, title }, stream)
+      async ingestStream ({ id, title, stream, private: isPrivate = false }) {
+        const op = await node.put({ id, title, private: Boolean(isPrivate) }, stream)
         await node.append(op)
-        if (channel) await node.publishChannel(op)
         onchange?.()
         return op
       },
       async repost (entry, { pin = false, channel = mirrorChannel, tracker = true } = {}) {
-        const op = { type: 'announce', id: entry.id, title: entry.title, size: entry.size, sha256: entry.sha256, blobs: entry.blobs, blob: entry.blob }
-        if (tracker) await node.append(op)
-        if (channel) await node.publishChannel(op)
+        const op = { type: 'announce', id: entry.id, title: entry.title, size: entry.size, sha256: entry.sha256, blobs: entry.blobs, blob: entry.blob, ...(entry.epoch ? { epoch: entry.epoch } : {}), ...(entry.wrappedKey ? { wrappedKey: entry.wrappedKey } : {}) }
+        if (tracker || channel) await node.append(op)
         if (pin) await node.warm(op)
         onchange?.()
         return op

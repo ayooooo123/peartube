@@ -106,15 +106,17 @@ function parseRecord (service) {
   if (tokens.length !== tc || tokens.some(t => !/^[A-Za-z0-9_-]{43}$/.test(t))) return null
   let generation = null
   let shard = 0
+  let totalShards = 1
   const prefix = `hyperdht-mdns-${peerKeyHex.slice(0, 12)}-`
   if (typeof service.name === 'string' && service.name.startsWith(prefix)) {
     const m = /^([A-Za-z0-9_-]{11})-(\d+)-(\d+)$/.exec(service.name.slice(prefix.length))
     if (m) {
       generation = m[1]
       shard = Number(m[2])
+      totalShards = Math.max(1, Number(m[3]) || 1)
     }
   }
-  return { peerKeyHex, peerKey: b4a.from(peerKeyHex, 'hex'), port, tokens, generation, shard }
+  return { peerKeyHex, peerKey: b4a.from(peerKeyHex, 'hex'), port, tokens, generation, shard, totalShards }
 }
 
 function serviceIPv4 (service) {
@@ -389,11 +391,13 @@ class LanDiscovery extends EventEmitter {
     const id = rec.peerKeyHex
     let state = this._peerShards.get(id)
     if (!state || state.generation !== rec.generation) {
-      state = { generation: rec.generation, shards: new Map() }
+      const prevTokens = rec.totalShards > 1 ? (this._peers.get(id)?.tokens || []) : []
+      state = { generation: rec.generation, totalShards: rec.totalShards, shards: new Map(), prevTokens }
       this._peerShards.set(id, state)
     }
     state.shards.set(rec.shard, rec.tokens)
-    const tokens = [...new Set([...state.shards.values()].flat())]
+    if (state.shards.size >= state.totalShards) state.prevTokens = []
+    const tokens = [...new Set([...state.prevTokens, ...[...state.shards.values()].flat()])]
     const peer = { id, publicKey: rec.peerKey, host, port: rec.port, tokens }
     this._peers.set(id, peer)
     this._consider(peer)
@@ -403,6 +407,21 @@ class LanDiscovery extends EventEmitter {
     const rec = parseRecord(service)
     if (!rec || rec.peerKeyHex === this.peerKeyHex) return
     const id = rec.peerKeyHex
+    const state = this._peerShards.get(id)
+    if (state && rec.generation && state.generation && rec.generation !== state.generation) return
+    if (state) {
+      state.shards.delete(rec.shard)
+      if (state.shards.size > 0) {
+        const tokens = [...new Set([...state.shards.values()].flat())]
+        const prev = this._peers.get(id)
+        if (prev) {
+          const peer = { ...prev, tokens }
+          this._peers.set(id, peer)
+          this._consider(peer)
+        }
+        return
+      }
+    }
     this._peerShards.delete(id)
     this._peers.delete(id)
     this._clearPeerDial(id)
@@ -503,7 +522,9 @@ class LanDiscovery extends EventEmitter {
       return
     }
     const peer = this._peers.get(id)
-    if (peer && !this._directPeers.has(id) && !this._sharesTopic(peer.tokens)) {
+    const state = this._peerShards.get(id)
+    const complete = !state || state.shards.size >= state.totalShards
+    if (peer && complete && !this._directPeers.has(id) && !this._sharesTopic(peer.tokens)) {
       socket.destroy()
       return
     }

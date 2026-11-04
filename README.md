@@ -60,10 +60,13 @@ and the pieces.
 
 ## How it works
 
-1. **Catalogs.** A tracker is multi-writer [Autobee](https://github.com/holepunchto/autobee)
-   with `fastForward: false`: every writer may add or remove only its own entries, and `apply`
-   decides what counts — no clock, no randomness, no I/O. A channel is a single-writer
-   `Hyperbee`. Both are public, shareable catalogs.
+1. **Unified Channels.** Every account or relay is a single [Autobee](https://github.com/holepunchto/autobee)
+   Channel (`peartube://channel/<key>`) with `fastForward: false` and a deterministic ACL `apply`:
+   followers replicate and seed read-only (`optimistic: false`), linked devices authenticate via a
+   fork-proof 12-word BIP-39 recovery phrase (`claim`) or explicit writer grants (`owner`/`mod`/`writer`),
+   owners and moderators can delete any entry or revoke writers, and optional `peartube://access/…`
+   epoch passes encrypt per-video Hypercores so blind relays seed ciphertext while canceled subscribers
+   lose access to new epochs.
 2. **Storage.** Every imported video becomes its own Hypercore with `512 KiB` blocks, opened
    lazily and closed at rest, so a viewer can start or seek before the whole file exists. Legacy
    shared-blob slots still read back, and `blob-rechunk` splits them in the background.
@@ -106,6 +109,15 @@ and `launchd`.
 
 A bare `npm start` founds a new tracker and prints its `tracker` and `channel` keys
 (`{"msg":"relay ready", …}`). Open `http://<relay>:8174/` and finish under **Settings**.
+
+Browsers hide `VideoDecoder` (WebCodecs) and `SharedArrayBuffer` on plain `http://` LAN addresses. To unlock hardware WebCodecs over a LAN IP without a reverse proxy, drop a local P-256 CA and 390-day SAN certificate into `/srv/peartube-data` (and remove `ca.key` after signing):
+
+```sh
+openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:P-256 -days 3650 -nodes -keyout /srv/peartube-data/ca.key -out /srv/peartube-data/ca.crt -subj "/CN=PearTube Local CA" -addext "basicConstraints=critical,CA:TRUE" -addext "keyUsage=critical,keyCertSign,cRLSign"
+openssl req -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes -keyout /srv/peartube-data/tls.key -subj "/CN=peartube" | openssl x509 -req -CA /srv/peartube-data/ca.crt -CAkey /srv/peartube-data/ca.key -CAcreateserial -days 390 -out /srv/peartube-data/tls.crt -extfile <(printf "basicConstraints=CA:FALSE\nkeyUsage=digitalSignature\nextendedKeyUsage=serverAuth\nsubjectAltName=IP:<lan-ipv4>,DNS:localhost\n") && rm -f /srv/peartube-data/ca.key /srv/peartube-data/ca.srl
+```
+
+When `tls.crt` and `tls.key` exist in `PEARTUBE_STORAGE` (or `PEARTUBE_TLS_CERT` / `PEARTUBE_TLS_KEY`), the relay also listens over `bare-https` on `PEARTUBE_HTTPS_PORT` (default `8443`; add `-p 8443:8443` if not using `--network host`) and serves `ca.crt` at `http://<relay>:8174/ca.crt` so phones and desktops can trust it once and open `https://<relay>:8443/`.
 
 ### Apps
 
@@ -343,14 +355,15 @@ and control) and **Settings**. Plugins appear only as user intents.
 |---|---|
 | `GET /` | Web UI |
 | `GET/PUT /v1/settings` | Settings with each one's `value`, `source` (`file`, `env` or `default`), `env`, `envSet`, `live` flag and `restartNeeded`. `PUT` applies before it answers; `null` puts a value back to its env var or default; secrets inside URLs never return |
+| `GET /v1/identity`, `POST /v1/identity/{writers,epoch,recover}`, `DELETE /v1/identity/writers/:key` | Channel writer ACL, 12-word recovery phrase (`?reveal=1` / `recover`), and paid subscriber epoch pass rotation; same token and origin gate as `/v1/settings` |
 | `POST /v1/restart` | Reopens the node, jobs, plugins and cast stack in the running process; same auth and origin rules as settings |
 | `POST /v1/identify` `{url}` | Link contents: parsed name, Cinemeta `candidates` and `match`, or a plain `clip:` fallback |
-| `GET /v1/search?id=imdb:tt…`, `GET /v1/entries` | Tracker entries with `streamUrl`; one result per file (`id` + `sha256`), picking a copy that plays |
-| `POST /v1/acquire` `{id, title, source}` | Fetch, store and announce; `page: true` downloads and muxes a page through `ubit` on every attempt |
+| `GET /v1/search?id=imdb:tt…`, `GET /v1/entries`, `POST /v1/entries/remove` | Channel entries with `streamUrl`; one result per file (`id` + `sha256`), or owner/mod entry removal + unreferenced core purge |
+| `POST /v1/acquire` `{id, title, private, source}` | Fetch, store (optionally epoch-encrypted) and announce; `page: true` downloads and muxes a page through `ubit` on every attempt |
 | `GET/DELETE /v1/jobs[/:id]` | Acquire jobs; sources are never returned. `DELETE` cancels or removes |
 | `GET /v1/status` | Keys, stored bytes, peers and per-transport traffic, `lan`, `privateRouting`, `privateGuard` (`publicKey`, `port`, circuit counts, or `null`), `tokenRequired`, `settingsOpen` |
-| `GET/POST /v1/sources`, `DELETE /v1/sources/:key` | Follow or remove a tracker or channel |
-| `POST /v1/open`, `GET /v1/resolve` | Open a `peartube://` channel, tracker, receiver pairing or `peartube://watch/…` link |
+| `GET/POST /v1/sources`, `DELETE /v1/sources/:key` | Follow or remove a channel |
+| `POST /v1/open`, `GET /v1/resolve` | Open a `peartube://channel/…`, `peartube://access/…` subscriber pass, receiver pairing or `peartube://watch/…` link |
 | `POST /v1/cache/clear`, `GET /v1/events` | Clear cached pieces; live SSE updates |
 | `GET /manifest.json`, `/catalog/…`, `/stream/…` | Stremio v3 addon |
 | `GET /v1/playlist.m3u`, `GET /tv` | M3U8 playlist; fullscreen TV page for a browser |
@@ -360,20 +373,14 @@ and control) and **Settings**. Plugins appear only as user intents.
 Job states: `queued` → `running` (`bytes` of `total`) → `announcing` → `done`, or `failed`/`cancelled`.
 A job is `done` only once its announce is on disk.
 
-## Trackers and Channels
+## Unified Channels, Devices & Subscriber Passes
 
-| | Shared Tracker (`peartube://tracker/<key>`) | Personal Channel (`peartube://channel/<key>`) |
-|---|---|---|
-| Who publishes | Anyone with the key | Only the owner; share `status.channel`, not the publishing secret |
-| Unwanted listings | Contributors can add their own, not edit others'; no moderation yet | Subscribers follow read-only |
-| Publisher offline | Other peers keep serving the catalog and their pieces | Subscribers keep serving the catalog and their pieces |
-| Typical use | A catalog shared across trusted relays | Your library, or a directory linking other catalogs (`PEARTUBE_DIRECTORY=1`) |
-
-Your node always creates its own channel (`sources.json` / `PEARTUBE_SOURCES`); relays with
-`PEARTUBE_PUBLISH_CHANNEL=1` also list their imports there without duplicating stored media.
-Viewers opening the same video through different catalogs join the same peer pool
-(`peartube/blob/v1/<key>`) and exchange pieces directly.
-
+| Capability | How it works |
+|---|---|
+| **Public followers** (`peartube://channel/<key>`) | Strictly read-only (`optimistic: false`); followers replicate and seed catalog + `512 KiB` video blocks without write access |
+| **Multi-device accounts** (12-word phrase or `grantWriter`) | Every device keeps its own random `Corestore` writer core (zero fork risk) and proves ownership via a detached Ed25519 `claim` signed from the 12-word BIP-39 vault (`identity.json`, `0600`) |
+| **Moderation & deletion** | `owner` and `mod` writers can delete any entry in the Channel and revoke secondary writers (`purgeEntries` optional) |
+| **Paid / private epochs** (`peartube://access/<ch>:<epoch>:<key>`) | Private uploads encrypt each per-video `Hypercore` with a random key wrapped under `EpochKey_N`; blind relays seed ciphertext, and rotating to `EpochKey_N+1` locks canceled subscribers out of new uploads without re-encrypting archives |
 ## Cast and TV receivers
 
 Senders stay libraries and players; only the dedicated TV clients receive a cast.

@@ -88,8 +88,13 @@ function saveSources (list) {
   syncDirectory(list).catch(() => {})
 }
 const emptyRoute = () => ({ peers: 0, rxBytes: 0, txBytes: 0, downBps: 0, upBps: 0 })
+const readOpt = p => { try { return p ? readFileSync(p) : null } catch { return null } }
+const tlsCert = readOpt(env.PEARTUBE_TLS_CERT || join(storage, 'tls.crt'))
+const tlsKey = readOpt(env.PEARTUBE_TLS_KEY || join(storage, 'tls.key'))
+const tlsCa = readOpt(env.PEARTUBE_TLS_CA || join(storage, 'ca.crt'))
 const state = {
   node: null,
+  tls: (tlsCert && tlsKey) ? { cert: tlsCert, key: tlsKey, ca: tlsCa } : (tlsCa ? { ca: tlsCa } : null),
   acquirer: null,
   mirror: null,
   cast: null,
@@ -106,8 +111,10 @@ const state = {
 }
 const api = createApi(state)
 const apiPort = Number(env.PEARTUBE_API_PORT || 8174)
-api.listen(apiPort, env.PEARTUBE_API_HOST || '0.0.0.0')
-
+const httpsPort = Number(env.PEARTUBE_HTTPS_PORT ?? 8443)
+const apiHost = env.PEARTUBE_API_HOST || '0.0.0.0'
+api.listen(apiPort, apiHost)
+if (api.https && httpsPort > 0) api.https.listen(httpsPort, apiHost)
 let shuttingDown = false
 let guard = null
 let guardConfig = ''
@@ -362,6 +369,17 @@ state.applySettings = changed => serial(async () => {
   api.notify('update')
 })
 // Reopens the node, then brings back an opted-in guard whose process has gone.
+state.recoverMnemonic = (mnemonic, alias = '') => serial(async () => {
+  if (!state.node) throw new Error('Node still starting')
+  const res = await state.node.claimWithMnemonic(mnemonic, { alias })
+  if (res.reopenNeeded) {
+    settings.update({ tracker: res.channel })
+    await reopen()
+    if (state.node) await state.node.claimWithMnemonic(mnemonic, { alias })
+  }
+  api.notify('update')
+  return state.node ? state.node.identity() : res
+})
 state.restart = () => serial(async () => {
   await reopen()
   await applyGuard()
@@ -370,5 +388,5 @@ state.restart = () => serial(async () => {
 await serial(start)
 await mirrorStarting
 await serial(applyGuard).catch(err => console.error(JSON.stringify({ msg: 'private guard failed to start', error: err.message })))
-console.log(JSON.stringify({ msg: 'relay ready', api: apiPort, ...state.node.status() }))
+console.log(JSON.stringify({ msg: 'relay ready', api: apiPort, ...(api.https && httpsPort > 0 ? { https: httpsPort } : {}), ...state.node.status() }))
 setInterval(() => { if (state.node) console.log(JSON.stringify({ msg: 'heartbeat', ...state.node.status() })) }, 60_000).unref()

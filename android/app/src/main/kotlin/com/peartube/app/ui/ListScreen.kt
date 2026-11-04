@@ -97,6 +97,7 @@ fun ListScreen(model: AppModel) {
                 val action = when {
                     query.contains("://receiver/", true) || query.contains("://cast/", true) -> "Connect TV"
                     query.contains("://watch/", true) || query.contains("://stream/", true) -> "Play Stream"
+                    query.contains("://access/", true) -> "Unlock Channel"
                     else -> "Connect Channel"
                 }
                 Text(action, color = Ink, modifier = Modifier.weight(1f))
@@ -217,7 +218,9 @@ private fun SeriesCard(model: AppModel, rows: List<Entry>, history: Map<String, 
 
 @Composable
 private fun SavedNote(entry: Entry, dl: com.peartube.app.DownloadProgress?) {
-    if (dl != null) {
+    if (entry.locked) {
+        Text("Subscriber pass needed", color = Danger, fontSize = 11.sp)
+    } else if (dl != null) {
         val labelText = if (dl.total > 0L) "Downloading ${(dl.bytes * 100L / dl.total).coerceIn(0L, 100L)}%" else "Downloading ${formatBytes(dl.bytes)}"
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(5.dp)) {
             Box(Modifier.size(4.dp).background(Accent, CircleShape))
@@ -225,7 +228,9 @@ private fun SavedNote(entry: Entry, dl: com.peartube.app.DownloadProgress?) {
         }
     } else if (entry.local || (entry.size > 0 && entry.cachedBytes >= entry.size)) Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(5.dp)) {
         Box(Modifier.size(4.dp).background(Accent, CircleShape))
-        Text("Saved", color = Accent, fontSize = 11.sp)
+        Text(if (entry.isPrivate) "Saved · Subscribers only" else "Saved", color = Accent, fontSize = 11.sp)
+    } else if (entry.isPrivate) {
+        Text("Subscribers only", color = Dim, fontSize = 11.sp)
     }
 }
 
@@ -243,24 +248,31 @@ private fun EntryProgress(entry: Entry, progress: WatchProgress?, dl: com.peartu
 @Composable
 private fun EntryActions(model: AppModel, entry: Entry, isDownloading: Boolean, downloadName: String?) {
     var menu by remember { mutableStateOf(false) }
+    val status by model.status.collectAsState()
     val clipboard = LocalClipboardManager.current
-    CinemaIcon(CastIcon, "Cast ${entry.title}") { model.castEntryOrSheet(entry, model.watchHistory.value[entry.key]?.takeIf { it.partial }?.positionMs ?: 0L) }
-    if (isDownloading) {
-        CinemaIcon(CloseIcon, "Cancel download ${entry.title}", Accent) { model.cancelDownload(entry.key) }
-    } else {
-        CinemaIcon(DownloadIcon, "Download ${entry.title}") { model.downloadEntry(entry, downloadName) }
+    val canDelete = status?.let { it.writable && it.channel.isNotEmpty() && it.channel == entry.source } == true
+    if (!entry.locked) {
+        CinemaIcon(CastIcon, "Cast ${entry.title}") { model.castEntryOrSheet(entry, model.watchHistory.value[entry.key]?.takeIf { it.partial }?.positionMs ?: 0L) }
+        if (isDownloading) {
+            CinemaIcon(CloseIcon, "Cancel download ${entry.title}", Accent) { model.cancelDownload(entry.key) }
+        } else {
+            CinemaIcon(DownloadIcon, "Download ${entry.title}") { model.downloadEntry(entry, downloadName) }
+        }
     }
     Box {
         CinemaIcon(MoreVertIcon, "More options") { menu = true }
         DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
-            DropdownMenuItem(text = { Text("Cast to TV…") }, onClick = { menu = false; model.castEntryOrSheet(entry, model.watchHistory.value[entry.key]?.takeIf { it.partial }?.positionMs ?: 0L) })
-            if (isDownloading) {
-                DropdownMenuItem(text = { Text("Cancel Download") }, onClick = { menu = false; model.cancelDownload(entry.key) })
-            } else {
-                DropdownMenuItem(text = { Text("Download Video") }, onClick = { menu = false; model.downloadEntry(entry, downloadName) })
+            if (!entry.locked) {
+                DropdownMenuItem(text = { Text("Cast to TV…") }, onClick = { menu = false; model.castEntryOrSheet(entry, model.watchHistory.value[entry.key]?.takeIf { it.partial }?.positionMs ?: 0L) })
+                if (isDownloading) {
+                    DropdownMenuItem(text = { Text("Cancel Download") }, onClick = { menu = false; model.cancelDownload(entry.key) })
+                } else {
+                    DropdownMenuItem(text = { Text("Download Video") }, onClick = { menu = false; model.downloadEntry(entry, downloadName) })
+                }
             }
             if (entry.magnetUrl.isNotBlank()) DropdownMenuItem(text = { Text("Copy Magnet Link") }, onClick = { menu = false; clipboard.setText(AnnotatedString(entry.magnetUrl)) })
             if (!entry.local && entry.cachedBytes > 0) DropdownMenuItem(text = { Text("Free Up Cache") }, onClick = { menu = false; model.clearCache(entry.key) })
+            if (canDelete) DropdownMenuItem(text = { Text("Delete from Channel", color = Danger) }, onClick = { menu = false; model.removeChannelEntry(entry.key) })
         }
     }
 }
@@ -269,6 +281,7 @@ private fun EntryActions(model: AppModel, entry: Entry, isDownloading: Boolean, 
 @Composable
 private fun UnderTheHood(model: AppModel, onClose: () -> Unit, onAdd: () -> Unit) {
     val status by model.status.collectAsState()
+    val identity by model.identity.collectAsState()
     val settings by model.settings.collectAsState()
     val clipboard = LocalClipboardManager.current
     var engine by remember { mutableStateOf(false) }
@@ -283,11 +296,11 @@ private fun UnderTheHood(model: AppModel, onClose: () -> Unit, onAdd: () -> Unit
             Text("A little cinema, anywhere.", color = Dim)
             Text(if ((status?.lanPeers ?: 0) > 0) "Local Wi-Fi Turbo active" else if (peers > 0) "Connected to $peers peers" else "Finding your people…", color = Accent)
             HorizontalDivider(color = Line)
-            Text("Channels & Sources", color = Ink, fontWeight = FontWeight.SemiBold)
+            Text("Channels & Account", color = Ink, fontWeight = FontWeight.SemiBold)
             val sources = status?.sources.orEmpty()
-            if (sources.isNotEmpty()) sources.forEach { Text(it.alias.ifBlank { "${it.kind.replaceFirstChar(Char::uppercase)} ${it.key.take(8)}" }, color = Dim) }
+            if (sources.isNotEmpty()) sources.forEach { Text(it.alias.ifBlank { "Channel ${it.key.take(8)}" }, color = Dim) }
             else {
-                if (settings.tracker.isNotEmpty()) Text("Primary tracker", color = Dim)
+                if (settings.tracker.isNotEmpty()) Text("Primary channel", color = Dim)
                 settings.sources.forEach { Text(it.alias.ifBlank { "Channel ${it.key.take(8)}" }, color = Dim) }
             }
             status?.discoveredSources.orEmpty().forEach { found ->
@@ -302,7 +315,35 @@ private fun UnderTheHood(model: AppModel, onClose: () -> Unit, onAdd: () -> Unit
                 AnimatedVisibility(share) {
                     Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.fillMaxWidth()) {
                         QrCodeView("peartube://channel/$channel", Modifier.size(240.dp))
-                        TextButton(onClick = { clipboard.setText(AnnotatedString("peartube://channel/$channel")) }) { Text("Copy Link", color = Brand) }
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            TextButton(onClick = { clipboard.setText(AnnotatedString("peartube://channel/$channel")) }) { Text("Copy Link", color = Brand) }
+                            status?.writer?.takeIf { it.isNotBlank() }?.let { wKey ->
+                                TextButton(onClick = { clipboard.setText(AnnotatedString(wKey)) }) { Text("Copy Device Key", color = Dim) }
+                            }
+                        }
+                    }
+                }
+                if (identity?.mnemonicSet == true) {
+                    TextButton(onClick = { model.copyRecoveryPhrase { clipboard.setText(AnnotatedString(it)) } }) {
+                        Text("Copy 12-Word Recovery Phrase", color = Brand)
+                    }
+                }
+                identity?.accessUri?.takeIf { it.isNotBlank() }?.let { passUri ->
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text("Subscriber pass · Epoch ${identity?.epoch ?: 1L}", color = Dim, modifier = Modifier.weight(1f), fontSize = 13.sp)
+                        TextButton(onClick = { clipboard.setText(AnnotatedString(passUri)) }) { Text("Copy Pass", color = Brand) }
+                        TextButton(onClick = { model.rotateSubscriberPass() }) { Text("Rotate", color = Dim) }
+                    }
+                }
+                val linkedWriters = identity?.writers.orEmpty()
+                if (linkedWriters.size > 1) {
+                    linkedWriters.forEach { w ->
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text("${w.alias.ifBlank { w.key.take(8) }}${if (w.selfDevice) " (this phone)" else " · ${w.role}"}", color = Dim, fontSize = 13.sp, modifier = Modifier.weight(1f))
+                            if (w.key != channel) {
+                                TextButton(onClick = { model.revokeLinkedWriter(w.key) }) { Text("Remove", color = Danger) }
+                            }
+                        }
                     }
                 }
             }

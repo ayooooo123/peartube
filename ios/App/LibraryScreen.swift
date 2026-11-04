@@ -117,32 +117,40 @@ struct EntryCard: View {
                             let pct = entry.size > 0 ? Int(min(100, (dl * 100) / max(1, entry.size))) : 0
                             Text("\(entry.episode ?? "Movie") · \(bytes(entry.size)) · Downloading \(entry.size > 0 ? "\(pct)%" : bytes(dl))").font(.caption).foregroundStyle(.cyan)
                         } else {
-                            Text("\(entry.episode ?? "Movie") · \(bytes(entry.size))\(entry.saved ? " · Saved" : "")").font(.caption).foregroundStyle(.secondary)
+                            let lockLabel = entry.locked ? " · Subscriber pass needed" : (entry.isPrivate ? " · Subscribers only" : "")
+                            Text("\(entry.episode ?? "Movie") · \(bytes(entry.size))\(entry.saved ? " · Saved" : "")\(lockLabel)").font(.caption).foregroundStyle(entry.locked ? .red : .secondary)
                         }
                         if let progress = model.history[entry.key], progress.partial { Text("Resume \(clock(progress.positionMs))").font(.caption).foregroundStyle(.mint) }
                     }.frame(maxWidth: .infinity, alignment: .leading).padding()
                 }.buttonStyle(.plain).accessibilityIdentifier("library.entry.\(entry.key)")
-                IconButton(title: "Cast \(entry.title)", icon: "airplayvideo", identifier: "library.cast.\(entry.key)") { model.chooseCast(entry) }
-                if dl != nil {
-                    IconButton(title: "Cancel download \(entry.title)", icon: "xmark.circle", identifier: "library.download.\(entry.key)") { model.cancelDownload(entry.key) }
-                } else {
-                    IconButton(title: "Download \(entry.title)", icon: "arrow.down.circle", identifier: "library.download.\(entry.key)") { model.download(entry) }
+                if !entry.locked {
+                    IconButton(title: "Cast \(entry.title)", icon: "airplayvideo", identifier: "library.cast.\(entry.key)") { model.chooseCast(entry) }
+                    if dl != nil {
+                        IconButton(title: "Cancel download \(entry.title)", icon: "xmark.circle", identifier: "library.download.\(entry.key)") { model.cancelDownload(entry.key) }
+                    } else {
+                        IconButton(title: "Download \(entry.title)", icon: "arrow.down.circle", identifier: "library.download.\(entry.key)") { model.download(entry) }
+                    }
                 }
                 Menu {
                     Button("Media Info", systemImage: "info.circle", action: onInfo)
-                    if formats.count > 1 {
+                    if formats.count > 1 && !entry.locked {
                         Menu("Formats") {
                             ForEach(formats) { format in Button("\(format.title) · \(bytes(format.size))") { model.play(format) } }
                         }
                     }
-                    Button("Cast to TV", systemImage: "airplayvideo") { model.chooseCast(entry) }
-                    if dl != nil {
-                        Button("Cancel Download", systemImage: "xmark.circle", role: .destructive) { model.cancelDownload(entry.key) }
-                    } else {
-                        Button("Download Video", systemImage: "arrow.down.circle") { model.download(entry) }
+                    if !entry.locked {
+                        Button("Cast to TV", systemImage: "airplayvideo") { model.chooseCast(entry) }
+                        if dl != nil {
+                            Button("Cancel Download", systemImage: "xmark.circle", role: .destructive) { model.cancelDownload(entry.key) }
+                        } else {
+                            Button("Download Video", systemImage: "arrow.down.circle") { model.download(entry) }
+                        }
                     }
                     if !entry.magnetURL.isEmpty { ShareLink("Share Link", item: entry.magnetURL); Button("Show Sharing QR") { model.shareURI = entry.magnetURL } }
                     if !entry.local && entry.cachedBytes > 0 { Button("Free Up Cache", role: .destructive) { Task { await model.clearCache(entry.key) } } }
+                    if model.status.flag("writable") && !model.status.string("channel").isEmpty && model.status.string("channel") == entry.source {
+                        Button("Delete from Channel", systemImage: "trash", role: .destructive) { Task { await model.removeChannelEntry(entry.key) } }
+                    }
                 } label: { Image(systemName: "ellipsis").frame(width: 36, height: 44) }.accessibilityIdentifier("library.more.\(entry.key)")
             }
             if let dl, entry.size > 0 {

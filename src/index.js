@@ -10,12 +10,16 @@ import BlobServer from 'hypercore-blob-server'
 import b4a from 'b4a'
 import { createHash } from 'node:crypto'
 import { pipelinePromise, Readable, Transform } from 'streamx'
-import { readdirSync, statSync, unlinkSync } from 'node:fs'
+import { readdirSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { tuneUdxSocket } from './lan.js'
 import { createPrivateSwarm } from './private-overlay.js'
+import { deriveIdentity, formatAccessUri, generateMnemonic, normalizeMnemonic, unwrapVideoKey, validateMnemonic, verifyClaim, wrapVideoKey } from './mnemonic.js'
 const ID = /^[a-z0-9]+:[a-z0-9]+(:s\d{2}e\d{2,3})?$/
 const HEX64 = /^[0-9a-f]{64}$/
+const HEX128 = /^[0-9a-f]{128}$/
+const HEX144 = /^[0-9a-f]{144}$/
+const ROLES = new Set(['owner', 'mod', 'writer'])
 const MAX_TITLE = 300
 const BLOB_BLOCK_SIZE = 512 * 1024
 const MAX_CONTENT_TOPICS = 24
@@ -56,12 +60,12 @@ export function formatWatchUri (entry, source = '', sourceKind = '') {
   return `peartube://watch/${entry.blobs}:${b.blockOffset}:${b.blockLength}:${b.byteOffset}:${b.byteLength}?${q.join('&')}`
 }
 
-// Strips peartube:// links and raw 64-hex keys down to an actionable source or instant watch payload.
-export function parseUri (input, defaultKind = 'tracker') {
+// Strips peartube:// links and raw 64-hex keys down to an actionable channel, subscriber access pass, or instant watch payload.
+export function parseUri (input, defaultKind = 'channel') {
   if (typeof input !== 'string') throw new Error('URI or 64-hex key required')
   const raw = input.trim()
   const lower = raw.toLowerCase()
-  if (HEX64.test(lower)) return { action: 'source', key: lower, kind: defaultKind === 'channel' ? 'channel' : 'tracker', alias: '' }
+  if (HEX64.test(lower)) return { action: 'source', key: lower, kind: defaultKind === 'tracker' ? 'channel' : 'channel', alias: '' }
   const m = raw.match(/^peartube:(?:\/\/)?([a-z]+)\/([^?#]+)(?:\?([^#]*))?/i)
   if (!m) throw new Error('Invalid PearTube URI or 64-hex key')
   const verb = m[1].toLowerCase()
@@ -69,9 +73,23 @@ export function parseUri (input, defaultKind = 'tracker') {
   const q = parseQuery(m[3] || '')
   if (verb === 'channel' || verb === 'tracker' || verb === 'add' || verb === 'source') {
     const key = body.toLowerCase()
-    if (!HEX64.test(key)) throw new Error('Source key must be 64 hex characters')
-    const kind = verb === 'channel' ? 'channel' : verb === 'tracker' ? 'tracker' : (q.kind === 'channel' ? 'channel' : 'tracker')
-    return { action: 'source', key, kind, alias: cleanText(q.name || q.alias || '') }
+    if (!HEX64.test(key)) throw new Error('Channel key must be 64 hex characters')
+    return { action: 'source', key, kind: 'channel', alias: cleanText(q.name || q.alias || '') }
+  }
+  if (verb === 'access') {
+    const parts = body.split(':')
+    if (parts.length !== 3 || !HEX64.test(parts[0].toLowerCase()) || !HEX64.test(parts[2].toLowerCase())) {
+      throw new Error('Malformed peartube://access pass')
+    }
+    const epoch = Number(parts[1])
+    if (!Number.isSafeInteger(epoch) || epoch < 1) throw new Error('Malformed peartube://access epoch')
+    return {
+      action: 'access',
+      channel: parts[0].toLowerCase(),
+      epoch,
+      epochKey: parts[2].toLowerCase(),
+      alias: cleanText(q.name || q.alias || '')
+    }
   }
   if (verb === 'watch') {
     const parts = body.split(':')
@@ -81,16 +99,15 @@ export function parseUri (input, defaultKind = 'tracker') {
     if (![blockOffset, blockLength, byteOffset, byteLength].every(n => Number.isSafeInteger(n) && n >= 0) || blockLength <= 0) {
       throw new Error('Malformed peartube://watch block bounds')
     }
-    const sha256 = q.sha256 && HEX64.test(q.sha256.toLowerCase()) ? q.sha256.toLowerCase() : ( '0'.repeat(64) )
+    const sha256 = q.sha256 && HEX64.test(q.sha256.toLowerCase()) ? q.sha256.toLowerCase() : ('0'.repeat(64))
     const fallbackId = `clip:${(q.sha256 || blobs).toLowerCase().slice(0, 12)}`
     const id = str(q.id?.toLowerCase(), ID) ? q.id.toLowerCase() : fallbackId
     const title = cleanText(q.title, id)
     const sourceKey = q.kind !== 'tracker' && q.source && HEX64.test(q.source.toLowerCase()) ? q.source.toLowerCase() : null
-    const sourceKind = 'channel'
     return {
       action: 'watch',
       sourceKey,
-      sourceKind,
+      sourceKind: 'channel',
       entry: { type: 'announce', id, title, size: byteLength, sha256, blobs, blob: { blockOffset, blockLength, byteOffset, byteLength } }
     }
   }
@@ -101,6 +118,17 @@ export function decodeOp (value) {
   let op
   try { op = JSON.parse(typeof value === 'string' ? value : b4a.toString(value)) } catch { return null }
   if (op === null || typeof op !== 'object') return null
+  if (op.claim !== undefined && !str(op.claim, HEX128)) return null
+  if (op.type === 'init') {
+    if (op.owner !== undefined && !str(op.owner, HEX64)) return null
+    if (op.epoch !== undefined && (!Number.isSafeInteger(op.epoch) || op.epoch < 1)) return null
+    return op
+  }
+  if (op.type === 'owner') return str(op.owner, HEX64) ? op : null
+  if (op.type === 'epoch') return Number.isSafeInteger(op.epoch) && op.epoch >= 1 ? op : null
+  if (op.type === 'claim') return str(op.sig, HEX128) ? op : null
+  if (op.type === 'grant') return str(op.writer, HEX64) && ROLES.has(op.role || 'writer') ? op : null
+  if (op.type === 'revoke') return str(op.writer, HEX64) ? op : null
   if (op.type === 'remove') return typeof op.key === 'string' ? op : null
   if (op.type === 'peer') return str(op.publicKey, HEX64) && Number.isSafeInteger(op.expiresAt) && op.expiresAt > 0 ? op : null
   if (op.type === 'source') {
@@ -110,32 +138,161 @@ export function decodeOp (value) {
   }
   if (op.type !== 'announce' || !str(op.id, ID) || !str(op.blobs, HEX64) || !str(op.sha256, HEX64)) return null
   if (typeof op.title !== 'string' || op.title.length > MAX_TITLE || !Number.isSafeInteger(op.size) || op.size < 0) return null
+  if (op.epoch !== undefined && (!Number.isSafeInteger(op.epoch) || op.epoch < 1)) return null
+  if (op.wrappedKey !== undefined && !str(op.wrappedKey, HEX144)) return null
   const { blockOffset, blockLength, byteOffset, byteLength } = op.blob || {}
   if (![blockOffset, blockLength, byteOffset, byteLength].every(n => Number.isSafeInteger(n) && n >= 0)) return null
   return op
 }
 
-// Deterministic multi-writer gate: each writer may file or delete only under its own hex key.
-async function apply (nodes, view, host) {
-  for (const node of nodes) {
-    const op = decodeOp(node.value)
-    if (!op) continue
-    await host.addWriter(node.key, { isIndexer: false })
-    const writer = b4a.toString(node.key, 'hex')
-    const w = view.write()
-    if (op.type === 'remove') {
-      if (op.key.split('/')[1] === writer) w.tryDelete(b4a.from(op.key))
-    } else if (op.type === 'peer') {
-      w.tryPut(b4a.from(`peer/${writer}`), node.value)
-    } else if (op.type === 'source') {
-      w.tryPut(b4a.from(`source/${writer}/${op.sourceKey}`), node.value)
-    } else {
-      w.tryPut(b4a.from(`${op.id}/${writer}/${op.blobs}:${op.blob.blockOffset}`), node.value)
+const isSystemViewKey = k => k.startsWith('peer/') || k.startsWith('source/') || k.startsWith('meta/') || k.startsWith('writer/') || k.startsWith('revoked/')
+
+// Deterministic ACL gate at the mouth of every unified Channel: ungranted strangers get swallowed and ignored,
+// linked devices prove ownership via detached 12-word vault claims or owner grants, and owners/mods can purge any key.
+function makeApply (getChannelHex, onWriterChange = null) {
+  return async function apply (nodes, view, host) {
+    const chHex = getChannelHex()
+    const roles = new Map()
+    const revokedCache = new Map()
+    let ownerHex = null
+    let curEpoch = null
+    const ops = []
+    async function flushOps () {
+      if (!ops.length) return
+      const w = view.write()
+      for (const [kind, k, v] of ops) {
+        if (kind === 'put') w.tryPut(k, v)
+        else w.tryDelete(k)
+      }
+      ops.length = 0
+      await w.flush()
     }
-    await w.flush()
+    async function getOwner () {
+      if (ownerHex !== null) return ownerHex
+      const n = await view.get(b4a.from('meta/owner'))
+      ownerHex = n ? b4a.toString(n.value) : ''
+      return ownerHex
+    }
+    async function isRevoked (wHex) {
+      if (revokedCache.has(wHex)) return revokedCache.get(wHex)
+      const r = Boolean(await view.get(b4a.from(`revoked/${wHex}`)))
+      revokedCache.set(wHex, r)
+      return r
+    }
+    for (const node of nodes) {
+      const op = decodeOp(node.value)
+      if (!op) continue
+      if (op.type === 'peer' && !(await getOwner())) continue
+      const writer = b4a.toString(node.key, 'hex')
+      let role = writer === chHex ? 'owner' : (roles.get(writer) ?? null)
+      let claimedHere = false
+      let legacyGrantedHere = false
+      if (!role && !roles.has(writer)) {
+        const rec = await view.get(b4a.from(`writer/${writer}`))
+        if (rec) {
+          try { role = JSON.parse(b4a.toString(rec.value))?.role || null } catch {}
+        }
+        if (role) roles.set(writer, role)
+      }
+      if (!role) {
+        const curOwner = await getOwner()
+        const claimSig = op.type === 'claim' ? op.sig : op.claim
+        if (claimSig && curOwner) {
+          if (!(await isRevoked(writer)) && verifyClaim(chHex, writer, curOwner, claimSig)) {
+            await host.addWriter(node.key, { isIndexer: false })
+            role = 'owner'
+            roles.set(writer, role)
+            claimedHere = true
+            onWriterChange?.(writer, true)
+          }
+        } else if (!curOwner) {
+          await host.addWriter(node.key, { isIndexer: false })
+          role = 'writer'
+          roles.set(writer, role)
+          legacyGrantedHere = true
+          onWriterChange?.(writer, true)
+        } else {
+          roles.set(writer, '')
+        }
+      }
+      if (!role) continue
+      if (claimedHere) {
+        ops.push(['put', b4a.from(`writer/${writer}`), b4a.from(JSON.stringify({ role: 'owner', alias: cleanText(op.alias || '') }))])
+        if (op.type === 'claim') continue
+      } else if (legacyGrantedHere) {
+        ops.push(['put', b4a.from(`writer/${writer}`), b4a.from(JSON.stringify({ role: 'writer', alias: '' }))])
+      }
+      if (op.type === 'init') {
+        if (writer === chHex) {
+          roles.set(writer, 'owner')
+          ops.push(['put', b4a.from(`writer/${writer}`), b4a.from(JSON.stringify({ role: 'owner', alias: 'primary' }))])
+          if (op.owner) {
+            ownerHex = op.owner
+            ops.push(['put', b4a.from('meta/owner'), b4a.from(op.owner)])
+          }
+          if (op.epoch) {
+            curEpoch = op.epoch
+            ops.push(['put', b4a.from('meta/epoch'), b4a.from(String(op.epoch))])
+          }
+        }
+      } else if (op.type === 'owner') {
+        if (role === 'owner' && !(await getOwner())) {
+          ownerHex = op.owner
+          ops.push(['put', b4a.from('meta/owner'), b4a.from(op.owner)])
+        }
+      } else if (op.type === 'epoch') {
+        if (role === 'owner') {
+          if (curEpoch === null) curEpoch = Number(b4a.toString((await view.get(b4a.from('meta/epoch')))?.value || '1')) || 1
+          if (op.epoch > curEpoch) {
+            curEpoch = op.epoch
+            ops.push(['put', b4a.from('meta/epoch'), b4a.from(String(op.epoch))])
+          }
+        }
+      } else if (op.type === 'grant') {
+        if (role === 'owner') {
+          const nextRole = op.role || 'writer'
+          revokedCache.set(op.writer, false)
+          roles.set(op.writer, nextRole)
+          ops.push(['del', b4a.from(`revoked/${op.writer}`)])
+          await host.addWriter(b4a.from(op.writer, 'hex'), { isIndexer: false })
+          ops.push(['put', b4a.from(`writer/${op.writer}`), b4a.from(JSON.stringify({ role: nextRole, alias: cleanText(op.alias || '') }))])
+          onWriterChange?.(op.writer, true)
+        }
+      } else if (op.type === 'revoke') {
+        if (role === 'owner' && op.writer !== chHex) {
+          await host.removeWriter(b4a.from(op.writer, 'hex'))
+          roles.set(op.writer, '')
+          revokedCache.set(op.writer, true)
+          ops.push(['del', b4a.from(`writer/${op.writer}`)])
+          ops.push(['put', b4a.from(`revoked/${op.writer}`), b4a.from('1')])
+          onWriterChange?.(op.writer, false)
+          if (op.purgeEntries) {
+            await flushOps()
+            for await (const entry of view.createReadStream()) {
+              const ek = b4a.toString(entry.key)
+              if (ek === `peer/${op.writer}` || ek.startsWith(`source/${op.writer}/`) || (!isSystemViewKey(ek) && ek.split('/')[1] === op.writer)) {
+                ops.push(['del', entry.key])
+              }
+            }
+          }
+        }
+      } else if (op.type === 'remove') {
+        if (!op.key.startsWith('meta/') && !op.key.startsWith('writer/') && !op.key.startsWith('revoked/')) {
+          if (role === 'owner' || role === 'mod' || op.key.split('/')[1] === writer) {
+            ops.push(['del', b4a.from(op.key)])
+          }
+        }
+      } else if (op.type === 'peer') {
+        ops.push(['put', b4a.from(`peer/${writer}`), node.value])
+      } else if (op.type === 'source') {
+        ops.push(['put', b4a.from(`source/${writer}/${op.sourceKey}`), node.value])
+      } else if (op.type === 'announce') {
+        ops.push(['put', b4a.from(`${op.id}/${writer}/${op.blobs}:${op.blob.blockOffset}`), node.value])
+      }
+    }
+    await flushOps()
   }
 }
-
 // Reads take a tracker's view as far as Autobee has applied it, waiting at most a second for more. A fresh
 // joiner of a large tracker takes minutes to catch up (V8 on a Mac: about two; a phone's QuickJS: far longer),
 // and starting, listing and playback must not wait that out: the list fills in as it applies, and Autobee's
@@ -163,7 +320,10 @@ export async function createNode (opts) {
 
 async function openNode ({
   storage,
-  tracker: trackerKey = null,
+  channel: channelOpt = null,
+  tracker: trackerOpt = null,
+  mnemonic: mnemonicOpt = null,
+  join: joinOpt = false,
   sources: initialSources = [],
   allowedPeers = null,
   streamHost = '127.0.0.1',
@@ -207,29 +367,112 @@ async function openNode ({
     if (onchange) queueMicrotask(onchange)
     if (onPeersChanged) queueMicrotask(onPeersChanged)
   }
-  // fastForward: false forces every peer to verify writer namespaces locally through apply.
-  const tracker = new Autobee(store.namespace('tracker'), trackerKey && b4a.from(trackerKey, 'hex'), { apply, update, optimistic: true, fastForward: false, wakeup })
-  undo.push(() => tracker.close())
-  await tracker.ready()
-  // Every node also owns an unforgeable single-writer Hyperbee channel; strangers can read & seed, never append.
-  const localChannel = new Hyperbee(store.namespace('channel'), { writable: true, autoUpdate: false })
-  undo.push(() => localChannel.close())
-  await localChannel.ready()
-  // Per-peer request window for video cores, passed as Hypercore's documented `inflightRange` when a core opens;
-  // the reciprocity tier picks the window for cores opened from then on.
-  let inflightRange = isWorklet ? [6, 8] : [12, 32]
-  const usePrimaryTracker = Boolean(trackerKey) || initialSources.length === 0
-  if (!trackerKey && usePrimaryTracker && tracker.local.length === 0) {
-    await tracker.append(b4a.from(JSON.stringify({ type: 'init' })))
-    await tracker.updated()
+  // Private 0600 vault file beside settings.json/jobs.json: holds the 12-word recovery phrase and subscriber epoch passes, never in Corestore.
+  const identityFile = join(storage, 'identity.json')
+  let savedIdentity = {}
+  try { savedIdentity = JSON.parse(readFileSync(identityFile, 'utf8')) || {} } catch {}
+  const accessKeys = new Map()
+  for (const [k, v] of Object.entries(savedIdentity.accessKeys || {})) {
+    if (typeof v === 'string' && HEX64.test(v.toLowerCase())) accessKeys.set(k.toLowerCase(), v.toLowerCase())
   }
-  const primaryKey = b4a.toString(tracker.key, 'hex')
-  const channelKey = b4a.toString(localChannel.core.key, 'hex')
-  let channelQueue = Promise.resolve()
-  const withChannelLock = fn => {
-    const next = channelQueue.then(fn, fn)
-    channelQueue = next.catch(() => {})
-    return next
+  let currentMnemonic = mnemonicOpt ? normalizeMnemonic(mnemonicOpt) : (savedIdentity.mnemonic ? normalizeMnemonic(savedIdentity.mnemonic) : '')
+  if (currentMnemonic && !validateMnemonic(currentMnemonic)) {
+    if (mnemonicOpt) throw new Error('Invalid 12- or 24-word recovery phrase')
+    currentMnemonic = ''
+  }
+  let idVault = currentMnemonic ? deriveIdentity(currentMnemonic) : null
+  let foundedKey = typeof savedIdentity.founded === 'string' && HEX64.test(savedIdentity.founded) ? savedIdentity.founded : ''
+  function saveIdentity () {
+    try {
+      const payload = {
+        mnemonic: currentMnemonic || '',
+        founded: foundedKey || '',
+        accessKeys: Object.fromEntries(accessKeys)
+      }
+      writeFileSync(identityFile + '.tmp', JSON.stringify(payload, null, 2), { mode: 0o600 })
+      renameSync(identityFile + '.tmp', identityFile)
+    } catch {}
+  }
+
+  let targetKey = String(channelOpt || trackerOpt || '').trim().toLowerCase() || null
+  if (targetKey && !HEX64.test(targetKey)) throw new Error('Channel key must be 64 hex characters')
+  if (joinOpt && idVault && !targetKey) targetKey = idVault.channelKey
+
+  const chNs = store.namespace('tracker')
+  const probeLocal = chNs.get({ name: 'local', active: false })
+  await probeLocal.ready()
+  const hasPreMnemonicLocal = probeLocal.length > 0
+  await probeLocal.close()
+
+  let founderKeyPair = null
+  if (!targetKey) {
+    if (hasPreMnemonicLocal && !foundedKey) {
+      if (!idVault) {
+        currentMnemonic = generateMnemonic(12)
+        idVault = deriveIdentity(currentMnemonic)
+      }
+    } else {
+      if (!idVault) {
+        currentMnemonic = generateMnemonic(12)
+        idVault = deriveIdentity(currentMnemonic)
+      }
+      if (foundedKey && foundedKey !== idVault.channelKey) {
+        targetKey = idVault.channelKey
+      } else {
+        founderKeyPair = idVault.genesisKeyPair
+      }
+    }
+  } else if (!idVault && !joinOpt) {
+    currentMnemonic = generateMnemonic(12)
+    idVault = deriveIdentity(currentMnemonic)
+  }
+
+  const secondaryWriters = new Set()
+  const writerCores = new Map()
+  let channel = null
+  const onWriterChange = (wHex, added) => {
+    if (!channel || wHex === b4a.toString(channel.key, 'hex')) return
+    if (added) secondaryWriters.add(wHex)
+    else secondaryWriters.delete(wHex)
+  }
+  const primaryApply = makeApply(() => b4a.toString(channel.key, 'hex'), onWriterChange)
+  // fastForward: false forces every peer to verify ACL grants, claims, and removals locally through apply.
+  channel = new Autobee(chNs, targetKey ? b4a.from(targetKey, 'hex') : null, {
+    ...(founderKeyPair ? { keyPair: founderKeyPair } : {}),
+    apply: primaryApply,
+    update,
+    optimistic: true,
+    fastForward: false,
+    wakeup
+  })
+  undo.push(() => channel.close())
+  await channel.ready()
+
+  let inflightRange = isWorklet ? [6, 8] : [12, 32]
+  const primaryKey = b4a.toString(channel.key, 'hex')
+  let usePrimaryChannel = Boolean(targetKey) || initialSources.length === 0
+  let channelHasEntries = false
+  if (channel.bootstrap.writable && !foundedKey) foundedKey = primaryKey
+  saveIdentity()
+
+  if (!targetKey && channel.local.length === 0 && channel.bootstrap.writable) {
+    await channel.append(b4a.from(JSON.stringify({ type: 'init', owner: idVault?.ownerPublicKey || undefined, epoch: 1 })))
+    await channel.updated()
+  }
+
+  async function syncWriterCores () {
+    for (const [hex, c] of writerCores) {
+      if (!secondaryWriters.has(hex)) {
+        writerCores.delete(hex)
+        await c.close().catch(() => {})
+      }
+    }
+    for (const hex of secondaryWriters) {
+      if (writerCores.has(hex)) continue
+      const c = store.get({ key: b4a.from(hex, 'hex'), active: false })
+      writerCores.set(hex, c)
+      await c.ready().catch(() => {})
+    }
   }
 
   // Legacy shared slots stay readable & migratable in place; every new video gets its own 512 KiB-piece Hypercore closed at rest.
@@ -237,9 +480,39 @@ async function openNode ({
   const blobCores = new Map()
   const ownedBlobs = new Map() // blobsHex -> { length, byteLength }
   const ownedByDiscovery = new Map() // discoveryKeyHex -> blobsHex
+  const encryptedBlobs = new Map() // blobsHex -> { source, epoch, wrappedKey }
+  const unlockedVideoKeys = new Map() // blobsHex -> Buffer(32)
   const registerOwned = (hex, meta) => {
     ownedBlobs.set(hex, meta)
     ownedByDiscovery.set(b4a.toString(hypercoreCrypto.discoveryKey(b4a.from(hex, 'hex')), 'hex'), hex)
+  }
+  function resolveVideoKey (entry, sourceHex) {
+    if (!entry?.wrappedKey) return null
+    encryptedBlobs.set(entry.blobs, { source: sourceHex, epoch: entry.epoch || 1, wrappedKey: entry.wrappedKey })
+    const cached = unlockedVideoKeys.get(entry.blobs)
+    if (cached) return cached
+    const ep = entry.epoch || 1
+    const candidates = []
+    if (idVault) {
+      candidates.push(idVault.epochKey(sourceHex, ep))
+    }
+    const passHex = accessKeys.get(`${sourceHex}:${ep}`)
+    if (passHex) candidates.push(b4a.from(passHex, 'hex'))
+    for (const ek of candidates) {
+      const vk = unwrapVideoKey(entry.wrappedKey, ek)
+      if (vk) {
+        unlockedVideoKeys.set(entry.blobs, vk)
+        return vk
+      }
+    }
+    return null
+  }
+  function resolveBlobEncryptionKey (hex) {
+    const cached = unlockedVideoKeys.get(hex)
+    if (cached) return cached
+    const meta = encryptedBlobs.get(hex)
+    if (!meta) return null
+    return resolveVideoKey({ blobs: hex, epoch: meta.epoch, wrappedKey: meta.wrappedKey }, meta.source)
   }
   async function openSlot (i) {
     const core = store.get({ name: i === 0 ? 'blobs' : `blobs-${i}` })
@@ -262,27 +535,28 @@ async function openNode ({
   const isOwnedBlob = hex => ownedBlobs.has(hex) || slotSet.has(hex)
   const blobsKey = blobSlots[0].key
 
-  // Finds the per-video cores this node authored (announces under its own tracker writer, and its channel) and
-  // records them as owned from their RocksDB headers, closing each session at once so idle movies take 0 RAM.
-  // Startup scans what the tracker has applied so far; a second pass once Autobee has fully caught up adds any
-  // it missed, and the content rotation announces those from then on.
   async function hydrateOwned () {
     const candidates = new Set()
-    if (usePrimaryTracker) {
-      const writer = b4a.toString(tracker.local.key, 'hex')
-      for await (const n of tracker.view.createReadStream()) {
-        const k = b4a.toString(n.key)
-        if (k.startsWith('peer/') || k.startsWith('source/') || k.split('/')[1] !== writer) continue
-        const op = decodeOp(n.value)
-        if (op?.type === 'announce' && !slotSet.has(op.blobs)) candidates.add(op.blobs)
+    const writer = b4a.toString(channel.local.key, 'hex')
+    for await (const n of channel.view.createReadStream()) {
+      const k = b4a.toString(n.key)
+      if (k.startsWith('writer/')) {
+        const wHex = k.slice(7)
+        if (wHex !== primaryKey) secondaryWriters.add(wHex)
+        continue
       }
-    }
-    if (localChannel.core.length > 0) {
-      for await (const n of localChannel.createReadStream({ gte: b4a.from('entry/'), lt: b4a.from('entry/\xff') })) {
-        const op = decodeOp(n.value)
-        if (op?.type === 'announce' && !slotSet.has(op.blobs)) candidates.add(op.blobs)
+      if (k.startsWith('source/')) {
+        channelHasEntries = true
+        continue
       }
+      if (isSystemViewKey(k)) continue
+      channelHasEntries = true
+      const op = decodeOp(n.value)
+      if (!op || op.type !== 'announce') continue
+      if (op.wrappedKey) resolveVideoKey(op, primaryKey)
+      if (k.split('/')[1] === writer && !slotSet.has(op.blobs)) candidates.add(op.blobs)
     }
+    await syncWriterCores()
     const keys = [...candidates].filter(hex => !ownedBlobs.has(hex))
     for (let i = 0; i < keys.length; i += 32) {
       await Promise.all(keys.slice(i, i + 32).map(async hex => {
@@ -298,10 +572,11 @@ async function openNode ({
       }))
     }
   }
-  // A relay waits for the whole update, so every video it owns is announced from the start, as before. The apps'
-  // worklet must not: a phone catching up on a large tracker would sit on "Connecting…" for as long as that takes,
-  // and the pass after catch-up (below) still finds any video it owns.
-  if (usePrimaryTracker) await (isWorklet ? applied(tracker) : tracker.update())
+  if (usePrimaryChannel) await (isWorklet ? applied(channel) : channel.update())
+  if (channel.writable && idVault && foundedKey === primaryKey && !(await channel.view.get(b4a.from('meta/owner')))) {
+    await channel.append(b4a.from(JSON.stringify({ type: 'owner', owner: idVault.ownerPublicKey })))
+    await channel.updated()
+  }
   await hydrateOwned()
   const host = privateHost ?? (Array.isArray(bootstrap) && bootstrap.some(b => String(b?.host || b).startsWith('127.')) ? '127.0.0.1' : undefined)
   const isPrivate = Boolean(privateRouting)
@@ -328,7 +603,7 @@ async function openNode ({
       path.closedRx += conn.rawBytesRead || conn.rawStream?.bytesReceived || 0
       path.closedTx += conn.rawBytesWritten || conn.rawStream?.bytesTransmitted || 0
     })
-    tracker.replicate(conn)
+    channel.replicate(conn)
     for (const fn of connListeners) fn(conn)
   }
   const swarm = isPrivate
@@ -352,7 +627,7 @@ async function openNode ({
   swarm.on('connection', conn => {
     if (hasLanPeer(conn.remotePublicKey)) { conn.destroy(); return }
     trackConn(conn, dht ? traffic.private : traffic.public)
-    if (dht) { tracker.update().catch(() => {}); scanPeers().catch(() => {}) }
+    if (dht) { channel.update().catch(() => {}); scanPeers().catch(() => {}) }
   })
   undo.push(() => swarm.destroy({ force: true }))
   undo.push(() => {
@@ -386,8 +661,7 @@ async function openNode ({
     else if (disc) await swarm.leave(disc.topic).catch(() => {})
   }
 
-  if (usePrimaryTracker) joinOverlayTopic(`tracker:${primaryKey}`, tracker.key, tracker.discoveryKey)
-  if (localChannel.core.length > 0) joinOverlayTopic(`channel:${channelKey}`, localChannel.core.key, localChannel.core.discoveryKey)
+  if (usePrimaryChannel) joinOverlayTopic(`channel:${primaryKey}`, channel.key, channel.discoveryKey)
 
   // Spreads both PearTube's merged blob topic and stock Hypercore discoveryKey wide on public swarms so supplemental HiveRelays find every wet 512 KiB block.
   const contentTopics = new Map()
@@ -447,7 +721,7 @@ async function openNode ({
   }, CONTENT_TOPIC_ROTATE_MS)
   rotateTimer.unref?.()
   undo.push(() => clearInterval(rotateTimer))
-  if (usePrimaryTracker) tracker.update().then(() => closing ? null : hydrateOwned()).catch(() => {})
+  if (usePrimaryChannel) channel.update().then(() => closing ? null : hydrateOwned()).catch(() => {})
   function leaveContentSwarm (blobsHex) {
     const oldTopics = contentTopics.get(blobsHex)
     if (!oldTopics) return
@@ -461,47 +735,45 @@ async function openNode ({
   const extraSources = new Map()
   const ephemeralWatches = new Map()
   let primaryAlias = ''
-  let localChannelAlias = ''
 
   async function addSource (spec) {
     const parsed = typeof spec === 'string' ? parseUri(spec, 'channel') : parseUri(spec.uri || spec.key, spec.kind || 'channel')
-    if (parsed.action !== 'source') throw new Error('Expected a channel or tracker source, not a watch URI')
-    const { key, kind } = parsed
-    const alias = cleanText(spec?.alias ?? parsed.alias)
-    if (key === primaryKey && usePrimaryTracker) {
-      if (alias) primaryAlias = alias
-      update()
-      return { key, kind: 'tracker', alias: primaryAlias, primary: true, writable: true }
+    if (parsed.action === 'access') {
+      await addAccessKey({ channel: parsed.channel, epoch: parsed.epoch, key: parsed.epochKey })
+      return addSource({ key: parsed.channel, kind: 'channel', alias: spec?.alias ?? parsed.alias })
     }
-    if (key === channelKey) {
-      if (alias) localChannelAlias = alias
-      joinOverlayTopic(`channel:${channelKey}`, localChannel.core.key, localChannel.core.discoveryKey)
+    if (parsed.action !== 'source') throw new Error('Expected a channel source, not a watch URI')
+    const { key } = parsed
+    const alias = cleanText(spec?.alias ?? parsed.alias)
+    if (key === primaryKey) {
+      if (alias) primaryAlias = alias
+      usePrimaryChannel = true
+      joinOverlayTopic(`channel:${primaryKey}`, channel.key, channel.discoveryKey)
       update()
-      return { key, kind: 'channel', alias: localChannelAlias, primary: false, writable: true }
+      return { key, kind: 'channel', alias: primaryAlias, primary: true, writable: Boolean(channel.writable || (idVault && idVault.channelKey === primaryKey)) }
     }
     const existing = extraSources.get(key)
     if (existing) {
       if (alias) existing.alias = alias
       update()
-      return { key, kind: existing.kind, alias: existing.alias, primary: false, writable: false }
+      return { key, kind: 'channel', alias: existing.alias, primary: false, writable: false }
     }
-    if (kind === 'tracker') {
-      const bee = new Autobee(store.namespace(`tracker:${key}`), b4a.from(key, 'hex'), { apply, update, optimistic: true, fastForward: false, wakeup })
-      await bee.ready()
-      extraSources.set(key, { key, kind, alias, bee })
-      joinOverlayTopic(`tracker:${key}`, bee.key, bee.discoveryKey)
-      if (dht) swarm.listen().then(() => advertisePeer(true)).catch(() => {})
-    } else {
-      const bee = new Hyperbee(store.namespace(`channel:${key}`), { key: b4a.from(key, 'hex'), writable: false, autoUpdate: true })
-      await bee.ready()
-      const dl = bee.core.download({ start: 0, end: -1 })
-      bee.on('update', update)
-      extraSources.set(key, { key, kind: 'channel', alias, bee, dl })
-      joinOverlayTopic(`channel:${key}`, bee.core.key, bee.core.discoveryKey)
-    }
+    let bee = null
+    const subApply = makeApply(() => b4a.toString(bee.key, 'hex'))
+    bee = new Autobee(store.namespace(`channel:${key}`), b4a.from(key, 'hex'), {
+      apply: subApply,
+      update,
+      optimistic: true,
+      fastForward: false,
+      wakeup
+    })
+    await bee.ready()
+    extraSources.set(key, { key, kind: 'channel', alias, bee })
+    joinOverlayTopic(`channel:${key}`, bee.key, bee.discoveryKey)
+    bee.update().catch(() => {})
     onPeersChanged?.()
     update()
-    return { key, kind, alias, primary: false, writable: false }
+    return { key, kind: 'channel', alias, primary: false, writable: false }
   }
 
   async function removeSource (key) {
@@ -509,8 +781,7 @@ async function openNode ({
     const src = extraSources.get(k)
     if (!src) return { removed: false }
     extraSources.delete(k)
-    src.dl?.destroy()
-    await leaveOverlayTopic(`${src.kind}:${k}`)
+    await leaveOverlayTopic(`channel:${k}`)
     await src.bee.close().catch(() => {})
     update()
     return { removed: true }
@@ -518,12 +789,17 @@ async function openNode ({
 
   function listSources () {
     const list = []
-    if (usePrimaryTracker) list.push({ key: primaryKey, kind: 'tracker', alias: primaryAlias, primary: true, writable: true })
-    if (localChannel.core.length > 0 || localChannelAlias) {
-      list.push({ key: channelKey, kind: 'channel', alias: localChannelAlias, primary: false, writable: true })
+    if (usePrimaryChannel || channelHasEntries || primaryAlias) {
+      list.push({
+        key: primaryKey,
+        kind: 'channel',
+        alias: primaryAlias,
+        primary: true,
+        writable: Boolean(channel.writable || (idVault && idVault.channelKey === primaryKey))
+      })
     }
     for (const s of extraSources.values()) {
-      list.push({ key: s.key, kind: s.kind, alias: s.alias, primary: false, writable: false })
+      list.push({ key: s.key, kind: 'channel', alias: s.alias, primary: false, writable: false })
     }
     return list
   }
@@ -546,8 +822,8 @@ async function openNode ({
       const available = new Map()
       const now = Date.now()
       const views = [
-        ...(usePrimaryTracker ? [tracker.view] : []),
-        ...[...extraSources.values()].map(s => s.kind === 'tracker' ? s.bee.view : s.bee)
+        ...(usePrimaryChannel || channelHasEntries ? [channel.view] : []),
+        ...[...extraSources.values()].map(s => s.bee.view)
       ]
       for (const v of views) {
         for await (const node of v.createReadStream({ gte: b4a.from('peer/'), lt: b4a.from('peer/\xff') })) {
@@ -570,23 +846,11 @@ async function openNode ({
   let lastPeerAdvertised = 0
   async function advertisePeer (force = false) {
     if (!dht || closing || advertisingPeer || (!force && Date.now() - lastPeerAdvertised < 3 * 60_000)) return
+    if (!channel.writable && !(idVault && idVault.channelKey === primaryKey)) return
     advertisingPeer = true
     try {
       const peerOp = { type: 'peer', publicKey: b4a.toString(swarm.keyPair.publicKey, 'hex'), expiresAt: Date.now() + 10 * 60_000 }
-      if (usePrimaryTracker) await append(peerOp)
-      for (const s of extraSources.values()) {
-        if (s.kind === 'tracker') {
-          await s.bee.append(b4a.from(JSON.stringify(peerOp)), { optimistic: !s.bee.writable }).catch(() => {})
-          await s.bee.updated().catch(() => {})
-        }
-      }
-      if (localChannel.core.length > 0) {
-        await withChannelLock(async () => {
-          const w = localChannel.write()
-          w.tryPut(b4a.from('peer/owner'), b4a.from(JSON.stringify(peerOp)))
-          await w.flush()
-        })
-      }
+      if (usePrimaryChannel || channelHasEntries) await append(peerOp)
       lastPeerAdvertised = Date.now()
     } finally {
       advertisingPeer = false
@@ -656,6 +920,8 @@ async function openNode ({
     token: null,
     resolve: async (key, info) => {
       const hex = b4a.toString(key, 'hex')
+      const encryptionKey = resolveBlobEncryptionKey(hex)
+      if (encryptedBlobs.has(hex) && !encryptionKey) return null
       joinContentSwarm(hex)
       if (!isWorklet && !info?.head) lastHttpViewAt = Date.now()
       if (!isOwnedBlob(hex)) {
@@ -687,7 +953,7 @@ async function openNode ({
           warmAhead(rec.core, Math.floor((info?.range?.start || 0) / BLOB_BLOCK_SIZE) - 1, 32)
         }
       }
-      return { key }
+      return encryptionKey ? { key, encryptionKey } : { key }
     }
   })
   undo.push(() => server.close())
@@ -745,9 +1011,13 @@ async function openNode ({
       warmAhead(core, index, byteLen > 0 && byteLen <= 131072 ? 128 : 32)
     })
   }
+  const absentDisc = new Set()
+  const discByBlob = new Map()
   const onCoreWake = raw => {
     if (closing || !raw?.discoveryKey) return
-    const hex = ownedByDiscovery.get(b4a.toString(raw.discoveryKey, 'hex'))
+    const discHex = b4a.toString(raw.discoveryKey, 'hex')
+    absentDisc.delete(discHex)
+    const hex = ownedByDiscovery.get(discHex)
     if (!hex || weakOwned.has(hex)) return
     queueMicrotask(() => {
       if (closing || !ownedBlobs.has(hex) || weakOwned.has(hex)) return
@@ -825,54 +1095,29 @@ async function openNode ({
     return blocks >= blockLength ? entry.size : Math.min(entry.size, Math.round((blocks / blockLength) * entry.size))
   }
 
-  async function readChannelEntries (bee, id, sourceKey) {
-    const out = []
-    const prefix = id ? `entry/${id}/` : 'entry/'
-    for await (const node of bee.createReadStream({ gte: b4a.from(prefix), lt: b4a.from(`${prefix}\xff`) })) {
-      const op = decodeOp(node.value)
-      if (op?.type === 'announce') out.push({ key: `channel:${sourceKey}/${b4a.toString(node.key).slice(6)}`, entry: op, source: sourceKey, sourceKind: 'channel' })
-    }
-    return out
-  }
-
   async function search (id = null, { source: filterSource = null } = {}) {
     const raw = []
-    const primarySlices = new Set()
-    if (usePrimaryTracker && (!filterSource || filterSource === primaryKey)) {
-      await applied(tracker)
+    if ((usePrimaryChannel || channelHasEntries) && (!filterSource || filterSource === primaryKey)) {
+      await applied(channel)
       const range = id ? { gte: b4a.from(`${id}/`), lt: b4a.from(`${id}/\xff`) } : {}
-      for await (const node of tracker.view.createReadStream(range)) {
+      for await (const node of channel.view.createReadStream(range)) {
         const key = b4a.toString(node.key)
-        if (key.startsWith('peer/') || key.startsWith('source/')) continue
+        if (isSystemViewKey(key)) continue
         const op = decodeOp(node.value)
         if (op?.type === 'announce') {
-          primarySlices.add(`${op.id}/${op.blobs}:${op.blob.blockOffset}`)
-          raw.push({ key, entry: op, source: primaryKey, sourceKind: 'tracker' })
+          raw.push({ key, entry: op, source: primaryKey, sourceKind: 'channel' })
         }
-      }
-    }
-    if (localChannel.core.length > 0 && (!filterSource || filterSource === channelKey)) {
-      for (const item of await readChannelEntries(localChannel, id, channelKey)) {
-        if (!filterSource && primarySlices.has(`${item.entry.id}/${item.entry.blobs}:${item.entry.blob.blockOffset}`)) continue
-        raw.push(item)
       }
     }
     for (const s of extraSources.values()) {
       if (filterSource && filterSource !== s.key) continue
-      if (s.kind === 'tracker') {
-        await applied(s.bee)
-        const range = id ? { gte: b4a.from(`${id}/`), lt: b4a.from(`${id}/\xff`) } : {}
-        for await (const node of s.bee.view.createReadStream(range)) {
-          const sub = b4a.toString(node.key)
-          if (sub.startsWith('peer/') || sub.startsWith('source/')) continue
-          const op = decodeOp(node.value)
-          if (op?.type === 'announce') raw.push({ key: `tracker:${s.key}/${sub}`, entry: op, source: s.key, sourceKind: 'tracker' })
-        }
-      } else {
-        for (const item of await readChannelEntries(s.bee, id, s.key)) {
-          if (!filterSource && primarySlices.has(`${item.entry.id}/${item.entry.blobs}:${item.entry.blob.blockOffset}`)) continue
-          raw.push(item)
-        }
+      await applied(s.bee)
+      const range = id ? { gte: b4a.from(`${id}/`), lt: b4a.from(`${id}/\xff`) } : {}
+      for await (const node of s.bee.view.createReadStream(range)) {
+        const sub = b4a.toString(node.key)
+        if (isSystemViewKey(sub)) continue
+        const op = decodeOp(node.value)
+        if (op?.type === 'announce') raw.push({ key: `channel:${s.key}/${sub}`, entry: op, source: s.key, sourceKind: 'channel' })
       }
     }
     for (const [key, item] of ephemeralWatches) {
@@ -881,11 +1126,21 @@ async function openNode ({
     const candidates = [...new Set(raw.map(r => r.entry.blobs))].filter(h => !ownedBlobs.has(h))
     await Promise.all(candidates.map(async h => {
       if (blobCores.has(h) || slotSet.has(h)) return blobCore(h)
-      const exists = await coreStorage.hasCore(hypercoreCrypto.discoveryKey(b4a.from(h, 'hex'))).catch(() => false)
-      if (!exists) return null
+      let d = discByBlob.get(h)
+      if (!d) {
+        const buf = hypercoreCrypto.discoveryKey(b4a.from(h, 'hex'))
+        d = { buf, hex: b4a.toString(buf, 'hex') }
+        discByBlob.set(h, d)
+      }
+      if (absentDisc.has(d.hex)) return null
+      const exists = await coreStorage.hasCore(d.buf).catch(() => false)
+      if (!exists) { absentDisc.add(d.hex); return null }
       return blobCore(h)
     }))
     const results = await Promise.all(raw.map(async ({ key, entry, source, sourceKind }) => {
+      const isPrivateEntry = Boolean(entry.wrappedKey)
+      const vk = isPrivateEntry ? resolveVideoKey(entry, source) : null
+      const locked = Boolean(isPrivateEntry && !vk)
       const owned = ownedBlobs.get(entry.blobs)
       const core = owned ? null : blobCores.get(entry.blobs)
       const cached = owned ? entry.size : await entryCachedBytes(core, entry)
@@ -898,16 +1153,16 @@ async function openNode ({
         sha256: entry.sha256,
         local: Boolean(owned) || (slotSet.has(entry.blobs) && cached >= entry.size),
         cachedBytes: cached,
+        private: isPrivateEntry,
+        epoch: entry.epoch || 0,
+        locked,
         streamUrl: streamUrl(entry),
-        magnetUrl: formatWatchUri(entry, source, sourceKind),
+        magnetUrl: formatWatchUri(entry),
         source,
         sourceKind
       }
     }))
-    // One result per file. Writers that announced a file and were later reset leave copies nobody stores (old shared
-    // slots), and they can't be removed: only their writer could. Keep the copy most likely to play: owned, then most
-    // cached here, then a per-video core (offset 0), then the tracker founder's own.
-    const rank = r => [r.local ? 1 : 0, r.cachedBytes, r.key.endsWith(':0') ? 1 : 0, r.key.split('/')[1] === primaryKey ? 1 : 0]
+    const rank = r => { const p = r.key.split('/'); return [!r.locked ? 1 : 0, r.local ? 1 : 0, r.cachedBytes, r.key.endsWith(':0') ? 1 : 0, p[p.length - 2] === r.source ? 1 : 0] }
     const better = (a, b) => { const x = rank(a), y = rank(b); for (let i = 0; i < x.length; i++) if (x[i] !== y[i]) return x[i] > y[i]; return false }
     const files = new Map()
     for (const r of results) {
@@ -928,15 +1183,14 @@ async function openNode ({
       for await (const node of view.createReadStream({ gte: b4a.from('source/'), lt: b4a.from('source/\xff') })) {
         const op = decodeOp(node.value)
         if (op?.type === 'source' && !active.has(op.sourceKey) && !found.has(op.sourceKey)) {
-          found.set(op.sourceKey, { key: op.sourceKey, kind: op.kind, title: cleanText(op.title, op.sourceKey.slice(0, 12)), via })
+          found.set(op.sourceKey, { key: op.sourceKey, kind: 'channel', title: cleanText(op.title, op.sourceKey.slice(0, 12)), via })
         }
       }
     }
-    if (usePrimaryTracker) { await applied(tracker); await scan(tracker.view, primaryKey) }
-    if (localChannel.core.length > 0) await scan(localChannel, channelKey)
+    if (usePrimaryChannel || channelHasEntries) { await applied(channel); await scan(channel.view, primaryKey) }
     for (const s of extraSources.values()) {
-      if (s.kind === 'tracker') await applied(s.bee)
-      await scan(s.kind === 'tracker' ? s.bee.view : s.bee, s.key)
+      await applied(s.bee)
+      await scan(s.bee.view, s.key)
     }
     const list = [...found.values()]
     discoveredCache = list
@@ -946,27 +1200,28 @@ async function openNode ({
 
   async function findEntry (key) {
     if (ephemeralWatches.has(key)) return ephemeralWatches.get(key).entry
-    if (key.startsWith(`channel:${channelKey}/`)) {
-      const n = await localChannel.get(b4a.from(`entry/${key.slice(channelKey.length + 9)}`))
-      return n ? decodeOp(n.value) : null
-    }
-    const chMatch = key.match(/^channel:([0-9a-f]{64})\/(.+)$/)
-    if (chMatch) {
-      const src = extraSources.get(chMatch[1])
-      const n = src?.kind === 'channel' ? await src.bee.get(b4a.from(`entry/${chMatch[2]}`)) : null
-      return n ? decodeOp(n.value) : null
-    }
-    const trMatch = key.match(/^tracker:([0-9a-f]{64})\/(.+)$/)
-    if (trMatch) {
-      const src = extraSources.get(trMatch[1])
-      if (src?.kind !== 'tracker') return null
+    const subMatch = key.match(/^(?:channel|tracker):([0-9a-f]{64})\/(.+)$/)
+    if (subMatch) {
+      if (subMatch[1] === primaryKey) {
+        await applied(channel)
+        const n = await channel.view.get(b4a.from(subMatch[2]))
+        const op = n ? decodeOp(n.value) : null
+        if (op?.wrappedKey) resolveVideoKey(op, primaryKey)
+        return op
+      }
+      const src = extraSources.get(subMatch[1])
+      if (!src) return null
       await applied(src.bee)
-      const n = await src.bee.view.get(b4a.from(trMatch[2]))
-      return n ? decodeOp(n.value) : null
+      const n = await src.bee.view.get(b4a.from(subMatch[2]))
+      const op = n ? decodeOp(n.value) : null
+      if (op?.wrappedKey) resolveVideoKey(op, src.key)
+      return op
     }
-    await applied(tracker)
-    const n = await tracker.view.get(b4a.from(key))
-    return n ? decodeOp(n.value) : null
+    await applied(channel)
+    const n = await channel.view.get(b4a.from(key))
+    const op = n ? decodeOp(n.value) : null
+    if (op?.wrappedKey) resolveVideoKey(op, primaryKey)
+    return op
   }
 
   const dbDir = join(storage, 'corestore', 'db')
@@ -1010,18 +1265,11 @@ async function openNode ({
 
   async function hasLiveBlobReference (blobsHex, blockOffset = null) {
     const matchOp = op => op?.type === 'announce' && op.blobs === blobsHex && (blockOffset === null || op.blob?.blockOffset === blockOffset)
-    if (usePrimaryTracker) {
-      await tracker.update()
-      for await (const n of tracker.view.createReadStream()) {
-        const k = b4a.toString(n.key)
-        if (k.startsWith('peer/') || k.startsWith('source/')) continue
-        if (matchOp(decodeOp(n.value))) return true
-      }
-    }
-    if (localChannel.core.length > 0) {
-      for await (const n of localChannel.createReadStream({ gte: b4a.from('entry/'), lt: b4a.from('entry/\xff') })) {
-        if (matchOp(decodeOp(n.value))) return true
-      }
+    await channel.update()
+    for await (const n of channel.view.createReadStream()) {
+      const k = b4a.toString(n.key)
+      if (isSystemViewKey(k)) continue
+      if (matchOp(decodeOp(n.value))) return true
     }
     for (const item of ephemeralWatches.values()) {
       if (matchOp(item.entry)) return true
@@ -1140,9 +1388,29 @@ async function openNode ({
   // The write session is inactive: an owned core never downloads, so peers see it as an uploader from the first
   // block. Otherwise it reports "downloading" for Hypercore's 20-40 s linger after the write, and a peer whose
   // channel closes when Corestore collects the at-rest core does not reopen it.
-  async function put ({ id, title, expectedSize = null }, source, onData = null) {
+  async function currentChannelEpoch () {
+    await applied(channel)
+    const n = await channel.view.get(b4a.from('meta/epoch'))
+    return n ? (Number(b4a.toString(n.value)) || 1) : 1
+  }
+
+  async function put ({ id, title, expectedSize = null, private: isPrivate = false, epoch: explicitEpoch = null }, source, onData = null) {
     if (!str(id, ID)) throw new Error(`Invalid id ${id}`)
-    const core = store.get({ name: `video:${b4a.toString(hypercoreCrypto.randomBytes(16), 'hex')}`, active: false })
+    const wantPrivate = Boolean(isPrivate || explicitEpoch)
+    let videoKey = null
+    let ep = 0
+    let wrappedKey
+    if (wantPrivate) {
+      if (!idVault) throw new Error('12-word recovery vault required to encrypt private channel media')
+      ep = explicitEpoch || await currentChannelEpoch()
+      videoKey = hypercoreCrypto.randomBytes(32)
+      wrappedKey = wrapVideoKey(videoKey, idVault.epochKey(primaryKey, ep))
+    }
+    const core = store.get({
+      name: `video:${b4a.toString(hypercoreCrypto.randomBytes(16), 'hex')}`,
+      active: false,
+      ...(videoKey ? { encryption: { key: videoKey } } : {})
+    })
     try {
       const hash = createHash('sha256')
       let size = 0
@@ -1179,9 +1447,22 @@ async function openNode ({
       const keyHex = b4a.toString(core.key, 'hex')
       const blob = writer.id
       registerOwned(keyHex, { length: core.length, byteLength: core.byteLength })
+      if (videoKey) {
+        encryptedBlobs.set(keyHex, { source: primaryKey, epoch: ep, wrappedKey })
+        unlockedVideoKeys.set(keyHex, videoKey)
+      }
       await core.close()
       joinContentSwarm(keyHex)
-      return { type: 'announce', id, title: cleanText(title, id), size, sha256: hash.digest('hex'), blobs: keyHex, blob }
+      return {
+        type: 'announce',
+        id,
+        title: cleanText(title, id),
+        size,
+        sha256: hash.digest('hex'),
+        blobs: keyHex,
+        blob,
+        ...(videoKey ? { epoch: ep, wrappedKey } : {})
+      }
     } catch (err) {
       await core.ready().then(() => core.purge()).catch(() => core.close().catch(() => {}))
       throw err
@@ -1191,60 +1472,39 @@ async function openNode ({
   async function publish (meta, source) {
     const op = await put(meta, source)
     await append(op)
-    return { ...op, streamUrl: streamUrl(op), magnetUrl: formatWatchUri(op) }
+    const writerHex = b4a.toString(channel.local.key, 'hex')
+    return {
+      ...op,
+      key: `${op.id}/${writerHex}/${op.blobs}:${op.blob.blockOffset}`,
+      channel: primaryKey,
+      streamUrl: streamUrl(op),
+      magnetUrl: formatWatchUri(op)
+    }
   }
 
-  // Writes an announce op (either freshly streamed or re-curated) into this node's single-writer Hyperbee channel.
   async function publishChannel (metaOrOp, source = null) {
     const op = source ? await put(metaOrOp, source) : decodeOp(JSON.stringify({ ...metaOrOp, type: 'announce' }))
     if (!op || op.type !== 'announce') throw new Error('Invalid channel announce payload')
-    const subKey = `${op.id}/${op.blobs}:${op.blob.blockOffset}`
-    await withChannelLock(async () => {
-      const w = localChannel.write()
-      w.tryPut(b4a.from(`entry/${subKey}`), b4a.from(JSON.stringify(op)))
-      await w.flush()
-    })
-    joinOverlayTopic(`channel:${channelKey}`, localChannel.core.key, localChannel.core.discoveryKey)
+    await append(op)
     joinContentSwarm(op.blobs)
-    update()
+    const writerHex = b4a.toString(channel.local.key, 'hex')
     return {
       ...op,
-      key: `channel:${channelKey}/${subKey}`,
-      channel: channelKey,
+      key: `${op.id}/${writerHex}/${op.blobs}:${op.blob.blockOffset}`,
+      channel: primaryKey,
       streamUrl: streamUrl(op),
-      magnetUrl: formatWatchUri(op, channelKey, 'channel')
+      magnetUrl: formatWatchUri(op)
     }
   }
 
   async function removeChannel (key) {
-    const prefix = `channel:${channelKey}/`
-    const fullKey = key.startsWith(prefix) ? key : `${prefix}${key.replace(/^entry\//, '')}`
-    const prev = key.startsWith('source/') ? null : await findEntry(fullKey).catch(() => null)
-    const sub = key.startsWith(prefix) ? `entry/${key.slice(prefix.length)}` : key.startsWith('source/') ? key : `entry/${key}`
-    await withChannelLock(async () => {
-      const w = localChannel.write()
-      w.tryDelete(b4a.from(sub))
-      await w.flush()
-    })
-    await gcUnreferencedSlotBlob(prev).catch(() => {})
-    update()
+    return remove(key)
   }
 
-  // Publishes a gossip/directory recommendation for another channel or tracker.
-  async function publishSource ({ sourceKey, kind = 'channel', title }, { target = 'channel' } = {}) {
-    const op = decodeOp(JSON.stringify({ type: 'source', sourceKey: String(sourceKey || '').toLowerCase(), kind, title: cleanText(title, String(sourceKey).slice(0, 12)) }))
+  async function publishSource ({ sourceKey, title }) {
+    const op = decodeOp(JSON.stringify({ type: 'source', sourceKey: String(sourceKey || '').toLowerCase(), kind: 'channel', title: cleanText(title, String(sourceKey).slice(0, 12)) }))
     if (!op) throw new Error('Invalid source directory record')
-    if (target === 'channel' || target === 'both') {
-      await withChannelLock(async () => {
-        const w = localChannel.write()
-        w.tryPut(b4a.from(`source/${op.sourceKey}`), b4a.from(JSON.stringify(op)))
-        await w.flush()
-      })
-      joinOverlayTopic(`channel:${channelKey}`, localChannel.core.key, localChannel.core.discoveryKey)
-    }
-    if ((target === 'tracker' || target === 'both') && usePrimaryTracker) {
-      await append(op)
-    }
+    await append(op)
     update()
     return op
   }
@@ -1252,18 +1512,14 @@ async function openNode ({
   async function unpublishSource (sourceKey) {
     const k = String(sourceKey || '').trim().toLowerCase()
     if (!HEX64.test(k)) throw new Error('Invalid source key')
-    if (localChannel.core.length > 0) {
-      await withChannelLock(async () => {
-        const w = localChannel.write()
-        w.tryDelete(b4a.from(`source/${k}`))
-        await w.flush()
-      })
-    }
-    if (usePrimaryTracker) {
-      const writer = b4a.toString(tracker.local.key, 'hex')
-      const trKey = `source/${writer}/${k}`
-      await tracker.update()
-      if (await tracker.view.get(b4a.from(trKey))) await append({ type: 'remove', key: trKey })
+    await channel.update()
+    const writer = b4a.toString(channel.local.key, 'hex')
+    const pfx = 'source/'
+    for await (const n of channel.view.createReadStream({ gte: b4a.from(pfx), lt: b4a.from(`${pfx}\xff`) })) {
+      const fullKey = b4a.toString(n.key)
+      if (fullKey.endsWith(`/${k}`) && (fullKey === `source/${writer}/${k}` || (await localRole()) === 'owner')) {
+        await append({ type: 'remove', key: fullKey })
+      }
     }
     update()
     return { unpublished: true, key: k }
@@ -1271,19 +1527,13 @@ async function openNode ({
 
   async function publishedSources () {
     const out = new Map()
-    if (localChannel.core.length > 0) {
-      for await (const node of localChannel.createReadStream({ gte: b4a.from('source/'), lt: b4a.from('source/\xff') })) {
-        const op = decodeOp(node.value)
-        if (op?.type === 'source') out.set(op.sourceKey, { key: op.sourceKey, kind: op.kind, title: cleanText(op.title, op.sourceKey.slice(0, 12)) })
-      }
-    }
-    if (usePrimaryTracker) {
-      await applied(tracker)
-      const writer = b4a.toString(tracker.local.key, 'hex')
-      const pfx = `source/${writer}/`
-      for await (const node of tracker.view.createReadStream({ gte: b4a.from(pfx), lt: b4a.from(`${pfx}\xff`) })) {
-        const op = decodeOp(node.value)
-        if (op?.type === 'source' && !out.has(op.sourceKey)) out.set(op.sourceKey, { key: op.sourceKey, kind: op.kind, title: cleanText(op.title, op.sourceKey.slice(0, 12)) })
+    if (!usePrimaryChannel && !channelHasEntries) return []
+    await applied(channel)
+    const pfx = 'source/'
+    for await (const node of channel.view.createReadStream({ gte: b4a.from(pfx), lt: b4a.from(`${pfx}\xff`) })) {
+      const op = decodeOp(node.value)
+      if (op?.type === 'source' && !out.has(op.sourceKey)) {
+        out.set(op.sourceKey, { key: op.sourceKey, kind: 'channel', title: cleanText(op.title, op.sourceKey.slice(0, 12)) })
       }
     }
     return [...out.values()]
@@ -1291,8 +1541,13 @@ async function openNode ({
 
   async function openUri (uri, { joinSource = true } = {}) {
     const parsed = parseUri(uri, 'channel')
+    if (parsed.action === 'access') {
+      await addAccessKey({ channel: parsed.channel, epoch: parsed.epoch, key: parsed.epochKey })
+      const source = await addSource({ key: parsed.channel, kind: 'channel', alias: parsed.alias })
+      return { action: 'access', channel: parsed.channel, epoch: parsed.epoch, source }
+    }
     if (parsed.action === 'source') return { action: 'source', source: await addSource(parsed) }
-    if (joinSource && parsed.sourceKey) await addSource({ key: parsed.sourceKey, kind: parsed.sourceKind }).catch(() => {})
+    if (joinSource && parsed.sourceKey) await addSource({ key: parsed.sourceKey, kind: 'channel' }).catch(() => {})
     else if (parsed.sourceKey && !dht) {
       const sk = b4a.from(parsed.sourceKey, 'hex')
       joinOverlayTopic(`source-swarm:${parsed.sourceKey}`, sk, hypercoreCrypto.discoveryKey(sk))
@@ -1311,55 +1566,64 @@ async function openNode ({
         size: entry.size,
         sha256: entry.sha256,
         local: isOwnedBlob(entry.blobs),
-        cachedBytes: entryCachedBytes(blobCores.get(entry.blobs), entry),
+        cachedBytes: await entryCachedBytes(blobCores.get(entry.blobs), entry),
+        private: false,
+        epoch: 0,
+        locked: false,
         streamUrl: streamUrl(entry),
-        magnetUrl: formatWatchUri(entry, parsed.sourceKey || '', parsed.sourceKind),
+        magnetUrl: formatWatchUri(entry),
         source: parsed.sourceKey || 'direct',
         sourceKind: 'watch'
       }
     }
   }
 
-  // Backfills all locally stored tracker entries into this node's single-writer channel with zero blob copies.
+  // One-shot zero-copy import of any pre-unification single-writer Hyperbee entries into the unified Channel.
   async function syncLocalChannel () {
-    if (!usePrimaryTracker) return { backfilled: 0, total: 0 }
-    return withChannelLock(async () => {
-      await tracker.update()
-      const writer = b4a.toString(tracker.local.key, 'hex')
-      const existing = new Set()
-      if (localChannel.core.length > 0) {
-        for await (const n of localChannel.createReadStream({ gte: b4a.from('entry/'), lt: b4a.from('entry/\xff') })) {
-          existing.add(b4a.toString(n.key))
-        }
+    const legacyNs = store.namespace('channel')
+    const probe = legacyNs.get({ name: 'bee', active: false })
+    await probe.ready()
+    const legacyLen = probe.length
+    await probe.close()
+    await channel.update()
+    const existing = new Set()
+    let total = 0
+    for await (const n of channel.view.createReadStream()) {
+      const k = b4a.toString(n.key)
+      if (isSystemViewKey(k)) continue
+      const op = decodeOp(n.value)
+      if (op?.type === 'announce') {
+        existing.add(`${op.id}/${op.blobs}:${op.blob.blockOffset}`)
+        total++
       }
-      let backfilled = 0
-      const w = localChannel.write()
-      for await (const n of tracker.view.createReadStream()) {
-        const key = b4a.toString(n.key)
-        if (key.startsWith('peer/') || key.startsWith('source/')) continue
+    }
+    if (legacyLen === 0) return { backfilled: 0, total }
+    const legacyBee = new Hyperbee(legacyNs, { writable: false, autoUpdate: false })
+    let backfilled = 0
+    try {
+      await legacyBee.ready()
+      for await (const n of legacyBee.createReadStream({ gte: b4a.from('entry/'), lt: b4a.from('entry/\xff') })) {
         const op = decodeOp(n.value)
         if (!op || op.type !== 'announce') continue
-        if (key.split('/')[1] !== writer && !isOwnedBlob(op.blobs)) continue
-        const chKey = `entry/${op.id}/${op.blobs}:${op.blob.blockOffset}`
-        if (!existing.has(chKey)) {
-          w.tryPut(b4a.from(chKey), b4a.from(JSON.stringify(op)))
+        const slice = `${op.id}/${op.blobs}:${op.blob.blockOffset}`
+        if (!existing.has(slice)) {
+          await append(op)
           joinContentSwarm(op.blobs)
+          existing.add(slice)
           backfilled++
         }
       }
-      if (backfilled > 0) {
-        await w.flush()
-        joinOverlayTopic(`channel:${channelKey}`, localChannel.core.key, localChannel.core.discoveryKey)
-        update()
-      }
-      return { backfilled, total: existing.size + backfilled }
-    })
+    } finally {
+      await legacyBee.close().catch(() => {})
+    }
+    if (backfilled > 0) { await hydrateOwned(); update() }
+    return { backfilled, total: total + backfilled }
   }
 
-  // Splits legacy variable-block AND multi-entry shared `blobSlots` spans into dedicated 512 KiB-piece per-video Hypercores,
-  // deduplicates identical `sha256:size` files, SHA-256-verifies every byte before swapping catalog pointers, and clears old slot spans.
+  // Splits legacy variable-block AND multi-entry shared `blobSlots` spans into dedicated 512 KiB-piece per-video Hypercores.
   async function rechunkLegacyBlobs ({ id = null, foreground = false, onMigrate = null, onProgress = null, limit = Infinity } = {}) {
-    const writer = b4a.toString(tracker.local.key, 'hex')
+    const writer = b4a.toString(channel.local.key, 'hex')
+    const role = await localRole()
     const uniformByHash = new Map()
     const legacyGroups = new Map()
     const slotMap = new Map(blobSlots.map(s => [s.key, s]))
@@ -1369,7 +1633,7 @@ async function openNode ({
       if (slot.core.length < end) return false
       return slot.core.has(blob.blockOffset, end)
     }
-    const addRef = async (op, kind, fullKey) => {
+    const addRef = async (op, fullKey) => {
       if (!slotMap.has(op.blobs)) {
         if (ownedBlobs.has(op.blobs) && op.blob?.blockOffset === 0 && isUniform512(op.blob)) {
           uniformByHash.set(`${op.sha256}:${op.size}`, { blobs: op.blobs, blob: op.blob })
@@ -1381,39 +1645,29 @@ async function openNode ({
       const oldTag = `${op.blobs}:${op.blob.blockOffset}`
       let g = legacyGroups.get(oldTag)
       if (!g) {
-        g = { oldTag, blobs: op.blobs, blob: op.blob, sha256: op.sha256, size: op.size, trackerOps: [], channelOps: [] }
+        g = { oldTag, blobs: op.blobs, blob: op.blob, sha256: op.sha256, size: op.size, ops: [] }
         legacyGroups.set(oldTag, g)
       }
-      if (kind === 'tracker') g.trackerOps.push({ fullKey, op })
-      else g.channelOps.push({ fullKey, op })
+      g.ops.push({ fullKey, op })
     }
 
-    if (usePrimaryTracker) {
-      await tracker.update()
-      for await (const n of tracker.view.createReadStream()) {
-        const key = b4a.toString(n.key)
-        if (key.startsWith('peer/') || key.startsWith('source/')) continue
-        const op = decodeOp(n.value)
-        if (op?.type === 'announce' && key.split('/')[1] === writer) await addRef(op, 'tracker', key)
-      }
-    }
-    if (localChannel.core.length > 0) {
-      for await (const n of localChannel.createReadStream({ gte: b4a.from('entry/'), lt: b4a.from('entry/\xff') })) {
-        const subKey = b4a.toString(n.key)
-        const op = decodeOp(n.value)
-        if (op?.type === 'announce') await addRef(op, 'channel', subKey)
-      }
+    await channel.update()
+    for await (const n of channel.view.createReadStream()) {
+      const key = b4a.toString(n.key)
+      if (isSystemViewKey(key)) continue
+      const op = decodeOp(n.value)
+      if (op?.type === 'announce' && (key.split('/')[1] === writer || role === 'owner')) await addRef(op, key)
     }
 
     const allGroups = [...legacyGroups.values()]
-    const filtered = id ? allGroups.filter(g => g.trackerOps.some(t => t.op.id === id) || g.channelOps.some(c => c.op.id === id)) : allGroups
+    const filtered = id ? allGroups.filter(g => g.ops.some(t => t.op.id === id)) : allGroups
     const queue = filtered.sort((a, b) => a.size - b.size)
     let migrated = 0, deduped = 0, migratedBytes = 0
     onProgress?.({ total: queue.length, migrated, deduped, remaining: queue.length, migratedBytes, currentId: null, currentTitle: null })
 
     for (const g of queue) {
       if (closing || migrated >= limit) break
-      const sample = g.trackerOps[0]?.op || g.channelOps[0]?.op
+      const sample = g.ops[0]?.op
       onProgress?.({ total: queue.length, migrated, deduped, remaining: queue.length - migrated, migratedBytes, currentId: sample.id, currentTitle: sample.title })
       const oldSlot = slotMap.get(g.blobs)
       if (!oldSlot || !(await hasAllBlocks(oldSlot, g.blob))) continue
@@ -1432,7 +1686,6 @@ async function openNode ({
             const pump = () => {
               if (closing) return cb(new Error('Node closing'))
               status()
-              // Background migration yields while this node is moving data for peers or viewers.
               if (!foreground && (downBps > 65536 || upBps > 65536)) { setTimeout(pump, 1500).unref?.(); return }
               const batchEnd = Math.min(endIdx, idx + 64)
               const reqs = []
@@ -1465,20 +1718,10 @@ async function openNode ({
       }
 
       await onMigrate?.(g.oldTag, target, sample)
-      for (const { op } of g.trackerOps) {
+      for (const { op } of g.ops) {
         await append({ ...op, blobs: target.blobs, blob: target.blob })
       }
-      for (const { op } of g.channelOps) {
-        await publishChannel({ ...op, blobs: target.blobs, blob: target.blob })
-      }
-      if (g.channelOps.length > 0) {
-        await withChannelLock(async () => {
-          const w = localChannel.write()
-          for (const { fullKey } of g.channelOps) w.tryDelete(b4a.from(fullKey))
-          await w.flush()
-        })
-      }
-      for (const { fullKey } of g.trackerOps) {
+      for (const { fullKey } of g.ops) {
         await append({ type: 'remove', key: fullKey })
       }
 
@@ -1498,24 +1741,145 @@ async function openNode ({
   }
 
   async function remove (key) {
-    if (key.startsWith(`channel:${channelKey}/`)) return removeChannel(key)
-    const prev = await findEntry(key).catch(() => null)
-    const parts = key.split('/')
-    if (parts.length === 3 && parts[1] === b4a.toString(tracker.local.key, 'hex') && localChannel.core.length > 0) {
-      await removeChannel(`${parts[0]}/${parts[2]}`).catch(() => {})
-    }
-    await append({ type: 'remove', key })
+    const cleanKey = key.startsWith(`channel:${primaryKey}/`) ? key.slice(primaryKey.length + 9) : key.startsWith(`tracker:${primaryKey}/`) ? key.slice(primaryKey.length + 9) : key
+    const prev = await findEntry(cleanKey).catch(() => null)
+    await append({ type: 'remove', key: cleanKey })
     await gcUnreferencedSlotBlob(prev).catch(() => {})
+    update()
   }
 
   async function append (op) {
-    const before = tracker.local.length
-    await tracker.append(b4a.from(JSON.stringify(op)), { optimistic: !tracker.writable })
-    await tracker.updated()
-    while (tracker.local.length <= before) {
+    usePrimaryChannel = true
+    if (op.type === 'announce' || op.type === 'source') channelHasEntries = true
+    joinOverlayTopic(`channel:${primaryKey}`, channel.key, channel.discoveryKey)
+    const writerHex = b4a.toString(channel.local.key, 'hex')
+    const ownerRec = !channel.writable && idVault ? await channel.view.get(b4a.from('meta/owner')) : null
+    const canClaim = Boolean(idVault && (idVault.channelKey === primaryKey || (ownerRec && b4a.toString(ownerRec.value) === idVault.ownerPublicKey)))
+    const payload = (!channel.writable && canClaim && op.type !== 'claim')
+      ? { ...op, claim: idVault.signClaim(primaryKey, writerHex) }
+      : op
+    const before = channel.local.length
+    await channel.append(b4a.from(JSON.stringify(payload)), { optimistic: !channel.writable })
+    await channel.updated()
+    while (channel.local.length <= before) {
       if (closing) throw new Error('Node closed before the write was durable')
       await new Promise(resolve => setTimeout(resolve, 500))
-      await tracker.update()
+      await channel.update()
+    }
+    await syncWriterCores()
+  }
+
+  async function localRole () {
+    const writerHex = b4a.toString(channel.local.key, 'hex')
+    if (writerHex === primaryKey) return 'owner'
+    await applied(channel)
+    const rec = await channel.view.get(b4a.from(`writer/${writerHex}`))
+    if (rec) {
+      try { return JSON.parse(b4a.toString(rec.value))?.role || null } catch {}
+    }
+    const ownerRec = idVault ? await channel.view.get(b4a.from('meta/owner')) : null
+    return idVault && (idVault.channelKey === primaryKey || (ownerRec && b4a.toString(ownerRec.value) === idVault.ownerPublicKey)) ? 'owner' : null
+  }
+
+  async function listWriters () {
+    await applied(channel)
+    const selfHex = b4a.toString(channel.local.key, 'hex')
+    const out = new Map()
+    out.set(primaryKey, { key: primaryKey, role: 'owner', alias: 'primary', self: primaryKey === selfHex })
+    for await (const n of channel.view.createReadStream({ gte: b4a.from('writer/'), lt: b4a.from('writer/\xff') })) {
+      const k = b4a.toString(n.key).slice(7)
+      let meta = {}
+      try { meta = JSON.parse(b4a.toString(n.value)) || {} } catch {}
+      out.set(k, { key: k, role: meta.role || 'writer', alias: cleanText(meta.alias || ''), self: k === selfHex })
+    }
+    return [...out.values()]
+  }
+
+  async function grantWriter (writerKey, { role = 'writer', alias = '' } = {}) {
+    const wHex = String(writerKey || '').trim().toLowerCase()
+    if (!HEX64.test(wHex)) throw new Error('Writer key must be 64 hex characters')
+    if (!ROLES.has(role)) throw new Error('Role must be owner, mod, or writer')
+    await append({ type: 'grant', writer: wHex, role, alias: cleanText(alias) })
+    return { granted: true, writer: wHex, role, alias: cleanText(alias) }
+  }
+
+  async function revokeWriter (writerKey, { purgeEntries = false } = {}) {
+    const wHex = String(writerKey || '').trim().toLowerCase()
+    if (!HEX64.test(wHex)) throw new Error('Writer key must be 64 hex characters')
+    if (wHex === primaryKey) throw new Error('Cannot revoke the genesis channel founder')
+    await append({ type: 'revoke', writer: wHex, purgeEntries: Boolean(purgeEntries) })
+    update()
+    return { revoked: true, writer: wHex, purgeEntries: Boolean(purgeEntries) }
+  }
+
+  async function claimWithMnemonic (phrase, { alias = '' } = {}) {
+    const nextVault = deriveIdentity(phrase)
+    currentMnemonic = nextVault.mnemonic
+    idVault = nextVault
+    saveIdentity()
+    if (nextVault.channelKey !== primaryKey) {
+      return { claimed: false, reopenNeeded: true, channel: nextVault.channelKey }
+    }
+    if (!channel.writable) {
+      const writerHex = b4a.toString(channel.local.key, 'hex')
+      await append({ type: 'claim', sig: nextVault.signClaim(primaryKey, writerHex), alias: cleanText(alias) })
+    }
+    update()
+    return { claimed: true, reopenNeeded: false, channel: primaryKey, writer: b4a.toString(channel.local.key, 'hex') }
+  }
+
+  async function rotateEpoch () {
+    if (!idVault) throw new Error('12-word recovery vault required to rotate subscriber epochs')
+    const nextEpoch = (await currentChannelEpoch()) + 1
+    await append({ type: 'epoch', epoch: nextEpoch })
+    const epochKeyHex = b4a.toString(idVault.epochKey(primaryKey, nextEpoch), 'hex')
+    update()
+    return { epoch: nextEpoch, epochKey: epochKeyHex, accessUri: formatAccessUri(primaryKey, nextEpoch, epochKeyHex) }
+  }
+
+  async function addAccessKey ({ channel: chHex, epoch, key: keyHex }) {
+    const c = String(chHex || '').trim().toLowerCase()
+    const k = String(keyHex || '').trim().toLowerCase()
+    const ep = Number(epoch)
+    if (!HEX64.test(c) || !HEX64.test(k) || !Number.isSafeInteger(ep) || ep < 1) {
+      throw new Error('Invalid subscriber access key')
+    }
+    accessKeys.set(`${c}:${ep}`, k)
+    saveIdentity()
+    update()
+    return { channel: c, epoch: ep }
+  }
+
+  async function removeAccessKey (chHex, epoch = null) {
+    const c = String(chHex || '').trim().toLowerCase()
+    for (const k of [...accessKeys.keys()]) {
+      if (epoch != null ? k === `${c}:${Number(epoch)}` : k.startsWith(`${c}:`)) accessKeys.delete(k)
+    }
+    for (const [blobsHex, meta] of encryptedBlobs) {
+      if (meta.source === c && (epoch == null || meta.epoch === Number(epoch))) {
+        unlockedVideoKeys.delete(blobsHex)
+      }
+    }
+    saveIdentity()
+    update()
+    return { removed: true, channel: c }
+  }
+
+  async function identity ({ revealMnemonic = false } = {}) {
+    const ep = await currentChannelEpoch()
+    const role = await localRole()
+    const canManageEpoch = Boolean(idVault && (primaryKey === foundedKey || idVault.channelKey === primaryKey))
+    const epochKeyHex = canManageEpoch ? b4a.toString(idVault.epochKey(primaryKey, ep), 'hex') : ''
+    return {
+      channel: primaryKey,
+      writer: b4a.toString(channel.local.key, 'hex'),
+      role,
+      writable: Boolean(channel.writable || role === 'owner'),
+      mnemonicSet: Boolean(currentMnemonic),
+      ...(revealMnemonic ? { mnemonic: currentMnemonic } : {}),
+      writers: await listWriters(),
+      epoch: ep,
+      ...(epochKeyHex ? { epochKey: epochKeyHex, accessUri: formatAccessUri(primaryKey, ep, epochKeyHex) } : {})
     }
   }
 
@@ -1597,11 +1961,12 @@ async function openNode ({
       return sum + (blocks >= s.core.length ? s.core.byteLength : Math.round((blocks / s.core.length) * s.core.byteLength))
     }, 0)
     const reciprocity = applyReciprocity(blobBytes + cachedBytes, txBytes, rxBytes, contributingPeers)
+    const writerHex = b4a.toString(channel.local.key, 'hex')
     return {
-      // No primary tracker means the node follows channels only; never report a channel as a tracker.
-      tracker: usePrimaryTracker ? primaryKey : '',
-      channel: channelKey,
-      writer: b4a.toString(tracker.local.key, 'hex'),
+      tracker: usePrimaryChannel || channelHasEntries ? primaryKey : '',
+      channel: primaryKey,
+      writer: writerHex,
+      writable: Boolean(channel.writable || writerHex === primaryKey || (idVault && idVault.channelKey === primaryKey)),
       blobs: blobsKey,
       blobBytes,
       cachedBytes,
@@ -1621,11 +1986,16 @@ async function openNode ({
   }
 
   function coreByteLen (c) { return c.byteLength || 0 }
-  // Lays bare every non-empty local channel and blob core ready for supplemental HiveRelay seeders to suck dry.
+  // Lays bare every non-empty unified Channel core, linked-device writer core, and 512 KiB video core for supplemental HiveRelays.
   function seedableCores ({ includeCached = false } = {}) {
     const out = []
-    if (localChannel.core.length > 0) {
-      out.push({ key: channelKey, kind: 'channel', length: localChannel.core.length, byteLength: localChannel.core.byteLength })
+    if (channel.bootstrap.length > 0 && (channelHasEntries || ownedBlobs.size > 0)) {
+      out.push({ key: primaryKey, kind: 'channel', length: channel.bootstrap.length, byteLength: channel.bootstrap.byteLength })
+    }
+    for (const [wHex, wc] of writerCores) {
+      if (wc.opened && wc.length > 0) {
+        out.push({ key: wHex, kind: 'channel', length: wc.length, byteLength: wc.byteLength })
+      }
     }
     for (const [key, v] of ownedBlobs) {
       if (v.length > 0) out.push({ key, kind: 'blobs', length: v.length, byteLength: v.byteLength })
@@ -1645,7 +2015,6 @@ async function openNode ({
     return out
   }
 
-
   let closingPromise = null
   function close () {
     if (closingPromise) return closingPromise
@@ -1661,15 +2030,14 @@ async function openNode ({
       httpOwned.clear()
       for (const s of weakOwned.values()) await s.close().catch(() => {})
       weakOwned.clear()
+      for (const wc of writerCores.values()) await wc.close().catch(() => {})
+      writerCores.clear()
       await lan?.destroy()
-      // The private overlay's clear() withdraws its rendezvous routes so readers stop dialing a dead peer.
-      // Hyperswarm's would only unannounce each topic; force skips that on the way out.
       if (dht) await swarm.clear()
       await swarm.destroy({ force: true })
-      for (const s of extraSources.values()) { s.dl?.destroy(); await s.bee.close().catch(() => {}) }
+      for (const s of extraSources.values()) await s.bee.close().catch(() => {})
       extraSources.clear()
-      await localChannel.close().catch(() => {})
-      await tracker.close()
+      await channel.close()
       wakeup.destroy()
       await server.close()
       await store.close()
@@ -1696,8 +2064,8 @@ async function openNode ({
       const sk = b4a.from(keyHex, 'hex')
       joinOverlayTopic(`source-swarm:${keyHex}`, sk, hypercoreCrypto.discoveryKey(sk))
     },
-    tracker,
-    localChannel,
+    channel,
+    tracker: channel,
     swarm,
     peerConnections: () => peerConns,
     onConnection: fn => { connListeners.add(fn); return () => connListeners.delete(fn) },
@@ -1719,6 +2087,14 @@ async function openNode ({
     discoveredSources,
     openUri,
     warm,
+    identity,
+    listWriters,
+    grantWriter,
+    revokeWriter,
+    claimWithMnemonic,
+    rotateEpoch,
+    addAccessKey,
+    removeAccessKey,
     setAllowedPeers,
     clearCache,
     gcStorage,

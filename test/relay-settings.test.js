@@ -20,6 +20,7 @@ import { execFileSync, spawn } from 'node:child_process'
 import { randomBytes } from 'node:crypto'
 import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { createServer as createHttpServer } from 'node:http'
+import { get as httpsGet } from 'node:https'
 import { connect, createServer } from 'node:net'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -85,8 +86,8 @@ async function guardKeysOnDht (bootstrap) {
 
 // A relay process (bin/relay.js under Bare) on the testnet, with a small API client.
 async function startRelay (testnet, extraEnv = {}) {
-  const storage = tmp()
-  const apiPort = await freePort()
+  const storage = extraEnv.PEARTUBE_STORAGE || tmp()
+  const apiPort = Number(extraEnv.PEARTUBE_API_PORT || await freePort())
   const proc = spawn(join(root, 'node_modules/.bin/bare'), [join(root, 'bin/relay.js')], {
     cwd: root,
     env: {
@@ -203,7 +204,7 @@ test('relay settings apply in place; its guard serves private peers while the re
   now = await listed()
   assert.deepEqual([now.has(followed), now.has(byHand)], [true, true], 'back on: the followed source is listed again')
   const ledger = JSON.parse(readFileSync(join(storage, 'directory.json'), 'utf8'))
-  assert.deepEqual(ledger.sort(), [followed, (await get('/v1/status')).channel].sort(), 'the setting lists followed sources and this relay\'s channel, never the hand-listed one')
+  assert.deepEqual(ledger.sort(), [followed], 'the setting lists followed sources, never the hand-listed one')
   result.checks.directory = { followed, byHand }
 
   // "Convert at every start": turning it on runs the conversion now, in place; turning it off starts nothing.
@@ -373,5 +374,58 @@ test('a closed acquirer never announces a download that finished after it closed
   const [saved] = JSON.parse(readFileSync(jobsFile, 'utf8'))
   assert.equal(saved.status, 'running', 'jobs.json keeps the job for the next acquirer')
   assert.ok(saved.source, 'with its source, so the next acquirer fetches it again')
+  result.pass = true
+})
+
+test('relay serves bare-https TLS from storage PEMs with /ca.crt, LAN settingsOpen, and https:// Stremio links', { timeout: 60_000 }, async t => {
+  const result = results.tls = { pass: false }
+  const testnet = await createTestnet(3)
+  t.after(() => testnet.destroy())
+  const storage = tmp()
+  const apiPort = await freePort()
+  const httpsPort = await freePort()
+  const ext = join(storage, 'san.ext')
+  writeFileSync(ext, 'basicConstraints=CA:FALSE\nkeyUsage=digitalSignature\nextendedKeyUsage=serverAuth\nsubjectAltName=IP:127.0.0.1,DNS:localhost\n')
+  execFileSync('openssl', ['req', '-x509', '-newkey', 'ec', '-pkeyopt', 'ec_paramgen_curve:P-256', '-days', '3650', '-nodes', '-keyout', join(storage, 'ca.key'), '-out', join(storage, 'ca.crt'), '-subj', '/CN=PearTube Local CA', '-addext', 'basicConstraints=critical,CA:TRUE', '-addext', 'keyUsage=critical,keyCertSign,cRLSign'])
+  const csr = execFileSync('openssl', ['req', '-newkey', 'ec', '-pkeyopt', 'ec_paramgen_curve:P-256', '-nodes', '-keyout', join(storage, 'tls.key'), '-subj', '/CN=peartube'])
+  execFileSync('openssl', ['x509', '-req', '-CA', join(storage, 'ca.crt'), '-CAkey', join(storage, 'ca.key'), '-CAcreateserial', '-days', '390', '-out', join(storage, 'tls.crt'), '-extfile', ext], { input: csr })
+  const ca = readFileSync(join(storage, 'ca.crt'))
+
+  const relay = await startRelay(testnet, { PEARTUBE_STORAGE: storage, PEARTUBE_API_PORT: String(apiPort), PEARTUBE_HTTPS_PORT: String(httpsPort) })
+  t.after(() => relay.stop())
+
+  const caRes = await fetch(`http://127.0.0.1:${apiPort}/ca.crt`)
+  assert.equal(caRes.status, 200)
+  assert.equal(caRes.headers.get('content-type'), 'application/x-x509-ca-cert')
+  assert.deepEqual(Buffer.from(await caRes.arrayBuffer()), ca, 'plain HTTP serves /ca.crt for one-tap device trust')
+
+  const getTlsJson = path => new Promise((resolve, reject) => {
+    httpsGet(`https://127.0.0.1:${httpsPort}${path}`, { ca }, res => {
+      const chunks = []
+      res.on('data', c => chunks.push(c))
+      res.on('end', () => resolve({ status: res.statusCode, data: JSON.parse(Buffer.concat(chunks).toString()) }))
+    }).on('error', reject)
+  })
+
+  const st = await getTlsJson('/v1/status')
+  assert.equal(st.status, 200)
+  assert.equal(st.data.settingsOpen, true, 'bare-https unwraps HTTPSSocket.socket.remoteAddress for LAN settings')
+  assert.equal((await getTlsJson('/v1/settings')).status, 200)
+
+  const src = createHttpServer((req, res) => {
+    res.writeHead(200, { 'content-length': '1024' })
+    res.end(Buffer.alloc(1024))
+  })
+  await new Promise(resolve => src.listen(0, '127.0.0.1', resolve))
+  t.after(() => src.close())
+  const job = await relay.send('POST', '/v1/acquire', { id: 'imdb:tt0133093', title: 'The Matrix 1999', source: { url: `http://127.0.0.1:${src.address().port}/matrix.mkv` } })
+  await until(async () => (await relay.get(`/v1/jobs/${job.jobId}`)).status === 'done', 20_000, 'matrix acquired')
+
+  const catTls = (await getTlsJson('/catalog/movie/peartube-movies.json')).data
+  const strTls = (await getTlsJson('/stream/movie/tt0133093.json')).data
+  assert.equal(catTls.metas[0].poster, `https://127.0.0.1:${httpsPort}/v1/poster/tt0133093`)
+  assert.ok(strTls.streams[0].url.startsWith(`https://127.0.0.1:${httpsPort}/v1/blob?`), strTls.streams[0].url)
+  const strHttp = await relay.get('/stream/movie/tt0133093.json')
+  assert.ok(strHttp.streams[0].url.startsWith(`http://127.0.0.1:${apiPort}/v1/blob?`), strHttp.streams[0].url)
   result.pass = true
 })

@@ -183,7 +183,17 @@ export function receiverPage ({ mode = 'standalone', defaultName = 'PearTube Web
       $('modeBadge').textContent = 'PearTube Cast';
       $('idle').style.display = 'none';
       $('stage').style.display = 'block';
-      video.src = cmd.streamUrl || cmd.httpStreamUrl;
+      const rawSrc = cmd.streamUrl || cmd.httpStreamUrl;
+      let playSrc = rawSrc;
+      if (BOOT.mode === 'hub' && rawSrc) {
+        try {
+          const u = new URL(rawSrc, location.href);
+          if (u.searchParams.has('key') && (u.searchParams.has('blob') || u.searchParams.has('pointer'))) {
+            playSrc = location.origin + '/v1/blob' + u.search;
+          }
+        } catch {}
+      }
+      video.src = playSrc;
       video.load();
       if (cmd.startPositionMs > 0) {
         video.addEventListener('loadedmetadata', () => { video.currentTime = cmd.startPositionMs / 1000; }, { once: true });

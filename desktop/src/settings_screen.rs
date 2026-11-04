@@ -18,6 +18,7 @@ use crate::theme::{CARD, DANGER, DIM, LINE};
 
 pub struct SettingsForm {
     tracker: Entity<InputState>,
+    mnemonic: Entity<InputState>,
     sources: Entity<TextareaState>,
     relays: Entity<TextareaState>,
     bootstrap: Entity<TextareaState>,
@@ -31,7 +32,8 @@ impl SettingsForm {
     pub fn new(settings: &Settings, window: &mut Window, cx: &mut Context<PearTube>) -> Self {
         let advanced_open = !settings.relay_through.is_empty() || !settings.bootstrap.is_empty() || settings.private_routing;
         SettingsForm {
-            tracker: cx.new(|cx| InputState::new(window, cx).placeholder("Paste a 64-character library or channel key…").default_value(settings.tracker.clone())),
+            tracker: cx.new(|cx| InputState::new(window, cx).placeholder("Paste a 64-character channel key or peartube://channel/…").default_value(settings.tracker.clone())),
+            mnemonic: cx.new(|cx| InputState::new(window, cx).placeholder("12-word recovery phrase to link your channel on this Mac…").default_value(settings.mnemonic.clone())),
             sources: cx.new(|cx| TextareaState::new(window, cx).rows(4).placeholder("One peartube://channel/… link per line").default_value(settings.format_sources())),
             relays: cx.new(|cx| TextareaState::new(window, cx).rows(2).default_value(settings.relay_through.join(", "))),
             bootstrap: cx.new(|cx| TextareaState::new(window, cx).rows(2).default_value(settings.bootstrap.join(", "))),
@@ -93,15 +95,21 @@ impl PearTube {
                         .gap_4()
                         .when_some(form.error.clone(), |this, error| this.child(inline_error(error)))
                         .child(card_section(
-                            "Library & Channels",
-                            "Connect your home server key or follow creator channels.",
+                            "Channels & Account",
+                            "Follow creator channels, connect a primary channel key, or link your 12-word recovery phrase.",
                             v_flex()
                                 .gap_3()
                                 .child(
                                     v_flex()
                                         .gap_1()
-                                        .child(div().text_xs().font_weight(FontWeight::MEDIUM).text_color(rgb(DIM)).child("Primary Library Key"))
+                                        .child(div().text_xs().font_weight(FontWeight::MEDIUM).text_color(rgb(DIM)).child("Primary Channel Key (optional)"))
                                         .child(Input::new(&form.tracker).cleanable(true)),
+                                )
+                                .child(
+                                    v_flex()
+                                        .gap_1()
+                                        .child(div().text_xs().font_weight(FontWeight::MEDIUM).text_color(rgb(DIM)).child("12-Word Recovery Phrase (link your account)"))
+                                        .child(Input::new(&form.mnemonic).cleanable(true)),
                                 )
                                 .child(
                                     v_flex()
@@ -219,6 +227,7 @@ impl PearTube {
         let Screen::Settings(form) = &mut self.screen else { return };
         let parsed = Settings::parse(
             &form.tracker.read(cx).value(),
+            &form.mnemonic.read(cx).value(),
             &form.sources.read(cx).value(),
             &form.relays.read(cx).value(),
             &form.bootstrap.read(cx).value(),

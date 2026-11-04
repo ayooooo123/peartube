@@ -35,28 +35,27 @@ struct SourceSpec: Codable, Hashable, Identifiable {
     var kind = "channel"
     var alias = ""
     var id: String { key }
-    var name: String { alias.isEmpty ? "\(kind.capitalized) \(key.prefix(8))" : alias }
-    var json: [String: Any] { ["key": key, "kind": kind, "alias": alias] }
+    var name: String { alias.isEmpty ? "Channel \(key.prefix(8))" : alias }
+    var json: [String: Any] { ["key": key, "kind": "channel", "alias": alias] }
     var uri: String {
         var c = URLComponents()
-        c.scheme = "peartube"; c.host = kind; c.path = "/\(key)"
+        c.scheme = "peartube"; c.host = "channel"; c.path = "/\(key)"
         if !alias.isEmpty { c.queryItems = [URLQueryItem(name: "name", value: alias)] }
-        return c.string ?? "peartube://\(kind)/\(key)"
+        return c.string ?? "peartube://channel/\(key)"
     }
-    init(key: String, kind: String = "channel", alias: String = "") { self.key = key; self.kind = kind; self.alias = alias }
-    init(_ json: [String: Any]) { key = json.string("key"); kind = json.string("kind").isEmpty ? "channel" : json.string("kind"); alias = json.string("alias") }
+    init(key: String, kind: String = "channel", alias: String = "") { self.key = key; self.kind = "channel"; self.alias = alias }
+    init(_ json: [String: Any]) { key = json.string("key"); kind = "channel"; alias = json.string("alias") }
     static func parse(_ input: String, defaultKind: String = "channel") throws -> SourceSpec {
         let raw = input.trimmingCharacters(in: .whitespacesAndNewlines)
-        if isKey(raw) { return SourceSpec(key: raw.lowercased(), kind: defaultKind) }
+        if isKey(raw) { return SourceSpec(key: raw.lowercased(), kind: "channel") }
         let split = raw.split(separator: ":", maxSplits: 1).map(String.init)
-        if split.count == 2, ["channel", "tracker"].contains(split[0].lowercased()), isKey(split[1]) { return SourceSpec(key: split[1].lowercased(), kind: split[0].lowercased()) }
+        if split.count == 2, ["channel", "tracker"].contains(split[0].lowercased()), isKey(split[1]) { return SourceSpec(key: split[1].lowercased(), kind: "channel") }
         let normalized = raw.lowercased().hasPrefix("peartube://") ? raw : raw.replacingOccurrences(of: "peartube:", with: "peartube://", options: .caseInsensitive)
-        guard let c = URLComponents(string: normalized), c.scheme?.lowercased() == "peartube", let verb = c.host?.lowercased(), ["channel", "tracker", "source", "add"].contains(verb) else { throw AppFailure("Enter a 64-character hexadecimal key or a peartube://channel/ or tracker/ URI.") }
+        guard let c = URLComponents(string: normalized), c.scheme?.lowercased() == "peartube", let verb = c.host?.lowercased(), ["channel", "tracker", "source", "add"].contains(verb) else { throw AppFailure("Enter a 64-character hexadecimal key or a peartube://channel/ URI.") }
         let key = c.path.trimmingCharacters(in: CharacterSet(charactersIn: "/")).lowercased()
-        guard isKey(key) else { throw AppFailure("Source keys must contain exactly 64 hexadecimal characters.") }
+        guard isKey(key) else { throw AppFailure("Channel keys must contain exactly 64 hexadecimal characters.") }
         let query = c.queryItems ?? []
-        let kind = verb == "channel" ? "channel" : verb == "tracker" ? "tracker" : (query.first(where: { $0.name == "kind" })?.value == "channel" ? "channel" : "tracker")
-        var source = SourceSpec(key: key, kind: kind)
+        var source = SourceSpec(key: key, kind: "channel")
         for item in query {
             if ["name", "alias"].contains(item.name) { source.alias = item.value ?? "" }
         }
@@ -66,22 +65,30 @@ struct SourceSpec: Codable, Hashable, Identifiable {
 
 struct Settings: Codable {
     var tracker = ""
+    var mnemonic = ""
     var sources: [SourceSpec] = []
     var relayThrough: [String] = []
     var bootstrap: [String] = []
     var lanDiscovery = true
     var privateRouting = false
     var configured = false
-    var hasSources: Bool { !tracker.isEmpty || !sources.isEmpty }
+    var hasSources: Bool { !tracker.isEmpty || !mnemonic.isEmpty || !sources.isEmpty }
     mutating func add(_ source: SourceSpec) {
         if tracker == source.key { return }
-        sources.removeAll { $0.key == source.key }; sources.append(source)
+        sources.removeAll { $0.key == source.key }; sources.append(SourceSpec(key: source.key, kind: "channel", alias: source.alias))
     }
-    static func parse(tracker: String, sources: String, relays: String, bootstrap: String, lan: Bool, privateRouting: Bool) throws -> Settings {
+    static func parse(tracker: String, sources: String, relays: String, bootstrap: String, lan: Bool, privateRouting: Bool, mnemonic: String = "") throws -> Settings {
         var next = Settings()
         if !tracker.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            let source = try SourceSpec.parse(tracker, defaultKind: "tracker")
-            if source.kind == "tracker" { next.tracker = source.key } else { next.add(source) }
+            let source = try SourceSpec.parse(tracker, defaultKind: "channel")
+            next.tracker = source.key
+        }
+        let words = mnemonic.lowercased().components(separatedBy: .whitespacesAndNewlines).filter { !$0.isEmpty }
+        if !words.isEmpty {
+            guard (words.count == 12 || words.count == 24), words.allSatisfy({ $0.unicodeScalars.allSatisfy { (97...122).contains($0.value) } }) else {
+                throw AppFailure("Recovery phrase must be 12 or 24 lowercase English words.")
+            }
+            next.mnemonic = words.joined(separator: " ")
         }
         for token in sources.components(separatedBy: CharacterSet.newlines.union(CharacterSet(charactersIn: ","))).filter({ !$0.trimmingCharacters(in: .whitespaces).isEmpty }) { next.add(try SourceSpec.parse(token)) }
         next.relayThrough = tokens(relays).map { $0.lowercased() }
@@ -97,10 +104,13 @@ struct Settings: Codable {
 
 struct MediaEntry: Identifiable, Hashable {
     var key: String; var mediaID: String; var title: String; var size: Double; var sha256: String
-    var local: Bool; var cachedBytes: Double; var streamURL: String; var magnetURL: String; var source: String
+    var local: Bool; var cachedBytes: Double; var isPrivate: Bool; var epoch: Int; var locked: Bool
+    var streamURL: String; var magnetURL: String; var source: String
     var id: String { key }
     init(_ j: [String: Any]) {
-        key = j.string("key"); mediaID = j.string("id"); title = j.string("title"); size = j.number("size"); sha256 = j.string("sha256"); local = j.flag("local"); cachedBytes = j.number("cachedBytes"); streamURL = j.string("streamUrl"); magnetURL = j.string("magnetUrl"); source = j.string("source")
+        key = j.string("key"); mediaID = j.string("id"); title = j.string("title"); size = j.number("size"); sha256 = j.string("sha256")
+        local = j.flag("local"); cachedBytes = j.number("cachedBytes"); isPrivate = j.flag("private"); epoch = Int(j.number("epoch")); locked = j.flag("locked")
+        streamURL = j.string("streamUrl"); magnetURL = j.string("magnetUrl"); source = j.string("source")
     }
     var episode: String? { mediaID.range(of: "(?i)s[0-9]{2}e[0-9]{2,3}$", options: .regularExpression).map { String(mediaID[$0]).uppercased() } }
     var season: String { episode.map { String($0.prefix(3)) } ?? "Movie" }

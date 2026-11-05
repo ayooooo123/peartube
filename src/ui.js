@@ -2354,7 +2354,11 @@ function openPlayer (entry, at = 0) {
     }
     // Keep 18 x 2 MiB (36 MiB) warm inside the 64 MiB Worker ring without wiping ahead-of-base marks on rollover.
     for (let i = 0; i <= 18; i++) {
-      if (p.prefetchInFlight.size >= 4) break
+      // Six in flight is the browser's per-host connection cap, and the most short 2 MiB reads a
+      // weak link actually rewards: measured on a Wi-Fi path to a 10-foot relay, four in flight gave
+      // 82 Mbps and six gave 154, so the 36 MiB read-ahead fills in about half the time and a dip
+      // no longer drains it.
+      if (p.prefetchInFlight.size >= 6) break
       const idx = base + i
       if (idx < 0) continue
       if (p.prefetchDone.has(idx) || p.prefetchInFlight.has(idx)) continue

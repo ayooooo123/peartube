@@ -1,5 +1,5 @@
 diff --git a/quickjs.c b/quickjs.c
-index a870743..027df02 100644
+index a870743..443ae1f 100644
 --- a/quickjs.c
 +++ b/quickjs.c
 @@ -358,6 +358,7 @@ struct JSRuntime {
@@ -280,13 +280,25 @@ index a870743..027df02 100644
          abuf->byte_length = 0;
          abuf->detached = TRUE;
          js_array_buffer_update_typed_arrays(abuf);
-@@ -61100,6 +61218,9 @@ static JSValue js_array_buffer_resize(JSContext *ctx, JSValueConst this_val,
+@@ -61093,6 +61211,7 @@ static JSValue js_array_buffer_resize(JSContext *ctx, JSValueConst this_val,
+         // 2 bytes big in A, and 1 byte big in B
+         abuf->byte_length = len;
+     } else {
++        size_t old_tracked = abuf->tracked_bytes;
+         data = js_array_buffer_realloc(ctx, abuf->data, max_int(len, 1));
+         if (!data)
+             return JS_EXCEPTION;
+@@ -61100,6 +61219,13 @@ static JSValue js_array_buffer_resize(JSContext *ctx, JSValueConst this_val,
              memset(&data[abuf->byte_length], 0, len - abuf->byte_length);
          abuf->byte_length = len;
          abuf->data = data;
 +        js_abuf_untrack(ctx->rt, abuf);
 +        if (ctx->rt->ab_funcs.ab_alloc)
 +            js_abuf_track(ctx->rt, abuf, len);
++        js_array_buffer_update_typed_arrays(abuf);
++        if (abuf->tracked_bytes > old_tracked)
++            js_trigger_gc(ctx->rt, 0);
++        return JS_UNDEFINED;
      }
      js_array_buffer_update_typed_arrays(abuf);
      return JS_UNDEFINED;

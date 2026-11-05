@@ -1,5 +1,5 @@
 diff --git a/src/js.c b/src/js.c
-index 8ed1d6e..bf34cb9 100644
+index 8ed1d6e..6c4412e 100644
 --- a/src/js.c
 +++ b/src/js.c
 @@ -95,6 +95,8 @@ struct js_env_s {
@@ -89,7 +89,7 @@ index 8ed1d6e..bf34cb9 100644
 -    finalizer->finalize_cb = js__on_reference_finalize;
 -    finalizer->finalize_hint = NULL;
 -    finalizer->tracked = false;
-+  if (reference->finalized || env->closing || !JS_IsObject(reference->value)) return;
++  if (reference->finalized || env->closing || (!JS_IsObject(reference->value) && !JS_IsSymbol(reference->value))) return;
  
 -    reference->symbol = JS_NewSymbol(env->context, "__native_reference", false);
 +  bool has_exception = JS_HasException(env->context);

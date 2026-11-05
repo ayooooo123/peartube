@@ -246,7 +246,7 @@ test('standalone bin/private-relay.js forwarders: zero disk writes, fresh-boot 2
 
   for (const contentTopic of [
     seeder.tracker.discoveryKey,
-    hypercoreCrypto.discoveryKey(Buffer.from(seeder.status().blobs, 'hex'))
+    hypercoreCrypto.discoveryKey(Buffer.from(entry.magnetUrl.match(/^peartube:\/\/watch\/([0-9a-f]{64})/)[1], 'hex'))
   ]) {
     const leaked = new Set()
     for await (const reply of observer.lookup(contentTopic)) {

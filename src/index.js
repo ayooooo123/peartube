@@ -759,20 +759,15 @@ async function openNode ({
       // walks the same queue, so a large library still gets its turn.
       if (!evict) return
       const victim = contentTopics.keys().next().value
-      const oldTopics = contentTopics.get(victim)
+      const oldTopic = contentTopics.get(victim)
       contentTopics.delete(victim)
-      for (const t of oldTopics) {
-        swarm.leave(t).catch(() => {})
-        lan?.leave?.(t)
-      }
+      swarm.leave(oldTopic).catch(() => {})
+      lan?.leave?.(oldTopic)
     }
-    const keyBuf = b4a.from(blobsHex, 'hex')
-    const topics = [hypercoreCrypto.discoveryKey(keyBuf)]
-    contentTopics.set(blobsHex, topics)
-    for (const t of topics) {
-      swarm.join(t, { server: true, client: true })
-      lan?.join(t)
-    }
+    const topic = hypercoreCrypto.discoveryKey(b4a.from(blobsHex, 'hex'))
+    contentTopics.set(blobsHex, topic)
+    swarm.join(topic, { server: true, client: true })
+    lan?.join(topic)
   }
   for (const s of blobSlots) {
     if (s.core.length > 0 && await s.core.count(0, s.core.length) > 0) joinContentSwarm(s.key)
@@ -803,13 +798,11 @@ async function openNode ({
   undo.push(() => clearInterval(rotateTimer))
   if (usePrimaryChannel) channel.update().then(() => closing ? null : hydrateOwned()).catch(() => {})
   function leaveContentSwarm (blobsHex) {
-    const oldTopics = contentTopics.get(blobsHex)
-    if (!oldTopics) return
+    const oldTopic = contentTopics.get(blobsHex)
+    if (!oldTopic) return
     contentTopics.delete(blobsHex)
-    for (const t of oldTopics) {
-      swarm.leave(t).catch(() => {})
-      lan?.leave?.(t)
-    }
+    swarm.leave(oldTopic).catch(() => {})
+    lan?.leave?.(oldTopic)
   }
 
   // O(1) active channel pool: even with 1,000+ followed channels, keep at most `activeSourceCap` Autobees
@@ -1331,7 +1324,7 @@ async function openNode ({
       return
     }
     for (const discKey of lanTopics.values()) next.join(discKey)
-    if (!dht) for (const topics of contentTopics.values()) for (const t of topics) next.join(t)
+    if (!dht) for (const topic of contentTopics.values()) next.join(topic)
     lan = next
   }
   // LAN discovery is optional: a node that cannot start it (an address this machine lacks) runs without it.

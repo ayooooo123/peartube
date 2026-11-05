@@ -293,6 +293,7 @@ const methods = {
   addAccessKey: async params => { const res = await (await current()).addAccessKey(params); update(); return res },
   removeAccessKey: async ({ channel, epoch = null }) => { const res = await (await current()).removeAccessKey(channel, epoch); update(); return res },
   clearCache: async ({ key = null } = {}) => { const res = await (await current()).clearCache(key); update(); return res },
+  setCacheMax: async ({ maxBytes = 0 } = {}) => { const cacheMaxBytes = (await current()).setCacheMaxBytes(maxBytes); update(); return { cacheMaxBytes } },
   castStatus: async ({ storage = null } = {}) => (await ensureCast(storage)).status(),
   castPair: async params => { const c = await ensureCast(params.storage); await c.pairReceiver(params); return c.status() },
   castRemove: async ({ id, storage = null }) => { const c = await ensureCast(storage); c.removeReceiver(id); return c.status() },

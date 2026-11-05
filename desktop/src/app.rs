@@ -359,6 +359,28 @@ impl PearTube {
         .detach();
     }
 
+    /// Storage contribution from the settings screen: persisted, then applied
+    /// to the running worklet so a change does not interrupt playback.
+    pub fn set_cache_limit(&mut self, gb: u32, cx: &mut Context<Self>) {
+        if self.settings.cache_max_gb == gb {
+            return;
+        }
+        self.settings.cache_max_gb = gb;
+        let _ = self.settings.save();
+        if let Screen::Settings(form) = &mut self.screen {
+            form.set_cache_max_gb(gb);
+        }
+        let bytes = u64::from(gb) * 1_000_000_000;
+        cx.spawn(async move |this, cx| {
+            if let Ok(w) = worker() {
+                let _ = w.set_cache_max(bytes).await;
+                refresh(&this, cx).await;
+            }
+        })
+        .detach();
+        cx.notify();
+    }
+
     pub fn remove_channel_entry(&mut self, key: String, cx: &mut Context<Self>) {
         cx.spawn(async move |this, cx| {
             if let Ok(w) = worker() {

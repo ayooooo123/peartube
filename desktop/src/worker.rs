@@ -595,8 +595,15 @@ impl Worker {
             "bootstrap": non_empty(&settings.bootstrap),
             "lan": settings.lan_discovery,
             "privateRouting": settings.private_routing,
+            "cacheMaxGb": settings.cache_max_gb,
         });
         parse(self.call("start", params).await?)
+    }
+
+    /// Applies the playback cache ceiling without restarting the worklet.
+    pub async fn set_cache_max(&self, max_bytes: u64) -> Result<u64, String> {
+        let value = self.call("setCacheMax", json!({ "maxBytes": max_bytes })).await?;
+        Ok(value.get("cacheMaxBytes").and_then(Value::as_u64).unwrap_or(0))
     }
 
     pub async fn status(&self) -> Result<Status, String> {

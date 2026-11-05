@@ -33,6 +33,8 @@ pub struct Settings {
     pub lan_discovery: bool,
     /// Route peer connections over 2-hop encrypted guard circuits.
     pub private_routing: bool,
+    /// Playback cache ceiling in GB, kept to help the network. `0` = unlimited.
+    pub cache_max_gb: u32,
 }
 
 impl Default for Settings {
@@ -45,6 +47,7 @@ impl Default for Settings {
             bootstrap: Vec::new(),
             lan_discovery: true,
             private_routing: false,
+            cache_max_gb: 10,
         }
     }
 }
@@ -66,6 +69,12 @@ struct RawSettings {
     lan_discovery: bool,
     #[serde(default)]
     private_routing: bool,
+    #[serde(default = "default_cache_max_gb")]
+    cache_max_gb: u32,
+}
+
+fn default_cache_max_gb() -> u32 {
+    10
 }
 
 impl Settings {
@@ -85,6 +94,7 @@ impl Settings {
                 bootstrap: r.bootstrap,
                 lan_discovery: r.lan_discovery,
                 private_routing: r.private_routing,
+                cache_max_gb: r.cache_max_gb,
             })
             .unwrap_or_default()
     }
@@ -154,7 +164,7 @@ impl Settings {
         if let Some(bad) = bootstrap.iter().find(|node| !is_host_port(node)) {
             return Err(format!("Bootstrap node {bad} is not host:port."));
         }
-        Ok(Settings { tracker: primary, mnemonic, sources, relay_through, bootstrap, lan_discovery, private_routing })
+        Ok(Settings { tracker: primary, mnemonic, sources, relay_through, bootstrap, lan_discovery, private_routing, cache_max_gb: 10 })
     }
 }
 

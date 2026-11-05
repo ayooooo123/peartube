@@ -24,11 +24,16 @@ pub struct SettingsForm {
     bootstrap: Entity<TextareaState>,
     lan: bool,
     private_routing: bool,
+    cache_max_gb: u32,
     advanced_open: bool,
     error: Option<SharedString>,
 }
 
 impl SettingsForm {
+    pub fn set_cache_max_gb(&mut self, gb: u32) {
+        self.cache_max_gb = gb;
+    }
+
     pub fn new(settings: &Settings, window: &mut Window, cx: &mut Context<PearTube>) -> Self {
         let advanced_open = !settings.relay_through.is_empty() || !settings.bootstrap.is_empty() || settings.private_routing;
         SettingsForm {
@@ -39,6 +44,7 @@ impl SettingsForm {
             bootstrap: cx.new(|cx| TextareaState::new(window, cx).rows(2).default_value(settings.bootstrap.join(", "))),
             lan: settings.lan_discovery,
             private_routing: settings.private_routing,
+            cache_max_gb: settings.cache_max_gb,
             advanced_open,
             error: None,
         }
@@ -149,6 +155,31 @@ impl PearTube {
                                     ),
                             ))
                         })
+                        // One clear promise about how much of the disk this app will take.
+                        .child(card_section(
+                            "Storage Contribution",
+                            "How much playback cache this Mac keeps to help the network. Applies immediately; the film you are watching always keeps a window around the playhead.",
+                            v_flex()
+                                .gap_3()
+                                .child(
+                                    h_flex()
+                                        .gap_2()
+                                        .flex_wrap()
+                                        .children([5u32, 10, 25, 50, 100, 0].into_iter().map(|gb| {
+                                            let selected = form.cache_max_gb == gb;
+                                            let btn = Button::new(SharedString::from(format!("cache-limit-{gb}")))
+                                                .small()
+                                                .label(if gb == 0 { "Unlimited".to_string() } else { format!("{gb} GB") });
+                                            let btn = if selected { btn.primary() } else { btn.ghost() };
+                                            btn.on_click(cx.listener(move |this, _, _, cx| this.set_cache_limit(gb, cx)))
+                                        })),
+                                )
+                                .child(div().text_xs().text_color(rgb(DIM)).child(if form.cache_max_gb == 0 {
+                                    "Currently unlimited: cached blocks are only freed when you do it by hand.".to_string()
+                                } else {
+                                    format!("At most {} GB of cached blocks; the least recently watched are freed first.", form.cache_max_gb)
+                                })),
+                        ))
                         // Progressive disclosure: Advanced Network & Engine
                         .child(
                             v_flex()

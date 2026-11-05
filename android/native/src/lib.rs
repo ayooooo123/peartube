@@ -11,7 +11,7 @@ use jni::objects::{JClass, JObject, JString};
 use jni::sys::{jboolean, jint, jlong, jstring};
 use oxideav_core::RuntimeContext;
 use player::android::surface::{SurfaceBinding, SurfaceRegistry, SurfaceRetirement};
-use player::{AndroidBackend, Player, PlayerOptions, State, TrackKind};
+use player::{AndroidBackend, AudioOutputMode, FrameRateMode, Player, PlayerOptions, State, TrackKind};
 use serde_json::json;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicI64, Ordering};
@@ -56,9 +56,69 @@ pub extern "system" fn Java_com_peartube_app_player_NativePlayer_open(
     } else {
         env.get_string(&soundfont).ok().map(|path| PathBuf::from(String::from(path)))
     };
-    let options = PlayerOptions { soundfont, ..PlayerOptions::default() };
+    let options = PlayerOptions {
+        soundfont,
+        steep_dsd_filter: true,
+        ..PlayerOptions::default()
+    };
     let backend = BACKEND.clone();
     // The app polls state(); events would only wake it sooner.
+    let player = Player::open(&url, backend, CODECS.clone(), options, |_| {});
+    Box::into_raw(Box::new(player)) as jlong
+}
+
+/// Opens `url` with explicit audio routing (`"auto"`, `"passthrough"`, `"bitperfect"`, `"stereo"`),
+/// display frame-rate matching (`"seamless"`, `"exact"`, `"off"`), and optional 12-bit DV FEL mode.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_com_peartube_app_player_NativePlayer_openWithOptions(
+    mut env: JNIEnv,
+    _class: JClass,
+    url: JString,
+    soundfont: JString,
+    audio_mode: JString,
+    frame_rate_mode: JString,
+    prefer_fel_12bit: jboolean,
+) -> jlong {
+    let url: String = match env.get_string(&url) {
+        Ok(url) => url.into(),
+        Err(err) => {
+            let _ = env.throw_new("java/lang/IllegalArgumentException", err.to_string());
+            return 0;
+        }
+    };
+    let soundfont = if soundfont.is_null() {
+        None
+    } else {
+        env.get_string(&soundfont).ok().map(|path| PathBuf::from(String::from(path)))
+    };
+    let am_str = (!audio_mode.is_null())
+        .then(|| env.get_string(&audio_mode).ok().map(String::from))
+        .flatten()
+        .unwrap_or_default();
+    let fr_str = (!frame_rate_mode.is_null())
+        .then(|| env.get_string(&frame_rate_mode).ok().map(String::from))
+        .flatten()
+        .unwrap_or_default();
+    let audio_mode = match am_str.to_ascii_lowercase().as_str() {
+        "passthrough" => AudioOutputMode::Passthrough,
+        "bitperfect" | "bit_perfect" => AudioOutputMode::BitPerfectPcm,
+        "stereo" => AudioOutputMode::Stereo,
+        _ => AudioOutputMode::Auto,
+    };
+    let frame_rate_mode = match fr_str.to_ascii_lowercase().as_str() {
+        "exact" => FrameRateMode::Exact,
+        "off" => FrameRateMode::Off,
+        _ => FrameRateMode::Seamless,
+    };
+    let options = PlayerOptions {
+        soundfont,
+        audio_mode,
+        frame_rate_mode,
+        prefer_fel_12bit: prefer_fel_12bit != 0,
+        steep_dsd_filter: true,
+        ..PlayerOptions::default()
+    };
+    let backend = BACKEND.clone();
     let player = Player::open(&url, backend, CODECS.clone(), options, |_| {});
     Box::into_raw(Box::new(player)) as jlong
 }
@@ -129,6 +189,18 @@ fn state_json(st: &State) -> String {
         "title": t.title,
         "default": t.default,
     })).collect();
+    let chapters: Vec<_> = st
+        .chapters
+        .iter()
+        .enumerate()
+        .map(|(i, c)| {
+            json!({
+                "title": c.title.clone().unwrap_or_else(|| format!("Chapter {}", i + 1)),
+                "startMs": c.start.as_millis() as u64,
+                "endMs": c.end.map(|e| e.as_millis() as u64),
+            })
+        })
+        .collect();
     json!({
         "positionMs": st.position.as_millis() as u64,
         "durationMs": st.duration.map(|d| d.as_millis() as u64),
@@ -137,6 +209,7 @@ fn state_json(st: &State) -> String {
         "ended": st.ended,
         "error": st.error,
         "tracks": tracks,
+        "chapters": chapters,
         "audio": st.audio,
         "subtitle": st.subtitle,
         "videoWidth": st.video_size.map(|(w, _)| w),
@@ -144,6 +217,10 @@ fn state_json(st: &State) -> String {
         "videoPixelAspect": st.video_pixel_aspect.map(|(h, v)| [h, v]),
         "videoFps": st.video_fps,
         "videoDecoder": st.video_decoder,
+        "videoDynamicRange": st.video_dynamic_range,
+        "videoBitDepth": st.video_bit_depth,
+        "videoChroma": st.video_chroma,
+        "audioOutput": st.audio_output,
         "droppedFrames": st.dropped_frames,
     })
     .to_string()

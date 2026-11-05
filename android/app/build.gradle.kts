@@ -172,7 +172,7 @@ androidComponents {
         variant.sources.jniLibs?.addGeneratedSourceDirectory(workletTask, WorkletTask::libsDir)
         val cargo = tasks.register<CargoTask>("cargo${variant.name.replaceFirstChar { it.uppercase() }}") {
             crate.set(nativeCrate)
-            sources.from(fileTree(nativeCrate.resolve("src")), nativeCrate.resolve("Cargo.toml"), nativeCrate.resolve("Cargo.lock"))
+            sources.from(fileTree(nativeCrate.resolve("src")), nativeCrate.resolve("Cargo.toml"), nativeCrate.resolve("Cargo.lock"), checkout.parentFile.resolve("peartube-media/crates").takeIf { it.isDirectory }?.let { fileTree(it) } ?: files())
             profile.set(if (variant.buildType == "release") "release" else "dev")
             ndk.set(androidComponents.sdkComponents.ndkDirectory)
             libsDir.set(layout.buildDirectory.dir("cargo/${variant.name}"))

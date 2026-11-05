@@ -1,5 +1,5 @@
 // Dedicated Web Worker driving peartube-media's SIMD128 Rust/OxideAV WebAssembly engine:
-//   - The page fetches 2 MiB blocks ahead and posts them into a 64 MiB ring; a wasm read never blocks on sync XHR
+//   - The page fetches 2 MiB blocks ahead into a 64 MiB ring; only an uncached read falls back to sync XHR
 //   - Zero-allocation OffscreenCanvas WebGL2/WebGL1 YUV420 + RGBA + WebCodecs GPU renderer inside the Worker
 //   - Recycled Transferable ArrayBuffer pools for zero steady-state GC churn
 let wasm = null
@@ -47,9 +47,11 @@ let offRenderer = null
 let renderQueue = []
 let renderLoopActive = false
 let drawnInSession = 0
-let streamCropDone = false
+let streamCrop = null
 let streamCropCandidate = null
 let streamCropSame = 0
+let streamCropFrames = 0
+let cropProbe = null
 const freeVideoPool = []
 const freeAudioPool = []
 
@@ -130,26 +132,22 @@ function putBlock (idx, data) {
   blockCache.set(idx, { data, stamp: blockStamp })
 }
 
-function probeStream (url) {
+async function probeStream (url) {
   blockCache.clear()
   headProbe = null
-  const xhr = new XMLHttpRequest()
-  xhr.open('GET', url, false)
-  xhr.timeout = 5000
-  xhr.responseType = 'arraybuffer'
-  xhr.setRequestHeader('Range', 'bytes=0-' + (STREAM_BLOCK - 1))
-  xhr.send()
-  if (xhr.status !== 200 && xhr.status !== 206) {
-    throw new Error('Stream HTTP ' + xhr.status)
-  }
-  const buf = new Uint8Array(xhr.response || new ArrayBuffer(0))
-  const cr = xhr.getResponseHeader('Content-Range') || ''
+  const response = await fetch(url, {
+    headers: { Range: 'bytes=0-' + (STREAM_BLOCK - 1) },
+    signal: AbortSignal.timeout(30000)
+  })
+  if (response.status !== 200 && response.status !== 206) throw new Error('Stream HTTP ' + response.status)
+  const buf = new Uint8Array(await response.arrayBuffer())
+  const cr = response.headers.get('Content-Range') || ''
   const slash = cr.lastIndexOf('/')
   if (slash !== -1) {
     const total = Number(cr.slice(slash + 1).trim())
     streamLen = total > 0 ? total : buf.byteLength
   } else {
-    const cl = Number(xhr.getResponseHeader('Content-Length') || 0)
+    const cl = Number(response.headers.get('Content-Length') || 0)
     streamLen = cl > 0 ? cl : buf.byteLength
   }
   headProbe = buf
@@ -189,8 +187,7 @@ function readAtSync (offset, dstPtr, len) {
     try {
       const xhr = new XMLHttpRequest()
       xhr.open('GET', streamUrl, false)
-      // Last-resort sync read when a seek or cold P2P block outruns page prefetch; 4s x 3 matches peer Range wakeup.
-      xhr.timeout = 4000
+      // shortcut: sync wasm reads cannot be timed out by XHR; move this last-resort read to an async host bridge when available.
       xhr.responseType = 'arraybuffer'
       xhr.setRequestHeader('Range', 'bytes=' + fetchStart + '-' + fetchEnd)
       xhr.send()
@@ -316,32 +313,65 @@ function initOffscreenRenderer (canvas) {
   return { gl, isGl2, canvas, texY, texU, texV, modeLoc, cropLoc, crop: [0, 0, 1, 1], cropPx: null, cropTries: 0, cropDone: false, w: 0, h: 0, mode: -1 }
 }
 
-// Encoded letterbox: a 16:9 frame can carry a 2.39 picture with black rows baked in, and then the
-// stage's own contain adds side bars too (black on all four sides). Find the active rectangle on
-// the first bright software frame and let the shader sample only that, so the picture fills the
-// width. Rows count as bars only when every sampled pixel there is black; dark scenes are skipped.
-function detectLetterbox (u8, w, h) {
+// Decode a small preview only occasionally: black rows baked into a 16:9 movie must not
+// become a second set of side bars when the stage contains its encoded frame. Three
+// matching bright pictures protect dark scenes, and continued probes restore IMAX shots.
+function detectLetterbox (u8, w, h, rgba = false) {
+  const value = i => rgba ? Math.max(u8[i * 4], u8[i * 4 + 1], u8[i * 4 + 2]) : u8[i]
   let sum = 0, n = 0
-  for (let y = 0; y < h; y += 16) for (let x = 0; x < w; x += 16) { sum += u8[y * w + x]; n++ }
+  for (let y = 0; y < h; y += 16) for (let x = 0; x < w; x += 16) { sum += value(y * w + x); n++ }
   if (n === 0 || sum / n < 25) return null
-  const blackRow = y => { for (let x = 0; x < w; x += 8) if (u8[y * w + x] > 24) return false; return true }
+  const blackRow = y => { for (let x = 0; x < w; x += 8) if (value(y * w + x) > 24) return false; return true }
   let top = 0
   while (top < h && blackRow(top)) top++
   let bottom = h - 1
   while (bottom > top && blackRow(bottom)) bottom--
   if (bottom - top + 1 < h * 0.5) return null
-  const blackCol = x => { for (let y = top; y <= bottom; y += 8) if (u8[y * w + x] > 24) return false; return true }
+  const blackCol = x => { for (let y = top; y <= bottom; y += 8) if (value(y * w + x) > 24) return false; return true }
   let left = 0
   while (left < w && blackCol(left)) left++
   let right = w - 1
   while (right > left && blackCol(right)) right--
-  // Letterbox only: the active picture spans the full width, so a narrow bright object on black
-  // (a studio logo) is not mistaken for the picture, and side pillars are left alone.
+  // A narrow bright logo against black is not evidence that the picture has bars.
   if (right - left + 1 < w * 0.95) return null
-  if (top < 2 && h - 1 - bottom < 2 && left < 2 && w - 1 - right < 2) {
+  if (top < h * 0.02 && h - 1 - bottom < h * 0.02 && left < w * 0.02 && w - 1 - right < w * 0.02) {
     return { left: 0, top: 0, right: w, bottom: h, full: true }
   }
-  return { left, top, right: right + 1, bottom: bottom + 1 }
+  return { left: 0, top, right: w, bottom: bottom + 1 }
+}
+
+function sampleVideoFrame (vf, w, h) {
+  if (typeof OffscreenCanvas !== 'function') return null
+  const sw = 320, sh = Math.max(1, Math.round(h * sw / w))
+  if (!cropProbe || cropProbe.canvas.height !== sh) {
+    const canvas = new OffscreenCanvas(sw, sh)
+    const ctx = canvas.getContext('2d', { willReadFrequently: true })
+    if (!ctx) return null
+    cropProbe = { canvas, ctx }
+  }
+  try {
+    cropProbe.ctx.drawImage(vf, 0, 0, sw, sh)
+    const c = detectLetterbox(cropProbe.ctx.getImageData(0, 0, sw, sh).data, sw, sh, true)
+    if (!c) return null
+    return { left: Math.round(c.left * w / sw), top: Math.round(c.top * h / sh),
+      right: Math.round(c.right * w / sw), bottom: Math.round(c.bottom * h / sh), full: c.full }
+  } catch { return null }
+}
+
+function trackLetterbox (c, w, h) {
+  if (!c) return
+  const p = streamCropCandidate
+  const tolerance = Math.max(2, Math.round(h / 100))
+  const same = p && Math.abs(p.left - c.left) <= tolerance && Math.abs(p.top - c.top) <= tolerance &&
+    Math.abs(p.right - c.right) <= tolerance && Math.abs(p.bottom - c.bottom) <= tolerance
+  streamCropCandidate = c
+  streamCropSame = same ? streamCropSame + 1 : 1
+  if (streamCropSame < 3) return
+  if (c.full ? streamCrop !== null : streamCrop === null ||
+    Math.abs(streamCrop.top - c.top) > tolerance || Math.abs(streamCrop.bottom - c.bottom) > tolerance) {
+    streamCrop = c.full ? null : c
+    self.postMessage({ type: 'videoCrop', seq: activeSeq, full: c.full, ...c, w, h })
+  }
 }
 
 function applyCrop (r, c) {
@@ -390,22 +420,21 @@ function drawOnWorkerGl (item) {
     gl.uniform4f(r.cropLoc, 0, 0, 1, 1)
   }
   const u8 = new Uint8Array(item.ab, 0, item.len)
-  if (item.yuv && !r.cropDone) {
-    r.cropTries++
+  if (item.yuv && ++r.cropTries % 4 === 1) {
     const c = detectLetterbox(u8, item.w, item.h)
-    if (c && c.full) {
-      r.cropDone = true
-    } else if (c) {
-      // Three bright frames must agree before cropping: a dark scene with black sky rows must not
-      // be mistaken for a letterbox, and the real bars repeat identically.
-      const p = r.cropCandidate
-      const same = p && Math.abs(p.left - c.left) <= 2 && Math.abs(p.top - c.top) <= 2 &&
-        Math.abs(p.right - c.right) <= 2 && Math.abs(p.bottom - c.bottom) <= 2
+    const p = r.cropCandidate
+    const same = c && p && Math.abs(p.left - c.left) <= 2 && Math.abs(p.top - c.top) <= 2 &&
+      Math.abs(p.right - c.right) <= 2 && Math.abs(p.bottom - c.bottom) <= 2
+    if (c) {
       r.cropCandidate = c
-      r.cropSame = same ? (r.cropSame || 1) + 1 : 1
-      if (r.cropSame >= 3) {
-        applyCrop(r, c)
-        r.cropDone = true
+      r.cropSame = same ? r.cropSame + 1 : 1
+      if (r.cropSame >= 3 && (c.full ? r.cropPx : !r.cropPx || Math.abs(r.cropPx.top - c.top) > 2 || Math.abs(r.cropPx.bottom - c.bottom) > 2)) {
+        if (c.full) {
+          r.crop = [0, 0, 1, 1]; r.cropPx = null
+          r.canvas.width = r.w; r.canvas.height = r.h
+          gl.viewport(0, 0, r.w, r.h)
+          gl.uniform4f(r.cropLoc, 0, 0, 1, 1)
+        } else applyCrop(r, c)
       }
     }
   }
@@ -612,6 +641,9 @@ function openWebCodecsInstance (seq, minPts) {
         wcInFlight++
         const w = vf.displayWidth || vf.codedWidth || 0
         const h = vf.displayHeight || vf.codedHeight || 0
+        if (++streamCropFrames % 4 === 1 && w > 0 && h > 0) {
+          trackLetterbox(sampleVideoFrame(vf, w, h), w, h)
+        }
         self.postMessage({ type: 'videoFrame', seq, pts, w, h, hwFrame: vf }, [vf])
         feedWebCodecs()
       },
@@ -773,22 +805,8 @@ function pump () {
       lastVideoPts = pts
       queuedVideoSec += step
       const { ab, len } = copyPooledBuf(freeVideoPool)
-      if (!offRenderer && code === 7 && !streamCropDone) {
-        const c = detectLetterbox(new Uint8Array(ab, 0, len), w, h)
-        if (c && c.full) {
-          streamCropDone = true
-          self.postMessage({ type: 'videoCrop', full: true, w, h })
-        } else if (c) {
-          const p = streamCropCandidate
-          const same = p && Math.abs(p.left - c.left) <= 2 && Math.abs(p.top - c.top) <= 2 &&
-            Math.abs(p.right - c.right) <= 2 && Math.abs(p.bottom - c.bottom) <= 2
-          streamCropCandidate = c
-          streamCropSame = same ? streamCropSame + 1 : 1
-          if (streamCropSame >= 3) {
-            streamCropDone = true
-            self.postMessage({ type: 'videoCrop', full: false, left: c.left, top: c.top, right: c.right, bottom: c.bottom, w, h })
-          }
-        }
+      if (!offRenderer && code === 7 && ++streamCropFrames % 4 === 1) {
+        trackLetterbox(detectLetterbox(new Uint8Array(ab, 0, len), w, h), w, h)
       }
       if (offRenderer) {
         renderQueue.push({ pts, step, w, h, yuv: code === 7, ab, len })
@@ -861,7 +879,7 @@ async function handleCmd (msg) {
     activeSeq = msg.seq || 1
     streamUrl = msg.streamUrl
     await ensureWasm(msg.wasmUrl)
-    probeStream(streamUrl)
+    await probeStream(streamUrl)
     const extBytes = enc.encode(msg.ext || '')
     let ptr = 0
     if (extBytes.length > 0) {
@@ -901,9 +919,10 @@ async function handleCmd (msg) {
     clockMedia = startAt
     clockWallMs = nowWall()
     clockPlaying = false
-    streamCropDone = false
+    streamCrop = null
     streamCropCandidate = null
     streamCropSame = 0
+    streamCropFrames = 0
     queuedVideoSec = 0
     queuedAudioSec = 0
     lastCreditAt = lastDrawAt = nowWall()
@@ -941,9 +960,10 @@ async function handleCmd (msg) {
     clockMedia = target
     clockWallMs = nowWall()
     clockPlaying = false
-    streamCropDone = false
+    streamCrop = null
     streamCropCandidate = null
     streamCropSame = 0
+    streamCropFrames = 0
     queuedVideoSec = 0
     queuedAudioSec = 0
     lastCreditAt = lastDrawAt = nowWall()

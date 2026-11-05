@@ -75,10 +75,24 @@ class AppModel(private val app: Application) {
             error.value = "Subscriber pass needed: paste this channel's peartube://access/… pass in the search bar."
             return
         }
-        val receiver = cast.value.session?.receiverId ?: selectedCastReceiver.value?.id
-        val start = watchHistory.value[entry.key]?.takeIf { it.partial }?.positionMs ?: 0L
-        if (receiver != null) castToReceiver(receiver, entry.key, "auto", start)
-        else screen.value = Screen.Play(entry)
+        scope.launch {
+            val current = runCatching {
+                if (entry.sourceKind == "channel" && entry.source.isNotEmpty()) worker.focusSource(entry.source)
+                val options = worker.search(entry.id)
+                options.firstOrNull { it.sha256 == entry.sha256 && it.source == entry.source }
+                    ?: options.firstOrNull { it.sha256 == entry.sha256 }
+                    ?: options.firstOrNull()
+            }.getOrNull() ?: entry
+            if (current.key != entry.key) {
+                entries.value = entries.value.map {
+                    if (it.id == current.id && it.sha256 == current.sha256) current else it
+                }
+            }
+            val receiver = cast.value.session?.receiverId ?: selectedCastReceiver.value?.id
+            val start = watchHistory.value[current.key]?.takeIf { it.partial }?.positionMs ?: 0L
+            if (receiver != null) castToReceiver(receiver, current.key, "auto", start)
+            else screen.value = Screen.Play(current)
+        }
     }
 
     fun openCastSheet() {
@@ -192,7 +206,25 @@ class AppModel(private val app: Application) {
         starts.trySend(next)
     }
 
-    fun shouldKeepWorkerAwake(): Boolean = cast.value.session != null || downloads.value.isNotEmpty()
+    // A followed channel keeps catching up after the app leaves the screen: the worklet and its LAN
+    // sockets stay up for a bounded window, so the library is not frozen at whatever it held when the
+    // phone went down. Past the window it sleeps exactly as before.
+    private var backgroundSyncUntil = 0L
+    private val backgroundSyncWindowMs = 2 * 60_000L
+
+    fun onBackground() {
+        if (!settings.value.hasSources) return
+        backgroundSyncUntil = System.currentTimeMillis() + backgroundSyncWindowMs
+        scope.launch {
+            kotlinx.coroutines.delay(backgroundSyncWindowMs + 1_000L)
+            if (!inForeground && System.currentTimeMillis() >= backgroundSyncUntil && !shouldKeepWorkerAwake()) {
+                worker.suspend()
+            }
+        }
+    }
+
+    fun shouldKeepWorkerAwake(): Boolean =
+        cast.value.session != null || downloads.value.isNotEmpty() || System.currentTimeMillis() < backgroundSyncUntil
 
     fun openUriOrKey(raw: String) {
         val trimmed = raw.trim()
@@ -244,6 +276,15 @@ class AppModel(private val app: Application) {
     fun refreshCast() {
         scope.launch {
             runCatching { worker.castStatus() }.onSuccess { cast.value = it }.onFailure { error.value = it.message }
+        }
+    }
+
+    fun focusSource(key: String) {
+        scope.launch {
+            runCatching {
+                worker.focusSource(key)
+                refresh()
+            }
         }
     }
 

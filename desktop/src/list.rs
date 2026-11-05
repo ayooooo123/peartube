@@ -343,7 +343,16 @@ impl PearTube {
                                 self.filter_pill("flt-saved", "On Device", LibraryFilter::OnDevice, cx),
                             ];
                             if sources.len() > 1 {
-                                for s in &sources {
+                                let selected_src = match &self.filter {
+                                    LibraryFilter::Source(k) => Some(k.as_str()),
+                                    _ => None,
+                                };
+                                let cap = 12usize;
+                                let mut shown_selected = false;
+                                for s in sources.iter().take(cap) {
+                                    if selected_src == Some(s.key.as_str()) {
+                                        shown_selected = true;
+                                    }
                                     let name = if !s.alias.is_empty() {
                                         s.alias.clone()
                                     } else if s.primary {
@@ -352,6 +361,35 @@ impl PearTube {
                                         format!("{}…", &s.key[..6.min(s.key.len())])
                                     };
                                     pills.push(self.filter_pill(&format!("flt-src-{}", s.key), &name, LibraryFilter::Source(s.key.clone()), cx));
+                                }
+                                if !shown_selected
+                                    && let Some(sel) = selected_src
+                                    && let Some(s) = sources.iter().skip(cap).find(|s| s.key == sel)
+                                {
+                                    let name = if !s.alias.is_empty() { s.alias.clone() } else { format!("{}…", &s.key[..6.min(s.key.len())]) };
+                                    pills.push(self.filter_pill(&format!("flt-src-{}", s.key), &name, LibraryFilter::Source(s.key.clone()), cx));
+                                }
+                                if sources.len() > cap {
+                                    let extra = sources.len() - cap;
+                                    pills.push(
+                                        div()
+                                            .id("flt-src-more")
+                                            .px_3()
+                                            .py_1()
+                                            .rounded(px(99.))
+                                            .bg(rgb(CARD))
+                                            .border_1()
+                                            .border_color(rgb(LINE))
+                                            .text_xs()
+                                            .text_color(rgb(DIM))
+                                            .cursor_pointer()
+                                            .on_click(cx.listener(|this, _, _, cx| {
+                                                this.hood_open = !this.hood_open;
+                                                cx.notify();
+                                            }))
+                                            .child(format!("+{extra} channels"))
+                                            .into_any_element(),
+                                    );
                                 }
                             }
                             h_flex().gap_1p5().flex_wrap().children(pills)
@@ -381,15 +419,46 @@ impl PearTube {
                         .when(catalog.is_empty(), |this| {
                             this.child(div().py_16().text_center().text_color(rgb(DIM)).child(empty_msg))
                         })
-                        .children(catalog.into_iter().map(|(_, item)| match item {
-                            CatalogItem::Movie(entry, alt_count) => self.render_movie_card(entry, alt_count, cx).into_any_element(),
-                            CatalogItem::Series { group_key, title, episodes } => self.render_series_card(group_key, title, episodes, !query.is_empty(), cx).into_any_element(),
-                        })),
+                        .children({
+                            let total_titles = catalog.len();
+                            let limit = self.visible_limit.max(80);
+                            let mut cards: Vec<_> = catalog
+                                .into_iter()
+                                .take(limit)
+                                .map(|(_, item)| match item {
+                                    CatalogItem::Movie(entry, alt_count) => self.render_movie_card(entry, alt_count, cx).into_any_element(),
+                                    CatalogItem::Series { group_key, title, episodes } => {
+                                        self.render_series_card(group_key, title, episodes, !query.is_empty(), cx).into_any_element()
+                                    }
+                                })
+                                .collect();
+                            if total_titles > limit {
+                                let rem = total_titles - limit;
+                                cards.push(
+                                    div()
+                                        .pt_2()
+                                        .flex()
+                                        .justify_center()
+                                        .child(
+                                            Button::new("catalog-show-more")
+                                                .ghost()
+                                                .small()
+                                                .label(format!("Show more ({rem} remaining)"))
+                                                .on_click(cx.listener(|this, _, _, cx| {
+                                                    this.visible_limit += 80;
+                                                    cx.notify();
+                                                })),
+                                        )
+                                        .into_any_element(),
+                                );
+                            }
+                            cards
+                        }),
                 ),
             )
     }
 
-    fn filter_pill(&self, id: &str, label: &str, target: LibraryFilter, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+    fn filter_pill(&self, id: &str, label: &str, target: LibraryFilter, cx: &mut Context<Self>) -> AnyElement {
         let active = self.filter == target;
         let bg_col = if active { rgb(BRAND) } else { rgb(CARD) };
         let txt_col = if active { rgb(0xffffff) } else { rgb(DIM) };
@@ -407,11 +476,9 @@ impl PearTube {
             .text_color(txt_col)
             .cursor_pointer()
             .hover(|s| if active { s } else { s.text_color(rgb(INK)) })
-            .on_click(cx.listener(move |this, _, _, cx| {
-                this.filter = target.clone();
-                cx.notify();
-            }))
+            .on_click(cx.listener(move |this, _, _, cx| this.select_filter(target.clone(), cx)))
             .child(label.to_string())
+            .into_any_element()
     }
 
     /// The one thing you were watching, at the size it deserves.
@@ -1126,12 +1193,14 @@ impl PearTube {
                             v_flex()
                                 .gap_2()
                                 .when(!self.settings.sources.is_empty(), |this| {
+                                    let total_src = self.settings.sources.len();
                                     let active: Vec<_> = self
                                         .settings
                                         .sources
                                         .iter()
+                                        .take(48)
                                         .map(|s| {
-                                            let label_txt = if s.alias.is_empty() { format!("{}…", &s.key[..8]) } else { s.alias.clone() };
+                                            let label_txt = if s.alias.is_empty() { format!("{}…", &s.key[..8.min(s.key.len())]) } else { s.alias.clone() };
                                             let rm_key = s.key.clone();
                                             Button::new(SharedString::from(format!("hood-rm-{}", s.key)))
                                                 .ghost()
@@ -1141,7 +1210,11 @@ impl PearTube {
                                                 .on_click(cx.listener(move |this, _, _, cx| this.remove_subscribed_source(rm_key.clone(), cx)))
                                         })
                                         .collect();
-                                    this.child(h_flex().gap_1p5().flex_wrap().children(active))
+                                    let mut row = v_flex().gap_1().child(h_flex().gap_1p5().flex_wrap().children(active));
+                                    if total_src > 48 {
+                                        row = row.child(div().text_xs().text_color(rgb(DIM)).child(format!("Showing 48 of {total_src} subscribed channels")));
+                                    }
+                                    this.child(row)
                                 })
                                 .when(!discovered.is_empty(), |this| {
                                     let disc_btns: Vec<_> = discovered

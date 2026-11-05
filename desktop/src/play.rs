@@ -19,7 +19,7 @@ use gpui_kit::*;
 use oxideav_core::RuntimeContext;
 use peartube::soundfont;
 use peartube::worker::Entry;
-use player::{Event, Player, PlayerOptions, State, Track, TrackKind};
+use player::{AudioOutputMode, Event, FrameRateMode, Player, PlayerOptions, State, Track, TrackKind};
 
 use crate::list::{format_bytes, label, origin, parse_season_episode, split_title_year};
 use crate::theme::{ACCENT, BG, BRAND, CARD, CARD_ELEVATED, DANGER, DIM, INK, LINE};
@@ -60,10 +60,13 @@ pub struct PlayScreen {
     info_open: bool,
     cast_open: bool,
     pending_seek_ms: Option<u64>,
+    audio_mode: AudioOutputMode,
+    frame_rate_mode: FrameRateMode,
+    prefer_fel_12bit: bool,
     last_progress_saved: Instant,
     player: Option<Arc<Player>>,
     video: Option<VideoView>,
-    open_error: Option<SharedString>,
+    open_error: Option<String>,
     state: State,
     seek: Option<(Entity<SliderState>, Subscription)>,
     dragging: Option<f32>,
@@ -130,7 +133,14 @@ impl PlayScreen {
         let (tx, mut events) = unbounded::<Event>();
         let (player, video, open_error) = match VideoView::open(window) {
             Ok(video) => {
-                let options = PlayerOptions { soundfont: soundfont::path(), ..PlayerOptions::default() };
+                let options = PlayerOptions {
+                    soundfont: soundfont::path(),
+                    audio_mode: AudioOutputMode::Auto,
+                    frame_rate_mode: FrameRateMode::Seamless,
+                    prefer_fel_12bit: false,
+                    steep_dsd_filter: true,
+                    ..PlayerOptions::default()
+                };
                 let player = Player::open(&entry.stream_url, video.backend(), CODECS.clone(), options, move |event| {
                     let _ = tx.unbounded_send(event);
                 });
@@ -162,6 +172,9 @@ impl PlayScreen {
             info_open: false,
             cast_open: false,
             pending_seek_ms: (start_pos_ms > 0).then_some(start_pos_ms),
+            audio_mode: AudioOutputMode::Auto,
+            frame_rate_mode: FrameRateMode::Seamless,
+            prefer_fel_12bit: false,
             last_progress_saved: Instant::now(),
             player,
             video,
@@ -215,6 +228,43 @@ impl PlayScreen {
         if shown || prev != (self.has_picture(), self.state.buffering, self.state.error.is_some(), shown) {
             cx.notify();
         }
+    }
+
+    fn reopen_with_quality(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(video) = &self.video else { return };
+        let pos_ms = self.current_position_ms();
+        if let Some(old) = self.player.take() {
+            std::thread::spawn(move || drop(old));
+        }
+        let (tx, mut events) = unbounded::<Event>();
+        let options = PlayerOptions {
+            soundfont: soundfont::path(),
+            audio_mode: self.audio_mode,
+            frame_rate_mode: self.frame_rate_mode,
+            prefer_fel_12bit: self.prefer_fel_12bit,
+            steep_dsd_filter: true,
+            ..PlayerOptions::default()
+        };
+        let player = Player::open(&self.entry.stream_url, video.backend(), CODECS.clone(), options, move |event| {
+            let _ = tx.unbounded_send(event);
+        });
+        self.player = Some(Arc::new(player));
+        self.pending_seek_ms = (pos_ms > 0).then_some(pos_ms);
+        self._tick = cx.spawn_in(window, async move |this, cx| {
+            loop {
+                let beat = cx.background_executor().timer(Duration::from_millis(250));
+                let ended = match select(events.next(), beat).await {
+                    Either::Left((None, _)) => return,
+                    Either::Left((Some(event), _)) => matches!(event, Event::Ended),
+                    Either::Right(_) => false,
+                };
+                if this.update_in(cx, |this, window, cx| this.tick(ended, window, cx)).is_err() {
+                    return;
+                }
+            }
+        });
+        self.controls_until = Instant::now() + SHOW_FOR;
+        cx.notify();
     }
 
     fn sync_seek(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -426,12 +476,18 @@ impl PlayScreen {
         let a_codec_badge = active_audio.map(|t| pretty_codec(&t.codec));
         let dec_badge = self.state.video_decoder.as_deref().map(pretty_decoder);
 
+        let color_suffix = match (self.state.video_bit_depth, self.state.video_chroma.as_deref()) {
+            (Some(b), Some(c)) => format!(" · {b}-bit {c}"),
+            (Some(b), None) => format!(" · {b}-bit"),
+            _ => String::new(),
+        };
         let picture_spec = match (self.state.video_size, &v_codec_badge) {
-            (Some((w, h)), Some(vc)) => format!("{w} × {h} ({}) · {vc}", aspect_label(w, h)),
-            (Some((w, h)), None) => format!("{w} × {h} ({})", aspect_label(w, h)),
-            (None, Some(vc)) => vc.clone(),
+            (Some((w, h)), Some(vc)) => format!("{w} × {h} ({}) · {vc}{color_suffix}", aspect_label(w, h)),
+            (Some((w, h)), None) => format!("{w} × {h} ({}){color_suffix}", aspect_label(w, h)),
+            (None, Some(vc)) => format!("{vc}{color_suffix}"),
             (None, None) => "Probing stream…".into(),
         };
+        let dynamic_spec = self.state.video_dynamic_range.clone().unwrap_or_else(|| "SDR".into());
         let decoder_spec = match &self.state.video_decoder {
             Some(dec) => format!("{dec} · {} dropped", self.state.dropped_frames),
             None => format!("{} dropped frames", self.state.dropped_frames),
@@ -446,10 +502,10 @@ impl PlayScreen {
         let audio_spec = match active_audio {
             Some(a) => {
                 let lang = a.language.as_deref().or(a.title.as_deref()).unwrap_or("Default").to_uppercase();
-                let extra = if audio_tracks.len() > 1 { format!(" ({} tracks)", audio_tracks.len()) } else { String::new() };
-                format!("{lang} · {}{extra}", pretty_codec(&a.codec))
+                let out_txt = self.state.audio_output.as_deref().map(|o| format!(" · {o}")).unwrap_or_default();
+                format!("{lang} · {}{out_txt}", pretty_codec(&a.codec))
             }
-            None => "None".into(),
+            None => self.state.audio_output.clone().unwrap_or_else(|| "None".into()),
         };
         let sub_spec = if sub_tracks.is_empty() {
             "None".into()
@@ -473,6 +529,11 @@ impl PlayScreen {
         if let Some(r) = res_badge {
             badges.push((r.into(), BRAND));
         }
+        if let Some(dr) = &self.state.video_dynamic_range {
+            if dr != "SDR" {
+                badges.push((dr.clone(), ACCENT));
+            }
+        }
         if let Some(vc) = v_codec_badge {
             badges.push((vc, INK));
         }
@@ -482,7 +543,6 @@ impl PlayScreen {
         if let Some((dlbl, hw)) = dec_badge {
             badges.push((dlbl, if hw { ACCENT } else { DIM }));
         }
-
         let cur_pos_ms = self.state.position.as_millis() as u64;
         let current_key = self.entry.key.clone();
         let current_id = self.entry.id.clone();
@@ -560,12 +620,98 @@ impl PlayScreen {
                     .border_1()
                     .border_color(rgb(LINE))
                     .child(spec_row("Video", picture_spec))
+                    .child(spec_row("Dynamic Range", dynamic_spec))
                     .child(spec_row("Decoder", decoder_spec))
                     .child(spec_row("Bitrate", bitrate_spec))
                     .child(spec_row("Audio", audio_spec))
                     .child(spec_row("Subtitles", sub_spec))
                     .child(spec_row("Source", storage_spec)),
             )
+            .child({
+                let cur_am = self.audio_mode;
+                let cur_fr = self.frame_rate_mode;
+                let cur_fel = self.prefer_fel_12bit;
+                let am_chips: Vec<_> = [
+                    (AudioOutputMode::Auto, "Auto"),
+                    (AudioOutputMode::BitPerfectPcm, "Bit-Perfect"),
+                    (AudioOutputMode::Passthrough, "Passthrough"),
+                    (AudioOutputMode::Stereo, "Stereo"),
+                ]
+                .into_iter()
+                .map(|(m, lbl)| {
+                    let btn = Button::new(SharedString::from(format!("am-{lbl}"))).small().label(lbl);
+                    let btn = if cur_am == m { btn.primary() } else { btn.ghost() };
+                    btn.on_click(cx.listener(move |this, _, window, cx| {
+                        if this.audio_mode != m {
+                            this.audio_mode = m;
+                            this.reopen_with_quality(window, cx);
+                        }
+                    }))
+                })
+                .collect();
+                let fr_chips: Vec<_> = [
+                    (FrameRateMode::Seamless, "VRR"),
+                    (FrameRateMode::Exact, "Exact 24p"),
+                    (FrameRateMode::Off, "Off"),
+                ]
+                .into_iter()
+                .map(|(m, lbl)| {
+                    let btn = Button::new(SharedString::from(format!("fr-{lbl}"))).small().label(lbl);
+                    let btn = if cur_fr == m { btn.primary() } else { btn.ghost() };
+                    btn.on_click(cx.listener(move |this, _, window, cx| {
+                        if this.frame_rate_mode != m {
+                            this.frame_rate_mode = m;
+                            this.reopen_with_quality(window, cx);
+                        }
+                    }))
+                })
+                .collect();
+                let fel_btn = {
+                    let b = Button::new("fel-12bit").small().label("DV P7 FEL 12-bit");
+                    let b = if cur_fel { b.primary() } else { b.ghost() };
+                    b.on_click(cx.listener(|this, _, window, cx| {
+                        this.prefer_fel_12bit = !this.prefer_fel_12bit;
+                        this.reopen_with_quality(window, cx);
+                    }))
+                };
+                v_flex()
+                    .gap_1p5()
+                    .child(div().text_xs().font_weight(FontWeight::BOLD).text_color(rgb(DIM)).child("LOSSLESS AUDIO & CADENCE"))
+                    .child(h_flex().gap_1p5().flex_wrap().children(am_chips))
+                    .child(h_flex().gap_1p5().flex_wrap().children(fr_chips).child(fel_btn))
+            })
+            .when(!self.state.chapters.is_empty(), |this| {
+                let pw = player_weak.clone();
+                let pos = self.state.position;
+                let ch_chips: Vec<_> = self
+                    .state
+                    .chapters
+                    .iter()
+                    .enumerate()
+                    .map(|(idx, ch)| {
+                        let start = ch.start;
+                        let active = pos >= ch.start && ch.end.is_none_or(|e| pos < e);
+                        let title = ch.title.clone().unwrap_or_else(|| format!("Chapter {}", idx + 1));
+                        let lbl = format!("{} · {}", clock(start), title);
+                        let p = pw.clone();
+                        let b = Button::new(SharedString::from(format!("chap-{idx}"))).small().label(lbl);
+                        let b = if active { b.primary() } else { b.ghost() };
+                        b.on_click(cx.listener(move |this, _, _, cx| {
+                            if let Some(pl) = p.as_ref().and_then(|w| w.upgrade()) {
+                                pl.seek(start);
+                                this.controls_until = Instant::now() + SHOW_FOR;
+                                cx.notify();
+                            }
+                        }))
+                    })
+                    .collect();
+                this.child(
+                    v_flex()
+                        .gap_1p5()
+                        .child(div().text_xs().font_weight(FontWeight::BOLD).text_color(rgb(DIM)).child("CHAPTERS"))
+                        .child(div().id("hud-chap-scroll").max_h(px(120.)).overflow_y_scrollbar().child(h_flex().gap_1p5().flex_wrap().children(ch_chips))),
+                )
+            })
             .when(audio_tracks.len() > 1, |this| {
                 let pw = player_weak.clone();
                 let active_a = self.state.audio;
@@ -917,14 +1063,22 @@ fn pretty_codec(raw: &str) -> String {
         "eac3" | "ec-3" => "Dolby E-AC-3".into(),
         "ac3" => "Dolby AC-3".into(),
         "truehd" => "Dolby TrueHD".into(),
-        "dts" | "dca" => "DTS".into(),
+        "mlp" => "Meridian Lossless".into(),
+        "dts" | "dca" => "DTS-HD / DTS".into(),
         "flac" => "FLAC Lossless".into(),
         "alac" => "ALAC Lossless".into(),
+        "wavpack" => "WavPack Lossless".into(),
+        "als" => "MPEG-4 ALS".into(),
+        "ape" => "Monkey's Audio".into(),
+        "tak" => "TAK Lossless".into(),
+        "tta" => "True Audio".into(),
+        "shorten" => "Shorten Lossless".into(),
+        "dsd_lsbf" | "dsd_msbf" | "dsd_lsbf_planar" | "dsd_msbf_planar" => "DSD SACD".into(),
         "aac" => "AAC".into(),
         "opus" => "Opus".into(),
         "vorbis" => "Vorbis".into(),
         "mp3" => "MP3".into(),
-        "pcm_s16le" | "pcm_s24le" | "pcm_f32le" | "pcm" => "Linear PCM".into(),
+        "pcm_s16le" | "pcm_s24le" | "pcm_s32le" | "pcm_f32le" | "pcm_f64le" | "pcm" => "Linear PCM".into(),
         "subrip" | "srt" => "SubRip".into(),
         "ass" | "ssa" => "ASS".into(),
         "hdmv_pgs_subtitle" | "pgs" => "PGS".into(),

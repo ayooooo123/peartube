@@ -27,7 +27,7 @@ use gpui_kit::*;
 use oxideav_core::RuntimeContext;
 use peartube::soundfont;
 use peartube::worker::{CastEntryMeta, Event as WorkerEvent, ReceiverCommand, ReceiverInfo, worker};
-use player::{Event, Player, PlayerOptions, State, Track, TrackKind};
+use player::{AudioOutputMode, Event, FrameRateMode, Player, PlayerOptions, State, Track, TrackKind};
 use serde_json::json;
 
 use crate::qr::qr_card;
@@ -228,7 +228,13 @@ impl DumbTvApp {
                 let (tx, mut events) = unbounded::<Event>();
                 match VideoView::open(window) {
                     Ok(video) => {
-                        let options = PlayerOptions { soundfont: soundfont::path(), ..PlayerOptions::default() };
+                        let options = PlayerOptions {
+                            soundfont: soundfont::path(),
+                            audio_mode: AudioOutputMode::Auto,
+                            frame_rate_mode: FrameRateMode::Exact,
+                            steep_dsd_filter: true,
+                            ..PlayerOptions::default()
+                        };
                         let player = Player::open(&url, video.backend(), CODECS.clone(), options, move |event| {
                             let _ = tx.unbounded_send(event);
                         });
@@ -356,6 +362,18 @@ impl DumbTvApp {
                 })
             })
             .collect();
+        let chapters: Vec<_> = st
+            .chapters
+            .iter()
+            .enumerate()
+            .map(|(i, c)| {
+                json!({
+                    "title": c.title.clone().unwrap_or_else(|| format!("Chapter {}", i + 1)),
+                    "startMs": c.start.as_millis() as u64,
+                    "endMs": c.end.map(|e| e.as_millis() as u64),
+                })
+            })
+            .collect();
         let payload = json!({
             "positionMs": st.position.as_millis() as u64,
             "durationMs": st.duration.map(|d| d.as_millis() as u64),
@@ -364,9 +382,14 @@ impl DumbTvApp {
             "ended": false,
             "error": st.error,
             "tracks": tracks,
+            "chapters": chapters,
             "audio": st.audio.map(|s| s as i32).unwrap_or(-1),
             "subtitle": st.subtitle.map(|s| s as i32).unwrap_or(-1),
             "videoDecoder": st.video_decoder,
+            "videoDynamicRange": st.video_dynamic_range,
+            "videoBitDepth": st.video_bit_depth,
+            "videoChroma": st.video_chroma,
+            "audioOutput": st.audio_output,
             "droppedFrames": st.dropped_frames,
         });
         if let Ok(w) = worker() {
@@ -394,6 +417,48 @@ impl DumbTvApp {
                 menu.item(PopupMenuItem::new(lbl.clone()).checked(*selected).on_click(move |_, _, cx| {
                     if let Some(player) = player.upgrade() {
                         if kind == TrackKind::Audio { player.select_audio(stream) } else { player.select_subtitle(stream) }
+                    }
+                    let _ = this_click.update(cx, |this, cx| {
+                        this.report_now(cx);
+                        cx.notify();
+                    });
+                }))
+            })
+        });
+        Some(menu.anchor(Anchor::BottomRight).on_open_change(move |open, _, cx| {
+            let _ = this_open.update(cx, |this, cx| {
+                this.menu_open = *open;
+                this.hud_until = Instant::now() + SHOW_HUD;
+                cx.notify();
+            });
+        }))
+    }
+
+    fn chapters_menu(&self, button: Button, cx: &mut Context<Self>) -> Option<impl IntoElement + use<>> {
+        if self.state.chapters.is_empty() {
+            return None;
+        }
+        let player = Arc::downgrade(self.player.as_ref()?);
+        let pos = self.state.position;
+        let items: Vec<(String, Duration, bool)> = self
+            .state
+            .chapters
+            .iter()
+            .enumerate()
+            .map(|(idx, c)| {
+                let active = pos >= c.start && c.end.is_none_or(|e| pos < e);
+                let title = c.title.clone().unwrap_or_else(|| format!("Chapter {}", idx + 1));
+                (format!("{} · {title}", format_clock(c.start)), c.start, active)
+            })
+            .collect();
+        let this_click = cx.entity().downgrade();
+        let this_open = cx.entity().downgrade();
+        let menu = button.dropdown_menu(move |menu, _, _| {
+            items.iter().fold(menu, |menu, (lbl, start, active)| {
+                let (player, start, this_click) = (player.clone(), *start, this_click.clone());
+                menu.item(PopupMenuItem::new(lbl.clone()).checked(*active).on_click(move |_, _, cx| {
+                    if let Some(player) = player.upgrade() {
+                        player.seek(start);
                     }
                     let _ = this_click.update(cx, |this, cx| {
                         this.report_now(cx);
@@ -514,6 +579,20 @@ impl Render for DumbTvApp {
         let seek_slider = self.seek.as_ref().map(|(s, _)| s.clone());
         let audio_menu = self.track_menu(TrackKind::Audio, Button::new("tv-audio").ghost().small().label("Audio"), cx);
         let sub_menu = self.track_menu(TrackKind::Subtitle, Button::new("tv-subs").ghost().small().label("Subtitles"), cx);
+        let chap_menu = self.chapters_menu(Button::new("tv-chaps").ghost().small().label("Chapters"), cx);
+        let signal_line = {
+            let mut parts = Vec::new();
+            if let Some((w, h)) = self.state.video_size {
+                parts.push(format!("{w}×{h}"));
+            }
+            if let Some(dr) = &self.state.video_dynamic_range {
+                parts.push(dr.clone());
+            }
+            if let Some(ao) = &self.state.audio_output {
+                parts.push(ao.clone());
+            }
+            parts.join(" · ")
+        };
         let (placer, mover) = (cx.entity().downgrade(), cx.entity().downgrade());
 
         v_flex()
@@ -624,7 +703,14 @@ impl Render for DumbTvApp {
                                         .rounded(px(14.))
                                         .bg(hsla(0., 0., 0., 0.68))
                                         .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                                        .child(div().text_xl().font_weight(FontWeight::BOLD).child(title))
+                                        .child(
+                                            v_flex()
+                                                .gap_0p5()
+                                                .child(div().text_xl().font_weight(FontWeight::BOLD).child(title))
+                                                .when(!signal_line.is_empty(), |this| {
+                                                    this.child(div().text_xs().text_color(rgb(DIM)).child(signal_line))
+                                                }),
+                                        )
                                         .child(div().px_3().py_1().rounded(px(99.)).bg(hsla(142. / 360., 0.7, 0.4, 0.25)).text_xs().font_weight(FontWeight::BOLD).text_color(rgb(ACCENT)).child(badge)),
                                 )
                                 .child(
@@ -689,6 +775,7 @@ impl Render for DumbTvApp {
                                                     h_flex()
                                                         .items_center()
                                                         .gap_2()
+                                                        .when_some(chap_menu, |this, m| this.child(m))
                                                         .when_some(audio_menu, |this, m| this.child(m))
                                                         .when_some(sub_menu, |this, m| this.child(m))
                                                         .child(Button::new("tv-stop").ghost().small().label("Stop").on_click(cx.listener(|this, _, window, cx| {

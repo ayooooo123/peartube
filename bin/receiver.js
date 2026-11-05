@@ -69,7 +69,7 @@ function createMpvDriver (storageDir) {
       if (cmd.action === 'load') {
         stopMpv()
         const startSec = cmd.startPositionMs > 0 ? `--start=+${(cmd.startPositionMs / 1000).toFixed(2)}` : null
-        const mpvArgs = ['--fs', '--force-window=immediate', `--input-ipc-server=${sockPath}`, ...(startSec ? [startSec] : []), cmd.streamUrl]
+        const mpvArgs = ['--fs', '--force-window=immediate', '--audio-spdif=ac3,eac3,dts-hd,truehd', '--video-sync=display-resample', '--hdr-compute-peak=auto', '--target-colorspace-hint=yes', `--input-ipc-server=${sockPath}`, ...(startSec ? [startSec] : []), cmd.streamUrl]
         proc = spawn('mpv', mpvArgs, { stdio: 'ignore' })
         proc.on('error', err => ctx.updateState({ status: 'error', playing: false, buffering: false, error: `mpv failed: ${err.message}` }))
         proc.once('exit', () => {

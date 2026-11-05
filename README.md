@@ -44,6 +44,8 @@ and the pieces.
 - **Watch in the browser.** The Library is a poster grid (All / Movies / Shows / Videos) that
   lists each file once and plays MKV, AVI, MP4 and TS through `peartube-media` compiled to
   WebAssembly — DTS, AC-3 and TrueHD surround, PGS/ASS/SRT subtitles — or casts to a TV.
+  Browser playback waits for a cold peer's first Range slice (up to 30 s); simultaneous viewers
+  share downloaded blocks rather than requiring separate full-file copies.
 - **Add without guessing.** Paste a direct file URL or a video page (YouTube, Vimeo and the
   sites `ubit` supports). The relay parses the name or reads the page, offers Cinemeta
   suggestions, and announces a Stremio-shaped id (`imdb:tt…` or `imdb:tt…:s01e02`) only when
@@ -423,8 +425,36 @@ pieces while online. They never run the HTTP acquirer, and cached data can be cl
 app without removing subscriptions. On first launch, enter a relay's tracker key (`/v1/status`
 shows it); LAN discovery is on by default on fresh installs and follows the device's address.
 
+The relay's browser player uses the same full-screen cinema layout and 10-second seek
+controls as the Mac app; its Mini player button keeps the stream playing in a corner
+while you browse, with its own pause, seek, and Expand controls. Close ends playback.
+WebCodecs playback can trim persistent black rows baked into a movie's encoded frame;
+it never trims picture columns, and restores the full frame when the picture expands.
+Codec and browser support still determine whether playback uses WebCodecs, MSE, or
+software decoding. The browser's picture and soundtrack are not HDMI bitstream
+passthrough or the native apps' HDR output path.
+
 On the Mac, Space plays and pauses, ← and → skip 10 s, F toggles fullscreen and Esc leaves it.
 A click on the picture plays or pauses; a double click toggles fullscreen.
+
+The Mac player info drawer offers Auto, Bit-Perfect PCM, Passthrough and Stereo audio
+routing, seamless/Exact 24p/off display matching, an opt-in Dolby Vision Profile 7
+12-bit FEL software path, chapter jumps, and live decoder/output details. Changing
+a quality option reopens the current stream at its saved position. The Android
+phone defaults to Auto audio and seamless frame-rate matching; the Android TV and
+Mac receiver default to Auto audio (attempting supported passthrough) and exact
+matching. Their info
+overlays show the active dynamic range and audio output, not a promise that the
+connected display or AVR accepted every advertised mode. TV receivers expose
+chapter jumps alongside audio/subtitle selection.
+
+For local development without pushing a media commit, run
+`python3 sync-player.py --local` in this checkout, then build both Mac bundles with
+`sh desktop/bundle.sh` and `sh desktop/bundle.sh --receiver`, or the Android
+debug clients with `cd android && ./gradlew :app:assembleDebug :tv:assembleDebug`.
+The script rewrites the four app Cargo manifests to sibling `peartube-media`
+paths; run `python3 sync-player.py` only after that media HEAD has been pushed
+to restore pinned git revisions.
 
 MIDI playback needs your own SoundFont 2 (`.sf2`, up to 256 MiB), copied into private storage;
 no bank is bundled. Subtitles use platform fonts and fonts attached to the media.

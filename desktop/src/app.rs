@@ -83,6 +83,7 @@ pub struct PearTube {
     pub search: Entity<InputState>,
     pub bank: Bank,
     pub filter: LibraryFilter,
+    pub visible_limit: usize,
     pub expanded_series: HashSet<String>,
     pub selected_seasons: HashMap<String, u32>,
     pub hood_open: bool,
@@ -150,7 +151,10 @@ impl PearTube {
         let watch_history = load_watch_history();
         let search = cx.new(|cx| InputState::new(window, cx).placeholder("Find something to watch…"));
         let search_sub = cx.subscribe_in(&search, window, |this, state, event: &InputEvent, window, cx| match event {
-            InputEvent::Change => cx.notify(),
+            InputEvent::Change => {
+                this.visible_limit = 80;
+                cx.notify();
+            }
             InputEvent::PressEnter { .. } => {
                 let raw = state.read(cx).value().to_string();
                 if let Some((_, uri)) = detect_smart_action(&raw) {
@@ -177,6 +181,7 @@ impl PearTube {
             search,
             bank: Bank { selected: soundfont::path().is_some(), busy: false, error: None, task: None },
             filter: LibraryFilter::All,
+            visible_limit: 80,
             expanded_series: HashSet::new(),
             selected_seasons: HashMap::new(),
             hood_open: false,
@@ -261,6 +266,22 @@ impl PearTube {
             }
         })
         .detach();
+    }
+
+    pub fn select_filter(&mut self, target: LibraryFilter, cx: &mut Context<Self>) {
+        if let LibraryFilter::Source(key) = &target {
+            let k = key.clone();
+            cx.spawn(async move |this, cx| {
+                if let Ok(w) = worker() {
+                    let _ = w.focus_source(&k).await;
+                    refresh(&this, cx).await;
+                }
+            })
+            .detach();
+        }
+        self.filter = target;
+        self.visible_limit = 80;
+        cx.notify();
     }
 
     pub fn open_uri_or_key(&mut self, raw: String, cx: &mut Context<Self>) {

@@ -163,7 +163,7 @@ async function run () {
     }
   }
 
-  // Stage 2: Full PearTube publisher + worklet viewer, encrypted access pass, 80-way scrub storm (/v1/blob + ?download + direct), and mid-stream clearCache wire-inflight race.
+  // Stage 2: Full PearTube publisher + worklet viewer, encrypted access pass, six concurrent viewers, 80-way scrub storm, and mid-stream clearCache race.
   {
     const d1 = join(os.tmpdir(), `pt-stress-n1-${Date.now()}-${Math.random().toString(16).slice(2)}`)
     const d2 = join(os.tmpdir(), `pt-stress-n2-${Date.now()}-${Math.random().toString(16).slice(2)}`)
@@ -224,8 +224,27 @@ async function run () {
       eq(dec.body.length, 65536, 'unlocked private slice length')
       check(dec.body.every(b => b === 0x77), 'unlocked private slice decrypted cleanly')
 
-      // 80-way jittered scrub storm across direct blobServer, /v1/blob proxy, and /v1/blob?download=Movie.
+      // Six overlapping browser-style viewers share one cold P2P source, each seeking through 2 MiB Range slices.
       const proxyUrl = `http://127.0.0.1:${apiPort}/v1/blob${new URL(pubEntry.streamUrl).search}`
+      let peakStreams = 0
+      const sample = setInterval(() => { peakStreams = Math.max(peakStreams, sub.blobServer.activeStreams) }, 5)
+      try {
+        await Promise.all(Array.from({ length: 6 }, async (_, viewer) => {
+          for (let part = 0; part < 4; part++) {
+            const start = ((viewer + part) % 8) * 2 * 1024 * 1024
+            const url = viewer % 2 ? pubEntry.streamUrl : proxyUrl
+            const got = await getRange(url, `bytes=${start}-${start + 2 * 1024 * 1024 - 1}`)
+            eq(got.status, 206, `viewer ${viewer} part ${part} Range status`)
+            eq(sha256(got.body), sha256(video.subarray(start, start + 2 * 1024 * 1024)), `viewer ${viewer} part ${part} bytes`)
+          }
+        }))
+      } finally {
+        clearInterval(sample)
+      }
+      check(peakStreams >= 2, `overlapping playback did not overlap: ${peakStreams}`)
+      eq(sub.blobServer.activeStreams, 0, 'all six playback sessions released their streams')
+      report.stages.concurrentPlayback = { ok: true, viewers: 6, rangesPerViewer: 4, peakStreams }
+
       const storm = []
       for (let i = 0; i < 80; i++) {
         const u = i % 3 === 0 ? pubEntry.streamUrl : (i % 3 === 1 ? proxyUrl : `${proxyUrl}&download=Movie`)

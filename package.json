@@ -81,7 +81,7 @@
     "start": "./node_modules/.bin/bare bin/relay.js",
     "receiver": "node bin/receiver.js",
     "test": "node --test --test-force-exit test/*.test.js",
-    "test:desktop": "node --test test/desktop.e2e.js",
+    "test:desktop": "node --test --test-force-exit test/desktop.e2e.js",
     "test:cast": "node --test test/cast.e2e.js",
     "test:web": "node --test test/web-player.e2e.js",
     "app": "sh desktop/bundle.sh --open"

@@ -615,6 +615,10 @@ impl Worker {
         self.call("removeSource", json!({ "key": key })).await.map(drop)
     }
 
+    pub async fn focus_source(&self, key: &str) -> Result<(), String> {
+        self.call("focusSource", json!({ "key": key })).await.map(drop)
+    }
+
     pub async fn open_uri(&self, uri: &str) -> Result<OpenUriResult, String> {
         let storage = STORE_DIR.join("cast").to_string_lossy().to_string();
         parse(self.call("openUri", json!({ "uri": uri, "storage": storage })).await?)

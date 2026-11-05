@@ -218,28 +218,54 @@ export const page = `<!doctype html>
     #playerModal .p-head { flex-basis: 100%; }
     #playerModal .p-title { white-space: normal; }
   }
-  /* The player is always dark chrome, in both themes: video wants black around it. */
+  /* The browser cinema HUD borrows the Mac player's over-picture chrome and quiet violet controls. */
   #playerModal { --p-bg:#08090c; --p-surface:#101218; --p-raised:#171a22; --p-line:#232733; --p-text:#f2f4f8; --p-dim:#98a0b3;
-    position: fixed; inset: 0; background: var(--p-bg); color: var(--p-text); z-index: 100; display: none; flex-direction: column; }
+    position: fixed; inset: 0; background: var(--p-bg); color: var(--p-text); z-index: 100; display: none; flex-direction: column; overflow: hidden; }
   #playerModal.open { display: flex; }
-  #playerModal .btn { background: var(--p-raised); border-color: var(--p-line); color: var(--p-text); min-height: 36px; padding: 0 12px; }
-  #playerModal .btn:hover:not(:disabled) { border-color: var(--p-dim); }
+  #playerModal .btn { background: rgba(23,26,34,.72); border-color: rgba(255,255,255,.12); color: var(--p-text); min-height: 36px; padding: 0 12px; backdrop-filter: blur(12px); }
+  #playerModal .btn:hover:not(:disabled) { border-color: var(--brand); background: rgba(145,71,255,.22); }
   #playerModal .btn.primary { background: var(--brand); border-color: var(--brand); color: var(--on-brand); }
   #playerModal .btn.primary:hover:not(:disabled) { background: var(--brand-hover); border-color: var(--brand-hover); }
-  #playerModal select { background: var(--p-raised); color: var(--p-text); border-color: var(--p-line); min-height: 36px; width: auto; }
-  .p-top { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 10px 16px; background: color-mix(in srgb, var(--p-surface) 92%, transparent); border-bottom: 1px solid var(--p-line); }
+  #playerModal select { background: rgba(23,26,34,.85); color: var(--p-text); border-color: rgba(255,255,255,.12); min-height: 36px; width: auto; backdrop-filter: blur(12px); }
+  .p-top { position: absolute; z-index: 2; top: 0; left: 0; right: 0; display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 16px 22px 32px; background: linear-gradient(180deg,rgba(0,0,0,.82),transparent); transition: opacity .2s; }
   .p-head { min-width: 0; flex: 1; }
-  .p-title { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .p-title { font-size: 18px; font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .p-badge { font-size: 12px; color: var(--p-dim); font-variant-numeric: tabular-nums; }
   .p-stage { position: relative; flex: 1; min-height: 0; display: flex; align-items: center; justify-content: center; background: #000; overflow: hidden; cursor: pointer; }
   #pVideo, #pGlCanvas, #pCanvas { max-width: 100%; max-height: 100%; width: 100%; height: 100%; object-fit: contain; display: none; }
   #pSubCanvas { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; pointer-events: none; }
-  #pSubText { position: absolute; left: 8%; right: 8%; bottom: 28px; text-align: center; font-size: clamp(16px, 2.2vw, 28px); font-weight: 600; color: var(--on-media); text-shadow: 0 2px 6px #000, 0 0 3px #000, 1px 1px 0 #000, -1px -1px 0 #000; white-space: pre-wrap; pointer-events: none; }
-  #pStatus { position: absolute; padding: 8px 14px; border-radius: var(--r-control); background: color-mix(in srgb, var(--p-surface) 88%, transparent); border: 1px solid var(--p-line); font-size: 13px; color: var(--p-text); pointer-events: none; display: none; }
-  .p-bar { padding: 10px 16px 14px; background: color-mix(in srgb, var(--p-surface) 94%, transparent); border-top: 1px solid var(--p-line); display: flex; flex-direction: column; gap: 8px; }
+  #pSubText { position: absolute; left: 8%; right: 8%; bottom: 13%; text-align: center; font-size: clamp(16px, 2.2vw, 28px); font-weight: 600; color: var(--on-media); text-shadow: 0 2px 6px #000, 0 0 3px #000, 1px 1px 0 #000, -1px -1px 0 #000; white-space: pre-wrap; pointer-events: none; }
+  #pStatus { position: absolute; padding: 8px 14px; border-radius: var(--r-control); background: color-mix(in srgb, var(--p-surface) 88%, transparent); border: 1px solid var(--p-line); font-size: 13px; color: var(--p-text); pointer-events: none; }
+  .p-bar { position: absolute; z-index: 2; bottom: 0; left: 0; right: 0; padding: 32px 20px 16px; background: linear-gradient(0deg,rgba(0,0,0,.88),rgba(0,0,0,.60) 52%,transparent); transition: opacity .2s; }
   .p-bar .row { justify-content: space-between; }
+  .p-bar .row .row { justify-content: flex-start; }
   #pSeek { width: 100%; accent-color: var(--brand); padding: 0; cursor: pointer; }
   .clock { font-variant-numeric: tabular-nums; font-size: 12.5px; color: var(--p-dim); min-width: 96px; }
+  #playerModal.chrome-hidden .p-top, #playerModal.chrome-hidden .p-bar { opacity: 0; pointer-events: none; }
+  #playerModal .p-mini-controls, #pMiniRestore { display: none; }
+  #playerModal.mini { inset: auto 18px 18px auto; width: min(380px, calc(100vw - 24px)); height: 280px; border-radius: 16px;
+    border: 1px solid rgba(255,255,255,.18); box-shadow: 0 18px 65px rgba(0,0,0,.7); }
+  #playerModal.mini .p-stage { flex: 1; }
+  #playerModal.mini .p-top { padding: 10px 12px 26px; }
+  #playerModal.mini .p-title { font-size: 14px; }
+  #playerModal.mini .p-badge, #playerModal.mini #pRawLink, #playerModal.mini #pFsBtn, #playerModal.mini #pMiniBtn, #playerModal.mini .p-bar > #pSeek, #playerModal.mini .p-bar > .row { display: none; }
+  #playerModal.mini #pMiniRestore, #playerModal.mini .p-mini-controls { display: flex; }
+  #playerModal.mini .p-bar { padding: 24px 12px 10px; }
+  #playerModal.mini .p-mini-controls { flex-direction: column; gap: 3px; }
+  #playerModal.mini .p-mini-controls .row { display: flex; align-items: center; gap: 6px; }
+  #playerModal.mini .p-mini-controls .btn { min-height: 30px; padding: 0 8px; font-size: 12px; }
+  #playerModal.mini .p-mini-controls .clock { margin-left: auto; min-width: 0; }
+  #pMiniSeek { width: 100%; accent-color: var(--brand); cursor: pointer; }
+  #playerModal.mini #pSubText { bottom: 25%; font-size: 13px; }
+  @media (max-width: 650px) {
+    #playerModal:not(.mini) .p-top { padding: 10px 12px 25px; }
+    #playerModal:not(.mini) .p-bar { padding: 24px 12px 10px; }
+    #playerModal:not(.mini) .p-bar .row { gap: 5px; }
+    #playerModal:not(.mini) #pRawLink, #playerModal:not(.mini) #pDownloadBtn, #playerModal:not(.mini) #pVol { display: none; }
+    #playerModal:not(.mini) .p-bar > .row { flex-wrap: wrap; }
+    #playerModal:not(.mini) .p-bar select { max-width: 42vw; }
+    #playerModal.mini { right: 12px; bottom: 12px; }
+  }
 </style>
 </head>
 <body>
@@ -432,8 +458,10 @@ export const page = `<!doctype html>
     </div>
     <div class="row">
       <a class="btn" id="pRawLink" target="_blank" rel="noopener">Open file</a>
+      <button class="btn" id="pMiniBtn" type="button" aria-label="Minimize player">Mini player</button>
+      <button class="btn" id="pMiniRestore" type="button" aria-label="Expand player">Expand</button>
       <button class="btn" id="pFsBtn" type="button">Fullscreen</button>
-      <button class="btn" id="pCloseBtn" type="button">Close</button>
+      <button class="btn" id="pCloseBtn" type="button" aria-label="Close player">Close</button>
     </div>
   </div>
   <div class="p-stage" id="pStage">
@@ -448,9 +476,9 @@ export const page = `<!doctype html>
     <input type="range" id="pSeek" min="0" max="1000" value="0" step="1" aria-label="Position">
     <div class="row">
       <div class="row">
+        <button class="btn" id="pBackBtn" type="button" aria-label="Back 10 seconds">↶ 10</button>
         <button class="btn primary" id="pPlayBtn" type="button">Pause</button>
-        <button class="btn" id="pBackBtn" type="button" aria-label="Back 10 seconds">-10s</button>
-        <button class="btn" id="pFwdBtn" type="button" aria-label="Forward 10 seconds">+10s</button>
+        <button class="btn" id="pFwdBtn" type="button" aria-label="Forward 10 seconds">10 ↷</button>
         <span class="clock" id="pClock">0:00 / 0:00</span>
       </div>
       <div class="row">
@@ -459,6 +487,15 @@ export const page = `<!doctype html>
         <a class="btn" id="pDownloadBtn" href="#" download>Download</a>
         <button class="btn" id="pMuteBtn" type="button">Mute</button>
         <input type="range" id="pVol" min="0" max="100" value="100" style="width:80px;padding:0;accent-color:var(--brand)" aria-label="Volume">
+      </div>
+    </div>
+    <div class="p-mini-controls">
+      <input type="range" id="pMiniSeek" min="0" max="1000" value="0" step="1" aria-label="Mini player position">
+      <div class="row">
+        <button class="btn" id="pMiniBack" type="button" aria-label="Back 10 seconds">↶ 10</button>
+        <button class="btn primary" id="pMiniPlay" type="button" aria-label="Pause">Pause</button>
+        <button class="btn" id="pMiniFwd" type="button" aria-label="Forward 10 seconds">10 ↷</button>
+        <span class="clock" id="pMiniClock">0:00 / 0:00</span>
       </div>
     </div>
   </div>
@@ -1745,10 +1782,35 @@ for (const evName of ['pointerover', 'focusin', 'touchstart']) {
 }
 
 let openCounter = 0
+let chromeTimer = 0
+function showPlayerChrome () {
+  const modal = $('playerModal')
+  modal.classList.remove('chrome-hidden')
+  clearTimeout(chromeTimer)
+  if (player && !player.paused && !modal.classList.contains('mini')) {
+    chromeTimer = setTimeout(() => {
+      if (player && !player.paused && !modal.classList.contains('mini') && !modal.matches(':focus-within')) {
+        modal.classList.add('chrome-hidden')
+      }
+    }, 3000)
+  }
+}
+function setMiniPlayer (mini) {
+  if (!player) return
+  if (mini && document.fullscreenElement) document.exitFullscreen().catch(() => {})
+  const modal = $('playerModal')
+  modal.classList.toggle('mini', mini)
+  modal.setAttribute('aria-modal', String(!mini))
+  modal.classList.remove('chrome-hidden')
+  if (!mini) showPlayerChrome()
+}
 
 function closePlayer () {
   if (!player) return
   clearTimeout(seekTimer)
+  clearTimeout(chromeTimer)
+  $('playerModal').classList.remove('mini', 'chrome-hidden')
+  $('playerModal').setAttribute('aria-modal', 'true')
   seekTarget = null
   const p = player
   player = null
@@ -1787,7 +1849,12 @@ function openPlayer (entry, at = 0) {
   $('pPlayBtn').textContent = 'Pause'
   $('pSeek').value = '0'
   $('pClock').textContent = '0:00 / 0:00'
+  $('pMiniSeek').value = '0'
+  $('pMiniClock').textContent = '0:00 / 0:00'
+  $('playerModal').classList.remove('mini', 'chrome-hidden')
+  $('playerModal').setAttribute('aria-modal', 'true')
   $('playerModal').classList.add('open')
+  showPlayerChrome()
 
   // Each decoded chunk becomes its own AudioBufferSourceNode. If its sample rate differs from the context's, the browser
   // resamples every 20–30 ms buffer on its own and the edges click; matching the rate leaves one resampler at the output.
@@ -1857,6 +1924,7 @@ function openPlayer (entry, at = 0) {
     raf: 0
   }
   player = p
+  showPlayerChrome()
 
   const canvas = $('pCanvas')
   const glCanvas = $('pGlCanvas')
@@ -1986,6 +2054,7 @@ function openPlayer (entry, at = 0) {
     p.freeBaseMedia = targetSecs
     p.freeBasePerf = performance.now()
     while (p.swFrames.length > 0) releaseFrame(p.swFrames.shift())
+    p.videoCrop = null
     p.workerGlPrimed = false
     p.lastSwPts = null
     p.lastDrawWall = 0
@@ -2321,24 +2390,27 @@ function openPlayer (entry, at = 0) {
       const fw = f.w || f.hwFrame.displayWidth || f.hwFrame.codedWidth || 0
       const fh = f.h || f.hwFrame.displayHeight || f.hwFrame.codedHeight || 0
       if (fw <= 0 || fh <= 0) return
+      const crop = p.videoCrop && p.videoCrop.w > 0 && p.videoCrop.cw === fw && p.videoCrop.ch === fh ? p.videoCrop : null
+      const ow = crop ? crop.w : fw, oh = crop ? crop.h : fh
       if (r) {
         if (glCanvas.style.display !== 'block') { glCanvas.style.display = 'block'; canvas.style.display = 'none' }
         const { gl } = r
-        if (r.w !== fw || r.h !== fh) {
-          r.w = fw; r.h = fh
-          glCanvas.width = fw; glCanvas.height = fh
-          gl.viewport(0, 0, fw, fh)
+        if (r.w !== ow || r.h !== oh) {
+          r.w = ow; r.h = oh
+          glCanvas.width = ow; glCanvas.height = oh
+          gl.viewport(0, 0, ow, oh)
         }
         if (r.mode !== 1) { r.mode = 1; gl.uniform1i(r.modeLoc, 1) }
-        gl.uniform4f(r.cropLoc, 0, 0, 1, 1)
+        gl.uniform4f(r.cropLoc, crop ? crop.x / fw : 0, crop ? crop.y / fh : 0,
+          crop ? (crop.x + crop.w) / fw : 1, crop ? (crop.y + crop.h) / fh : 1)
         gl.activeTexture(gl.TEXTURE0)
         gl.bindTexture(gl.TEXTURE_2D, r.texY)
         gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, f.hwFrame)
         gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4)
       } else {
         if (canvas.style.display !== 'block') { canvas.style.display = 'block'; glCanvas.style.display = 'none' }
-        if (canvas.width !== fw || canvas.height !== fh) { canvas.width = fw; canvas.height = fh }
-        ctx2d.drawImage(f.hwFrame, 0, 0, fw, fh)
+        if (canvas.width !== ow || canvas.height !== oh) { canvas.width = ow; canvas.height = oh }
+        ctx2d.drawImage(f.hwFrame, crop ? crop.x : 0, crop ? crop.y : 0, ow, oh, 0, 0, ow, oh)
       }
       p.drawnFrames++
       return
@@ -2406,6 +2478,7 @@ function openPlayer (entry, at = 0) {
         if (p.useMse) video.pause()
         syncWorkerClock(now, false)
         $('pPlayBtn').textContent = 'Replay'
+        $('pMiniPlay').textContent = 'Replay'
       }
     }
 
@@ -2469,12 +2542,12 @@ function openPlayer (entry, at = 0) {
 
     if (!p.seeking && p.duration > 0) {
       const seekVal = String(Math.min(1000, Math.round((now / p.duration) * 1000)))
-      if (seekVal !== p.lastSeekVal) { p.lastSeekVal = seekVal; $('pSeek').value = seekVal }
+      if (seekVal !== p.lastSeekVal) { p.lastSeekVal = seekVal; $('pSeek').value = seekVal; $('pMiniSeek').value = seekVal }
     }
     // Rewriting the same text node every frame makes the clock shimmer; only touch the DOM when
     // the formatted time actually changes (once a second), not on every animation frame.
     const clockText = fmtClock(now) + ' / ' + fmtClock(p.duration)
-    if (clockText !== p.lastClockText) { p.lastClockText = clockText; $('pClock').textContent = clockText }
+    if (clockText !== p.lastClockText) { p.lastClockText = clockText; $('pClock').textContent = clockText; $('pMiniClock').textContent = clockText }
     if (p.duration > 0 && playerEntry && Date.now() - lastResumeSave > 4000) {
       lastResumeSave = Date.now()
       saveResume(playerEntry, now, p.duration)
@@ -2576,6 +2649,7 @@ function togglePlay () {
     player.ended = false
     player.paused = false
     $('pPlayBtn').textContent = 'Pause'
+    $('pMiniPlay').textContent = 'Pause'
     player.audioCtx?.resume?.().catch(() => {})
     seekTo(0)
     return
@@ -2585,6 +2659,8 @@ function togglePlay () {
   player.freeBaseMedia = now
   player.freeBasePerf = performance.now()
   $('pPlayBtn').textContent = player.paused ? 'Play' : 'Pause'
+  $('pMiniPlay').textContent = $('pPlayBtn').textContent
+  showPlayerChrome()
   if (player.paused) {
     player.audioCtx?.suspend?.().catch(() => {})
     if (player.useMse) $('pVideo').pause()
@@ -2609,6 +2685,7 @@ function seekTo (targetSecs) {
   if (player.ended) {
     player.ended = false
     $('pPlayBtn').textContent = 'Pause'
+    $('pMiniPlay').textContent = 'Pause'
   }
   const clamped = Math.max(0, player.duration > 0 ? Math.min(player.duration, targetSecs) : targetSecs)
   // If open is still probing the container before manifest lands, update startAt in place instead of dropping manifest's seq.
@@ -2645,8 +2722,16 @@ function seekTo (targetSecs) {
 }
 
 $('pCloseBtn').onclick = closePlayer
+$('pMiniBtn').onclick = () => setMiniPlayer(true)
+$('pMiniRestore').onclick = () => setMiniPlayer(false)
+$('pMiniPlay').onclick = togglePlay
+$('pMiniBack').onclick = () => nudge(-10)
+$('pMiniFwd').onclick = () => nudge(10)
 $('pPlayBtn').onclick = togglePlay
+$('playerModal').onpointermove = showPlayerChrome
+$('playerModal').onfocusin = showPlayerChrome
 $('pStage').onclick = () => {
+  if ($('playerModal').classList.contains('mini')) { setMiniPlayer(false); return }
   // A click into an unfocused window only focuses it; the first click after returning must not
   // pause the film. Real clicks (document focused, outside the grace window) still toggle.
   if (!document.hasFocus()) return
@@ -2671,6 +2756,7 @@ $('pBackBtn').onclick = () => nudge(-10)
 $('pFwdBtn').onclick = () => nudge(10)
 $('pFsBtn').onclick = () => {
   const m = $('playerModal')
+  if (m.classList.contains('mini')) setMiniPlayer(false)
   if (document.fullscreenElement) document.exitFullscreen().catch(() => {})
   else m.requestFullscreen?.().catch(() => {})
 }
@@ -2679,6 +2765,12 @@ $('pSeek').onchange = () => {
   if (!player) return
   player.seeking = false
   if (player.duration > 0) seekTo((Number($('pSeek').value) / 1000) * player.duration)
+}
+$('pMiniSeek').onpointerdown = () => { if (player) player.seeking = true }
+$('pMiniSeek').onchange = () => {
+  if (!player) return
+  player.seeking = false
+  if (player.duration > 0) seekTo((Number($('pMiniSeek').value) / 1000) * player.duration)
 }
 $('pAudioSel').onchange = () => {
   if (!player) return
@@ -2702,8 +2794,9 @@ $('pVol').oninput = () => {
   if (player?.gainNode) player.gainNode.gain.value = Number($('pVol').value) / 100
 }
 addEventListener('keydown', ev => {
-  if (!player) return
-  if (ev.key === 'Escape') { ev.preventDefault(); closePlayer() }
+  if (!player || ev.altKey || ev.ctrlKey || ev.metaKey || /^(INPUT|SELECT|TEXTAREA)$/.test(ev.target.tagName) || ev.target.isContentEditable) return
+  if ($('playerModal').classList.contains('mini') && !$('playerModal').contains(document.activeElement)) return
+  if (ev.key === 'Escape') { ev.preventDefault(); if (document.fullscreenElement) document.exitFullscreen().catch(() => {}); else closePlayer() }
   else if (ev.key === ' ') { ev.preventDefault(); togglePlay() }
   else if (ev.key === 'ArrowLeft') { ev.preventDefault(); $('pBackBtn').click() }
   else if (ev.key === 'ArrowRight') { ev.preventDefault(); $('pFwdBtn').click() }

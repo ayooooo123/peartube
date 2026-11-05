@@ -337,6 +337,7 @@ async function openNode ({
   relayThrough = null,
   lan: createLan = null,
   // Set by the apps' worklet (worklet/worker.js): small request windows for phones' UDP buffers.
+  maxActiveSources = null,
   worklet: isWorklet = false,
   onchange = null
 }, undo) {
@@ -375,6 +376,10 @@ async function openNode ({
     await store.ready()
   }
   undo.push(() => store.close())
+  const storedDisc = new Set()
+  for await (const raw of coreStorage.createCoreStream()) {
+    if (raw?.discoveryKey) storedDisc.add(b4a.toString(raw.discoveryKey, 'hex'))
+  }
   const wakeup = new ProtomuxWakeup()
   let onPeersChanged = null
   let viewEpoch = 1
@@ -453,10 +458,14 @@ async function openNode ({
   }
   const primaryApply = makeApply(() => b4a.toString(channel.key, 'hex'), onWriterChange)
   // fastForward: false forces every peer to verify ACL grants, claims, and removals locally through apply.
+  let primaryDirty = true
+  let primaryHydrated = false
+  let primaryViewVersion = -1
+  const primaryCache = { entries: [], byId: new Map(), discovered: [], peers: [] }
   channel = new Autobee(chNs, targetKey ? b4a.from(targetKey, 'hex') : null, {
     ...(founderKeyPair ? { keyPair: founderKeyPair } : {}),
     apply: primaryApply,
-    update,
+    update: () => { primaryDirty = true; update() },
     optimistic: true,
     fastForward: false,
     wakeup
@@ -474,6 +483,7 @@ async function openNode ({
   if (!targetKey && channel.local.length === 0 && channel.bootstrap.writable) {
     await channel.append(b4a.from(JSON.stringify({ type: 'init', owner: idVault?.ownerPublicKey || undefined, epoch: 1 })))
     await channel.updated()
+    primaryDirty = true
   }
 
   async function syncWriterCores () {
@@ -612,6 +622,16 @@ async function openNode ({
   // Every replication connection, public swarm and LAN alike, for plugins that act per peer.
   const peerConns = new Set()
   const connListeners = new Set()
+  // A followed channel is an Autobee of its own, and Autobee's wakeup rides its replication stream:
+  // a peer that never gets one is never told which writer cores to fetch, so a follower stalls at
+  // whatever head it happened to wake with. `Hypercore.createProtocolStream` reuses the connection's
+  // existing Protomux, so sharing a connection here is safe.
+  function attachSource (src, conn) {
+    if (!src?.bee || !src.conns) return
+    if (src.conns.has(conn)) return
+    src.conns.add(conn)
+    try { src.bee.replicate(conn) } catch {}
+  }
   const trackConn = (conn, path) => {
     tuneUdxSocket(conn.rawStream?.socket)
     tuneUdxSocket(conn.rawStream?.rawStream?.socket)
@@ -622,6 +642,7 @@ async function openNode ({
       path.closedTx += conn.rawBytesWritten || conn.rawStream?.bytesTransmitted || 0
     })
     channel.replicate(conn)
+    for (const s of extraSources.values()) attachSource(s, conn)
     for (const fn of connListeners) fn(conn)
   }
   const swarm = isPrivate
@@ -755,15 +776,300 @@ async function openNode ({
     }
   }
 
+  // O(1) active channel pool: even with 1,000+ followed channels, keep at most `activeSourceCap` Autobees
+  // and overlay topics open in RAM while hibernated channels serve instant cached views and rotate smoothly.
+  const activeSourceCap = Math.max(1, Number(maxActiveSources) || (isWorklet ? 8 : 24))
   const extraSources = new Map()
+  const activeSources = new Set()
   const ephemeralWatches = new Map()
   let primaryAlias = ''
+  let touchClock = 0
 
-  async function addSource (spec) {
+  const catalogCacheFile = join(storage, 'catalog-cache.json')
+  let savedCatalog = {}
+  try { savedCatalog = JSON.parse(readFileSync(catalogCacheFile, 'utf8'))?.channels || {} } catch {}
+  let catalogSaveTimer = null
+  let catalogCacheDirty = false
+
+  function flushCatalogCache () {
+    if (catalogSaveTimer) { clearTimeout(catalogSaveTimer); catalogSaveTimer = null }
+    if (!catalogCacheDirty) return
+    catalogCacheDirty = false
+    try {
+      const channels = {}
+      for (const [k, s] of extraSources) {
+        if (!s.hydrated) continue
+        channels[k] = {
+          syncedAt: s.syncedAt || 0,
+          entries: s.entries.map(it => [it.sub, it.entry]),
+          discovered: s.discovered,
+          peers: s.peers
+        }
+      }
+      const tmp = `${catalogCacheFile}.tmp.${process.pid}`
+      writeFileSync(tmp, JSON.stringify({ version: 1, channels }), { mode: 0o600 })
+      renameSync(tmp, catalogCacheFile)
+    } catch {}
+  }
+
+  function scheduleCatalogSave () {
+    catalogCacheDirty = true
+    if (closing || catalogSaveTimer) return
+    catalogSaveTimer = setTimeout(flushCatalogCache, 5_000)
+    catalogSaveTimer.unref?.()
+  }
+
+  function indexChannelRecords (target, entriesList, discoveredList, peersList, { merge = false } = {}) {
+    // A view can be read while it is still catching up, and a follower's scan then holds fewer
+    // announces than the library already knows. Replacing wholesale let one partial read wipe the
+    // catalog down to a single title; merging keeps what was already proven and adds what is new.
+    const byId = merge ? new Map(target.byId) : new Map()
+    const bySub = merge ? new Map(target.bySub) : new Map()
+    const entries = merge ? new Map(target.entries.map(it => [it.sub, it])) : new Map()
+    for (const item of entriesList) {
+      if (!bySub.has(item.sub)) {
+        let bucket = byId.get(item.entry.id)
+        if (!bucket) { bucket = []; byId.set(item.entry.id, bucket) }
+        bucket.push(item)
+      }
+      bySub.set(item.sub, item.entry)
+      entries.set(item.sub, item)
+    }
+    target.entries = [...entries.values()]
+    target.byId = byId
+    target.bySub = bySub
+    target.discovered = discoveredList
+    target.peers = peersList
+  }
+
+  async function scanChannelView (view, viaKey) {
+    const entriesList = []
+    const discoveredList = []
+    const peersList = []
+    for await (const node of view.createReadStream()) {
+      const sub = b4a.toString(node.key)
+      if (sub.startsWith('source/')) {
+        const op = decodeOp(node.value)
+        if (op?.type === 'source') {
+          discoveredList.push({ key: op.sourceKey, kind: 'channel', title: cleanText(op.title, op.sourceKey.slice(0, 12)), via: viaKey })
+        }
+      } else if (sub.startsWith('peer/')) {
+        const op = decodeOp(node.value)
+        if (op?.type === 'peer') peersList.push({ publicKey: op.publicKey, expiresAt: op.expiresAt })
+      } else if (!isSystemViewKey(sub)) {
+        const op = decodeOp(node.value)
+        if (op?.type === 'announce') entriesList.push({ sub, entry: op })
+      }
+    }
+    return { entriesList, discoveredList, peersList }
+  }
+
+  async function refreshPrimaryCache () {
+    if (closing) return
+    await applied(channel)
+    const version = channel.view.version
+    if (closing || (!primaryDirty && primaryHydrated && primaryViewVersion === version)) return
+    const previousVersion = primaryViewVersion
+    primaryDirty = false
+    const { entriesList, discoveredList, peersList } = await scanChannelView(channel.view, primaryKey)
+    indexChannelRecords(primaryCache, entriesList, discoveredList, peersList, { merge: true })
+    primaryHydrated = true
+    primaryViewVersion = version
+    if (previousVersion >= 0 && previousVersion !== version) update()
+  }
+
+  async function refreshSourceCache (src, { waitSync = true, force = false } = {}) {
+    if (!src?.bee || closing) return
+    // A forced tick is the background's own read: it gives the linearizer room to fetch (the 1 s
+    // cap `applied()` uses is for foreground reads that must not hang the UI), then walks the view.
+    if (force) await Promise.race([src.bee.update().catch(() => {}), new Promise(r => setTimeout(r, 10_000))])
+    else if (waitSync) await applied(src.bee)
+    if (!src.bee || closing) return
+    const version = src.bee.view.version
+    // `force` is the background tick's read: walking the view is what makes Autobase fetch the
+    // blocks it linearizes next, so a view that still owes announces gets them. Gating every read
+    // on `version` alone deadlocks — no read, no progress, no new version.
+    if (!force && !src.dirty && src.hydrated && src.cachedRev === src.rev && src.viewVersion === version) return
+    const revSnap = src.rev
+    const previousVersion = src.viewVersion
+    src.dirty = false
+    // A follower's view grows only while something walks it. One pass can leave the linearizer
+    // parked on a block nobody asked for, so the background tick keeps reading until the count
+    // stops moving (bounded); that is exactly the scanning `search()` used to do on every call.
+    let scan = await scanChannelView(src.bee.view, src.key)
+    if (force) {
+      for (let pass = 0; pass < 5 && !closing; pass++) {
+        const next = await scanChannelView(src.bee.view, src.key)
+        if (next.entriesList.length <= scan.entriesList.length) break
+        scan = next
+        await new Promise(resolve => setTimeout(resolve, 400))
+      }
+    }
+    const { entriesList, discoveredList, peersList } = scan
+    const prevCount = src.entries.length
+    indexChannelRecords(src, entriesList, discoveredList, peersList, { merge: true })
+    src.cachedRev = revSnap
+    src.viewVersion = version
+    if (revSnap > 0 || entriesList.length > 0 || discoveredList.length > 0 || peersList.length > 0) {
+      src.hydrated = true
+    }
+    src.syncedAt = Date.now()
+    if (src.hydrated) scheduleCatalogSave()
+    if (entriesList.length !== prevCount) viewEpoch++
+    if (previousVersion >= 0 && previousVersion !== version) update()
+  }
+
+  function ensureSourceRecord (key, alias = '') {
+    let src = extraSources.get(key)
+    if (src) {
+      if (alias) src.alias = alias
+      return { src, existed: true }
+    }
+    src = {
+      key,
+      kind: 'channel',
+      alias,
+      bee: null,
+      opening: null,
+      closing: null,
+      rev: 0,
+      cachedRev: -1,
+      dirty: true,
+      viewVersion: -1,
+      hydrated: false,
+      touchedAt: 0,
+      syncedAt: 0,
+      entries: [],
+      byId: new Map(),
+      bySub: new Map(),
+      discovered: [],
+      peers: []
+    }
+    const cached = savedCatalog[key]
+    if (cached && Array.isArray(cached.entries)) {
+      const entriesList = []
+      for (const pair of cached.entries) {
+        if (Array.isArray(pair) && typeof pair[0] === 'string' && pair[1]?.type === 'announce') {
+          entriesList.push({ sub: pair[0], entry: pair[1] })
+        }
+      }
+      indexChannelRecords(
+        src,
+        entriesList,
+        Array.isArray(cached.discovered) ? cached.discovered : [],
+        Array.isArray(cached.peers) ? cached.peers : []
+      )
+      src.hydrated = true
+      src.cachedRev = 0
+      src.syncedAt = Number(cached.syncedAt) || 0
+    }
+    extraSources.set(key, src)
+    return { src, existed: false }
+  }
+
+  async function hibernateSource (src) {
+    if (!src?.bee) return
+    if (src.closing) return src.closing
+    src.closing = (async () => {
+      try {
+        if (!closing && (src.dirty || src.rev !== src.cachedRev || src.viewVersion !== src.bee.view.version)) {
+          await refreshSourceCache(src, { waitSync: false }).catch(() => {})
+        }
+      } finally {
+        const oldBee = src.bee
+        src.bee = null
+        activeSources.delete(src.key)
+        leaveOverlayTopic(`channel:${src.key}`).catch(() => {})
+        if (oldBee) await oldBee.close().catch(() => {})
+        src.closing = null
+      }
+    })()
+    return src.closing
+  }
+
+  let poolGate = Promise.resolve()
+  const withPoolLock = fn => {
+    const next = poolGate.then(fn, fn)
+    poolGate = next.catch(() => {})
+    return next
+  }
+
+  async function wakeSource (key, { touch = true } = {}) {
+    const k = String(key || '').trim().toLowerCase()
+    const src = extraSources.get(k)
+    if (!src || closing) return null
+    if (src.closing) await src.closing
+    if (closing || extraSources.get(k) !== src) return null
+    if (src.bee) {
+      if (touch) src.touchedAt = ++touchClock
+      return src.bee
+    }
+    if (src.opening) {
+      const b = await src.opening
+      if (b && touch) src.touchedAt = ++touchClock
+      return b
+    }
+    src.opening = withPoolLock(async () => {
+      try {
+        if (src.closing) await src.closing
+        if (src.bee) {
+          if (touch) src.touchedAt = ++touchClock
+          return src.bee
+        }
+        while (!closing && activeSources.size >= activeSourceCap) {
+          let victim = null
+          for (const ak of activeSources) {
+            if (ak === k) continue
+            const cand = extraSources.get(ak)
+            if (!cand?.bee || cand.closing) continue
+            if (!victim || cand.touchedAt < victim.touchedAt) victim = cand
+          }
+          if (!victim) break
+          await hibernateSource(victim)
+        }
+        if (closing || extraSources.get(k) !== src) return null
+        let bee = null
+        const subApply = makeApply(() => b4a.toString(bee.key, 'hex'))
+        bee = new Autobee(store.namespace(`channel:${k}`), b4a.from(k, 'hex'), {
+          apply: subApply,
+          update: () => { src.dirty = true; src.rev++; update() },
+          optimistic: true,
+          fastForward: false,
+          wakeup
+        })
+        await bee.ready()
+        if (closing || extraSources.get(k) !== src) {
+          await bee.close().catch(() => {})
+          return null
+        }
+        src.bee = bee
+        src.conns = new WeakSet()
+        src.dirty = true
+        src.cachedRev = -1
+        src.touchedAt = touch ? ++touchClock : 0
+        activeSources.add(k)
+        joinOverlayTopic(`channel:${k}`, bee.key, bee.discoveryKey)
+        for (const conn of peerConns) attachSource(src, conn)
+        bee.update().then(() => {
+          if (!closing && src.bee === bee) {
+            src.dirty = true
+            refreshSourceCache(src).then(() => update()).catch(() => {})
+          }
+        }).catch(() => {})
+        onPeersChanged?.()
+        return bee
+      } finally {
+        src.opening = null
+      }
+    })
+    return src.opening
+  }
+
+  async function addSource (spec, { wake = true } = {}) {
     const parsed = typeof spec === 'string' ? parseUri(spec, 'channel') : parseUri(spec.uri || spec.key, spec.kind || 'channel')
     if (parsed.action === 'access') {
       await addAccessKey({ channel: parsed.channel, epoch: parsed.epoch, key: parsed.epochKey })
-      return addSource({ key: parsed.channel, kind: 'channel', alias: spec?.alias ?? parsed.alias })
+      return addSource({ key: parsed.channel, kind: 'channel', alias: spec?.alias ?? parsed.alias }, { wake })
     }
     if (parsed.action !== 'source') throw new Error('Expected a channel source, not a watch URI')
     const { key } = parsed
@@ -775,28 +1081,10 @@ async function openNode ({
       update()
       return { key, kind: 'channel', alias: primaryAlias, primary: true, writable: Boolean(channel.writable || (idVault && idVault.channelKey === primaryKey)) }
     }
-    const existing = extraSources.get(key)
-    if (existing) {
-      if (alias) existing.alias = alias
-      update()
-      return { key, kind: 'channel', alias: existing.alias, primary: false, writable: false }
-    }
-    let bee = null
-    const subApply = makeApply(() => b4a.toString(bee.key, 'hex'))
-    bee = new Autobee(store.namespace(`channel:${key}`), b4a.from(key, 'hex'), {
-      apply: subApply,
-      update,
-      optimistic: true,
-      fastForward: false,
-      wakeup
-    })
-    await bee.ready()
-    extraSources.set(key, { key, kind: 'channel', alias, bee })
-    joinOverlayTopic(`channel:${key}`, bee.key, bee.discoveryKey)
-    bee.update().catch(() => {})
-    onPeersChanged?.()
-    update()
-    return { key, kind: 'channel', alias, primary: false, writable: false }
+    const { src, existed } = ensureSourceRecord(key, alias)
+    if (wake) await wakeSource(key, { touch: true })
+    if (!existed || alias) update()
+    return { key, kind: 'channel', alias: src.alias, primary: false, writable: false }
   }
 
   async function removeSource (key) {
@@ -804,8 +1092,11 @@ async function openNode ({
     const src = extraSources.get(k)
     if (!src) return { removed: false }
     extraSources.delete(k)
+    delete savedCatalog[k]
+    scheduleCatalogSave()
+    if (src.opening) await src.opening.catch(() => {})
+    await hibernateSource(src)
     await leaveOverlayTopic(`channel:${k}`)
-    await src.bee.close().catch(() => {})
     update()
     return { removed: true }
   }
@@ -822,12 +1113,73 @@ async function openNode ({
       })
     }
     for (const s of extraSources.values()) {
-      list.push({ key: s.key, kind: 'channel', alias: s.alias, primary: false, writable: false })
+      list.push({
+        key: s.key,
+        kind: 'channel',
+        alias: s.alias,
+        primary: false,
+        writable: false,
+        // What this follower actually holds right now: the app can show "390 videos,
+        // syncing" instead of pretending a hibernated snapshot is the whole channel.
+        entries: s.entries.length,
+        active: Boolean(s.bee),
+        hydrated: s.hydrated
+      })
     }
     return list
   }
 
-  for (const s of initialSources) await addSource(s)
+  // Register every saved channel in O(1) memory, waking only the first `activeSourceCap` at boot.
+  let bootWoken = 0
+  for (const s of initialSources) {
+    await addSource(s, { wake: bootWoken < activeSourceCap })
+    if (extraSources.size > bootWoken) bootWoken = Math.min(activeSourceCap, extraSources.size)
+  }
+
+  let rotatingSources = false
+  let sourceRotateTimer = null
+  function armSourceRotator () {
+    if (closing) return
+    let unhydrated = false
+    for (const s of extraSources.values()) { if (!s.hydrated) { unhydrated = true; break } }
+    const delay = unhydrated ? 1_500 : 15_000
+    sourceRotateTimer = setTimeout(async () => {
+      sourceRotateTimer = null
+      if (closing) return
+      if (!rotatingSources) {
+        rotatingSources = true
+        try {
+          const prevEpoch = viewEpoch
+          // An awake channel nobody asks again keeps the view it woke with, and a frozen view
+          // serves blob keys its publisher already repointed (a video that never loads).
+          for (const s of [...extraSources.values()]) {
+            if (closing) break
+            if (s.bee && !s.closing) await refreshSourceCache(s, { force: true }).catch(() => {})
+          }
+          // Dormant channels take their turn even under the cap: a phone follows one channel,
+          // so the cap is never reached there and this was the only path that ever woke it.
+          const dormant = []
+          for (const s of extraSources.values()) {
+            if (!s.bee && !s.opening && !s.closing) dormant.push(s)
+          }
+          dormant.sort((a, b) => (a.hydrated === b.hydrated ? a.syncedAt - b.syncedAt : (a.hydrated ? 1 : -1)))
+          const budget = extraSources.size > activeSourceCap ? Math.min(2, activeSourceCap) : dormant.length
+          for (const s of dormant.slice(0, budget)) {
+            if (closing) break
+            const bee = await wakeSource(s.key, { touch: false })
+            if (bee) await refreshSourceCache(s).catch(() => {})
+          }
+          if (viewEpoch !== prevEpoch && !closing) update()
+        } finally {
+          rotatingSources = false
+        }
+      }
+      armSourceRotator()
+    }, delay)
+    sourceRotateTimer.unref?.()
+  }
+  armSourceRotator()
+  undo.push(() => clearTimeout(sourceRotateTimer))
 
   const refreshTimer = dht ? setInterval(() => {
     if (closing || swarm.connections.size >= 16) return
@@ -844,14 +1196,18 @@ async function openNode ({
     try {
       const available = new Map()
       const now = Date.now()
-      const views = [
-        ...(usePrimaryChannel || channelHasEntries ? [channel.view] : []),
-        ...[...extraSources.values()].map(s => s.bee.view)
+      const selfHex = b4a.toString(swarm.keyPair.publicKey, 'hex')
+      if (usePrimaryChannel || channelHasEntries) await refreshPrimaryCache().catch(() => {})
+      for (const s of extraSources.values()) {
+        if (s.bee && s.dirty) await refreshSourceCache(s).catch(() => {})
+      }
+      const peerLists = [
+        ...(usePrimaryChannel || channelHasEntries ? [primaryCache.peers] : []),
+        ...[...extraSources.values()].map(s => s.peers)
       ]
-      for (const v of views) {
-        for await (const node of v.createReadStream({ gte: b4a.from('peer/'), lt: b4a.from('peer/\xff') })) {
-          const peer = decodeOp(node.value)
-          if (!peer || peer.type !== 'peer' || peer.expiresAt <= now || peer.expiresAt > now + 60 * 60_000 || peer.publicKey === b4a.toString(swarm.keyPair.publicKey, 'hex')) continue
+      for (const list of peerLists) {
+        for (const peer of list) {
+          if (!peer || peer.expiresAt <= now || peer.expiresAt > now + 60 * 60_000 || peer.publicKey === selfHex) continue
           if (available.size >= 64) break
           available.set(peer.publicKey, b4a.from(peer.publicKey, 'hex'))
         }
@@ -1059,6 +1415,7 @@ async function openNode ({
   const onCoreWake = raw => {
     if (closing || !raw?.discoveryKey) return
     const discHex = b4a.toString(raw.discoveryKey, 'hex')
+    storedDisc.add(discHex)
     absentDisc.delete(discHex)
     const hex = ownedByDiscovery.get(discHex) || cachedByDiscovery.get(discHex)
     if (!hex || weakOwned.has(hex) || blobCores.has(hex)) return
@@ -1190,44 +1547,58 @@ async function openNode ({
     return blocks >= blockLength ? entry.size : Math.min(entry.size, Math.round((blocks / blockLength) * entry.size))
   }
 
-  async function search (id = null, { source: filterSource = null } = {}) {
+  async function search (id = null, { source: filterSource = null, query = null, limit = 0, offset = 0 } = {}) {
+    if (filterSource && extraSources.has(filterSource)) {
+      await wakeSource(filterSource, { touch: true })
+    }
+    const activeRefresh = []
+    if ((usePrimaryChannel || channelHasEntries) && (!filterSource || filterSource === primaryKey)) {
+      activeRefresh.push(refreshPrimaryCache())
+    }
+    for (const s of extraSources.values()) {
+      if (filterSource && filterSource !== s.key) continue
+      if (s.bee) activeRefresh.push(refreshSourceCache(s))
+    }
+    if (activeRefresh.length > 0) await Promise.all(activeRefresh)
+
     const raw = []
     if ((usePrimaryChannel || channelHasEntries) && (!filterSource || filterSource === primaryKey)) {
-      await applied(channel)
-      const range = id ? { gte: b4a.from(`${id}/`), lt: b4a.from(`${id}/\xff`) } : {}
-      for await (const node of channel.view.createReadStream(range)) {
-        const key = b4a.toString(node.key)
-        if (isSystemViewKey(key)) continue
-        const op = decodeOp(node.value)
-        if (op?.type === 'announce') {
-          raw.push({ key, entry: op, source: primaryKey, sourceKind: 'channel' })
-        }
+      const items = id ? (primaryCache.byId.get(id) || []) : primaryCache.entries
+      for (const { sub, entry } of items) {
+        raw.push({ key: sub, entry, source: primaryKey, sourceKind: 'channel' })
       }
     }
     for (const s of extraSources.values()) {
       if (filterSource && filterSource !== s.key) continue
-      await applied(s.bee)
-      const range = id ? { gte: b4a.from(`${id}/`), lt: b4a.from(`${id}/\xff`) } : {}
-      for await (const node of s.bee.view.createReadStream(range)) {
-        const sub = b4a.toString(node.key)
-        if (isSystemViewKey(sub)) continue
-        const op = decodeOp(node.value)
-        if (op?.type === 'announce') raw.push({ key: `channel:${s.key}/${sub}`, entry: op, source: s.key, sourceKind: 'channel' })
+      const items = id ? (s.byId.get(id) || []) : s.entries
+      for (const { sub, entry } of items) {
+        raw.push({ key: `channel:${s.key}/${sub}`, entry, source: s.key, sourceKind: 'channel' })
       }
     }
     for (const [key, item] of ephemeralWatches) {
       if ((!id || item.entry.id === id) && (!filterSource || filterSource === 'direct')) raw.push({ key, ...item })
     }
-    // Taste cached video cores in small batches and clamp them shut at rest so 50 GB libraries never gape open inside blobCores forever.
-    const candidates = [...new Set(raw.map(r => r.entry.blobs))].filter(h => !ownedBlobs.has(h))
-    for (let i = 0; i < candidates.length; i += 16) {
-      await Promise.all(candidates.slice(i, i + 16).map(async h => {
+
+    // Only probe cores whose discoveryKey actually exists in `storedDisc` (`O(stored_cores)` instead of `O(catalog)`).
+    const toProbe = []
+    const seenBlobs = new Set()
+    for (const r of raw) {
+      const h = r.entry.blobs
+      if (seenBlobs.has(h) || ownedBlobs.has(h)) continue
+      seenBlobs.add(h)
+      if (slotSet.has(h) || blobCores.has(h)) { toProbe.push(h); continue }
+      if (cachedBlobs.has(h)) continue
+      const d = blobDisc(h)
+      if (!storedDisc.has(d.hex) || absentDisc.has(d.hex)) continue
+      toProbe.push(h)
+    }
+    for (let i = 0; i < toProbe.length; i += 16) {
+      await Promise.all(toProbe.slice(i, i + 16).map(async h => {
         if (slotSet.has(h) || blobCores.has(h)) return blobCore(h)
         if (cachedBlobs.has(h)) return null
         const d = blobDisc(h)
-        if (absentDisc.has(d.hex)) return null
         const exists = await coreStorage.hasCore(d.buf).catch(() => false)
-        if (!exists) { absentDisc.add(d.hex); return null }
+        if (!exists) { absentDisc.add(d.hex); storedDisc.delete(d.hex); return null }
         const tmp = store.get({ key: b4a.from(h, 'hex'), active: false })
         try {
           await tmp.ready()
@@ -1239,16 +1610,39 @@ async function openNode ({
         return null
       }))
     }
-    const results = await Promise.all(raw.map(async ({ key, entry, source, sourceKind }) => {
+
+    // Deduplicate across channels/writers synchronously for the 99.9% uncached/per-video fast path,
+    // only awaiting legacy shared-slot slice counts when actually present on disk.
+    const files = new Map()
+    const rank = r => {
+      const p = r.key.split('/')
+      return [!r.locked ? 1 : 0, r.local ? 1 : 0, r.cachedBytes, r.key.endsWith(':0') ? 1 : 0, p[p.length - 2] === r.source ? 1 : 0]
+    }
+    const better = (a, b) => {
+      const x = rank(a)
+      const y = rank(b)
+      for (let i = 0; i < x.length; i++) if (x[i] !== y[i]) return x[i] > y[i]
+      return false
+    }
+    for (const { key, entry, source, sourceKind } of raw) {
       const isPrivateEntry = Boolean(entry.wrappedKey)
       const vk = isPrivateEntry ? resolveVideoKey(entry, source) : null
       const locked = Boolean(isPrivateEntry && !vk)
       const owned = ownedBlobs.get(entry.blobs)
-      const core = owned ? null : blobCores.get(entry.blobs)
-      const cached = owned ? entry.size : await entryCachedBytes(core, entry)
+      let cached = 0
+      if (owned) {
+        cached = entry.size
+      } else {
+        const core = blobCores.get(entry.blobs)
+        const meta = cachedBlobs.get(entry.blobs)
+        if (core?.opened || (meta && meta.blocks > 0)) {
+          cached = await entryCachedBytes(core, entry)
+        }
+      }
       if (cached > 0 && !owned) joinContentSwarm(entry.blobs, false)
-      return {
+      const rec = {
         key,
+        entry,
         id: entry.id,
         title: cleanText(entry.title, entry.id),
         size: entry.size,
@@ -1258,20 +1652,28 @@ async function openNode ({
         private: isPrivateEntry,
         epoch: entry.epoch || 0,
         locked,
-        streamUrl: streamUrl(entry),
-        magnetUrl: formatWatchUri(entry),
         source,
         sourceKind
       }
-    }))
-    const rank = r => { const p = r.key.split('/'); return [!r.locked ? 1 : 0, r.local ? 1 : 0, r.cachedBytes, r.key.endsWith(':0') ? 1 : 0, p[p.length - 2] === r.source ? 1 : 0] }
-    const better = (a, b) => { const x = rank(a), y = rank(b); for (let i = 0; i < x.length; i++) if (x[i] !== y[i]) return x[i] > y[i]; return false }
-    const files = new Map()
-    for (const r of results) {
-      const k = `${r.id}/${r.sha256}`
-      if (!files.has(k) || better(r, files.get(k))) files.set(k, r)
+      const fk = `${rec.id}/${rec.sha256}`
+      if (!files.has(fk) || better(rec, files.get(fk))) files.set(fk, rec)
     }
-    return [...files.values()]
+
+    let list = [...files.values()]
+    const q = typeof query === 'string' ? query.trim().toLowerCase() : ''
+    if (q) {
+      list = list.filter(r => r.title.toLowerCase().includes(q) || r.id.toLowerCase().includes(q))
+    }
+    const off = Math.max(0, Number(offset) || 0)
+    const lim = Math.max(0, Number(limit) || 0)
+    if (off > 0 || lim > 0) {
+      list = lim > 0 ? list.slice(off, off + lim) : list.slice(off)
+    }
+    return list.map(({ entry, ...rest }) => ({
+      ...rest,
+      streamUrl: streamUrl(entry),
+      magnetUrl: formatWatchUri(entry)
+    }))
   }
 
   let discoveredCache = null
@@ -1279,21 +1681,17 @@ async function openNode ({
   async function discoveredSources () {
     if (discoveredCache && discoveredAtEpoch === viewEpoch) return discoveredCache
     const epochSnap = viewEpoch
+    if (usePrimaryChannel || channelHasEntries) await refreshPrimaryCache()
+    await Promise.all([...extraSources.values()].filter(s => s.bee).map(s => refreshSourceCache(s)))
     const active = new Set(listSources().map(s => s.key))
     const found = new Map()
-    const scan = async (view, via) => {
-      for await (const node of view.createReadStream({ gte: b4a.from('source/'), lt: b4a.from('source/\xff') })) {
-        const op = decodeOp(node.value)
-        if (op?.type === 'source' && !active.has(op.sourceKey) && !found.has(op.sourceKey)) {
-          found.set(op.sourceKey, { key: op.sourceKey, kind: 'channel', title: cleanText(op.title, op.sourceKey.slice(0, 12)), via })
-        }
+    const collect = list => {
+      for (const item of list) {
+        if (!active.has(item.key) && !found.has(item.key)) found.set(item.key, item)
       }
     }
-    if (usePrimaryChannel || channelHasEntries) { await applied(channel); await scan(channel.view, primaryKey) }
-    for (const s of extraSources.values()) {
-      await applied(s.bee)
-      await scan(s.bee.view, s.key)
-    }
+    if (usePrimaryChannel || channelHasEntries) collect(primaryCache.discovered)
+    for (const s of extraSources.values()) collect(s.discovered)
     const list = [...found.values()]
     discoveredCache = list
     discoveredAtEpoch = epochSnap
@@ -1313,8 +1711,15 @@ async function openNode ({
       }
       const src = extraSources.get(subMatch[1])
       if (!src) return null
-      await applied(src.bee)
-      const n = await src.bee.view.get(b4a.from(subMatch[2]))
+      if (!src.bee && src.hydrated && src.bySub.has(subMatch[2])) {
+        const cachedOp = src.bySub.get(subMatch[2])
+        if (cachedOp?.wrappedKey) resolveVideoKey(cachedOp, src.key)
+        return cachedOp
+      }
+      const bee = await wakeSource(src.key, { touch: true })
+      if (!bee) return null
+      await applied(bee)
+      const n = await bee.view.get(b4a.from(subMatch[2]))
       const op = n ? decodeOp(n.value) : null
       if (op?.wrappedKey) resolveVideoKey(op, src.key)
       return op
@@ -2167,6 +2572,9 @@ async function openNode ({
       clearInterval(peerTimer)
       clearInterval(refreshTimer)
       clearInterval(rotateTimer)
+      clearTimeout(sourceRotateTimer)
+      sourceRotateTimer = null
+      flushCatalogCache()
       for (const ranges of warmRanges.values()) for (const r of ranges) r.destroy()
       warmRanges.clear()
       store.unwatch(onCoreWake)
@@ -2179,8 +2587,13 @@ async function openNode ({
       await lan?.destroy()
       if (dht) await swarm.clear()
       await swarm.destroy({ force: true })
-      for (const s of extraSources.values()) await s.bee.close().catch(() => {})
+      for (const s of extraSources.values()) {
+        if (s.opening) await s.opening.catch(() => {})
+        if (s.closing) await s.closing.catch(() => {})
+        if (s.bee) await s.bee.close().catch(() => {})
+      }
       extraSources.clear()
+      activeSources.clear()
       await channel.close()
       wakeup.destroy()
       await server.close()
@@ -2228,6 +2641,9 @@ async function openNode ({
     addSource,
     removeSource,
     listSources,
+    focusSource: key => wakeSource(key, { touch: true }).then(b => Boolean(b)),
+    activeSourceCount: () => activeSources.size,
+    overlayTopicCount: () => discoveries.size,
     discoveredSources,
     openUri,
     warm,

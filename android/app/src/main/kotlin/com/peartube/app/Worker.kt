@@ -97,21 +97,10 @@ class Worker(context: Context) {
                 "channels-v2"
             }
         }
-        val effectiveBootstrap = if (settings.bootstrap.isNotEmpty()) {
-            settings.bootstrap
-        } else {
-            kotlinx.coroutines.withContext(Dispatchers.IO) {
-                listOf("bootstrap1.hyperdht.org", "bootstrap2.hyperdht.org", "bootstrap3.hyperdht.org")
-                    .flatMap { host ->
-                        runCatching {
-                            java.net.InetAddress.getAllByName(host)
-                                .filterIsInstance<java.net.Inet4Address>()
-                                .mapNotNull { it.hostAddress?.let { ip -> "$ip:49737" } }
-                        }.getOrDefault(emptyList())
-                    }
-                    .distinct()
-            }
-        }
+        // The user's own bootstrap, or nothing at all: `hyperdht`'s built-in table is the one that
+        // stays current. Resolving hostnames here pinned the phone to servers that later died
+        // (bootstrap1..3.hyperdht.org resolve to hosts the DHT no longer answers on), and a phone
+        // that cannot join the public swarm can only ever replay what its LAN peers happen to hold.
         val srcArray = JSONArray().apply { effectiveSources.forEach { put(it.toJson()) } }
         val params = JSONObject()
             .put("storage", File(storeDir, "trackers/$folder").path)
@@ -120,7 +109,7 @@ class Worker(context: Context) {
             .put("join", settings.mnemonic.isNotEmpty() && effectiveTracker.isEmpty())
             .put("sources", srcArray)
             .put("relayThrough", if (settings.relayThrough.isEmpty()) JSONObject.NULL else JSONArray(settings.relayThrough))
-            .put("bootstrap", if (effectiveBootstrap.isEmpty()) JSONObject.NULL else JSONArray(effectiveBootstrap))
+            .put("bootstrap", if (settings.bootstrap.isEmpty()) JSONObject.NULL else JSONArray(settings.bootstrap))
             .put("lan", settings.lanDiscovery)
             .put("privateRouting", settings.privateRouting)
         return Status.from(call("start", params) as JSONObject)
@@ -129,9 +118,13 @@ class Worker(context: Context) {
     suspend fun status(): Status = Status.from(call("status") as JSONObject)
 
     /** Every entry across subscribed trackers and channels. */
-    suspend fun search(): List<Entry> {
-        val list = call("search", JSONObject().put("id", JSONObject.NULL)) as JSONArray
+    suspend fun search(id: String? = null): List<Entry> {
+        val list = call("search", JSONObject().put("id", id ?: JSONObject.NULL)) as JSONArray
         return List(list.length()) { Entry.from(list.getJSONObject(it)) }
+    }
+
+    suspend fun focusSource(key: String) {
+        call("focusSource", JSONObject().put("key", key))
     }
 
     suspend fun warm(key: String) {

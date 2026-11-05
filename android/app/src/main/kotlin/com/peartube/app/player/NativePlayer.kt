@@ -11,6 +11,13 @@ object NativePlayer {
 
     /** Opens [url] and starts playing; [soundfont] is the user's SF2 bank for MIDI. */
     @JvmStatic external fun open(url: String, soundfont: String?): Long
+    @JvmStatic external fun openWithOptions(
+        url: String,
+        soundfont: String?,
+        audioMode: String?,
+        frameRateMode: String?,
+        preferFel12Bit: Boolean,
+    ): Long
     @JvmStatic external fun close(handle: Long)
     @JvmStatic external fun play(handle: Long)
     @JvmStatic external fun pause(handle: Long)
@@ -50,6 +57,12 @@ data class Track(
         }
 }
 
+data class Chapter(
+    val title: String,
+    val startMs: Long,
+    val endMs: Long?,
+)
+
 data class PlayerState(
     val positionMs: Long = 0,
     val durationMs: Long? = null,
@@ -58,12 +71,17 @@ data class PlayerState(
     val ended: Boolean = false,
     val error: String? = null,
     val tracks: List<Track> = emptyList(),
+    val chapters: List<Chapter> = emptyList(),
     val audio: Int? = null,
     val subtitle: Int? = null,
     val videoWidth: Int? = null,
     val videoHeight: Int? = null,
     val videoFps: Float? = null,
     val videoDecoder: String? = null,
+    val videoDynamicRange: String? = null,
+    val videoBitDepth: Int? = null,
+    val videoChroma: String? = null,
+    val audioOutput: String? = null,
     val droppedFrames: Long = 0,
     /** One pixel's width over its height when not square (anamorphic video). */
     val videoPixelAspect: Pair<Int, Int>? = null,
@@ -94,12 +112,26 @@ data class PlayerState(
                     val t = list.getJSONObject(it)
                     Track(t.getInt("stream"), t.getString("kind"), t.getString("codec"), t.optText("language"), t.optText("title"))
                 },
+                chapters = json.optJSONArray("chapters")?.let { chaps ->
+                    List(chaps.length()) { idx ->
+                        val c = chaps.getJSONObject(idx)
+                        Chapter(
+                            title = c.optText("title") ?: "Chapter ${idx + 1}",
+                            startMs = c.optLong("startMs", 0L),
+                            endMs = if (c.isNull("endMs")) null else c.optLong("endMs"),
+                        )
+                    }
+                } ?: emptyList(),
                 audio = json.optInteger("audio"),
                 subtitle = json.optInteger("subtitle"),
                 videoWidth = json.optInteger("videoWidth"),
                 videoHeight = json.optInteger("videoHeight"),
                 videoFps = if (json.isNull("videoFps")) null else json.optDouble("videoFps").toFloat().takeIf { it > 0f },
                 videoDecoder = json.optText("videoDecoder"),
+                videoDynamicRange = json.optText("videoDynamicRange"),
+                videoBitDepth = json.optInteger("videoBitDepth"),
+                videoChroma = json.optText("videoChroma"),
+                audioOutput = json.optText("audioOutput"),
                 droppedFrames = json.optLong("droppedFrames", 0L),
                 videoPixelAspect = json.optJSONArray("videoPixelAspect")?.let { it.getInt(0) to it.getInt(1) },
             )

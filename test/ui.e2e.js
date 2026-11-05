@@ -61,6 +61,20 @@ function playableClip (secs = 5) {
   rmSync(dir, { recursive: true, force: true })
   return bytes
 }
+// One 16:9 encode whose first four seconds bake in scope bars, then opens back up to full frame.
+// It proves the WebCodecs canvas follows the picture as its aspect changes, not just the file header.
+function variableAspectClip () {
+  const dir = mkdtempSync(join(tmpdir(), 'peartube-ui-aspect-'))
+  const file = join(dir, 'variable.mkv')
+  execFileSync('ffmpeg', ['-nostdin', '-v', 'error', '-y',
+    '-f', 'lavfi', '-i', 'testsrc2=size=320x180:rate=24',
+    '-f', 'lavfi', '-i', 'sine=frequency=440:sample_rate=48000',
+    '-t', '8', '-vf', "drawbox=x=0:y=0:w=iw:h=24:color=black:t=fill:enable='lt(t,4)',drawbox=x=0:y=156:w=iw:h=24:color=black:t=fill:enable='lt(t,4)'",
+    '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-g', '24', '-c:a', 'aac', file])
+  const bytes = readFileSync(file)
+  rmSync(dir, { recursive: true, force: true })
+  return bytes
+}
 
 function startStub () {
   const files = {
@@ -70,7 +84,8 @@ function startStub () {
     '/page-video.mp4': bytesFor('page'),
     '/media/long.mp4': bytesFor('long', 16 * 1024 * 1024),
     '/media/clip.mkv': playableClip(),
-    '/media/clip30.mkv': playableClip(30)
+    '/media/clip30.mkv': playableClip(30),
+    '/media/variable.mkv': variableAspectClip()
   }
   const srv = createServer((req, res) => {
     const url = new URL(req.url, 'http://x')
@@ -310,9 +325,9 @@ test('relay web UI: settings, plugins as intents, identification, and taste gate
   }
   const goTab = async name => { await clickText(name, '.tabs'); await sleep(300) }
   const entries = async () => (await getJson('/v1/entries')).results
-  async function shot (name) {
+  async function shot (name, viewportOnly = false) {
     const file = join(shotDir, name + '.png')
-    writeFileSync(file, Buffer.from((await send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: true })).data, 'base64'))
+    writeFileSync(file, Buffer.from((await send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: !viewportOnly })).data, 'base64'))
     result.screenshots.push(file.slice(root.length))
   }
 
@@ -383,15 +398,15 @@ test('relay web UI: settings, plugins as intents, identification, and taste gate
     await clickText('Save changes', '.card:has(#set-streamPort)')
     await waitApi(async () => (await settingsNow()).settings.streamPort.source === 'env', 'env value back again')
     result.checks.typingCancelsEnvReset = true
-    await type('#set-streamHost', '192.168.1.20')
+    await type('#set-streamHost', '0.0.0.0')
     await clickText('Save changes', '.card:has(#set-streamHost)')
-    await waitApi(async () => (await settingsNow()).settings.streamHost.value === '192.168.1.20', 'stream host saved')
+    await waitApi(async () => (await settingsNow()).settings.streamHost.value === '0.0.0.0', 'stream host saved')
     await type('#set-cinemetaUrl', stub.base + '/cinemeta')
     await clickText('Save changes', '.card:has(#set-cinemetaUrl)')
     const saved = await waitApi(async () => { const s = await settingsNow(); return s.settings.cinemetaUrl.value === stub.base + '/cinemeta' && s }, 'lookup service saved')
     assert.equal(saved.settings.streamHost.source, 'file')
-    assert.deepEqual(saved.restartNeeded, [], 'every change applied without a restart')
-    assert.equal(await evaluate(`document.querySelectorAll('.banner').length`), 0, 'no restart banner')
+    assert.deepEqual(saved.restartNeeded, [], 'valid stream host is applied by reopening the listener')
+    assert.equal(await evaluate(`document.querySelectorAll('.banner').length`), 0, 'no restart banner after the listener reopens')
     await clickText('Restart relay')
     await waitFor(`document.querySelector('#toast').textContent === 'Restarted'`, 'restart action finished')
     assert.equal(relay.exitCode, null, 'restarted in place')
@@ -402,7 +417,7 @@ test('relay web UI: settings, plugins as intents, identification, and taste gate
     result.checks.settingsFollowChanges = true
     const fileMode = statSync(join(storage, 'settings.json')).mode & 0o777
     assert.equal(fileMode, 0o600)
-    assert.equal(JSON.parse(readFileSync(join(storage, 'settings.json'), 'utf8')).streamHost, '192.168.1.20')
+    assert.equal(JSON.parse(readFileSync(join(storage, 'settings.json'), 'utf8')).streamHost, '0.0.0.0')
     result.checks.settingsRoundTrip = true
     mark('settings')
     result.settingsFileMode = fileMode.toString(8)
@@ -479,6 +494,20 @@ test('relay web UI: settings, plugins as intents, identification, and taste gate
     await waitFor(`$('pPlayBtn').textContent === 'Pause' && ${clockSecs} >= 1 && ${clockSecs} < 5`, 'replay from the start', 15_000)
     await evaluate(`closePlayer(); true`)
     result.checks.player = { menus, ended }
+    const aspectJob = await (await fetch(base + '/v1/acquire', { method: 'POST', headers: { ...auth, 'content-type': 'application/json' }, body: JSON.stringify({ id: 'clip:variableaspect', title: 'Variable Aspect', source: { url: stub.base + '/media/variable.mkv' } }) })).json()
+    await waitApi(async () => (await getJson('/v1/jobs/' + aspectJob.jobId)).status === 'done', 'variable-aspect clip stored').catch(async e => { throw new Error(e.message + ': ' + JSON.stringify(await getJson('/v1/jobs/' + aspectJob.jobId))) })
+    await waitFor(`S.entries.some(e => e.id === 'clip:variableaspect')`, 'variable-aspect clip in library', 15_000)
+    await evaluate(`(() => { openPlayer(S.entries.find(e => e.id === 'clip:variableaspect')); return true })()`)
+    await waitFor(`!!player && player.primed && player.usingWebCodecs`, 'WebCodecs variable-aspect playback', 30_000)
+    await waitFor(`player.videoCrop?.h < 160 && ($('pCanvas').style.display === 'block' ? $('pCanvas') : $('pGlCanvas')).height === player.videoCrop.h`, 'encoded scope picture fills the stage without second side bars', 10_000)
+    await shot('player-scope-1440-dark', true)
+    const cropped = await evaluate(`({ width: ($('pCanvas').style.display === 'block' ? $('pCanvas') : $('pGlCanvas')).width, height: ($('pCanvas').style.display === 'block' ? $('pCanvas') : $('pGlCanvas')).height, crop: player.videoCrop })`)
+    assert.equal(cropped.width, 320, 'only encoded rows may be cropped: ' + JSON.stringify(cropped))
+    assert.equal(cropped.crop.ch, 180)
+    await waitFor(`player.videoCrop === null && ($('pCanvas').style.display === 'block' ? $('pCanvas') : $('pGlCanvas')).height === 180 && Number($('pClock').textContent.split(' / ')[0].split(':').pop()) >= 4`, 'full-height sequence restores all picture pixels', 12_000)
+    await shot('player-fullframe-1440-dark', true)
+    await evaluate(`closePlayer(); true`)
+    result.checks.variableAspect = cropped
 
     // A hidden tab gets no animation frames and the browser pauses the muted picture: the sound used to run dry
     // after about 8 s and the picture jumped on return. Now the sound plays on and the picture rejoins it.
@@ -487,6 +516,27 @@ test('relay web UI: settings, plugins as intents, identification, and taste gate
     await waitFor(`S.entries.some(e => e.id === 'clip:backgrounded')`, '30 s clip in the library')
     await evaluate(`(() => { openPlayer(S.entries.find(e => e.id === 'clip:backgrounded')); return true })()`)
     await waitFor(`!!player && player.primed && ${clockSecs} >= 2`, '30 s clip playing', 30_000)
+    await evaluate(`(() => { window.__miniBefore = player; showPlayerChrome(); return true })()`)
+    await click('#pMiniBtn')
+    await waitFor(`$('playerModal').classList.contains('mini') && !$('playerModal').getAttribute('aria-modal').includes('true')`, 'player minimizes without closing', 5_000)
+    await shot('player-mini-1440-dark', true)
+    await waitFor(`Number($('pMiniClock').textContent.split(' / ')[0].split(':').pop()) >= 4`, 'mini player keeps playing', 10_000)
+    assert.equal(await evaluate(`player === window.__miniBefore`), true, 'mini and full view share one playback session')
+    await goTab('Channels')
+    assert.equal(await evaluate(`player === window.__miniBefore && $('playerModal').classList.contains('mini')`), true, 'mini player survives browsing another tab')
+    await goTab('Library')
+    await click('#pMiniPlay')
+    assert.equal(await evaluate(`player.paused && $('pMiniPlay').textContent === 'Play'`), true, 'mini play button pauses the same player')
+    await evaluate(`(() => { $('pMiniSeek').value = 300; $('pMiniSeek').dispatchEvent(new Event('change')); return true })()`)
+    await waitFor(`Number($('pMiniClock').textContent.split(' / ')[0].split(':').pop()) >= 8`, 'mini seek moves the current playback session', 10_000)
+    await viewport(390, 844, 'dark')
+    assert.equal(await evaluate(`document.documentElement.scrollWidth <= innerWidth && $('playerModal').getBoundingClientRect().right <= innerWidth`), true, 'mini player fits the mobile viewport')
+    await shot('player-mini-390-dark', true)
+    await viewport(1440, 900, 'dark')
+    await click('#pMiniPlay')
+    await click('#pMiniRestore')
+    assert.equal(await evaluate(`player === window.__miniBefore && !$('playerModal').classList.contains('mini')`), true, 'expand keeps playback and returns to cinema')
+    await shot('player-restored-1440-dark', true)
     await evaluate(`(() => { window.__hidden = []; window.__hiddenTimer = setInterval(() => { if (document.hidden && player) window.__hidden.push({ t: (player.audioBaseMedia + audioOutTime(player.audioCtx) - player.audioBaseCtx), lead: player.nextAudioCtxTime - player.audioCtx.currentTime }) }, 500); return true })()`)
     const hiddenFrom = await evaluate(`(player.audioBaseMedia + audioOutTime(player.audioCtx) - player.audioBaseCtx)`)
     const hideAt = Date.now()
@@ -505,7 +555,9 @@ test('relay web UI: settings, plugins as intents, identification, and taste gate
     const f1 = await frame()
     await sleep(800)
     assert.notEqual(await frame(), f1, 'the picture moves again after return')
-    await evaluate(`closePlayer(); true`)
+    await evaluate(`setMiniPlayer(true); true`)
+    await click('#pCloseBtn')
+    assert.equal(await evaluate(`player === null && !$('playerModal').classList.contains('open')`), true, 'mini close tears down playback')
     result.checks.backgroundTab = { heardWhileHidden: +heard.toFixed(1), minLead: +Math.min(...hidden.map(x => x.lead)).toFixed(1) }
     // The shipped player must be built from the pinned decoders: a stale build once seeked by scanning from the start.
     const lockHash = createHash('sha256').update(readFileSync(join(root, 'web/Cargo.lock'))).digest('hex')

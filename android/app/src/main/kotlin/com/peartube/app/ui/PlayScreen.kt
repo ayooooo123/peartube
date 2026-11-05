@@ -57,6 +57,7 @@ import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -97,7 +98,13 @@ import com.peartube.app.player.NativePlayer
 import com.peartube.app.player.PlayerHost
 import com.peartube.app.player.PlayerState
 import com.peartube.app.player.Track
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.delay
+import java.util.concurrent.atomic.AtomicBoolean
 import java.io.File
 import java.util.Locale
 import kotlin.math.abs
@@ -137,6 +144,7 @@ fun PlayScreen(model: AppModel, host: PlayerHost, entry: Entry, startPositionMs:
     val resumePosition = remember(entry.key) { startPositionMs ?: model.watchHistory.value[entry.key]?.takeIf { it.partial }?.positionMs ?: 0L }
     var resumePending by remember(entry.key) { mutableStateOf(resumePosition > 0) }
     val latestState by rememberUpdatedState(state)
+    val openingScope = rememberCoroutineScope()
 
     LaunchedEffect(liveEntry.key) {
         runCatching { model.worker.warm(liveEntry.key) }
@@ -144,18 +152,33 @@ fun PlayScreen(model: AppModel, host: PlayerHost, entry: Entry, startPositionMs:
 
     DisposableEffect(liveEntry.streamUrl) {
         model.playStarted = false
+        openError = null
         host.open()
         val soundfont = File(context.filesDir, "soundfont.sf2").takeIf { it.isFile }?.path
-        val opened = try {
-            NativePlayer.open(liveEntry.streamUrl, soundfont)
-        } catch (e: Throwable) {
-            openError = "The player did not start: ${e.message ?: e}"
-            0L
+        val active = AtomicBoolean(true)
+        val opening = openingScope.launch(Dispatchers.IO) {
+            var failure: String? = null
+            val opened = try {
+                NativePlayer.openWithOptions(liveEntry.streamUrl, soundfont, "auto", if (isTv) "exact" else "seamless", false)
+            } catch (e: Throwable) {
+                failure = "The player did not start: ${e.message ?: e}"
+                0L
+            }
+            withContext(Dispatchers.Main.immediate + NonCancellable) {
+                if (active.get()) {
+                    openError = failure ?: if (opened == 0L) "The player did not start." else null
+                    handle = opened
+                } else if (opened != 0L) {
+                    NativePlayer.close(opened)
+                }
+            }
         }
-        handle = opened
         onDispose {
+            active.set(false)
+            opening.cancel()
             model.playStarted = false
             model.recordWatchProgress(liveEntry, latestState.positionMs, latestState.durationMs)
+            val opened = handle
             handle = 0L
             host.close()
             if (opened != 0L) NativePlayer.close(opened)
@@ -183,12 +206,24 @@ fun PlayScreen(model: AppModel, host: PlayerHost, entry: Entry, startPositionMs:
         val h = handle
         if (h == 0L) return@LaunchedEffect
         var ticks = 0
+        var waitingSince = SystemClock.uptimeMillis()
         while (true) {
             val st = PlayerState.parse(NativePlayer.state(h))
             st.displayAspect?.let { host.fit(it) }
             st.videoFps?.let { host.matchFrameRate(it) }
             host.shown(st.positionMs)
             state = st
+            if (st.positionMs > 0 || st.durationMs != null) waitingSince = SystemClock.uptimeMillis()
+            // A title nobody in the swarm serves waits forever otherwise: say so, and let a
+            // later peer's bytes still start it (the message clears the moment they do).
+            val waiting = SystemClock.uptimeMillis() - waitingSince
+            if (st.positionMs == 0L && st.durationMs == null && st.error == null) {
+                if (waiting > 90_000L && openError != "Still waiting for peers to send this video.") {
+                    openError = "Still waiting for peers to send this video."
+                }
+            } else if (openError == "Still waiting for peers to send this video.") {
+                openError = null
+            }
             if (st.positionMs > 0) model.playStarted = true
             if (resumePending && st.durationMs != null) {
                 resumePending = false
@@ -390,6 +425,7 @@ fun PlayScreen(model: AppModel, host: PlayerHost, entry: Entry, startPositionMs:
                 state = state,
                 landscape = landscape,
                 onSelectAudio = selectAudio,
+                onSeek = ::seekTo,
                 onClose = { infoOpen = false },
                 onSwitch = { next, preserveTime ->
                     model.recordWatchProgress(liveEntry, state.positionMs, state.durationMs)
@@ -413,9 +449,17 @@ private fun prettyCodec(raw: String): String = when (raw.lowercase(Locale.ROOT))
     "eac3", "ec-3" -> "Dolby E-AC-3"
     "ac3" -> "Dolby AC-3"
     "truehd" -> "Dolby TrueHD"
-    "dts", "dca" -> "DTS"
+    "mlp" -> "Meridian Lossless"
+    "dts", "dca" -> "DTS-HD / DTS"
     "flac" -> "FLAC Lossless"
     "alac" -> "ALAC Lossless"
+    "wavpack" -> "WavPack Lossless"
+    "als" -> "MPEG-4 ALS"
+    "ape" -> "Monkey's Audio"
+    "tak" -> "TAK Lossless"
+    "tta" -> "True Audio"
+    "shorten" -> "Shorten Lossless"
+    "dsd_lsbf", "dsd_msbf", "dsd_lsbf_planar", "dsd_msbf_planar" -> "DSD SACD"
     "aac" -> "AAC"
     "opus" -> "Opus"
     "vorbis" -> "Vorbis"
@@ -463,6 +507,7 @@ private fun PlayerInfoPanel(
     state: PlayerState,
     landscape: Boolean,
     onSelectAudio: (Int) -> Unit,
+    onSeek: (Long) -> Unit,
     onClose: () -> Unit,
     onSwitch: (Entry, Boolean) -> Unit,
     modifier: Modifier = Modifier,
@@ -494,14 +539,19 @@ private fun PlayerInfoPanel(
     val decRaw = state.videoDecoder
     val isHw = decRaw?.lowercase(Locale.ROOT)?.let { "mediacodec" in it || "hardware" in it || "hw" in it } == true
 
+    val depthSuffix = listOfNotNull(
+        state.videoBitDepth?.let { "${it}-bit" },
+        state.videoChroma,
+    ).joinToString(" ").let { if (it.isNotEmpty()) " · $it" else "" }
     val pictureSpec = when {
         state.videoWidth != null && state.videoHeight != null && vBadge != null ->
-            "${state.videoWidth} × ${state.videoHeight} (${aspectRatioLabel(state.videoWidth, state.videoHeight)}) · $vBadge"
+            "${state.videoWidth} × ${state.videoHeight} (${aspectRatioLabel(state.videoWidth, state.videoHeight)}) · $vBadge$depthSuffix"
         state.videoWidth != null && state.videoHeight != null ->
-            "${state.videoWidth} × ${state.videoHeight} (${aspectRatioLabel(state.videoWidth, state.videoHeight)})"
-        vBadge != null -> vBadge
+            "${state.videoWidth} × ${state.videoHeight} (${aspectRatioLabel(state.videoWidth, state.videoHeight)})$depthSuffix"
+        vBadge != null -> "$vBadge$depthSuffix"
         else -> "Probing stream…"
     }
+    val dynamicSpec = state.videoDynamicRange ?: "SDR"
     val decoderSpec = if (!decRaw.isNullOrBlank()) "$decRaw · ${state.droppedFrames} dropped" else "${state.droppedFrames} dropped frames"
     val bitrateSpec = state.durationMs?.takeIf { it > 1000L && entry.size > 0L }?.let { durMs ->
         val mbps = (entry.size.toDouble() * 8.0) / (durMs.toDouble() / 1000.0) / 1_000_000.0
@@ -509,9 +559,9 @@ private fun PlayerInfoPanel(
     } ?: formatBytes(entry.size)
     val audioSpec = activeAudio?.let { a ->
         val lang = (a.language ?: a.title ?: "Default").uppercase(Locale.ROOT)
-        val count = if (audioTracks.size > 1) " (${audioTracks.size} tracks)" else ""
-        "$lang · ${prettyCodec(a.codec)}$count"
-    } ?: "None"
+        val outTxt = state.audioOutput?.let { " · $it" } ?: ""
+        "$lang · ${prettyCodec(a.codec)}$outTxt"
+    } ?: (state.audioOutput ?: "None")
     val subSpec = when {
         subTracks.isEmpty() -> "None"
         activeSub != null -> "${(activeSub.language ?: activeSub.title ?: "Active").uppercase(Locale.ROOT)} · ${prettyCodec(activeSub.codec)} (of ${subTracks.size})"
@@ -525,6 +575,7 @@ private fun PlayerInfoPanel(
 
     val badges = buildList {
         resBadge?.let { add(it to Brand) }
+        state.videoDynamicRange?.takeIf { it != "SDR" }?.let { add(it to Accent) }
         vBadge?.let { add(it to Ink) }
         aBadge?.let { add(it to Ink) }
         decRaw?.takeIf { it.isNotBlank() }?.let { add("${if (isHw) "HW" else "SW"} · $it" to if (isHw) Accent else Dim) }
@@ -578,11 +629,27 @@ private fun PlayerInfoPanel(
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             SpecRow("Video", pictureSpec)
+            SpecRow("Dynamic Range", dynamicSpec)
             SpecRow("Decoder", decoderSpec)
             SpecRow("Bitrate", bitrateSpec)
             SpecRow("Audio", audioSpec)
             SpecRow("Subtitles", subSpec)
             SpecRow("Source", sourceSpec)
+        }
+        if (state.chapters.isNotEmpty()) {
+            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Text("CHAPTERS", color = Dim, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    state.chapters.forEach { chap ->
+                        val active = state.positionMs >= chap.startMs && (chap.endMs == null || state.positionMs < chap.endMs)
+                        FilterChip(
+                            selected = active,
+                            onClick = { onSeek(chap.startMs) },
+                            label = { Text("${clock(chap.startMs)} · ${chap.title}", fontSize = 12.sp) },
+                        )
+                    }
+                }
+            }
         }
         if (audioTracks.size > 1) {
             Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {

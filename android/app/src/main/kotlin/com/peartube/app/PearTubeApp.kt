@@ -31,6 +31,7 @@ class PearTubeApp : Application() {
 
             override fun onStop(owner: LifecycleOwner) {
                 model.inForeground = false
+                model.onBackground()
                 if (!model.shouldKeepWorkerAwake()) {
                     model.worker.suspend()
                     if (wifiLock.isHeld) wifiLock.release()

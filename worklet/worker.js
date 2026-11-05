@@ -250,7 +250,8 @@ const methods = {
     const n = await current()
     return { ...report(), discoveredSources: await n.discoveredSources() }
   },
-  search: async ({ id = null, source = null } = {}) => (await current()).search(id, { source }),
+  search: async ({ id = null, source = null, query = null, limit = 0, offset = 0 } = {}) => (await current()).search(id, { source, query, limit, offset }),
+  focusSource: async ({ key }) => ({ ok: await (await current()).focusSource(key) }),
   warm: async ({ key }) => {
     const n = await current()
     const entry = await n.findEntry(key)

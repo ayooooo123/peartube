@@ -225,11 +225,16 @@ export function createApi (state) {
       const id = url.searchParams.get('id')
       if (!id) throw Object.assign(new Error('id is required'), { status: 400 })
       const source = url.searchParams.get('source') || null
-      return { results: node ? await node.search(id, { source }) : [] }
+      const limit = Number(url.searchParams.get('limit')) || 0
+      const offset = Number(url.searchParams.get('offset')) || 0
+      return { results: node ? await node.search(id, { source, limit, offset }) : [] }
     }
     if (req.method === 'GET' && path === '/v1/entries') {
       const source = url.searchParams.get('source') || null
-      return { results: node ? await node.search(null, { source }) : [] }
+      const query = url.searchParams.get('q') || null
+      const limit = Number(url.searchParams.get('limit')) || 0
+      const offset = Number(url.searchParams.get('offset')) || 0
+      return { results: node ? await node.search(null, { source, query, limit, offset }) : [] }
     }
     if (req.method === 'POST' && path === '/v1/entries/remove') {
       const n = requireNode(node)

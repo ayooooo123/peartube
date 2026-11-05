@@ -205,9 +205,15 @@ private fun prettyCodec(raw: String): String = when (raw.lowercase(Locale.ROOT))
     "truehd", "mlp" -> "TrueHD"
     "eac3" -> "E-AC-3"
     "ac3" -> "AC-3"
-    "dts", "dca" -> "DTS"
+    "dts", "dca" -> "DTS-HD"
     "flac" -> "FLAC"
     "alac" -> "ALAC"
+    "wavpack" -> "WavPack"
+    "als" -> "ALS"
+    "ape" -> "APE"
+    "tak" -> "TAK"
+    "tta" -> "TTA"
+    "dsd_lsbf", "dsd_msbf", "dsd_lsbf_planar", "dsd_msbf_planar" -> "DSD"
     "aac" -> "AAC"
     "opus" -> "Opus"
     "vorbis" -> "Vorbis"
@@ -263,6 +269,9 @@ private fun playerStateJson(
         .put("audio", st.audio ?: -1)
         .put("subtitle", st.subtitle ?: -1)
         .put("videoDecoder", st.videoDecoder ?: JSONObject.NULL)
+        .put("videoDynamicRange", st.videoDynamicRange ?: JSONObject.NULL)
+        .put("videoBitDepth", st.videoBitDepth ?: JSONObject.NULL)
+        .put("audioOutput", st.audioOutput ?: JSONObject.NULL)
         .put("droppedFrames", st.droppedFrames)
     // Only pack the full track catalog when it actually changed, sparing QuickJS and Kotlin repeated 48-track JSON churn.
     if (includeTracks) {
@@ -422,7 +431,7 @@ private fun TvSeekBar(
     }
 }
 
-private enum class TvOverlaySheet { Audio, Subtitles, Info }
+private enum class TvOverlaySheet { Chapters, Audio, Subtitles, Info }
 
 @Composable
 private fun DumbTvReceiverScreen(activity: Activity, worker: ReceiverWorker, host: PlayerHost) {
@@ -546,7 +555,7 @@ private fun DumbTvReceiverScreen(activity: Activity, worker: ReceiverWorker, hos
                     initialMode = cmd.mode ?: "http"
                     pendingSeekMs = cmd.startPositionMs.takeIf { it > 0L }
                     host.open()
-                    val opened = runCatching { NativePlayer.open(url, null) }
+                    val opened = runCatching { NativePlayer.openWithOptions(url, null, "auto", "exact", false) }
                         .onFailure {
                             host.close()
                             openError = "Player could not start: ${it.message}"
@@ -918,6 +927,8 @@ private fun DumbTvReceiverScreen(activity: Activity, worker: ReceiverWorker, hos
                         } else null
                         val subLine = listOfNotNull(
                             resSpec,
+                            state.videoDynamicRange?.takeIf { it != "SDR" },
+                            state.audioOutput,
                             state.videoDecoder?.let(::prettyCodec),
                             info?.p2pPeers?.takeIf { it > 0 }?.let { "$it peers" },
                         ).joinToString(" · ")
@@ -984,6 +995,15 @@ private fun DumbTvReceiverScreen(activity: Activity, worker: ReceiverWorker, hos
                                 syncStateSoon()
                             },
                         )
+                        if (state.chapters.isNotEmpty()) {
+                            TvControlButton(
+                                label = "Chapters (${state.chapters.size})",
+                                onInteraction = ::touchHud,
+                                onClick = {
+                                    overlaySheet = if (overlaySheet == TvOverlaySheet.Chapters) null else TvOverlaySheet.Chapters
+                                },
+                            )
+                        }
                         if (audioTracks.isNotEmpty()) {
                             TvControlButton(
                                 label = "Audio · ${shortTrackBadge(activeAudio)}",
@@ -1042,6 +1062,7 @@ private fun DumbTvReceiverScreen(activity: Activity, worker: ReceiverWorker, hos
                     verticalArrangement = Arrangement.spacedBy(14.dp),
                 ) {
                     val header = when (sheet) {
+                        TvOverlaySheet.Chapters -> "Chapters (${state.chapters.size})"
                         TvOverlaySheet.Audio -> "Audio Track (${audioTracks.size})"
                         TvOverlaySheet.Subtitles -> "Subtitles (${subTracks.size})"
                         TvOverlaySheet.Info -> "Stream & Decoder Info"
@@ -1060,6 +1081,30 @@ private fun DumbTvReceiverScreen(activity: Activity, worker: ReceiverWorker, hos
                         )
                     }
                     when (sheet) {
+                        TvOverlaySheet.Chapters -> {
+                            LazyColumn(
+                                Modifier.weight(1f, fill = false),
+                                contentPadding = PaddingValues(vertical = 4.dp),
+                                verticalArrangement = Arrangement.spacedBy(8.dp),
+                            ) {
+                                itemsIndexed(state.chapters, key = { idx, _ -> idx }) { idx, chap ->
+                                    val active = state.positionMs >= chap.startMs && (chap.endMs == null || state.positionMs < chap.endMs)
+                                    TvControlButton(
+                                        label = "${if (active) "✓  " else ""}${formatClock(chap.startMs)} · ${chap.title}",
+                                        primary = active,
+                                        onInteraction = ::touchHud,
+                                        onClick = {
+                                            NativePlayer.seek(handle, chap.startMs)
+                                            overlaySheet = null
+                                            syncStateSoon()
+                                        },
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .then(if (idx == 0) Modifier.focusRequester(sheetFirstFocus) else Modifier),
+                                    )
+                                }
+                            }
+                        }
                         TvOverlaySheet.Audio -> {
                             LazyColumn(
                                 Modifier.weight(1f, fill = false),
@@ -1127,9 +1172,10 @@ private fun DumbTvReceiverScreen(activity: Activity, worker: ReceiverWorker, hos
                             val vCodec = state.tracks.firstOrNull { it.kind == "video" }?.codec?.let(::prettyCodec) ?: "—"
                             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                                 InfoRow("Title", activeTitle)
-                                InfoRow("Picture", "$resTxt · $vCodec")
+                                InfoRow("Picture", listOfNotNull("$resTxt · $vCodec", state.videoBitDepth?.let { "${it}-bit" }, state.videoChroma).joinToString(" · "))
+                                InfoRow("Dynamic Range", state.videoDynamicRange ?: "SDR")
                                 InfoRow("Decoder", "${state.videoDecoder ?: "MediaCodec"} · ${state.droppedFrames} dropped frames")
-                                InfoRow("Audio", shortTrackBadge(activeAudio))
+                                InfoRow("Audio", listOfNotNull(shortTrackBadge(activeAudio), state.audioOutput).joinToString(" · "))
                                 InfoRow("Subtitles", activeSub?.let(::shortTrackBadge) ?: "Off")
                                 InfoRow("Network", "$badgeTxt · ${info?.p2pPeers ?: 0} P2P peers")
                                 info?.let { formatStorageFree(it.storageFreeBytes, it.externalStorage) }?.let { diskTxt ->

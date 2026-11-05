@@ -7,6 +7,8 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -104,13 +106,23 @@ fun ListScreen(model: AppModel) {
                 TextButton(onClick = { connect() }) { Text("Let's go", color = Brand) }
             }
         }
-        Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            listOf("All", "Movies", "Series", "On Device").forEach { name ->
+        val sources = status?.sources.orEmpty()
+        LazyRow(Modifier.fillMaxWidth(), contentPadding = PaddingValues(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            items(listOf("All", "Movies", "Series", "On Device"), key = { "kind-$it" }) { name ->
                 FilterChip(selected = filter == name, onClick = { filter = name }, label = { Text(name) })
             }
-            val sources = status?.sources.orEmpty()
-            if (sources.size > 1) sources.forEach { channel ->
-                FilterChip(selected = source == channel.key, onClick = { source = if (source == channel.key) null else channel.key }, label = { Text(channel.alias.ifBlank { "Channel ${channel.key.take(6)}" }) })
+            if (sources.size > 1) {
+                items(sources, key = { "src-${it.key}" }) { channel ->
+                    FilterChip(
+                        selected = source == channel.key,
+                        onClick = {
+                            val next = if (source == channel.key) null else channel.key
+                            source = next
+                            if (next != null) model.focusSource(next)
+                        },
+                        label = { Text(channel.alias.ifBlank { "Channel ${channel.key.take(6)}" }) },
+                    )
+                }
             }
         }
         LazyColumn(Modifier.weight(1f).fillMaxWidth(), contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {

@@ -23,7 +23,7 @@ const HEX144 = /^[0-9a-f]{144}$/
 const ROLES = new Set(['owner', 'mod', 'writer'])
 const MAX_TITLE = 300
 const BLOB_BLOCK_SIZE = 512 * 1024
-const MAX_CONTENT_TOPICS = 24
+const MAX_CONTENT_TOPICS = 48
 // How often content beyond the announcement cap gets its turn on the DHT.
 const CONTENT_TOPIC_ROTATE_MS = 20_000
 const isUniform512 = blob => Boolean(blob && (
@@ -741,7 +741,7 @@ async function openNode ({
 
   if (usePrimaryChannel) joinOverlayTopic(`channel:${primaryKey}`, channel.key, channel.discoveryKey)
 
-  // Spreads both PearTube's merged blob topic and stock Hypercore discoveryKey wide on public swarms so supplemental HiveRelays find every wet 512 KiB block.
+  // Announces each video on its stock Hypercore discoveryKey, the topic HiveRelays and every PearTube since v0.4.32 look up.
   const contentTopics = new Map()
   function joinContentSwarm (blobsHex, evict = true) {
     if (dht || closing || !str(blobsHex, HEX64)) return
@@ -767,10 +767,7 @@ async function openNode ({
       }
     }
     const keyBuf = b4a.from(blobsHex, 'hex')
-    const topics = [
-      createHash('sha256').update('peartube/blob/v1/').update(keyBuf).digest(),
-      hypercoreCrypto.discoveryKey(keyBuf)
-    ]
+    const topics = [hypercoreCrypto.discoveryKey(keyBuf)]
     contentTopics.set(blobsHex, topics)
     for (const t of topics) {
       swarm.join(t, { server: true, client: true })

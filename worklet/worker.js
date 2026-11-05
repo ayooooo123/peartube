@@ -177,7 +177,18 @@ function ipv4s (interfaces) {
     .join(', ')
 }
 
-const report = () => ({ ...node.status(), lan: lanNote, apiUrl })
+// A status read can land before the node exists (the app asks as soon as Settings opens, and a
+// start or stop may still be queued); spreading the node status threw "cannot read property
+// 'status' of null" into the UI. Report an empty node instead.
+const idleBucket = () => ({ peers: 0, rxBytes: 0, txBytes: 0, downBps: 0, upBps: 0, closedRx: 0, closedTx: 0 })
+const idleReport = () => ({
+  tracker: '', channel: '', writer: '', writable: false, blobs: '', blobBytes: 0, cachedBytes: 0,
+  peers: 0, lanPeers: 0, downBps: 0, upBps: 0, rxBytes: 0, txBytes: 0,
+  routes: { private: idleBucket(), public: idleBucket(), lan: idleBucket() },
+  inflightBlocks: 0, rtt: 0, retransmits: 0, sources: [],
+  lan: lanNote, apiUrl
+})
+const report = () => (node ? { ...node.status(), lan: lanNote, apiUrl } : idleReport())
 
 // Reads wait for a queued start or stop, so they never see the node being replaced.
 async function current () {
@@ -251,9 +262,12 @@ const methods = {
     const discovered = await node.discoveredSources()
     return { ...report(), discoveredSources: discovered }
   }),
+  // The app asks for status the moment Settings opens, which can be before a queued start has
+  // finished: answer with an empty node rather than throwing into the UI.
   status: async () => {
-    const n = await current()
-    return { ...report(), discoveredSources: await n.discoveredSources() }
+    await lifecycle
+    if (!node) return { ...idleReport(), discoveredSources: [] }
+    return { ...report(), discoveredSources: await node.discoveredSources() }
   },
   search: async ({ id = null, source = null, query = null, limit = 0, offset = 0 } = {}) => (await current()).search(id, { source, query, limit, offset }),
   focusSource: async ({ key }) => ({ ok: await (await current()).focusSource(key) }),

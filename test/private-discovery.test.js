@@ -10,6 +10,7 @@ import { join } from 'node:path'
 import HyperDHT from 'hyperdht'
 import NoiseSecretStream from '@hyperswarm/secret-stream'
 import createTestnet from 'hyperdht/testnet.js'
+import hypercoreCrypto from 'hypercore-crypto'
 import { createNode } from '../src/index.js'
 import { attemptDirectHopBypass, createPrivateGuard, diversityBucketForAddress, publishStandaloneRouteCard } from '../src/private-overlay.js'
 
@@ -245,7 +246,7 @@ test('standalone bin/private-relay.js forwarders: zero disk writes, fresh-boot 2
 
   for (const contentTopic of [
     seeder.tracker.discoveryKey,
-    createHash('sha256').update('peartube/blob/v1/').update(Buffer.from(seeder.status().blobs, 'hex')).digest()
+    hypercoreCrypto.discoveryKey(Buffer.from(seeder.status().blobs, 'hex'))
   ]) {
     const leaked = new Set()
     for await (const reply of observer.lookup(contentTopic)) {

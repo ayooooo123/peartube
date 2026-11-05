@@ -156,7 +156,7 @@ test('channels, gossip discovery, cross-channel magnet seeding, reciprocity, Str
   await directory.close()
 
   // Brand-new peer C has ZERO trackers and ZERO channels in common with B — it opens ONLY the peartube://watch/... magnet URI
-  // (stripped of sourceKey to prove pure content-swarm discovery over peartube/blob/v1/<blobs>)!
+  // (stripped of sourceKey to prove pure content-swarm discovery over the video core's discoveryKey)!
   const pureMagnet = bMovie.magnetUrl.replace(/&source=[0-9a-f]{64}(&kind=[a-z]+)?/i, '')
   const viewerC = await createNode({ storage: tmp('viewer-c'), bootstrap: testnet.bootstrap })
   nodes.push(viewerC)

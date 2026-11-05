@@ -58,11 +58,11 @@ function pearToStremioMeta (entry) {
 
 // Bytes start..end of a stream, through the node's own blob server. Only a 206 is accepted: a server that ignores
 // the range would send the whole video.
-function readStream (port, search, start, end) {
+function readStream (host, port, search, start, end) {
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => req.destroy(new Error('Stream read timed out')), 4000)
     const fail = err => { clearTimeout(timer); reject(err) }
-    const req = httpRequest({ host: '127.0.0.1', port, path: '/' + search, headers: { range: `bytes=${start}-${end}` } }, res => {
+    const req = httpRequest({ host, port, path: '/' + search, headers: { range: `bytes=${start}-${end}` } }, res => {
       if (res.statusCode !== 206) { res.destroy(); fail(new Error(`Stream read returned ${res.statusCode}`)); return }
       const chunks = []
       res.on('data', chunk => chunks.push(chunk))
@@ -110,6 +110,12 @@ export function createApi (state) {
   // 10 minutes: its header may not have been reachable yet.
   const resolutions = new Map()
   const downloadFormats = new Map()
+  // The blob server binds the interface it advertises (PEARTUBE_STREAM_HOST), not loopback: a
+  // relay on a LAN address refuses 127.0.0.1, and every same-origin /v1/blob read answered 502.
+  const blobHost = () => {
+    const h = state.node?.blobServer?.host
+    return !h || h === '0.0.0.0' || h === '::' ? '127.0.0.1' : h
+  }
   function resolutionOf (entry) {
     const port = state.node?.blobServer?.port
     if (!port) return null
@@ -117,7 +123,7 @@ export function createApi (state) {
     const known = resolutions.get(search)
     if (known && (known.label !== null || Date.now() - known.at < 600000)) return known.promise
     const record = { at: Date.now(), label: undefined }
-    record.promise = videoSize((start, end) => readStream(port, search, start, end))
+    record.promise = videoSize((start, end) => readStream(blobHost(), port, search, start, end))
       .then(size => size && resolutionLabel(size), () => null)
       .then(label => { record.label = label; return label })
     resolutions.set(search, record)
@@ -435,7 +441,7 @@ export function createApi (state) {
       if (dlTitle !== null) {
         let fmt = downloadFormats.get(upUrl.search)
         if (!fmt) {
-          const head = await readStream(state.node.blobServer.port, upUrl.search, 0, 255).catch(() => null)
+          const head = await readStream(blobHost(), state.node.blobServer.port, upUrl.search, 0, 255).catch(() => null)
           fmt = sniffDownloadFormat(head)
           if (head && head.length >= 4) {
             if (downloadFormats.size >= 512) downloadFormats.clear()
@@ -446,7 +452,7 @@ export function createApi (state) {
       }
       if (res.destroyed) return
       const headers = req.headers.range ? { range: req.headers.range } : {}
-      const up = httpRequest({ host: '127.0.0.1', port: state.node.blobServer.port, path: '/' + upUrl.search, method: req.method, headers }, upRes => {
+      const up = httpRequest({ host: blobHost(), port: state.node.blobServer.port, path: '/' + upUrl.search, method: req.method, headers }, upRes => {
         const out = { ...CORS }
         for (const h of ['content-type', 'content-length', 'content-range', 'accept-ranges']) {
           if (upRes.headers[h] !== undefined) out[h] = upRes.headers[h]

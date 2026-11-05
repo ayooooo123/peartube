@@ -460,7 +460,6 @@ async function openNode ({
   // fastForward: false forces every peer to verify ACL grants, claims, and removals locally through apply.
   let primaryDirty = true
   let primaryHydrated = false
-  let primaryViewVersion = -1
   const primaryCache = { entries: [], byId: new Map(), discovered: [], peers: [] }
   channel = new Autobee(chNs, targetKey ? b4a.from(targetKey, 'hex') : null, {
     ...(founderKeyPair ? { keyPair: founderKeyPair } : {}),
@@ -866,18 +865,27 @@ async function openNode ({
     return { entriesList, discoveredList, peersList }
   }
 
-  async function refreshPrimaryCache () {
+  async function refreshPrimaryCache ({ force = false } = {}) {
     if (closing) return
-    await applied(channel)
-    const version = channel.view.version
-    if (closing || (!primaryDirty && primaryHydrated && primaryViewVersion === version)) return
-    const previousVersion = primaryViewVersion
-    primaryDirty = false
+    // The node's own channel is read on every call, exactly as before the pool. Caching this one
+    // broke co-writer visibility: Autobee only interrupts for its own updates, so a peer's publish
+    // could land with `dirty` still false and nothing would rescan — the owner waited out the whole
+    // 120 s window in test/network.test.js and never saw the entry. The pool exists for thousands of
+    // *followed* channels; this one is one channel, and correctness wins.
+    if (force) {
+      if (Date.now() - lastSwarmFlushAt > 10_000) {
+        lastSwarmFlushAt = Date.now()
+        await Promise.race([swarm.flush().catch(() => {}), new Promise(r => setTimeout(r, 3_000))])
+      }
+      for (const session of wakeup.getSessions(channel.key, { discoveryKey: channel.discoveryKey })) {
+        try { session.broadcastLookup() } catch {}
+      }
+      await Promise.race([channel.update().catch(() => {}), new Promise(r => setTimeout(r, 2_000))])
+    } else await applied(channel)
     const { entriesList, discoveredList, peersList } = await scanChannelView(channel.view, primaryKey)
     indexChannelRecords(primaryCache, entriesList, discoveredList, peersList, { merge: true })
     primaryHydrated = true
-    primaryViewVersion = version
-    if (previousVersion >= 0 && previousVersion !== version) update()
+    primaryDirty = false
   }
 
   async function refreshSourceCache (src, { waitSync = true, force = false } = {}) {
@@ -1166,6 +1174,7 @@ async function openNode ({
       if (!rotatingSources) {
         rotatingSources = true
         try {
+          if (usePrimaryChannel || channelHasEntries) await refreshPrimaryCache({ force: true }).catch(() => {})
           const prevEpoch = viewEpoch
           // An awake channel nobody asks again keeps the view it woke with, and a frozen view
           // serves blob keys its publisher already repointed (a video that never loads).
@@ -1587,20 +1596,38 @@ async function openNode ({
     }
     if (activeRefresh.length > 0) await Promise.all(activeRefresh)
 
+    // A listing and an id lookup both union two sources of truth: the snapshot the channel was
+    // hibernated with, and its live view. Either alone loses real titles — a view can stop at a
+    // region it has not downloaded yet (a co-writer's publish read as absent, the ACL test's whole
+    // window), and a snapshot cannot know what arrived while the channel slept.
     const raw = []
+    const pushRaw = new Map()
+    const addRaw = rec => { if (!pushRaw.has(rec.key)) pushRaw.set(rec.key, rec) }
+    const readView = async (view, viaKey, prefix) => {
+      const range = id ? { gte: b4a.from(`${id}/`), lt: b4a.from(`${id}/\xff`) } : {}
+      for await (const node of view.createReadStream(range)) {
+        const sub = b4a.toString(node.key)
+        if (isSystemViewKey(sub)) continue
+        const op = decodeOp(node.value)
+        if (op?.type === 'announce') addRaw({ key: prefix ? `${prefix}${sub}` : sub, entry: op, source: viaKey, sourceKind: 'channel' })
+      }
+    }
     if ((usePrimaryChannel || channelHasEntries) && (!filterSource || filterSource === primaryKey)) {
-      const items = id ? (primaryCache.byId.get(id) || []) : primaryCache.entries
-      for (const { sub, entry } of items) {
-        raw.push({ key: sub, entry, source: primaryKey, sourceKind: 'channel' })
+      await readView(channel.view, primaryKey, null)
+      for (const { sub, entry } of primaryCache.entries) {
+        if (id && entry.id !== id) continue
+        addRaw({ key: sub, entry, source: primaryKey, sourceKind: 'channel' })
       }
     }
     for (const s of extraSources.values()) {
       if (filterSource && filterSource !== s.key) continue
-      const items = id ? (s.byId.get(id) || []) : s.entries
-      for (const { sub, entry } of items) {
-        raw.push({ key: `channel:${s.key}/${sub}`, entry, source: s.key, sourceKind: 'channel' })
+      if (s.bee) await readView(s.bee.view, s.key, `channel:${s.key}/`)
+      for (const { sub, entry } of s.entries) {
+        if (id && entry.id !== id) continue
+        addRaw({ key: `channel:${s.key}/${sub}`, entry, source: s.key, sourceKind: 'channel' })
       }
     }
+    raw.push(...pushRaw.values())
     for (const [key, item] of ephemeralWatches) {
       if ((!id || item.entry.id === id) && (!filterSource || filterSource === 'direct')) raw.push({ key, ...item })
     }

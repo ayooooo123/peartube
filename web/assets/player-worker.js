@@ -125,12 +125,22 @@ function putBlock (idx, data) {
     return
   }
   if (blockCache.size >= MAX_BLOCKS) {
-    let oldestKey = null
-    let oldestStamp = Infinity
+    // Never evict a block the demuxer has not read yet. Blocks ahead of the read position keep the
+    // stamp they were fetched with, while every block behind is re-stamped each time it is read, so
+    // plain oldest-stamp eviction threw away the next block on every insert: every read became a
+    // cache miss, and a miss is a synchronous fetch that freezes this worker for the round trip.
+    let victim = null
+    let victimStamp = Infinity
     for (const [k, v] of blockCache) {
-      if (v.stamp < oldestStamp) { oldestStamp = v.stamp; oldestKey = k }
+      if (k >= lastPostedBlock) continue
+      if (v.stamp < victimStamp) { victimStamp = v.stamp; victim = k }
     }
-    if (oldestKey !== null) blockCache.delete(oldestKey)
+    if (victim === null) {
+      for (const [k, v] of blockCache) {
+        if (v.stamp < victimStamp) { victimStamp = v.stamp; victim = k }
+      }
+    }
+    if (victim !== null) blockCache.delete(victim)
   }
   blockCache.set(idx, { data, stamp: blockStamp })
 }

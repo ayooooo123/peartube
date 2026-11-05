@@ -201,20 +201,23 @@ export function createBlobRangeServer (store, opts = {}) {
   })
 
   async function serveBlob (info, req, res) {
-    const resolved = await resolve(info.key, info)
-    if (!resolved) {
-      if (!res.destroyed) { res.statusCode = 404; res.end() }
-      return
-    }
-    if (res.destroyed) return
-    const core = store.get(resolved)
-    const onEarlyClose = () => core.close().catch(noop)
-    res.once('close', onEarlyClose)
+    let resolved = null
+    let core = null
+    let onEarlyClose = null
     try {
+      resolved = await resolve(info.key, info)
+      if (!resolved) {
+        if (!res.destroyed) { res.statusCode = 404; res.end() }
+        return
+      }
+      if (res.destroyed) return
+      core = store.get(resolved)
+      onEarlyClose = () => core.close().catch(noop)
+      res.once('close', onEarlyClose)
       await core.ready()
     } catch {
-      res.removeListener('close', onEarlyClose)
-      await core.close().catch(noop)
+      if (onEarlyClose) res.removeListener('close', onEarlyClose)
+      if (core) await core.close().catch(noop)
       if (!res.destroyed) { res.statusCode = 404; res.end() }
       return
     }

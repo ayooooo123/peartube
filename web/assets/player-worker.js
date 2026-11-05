@@ -183,8 +183,13 @@ function readAtSync (offset, dstPtr, len) {
     return take
   }
 
+  // A sync read blocks this worker — demux, decode and mux all stop until it returns — so on a
+  // cache miss fetch only enough to serve the caller (a fraction of the 2 MiB block) instead of
+  // the whole thing. The page is told to fetch the full block in parallel (the readBlock message
+  // above), and only a complete block is ever put into blockCache.
   const fetchStart = bIdx * STREAM_BLOCK
-  const fetchEnd = Math.min(streamLen - 1, fetchStart + STREAM_BLOCK - 1)
+  const need = Math.min(STREAM_BLOCK, Math.max(131072, bOff + maxLen))
+  const fetchEnd = Math.min(streamLen - 1, fetchStart + need - 1)
 
   for (let attempt = 0; attempt < 3; attempt++) {
     try {
@@ -197,7 +202,9 @@ function readAtSync (offset, dstPtr, len) {
       if (xhr.status !== 200 && xhr.status !== 206) continue
       const src = new Uint8Array(xhr.response || new ArrayBuffer(0))
       if (src.byteLength === 0) continue
-      putBlock(bIdx, src)
+      // Only a whole block belongs in the cache; a short read is served directly.
+      const wholeBlock = src.byteLength >= Math.min(STREAM_BLOCK, streamLen - fetchStart)
+      if (wholeBlock) putBlock(bIdx, src)
       const offInSrc = offset - fetchStart
       if (offInSrc >= src.byteLength) return -1
       const take = Math.min(maxLen, src.byteLength - offInSrc)

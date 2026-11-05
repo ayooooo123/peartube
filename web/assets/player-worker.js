@@ -27,7 +27,10 @@ let wcGops = []
 let wcQueuedSpanSec = 0
 let wcInFlight = 0
 let wcFlushAtDrain = false
-const MAX_WC_ACTIVE = 10
+// Pictures the decoder may hold in flight. Ten ran dry when the worker paused even briefly
+// (a letterbox readback, a queue drain), and late pictures reach the page as drops; sixteen
+// rides out a stall of a few hundred milliseconds at 24 fps.
+const MAX_WC_ACTIVE = 16
 let lastMseSegEnd = 0
 let latestQueuedSeq = 0
 let eof = false
@@ -358,6 +361,15 @@ function sampleVideoFrame (vf, w, h) {
   } catch { return null }
 }
 
+// Reading a 4K frame back from the GPU to look for baked-in bars costs a full resolve and a
+// colour convert. Three agreeing samples settle a file's letterbox, so after that look far less
+// often — every thirtieth frame still follows a picture that opens up, while the readback
+// that was starving the decoder (and dropping late pictures) happens a fraction as often.
+function cropSampleDue () {
+  if (streamCropSame >= 3) return ++streamCropFrames % 30 === 1
+  return ++streamCropFrames % 4 === 1
+}
+
 function trackLetterbox (c, w, h) {
   if (!c) return
   const p = streamCropCandidate
@@ -641,7 +653,7 @@ function openWebCodecsInstance (seq, minPts) {
         wcInFlight++
         const w = vf.displayWidth || vf.codedWidth || 0
         const h = vf.displayHeight || vf.codedHeight || 0
-        if (++streamCropFrames % 4 === 1 && w > 0 && h > 0) {
+        if (cropSampleDue() && w > 0 && h > 0) {
           trackLetterbox(sampleVideoFrame(vf, w, h), w, h)
         }
         self.postMessage({ type: 'videoFrame', seq, pts, w, h, hwFrame: vf }, [vf])
@@ -805,7 +817,7 @@ function pump () {
       lastVideoPts = pts
       queuedVideoSec += step
       const { ab, len } = copyPooledBuf(freeVideoPool)
-      if (!offRenderer && code === 7 && ++streamCropFrames % 4 === 1) {
+      if (!offRenderer && code === 7 && cropSampleDue()) {
         trackLetterbox(detectLetterbox(new Uint8Array(ab, 0, len), w, h), w, h)
       }
       if (offRenderer) {

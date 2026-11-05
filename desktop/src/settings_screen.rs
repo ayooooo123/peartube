@@ -161,6 +161,11 @@ impl PearTube {
                             "How much playback cache this Mac keeps to help the network. Applies immediately; the film you are watching always keeps a window around the playhead.",
                             v_flex()
                                 .gap_3()
+                                .child(div().text_sm().font_weight(FontWeight::SEMIBOLD).child(if form.cache_max_gb == 0 {
+                                    "Unlimited".to_string()
+                                } else {
+                                    format!("{} GB on disk", form.cache_max_gb)
+                                }))
                                 .child(
                                     h_flex()
                                         .gap_2()
@@ -250,11 +255,15 @@ impl PearTube {
                                     )
                                 }),
                         )
-                        .child(
-                            h_flex()
-                                .mt_2()
-                                .child(Button::new("save").primary().label(if first_run { "Connect & Open Cinema" } else { "Save Changes" }).on_click(cx.listener(|this, _, _, cx| this.save_settings(cx)))),
-                        ),
+                ),
+            )
+            .child(
+                div().border_t_1().border_color(rgb(LINE)).child(
+                    column().py_3().child(
+                        h_flex()
+                            .justify_end()
+                            .child(Button::new("save").primary().label(if first_run { "Connect & Open Cinema" } else { "Save Changes" }).on_click(cx.listener(|this, _, _, cx| this.save_settings(cx)))),
+                    ),
                 ),
             )
     }
@@ -269,6 +278,7 @@ impl PearTube {
             &form.bootstrap.read(cx).value(),
             form.lan,
             form.private_routing,
+            form.cache_max_gb,
         );
         match parsed.and_then(|new| new.save().map(|()| new)) {
             Err(err) => {

@@ -137,7 +137,7 @@ impl Settings {
     }
 
     /// Settings from the form's fields. Accepts raw 64-hex keys, `peartube://` URIs, and 12/24-word recovery phrases.
-    pub fn parse(tracker: &str, mnemonic_raw: &str, sources_raw: &str, relay_through: &str, bootstrap: &str, lan_discovery: bool, private_routing: bool) -> Result<Settings, String> {
+    pub fn parse(tracker: &str, mnemonic_raw: &str, sources_raw: &str, relay_through: &str, bootstrap: &str, lan_discovery: bool, private_routing: bool, cache_max_gb: u32) -> Result<Settings, String> {
         let mut primary = String::new();
         let mut sources: Vec<SourceSpec> = Vec::new();
         let tr = tracker.trim();
@@ -164,7 +164,7 @@ impl Settings {
         if let Some(bad) = bootstrap.iter().find(|node| !is_host_port(node)) {
             return Err(format!("Bootstrap node {bad} is not host:port."));
         }
-        Ok(Settings { tracker: primary, mnemonic, sources, relay_through, bootstrap, lan_discovery, private_routing, cache_max_gb: 10 })
+        Ok(Settings { tracker: primary, mnemonic, sources, relay_through, bootstrap, lan_discovery, private_routing, cache_max_gb })
     }
 }
 

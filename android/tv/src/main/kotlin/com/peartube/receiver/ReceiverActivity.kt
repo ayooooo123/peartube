@@ -116,6 +116,8 @@ class ReceiverActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         setShowWhenLocked(true)
         setTurnScreenOn(true)
+        // Opening the app must never be what keeps the receiver alive.
+        ReceiverService.start(this)
         val worker = (application as ReceiverApp).worker
         player = PlayerHost(this)
         setContent {

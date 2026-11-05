@@ -27,9 +27,21 @@ class ReceiverApp : Application() {
     private var highPerfWifiLock: WifiManager.WifiLock? = null
     private var cpuWakeLock: PowerManager.WakeLock? = null
 
+    private var running = false
+
     override fun onCreate() {
         super.onCreate()
         worker = ReceiverWorker(this)
+        ensureRunning()
+    }
+
+    /**
+     * Locks and worklet start, once per process. The foreground service calls
+     * this too, so a boot start and a launcher start converge on one receiver.
+     */
+    fun ensureRunning() {
+        if (running) return
+        running = true
         val tvName = Build.MODEL?.takeIf { it.isNotBlank() }?.let { "PearTube TV · $it" } ?: "PearTube TV"
         appScope.launch {
             runCatching { worker.ensureStarted(tvName, openAuth = true) }

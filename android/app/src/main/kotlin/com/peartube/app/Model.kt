@@ -34,6 +34,8 @@ data class Settings(
     val bootstrap: List<String> = emptyList(),
     val lanDiscovery: Boolean = true,
     val privateRouting: Boolean = false,
+    /** Playback cache ceiling in GB kept to help the network; 0 = unlimited. */
+    val cacheMaxGb: Int = 10,
 ) {
     val hasSources: Boolean get() = tracker.isNotEmpty() || mnemonic.isNotEmpty() || sources.isNotEmpty()
 
@@ -60,6 +62,7 @@ data class Settings(
             .put("bootstrap", JSONArray(bootstrap))
             .put("lanDiscovery", lanDiscovery)
             .put("privateRouting", privateRouting)
+            .put("cacheMaxGb", cacheMaxGb)
         val tmp = File(dir, "settings.json.tmp")
         tmp.writeText(json.toString(2))
         if (!tmp.renameTo(File(dir, "settings.json"))) throw IOException("Cannot save settings.json")
@@ -78,6 +81,7 @@ data class Settings(
                 bootstrap = json.optJSONArray("bootstrap").strings(),
                 lanDiscovery = json.optBoolean("lanDiscovery", false),
                 privateRouting = json.optBoolean("privateRouting"),
+                cacheMaxGb = json.optInt("cacheMaxGb", 10),
             )
         } catch (_: Exception) {
             Settings()
@@ -122,7 +126,7 @@ data class Settings(
             return SourceSpec(key, kind, alias)
         }
 
-        fun parse(tracker: String, sourcesRaw: String, relayThrough: String, bootstrap: String, lan: Boolean, privateRouting: Boolean = false, mnemonicRaw: String = ""): Settings {
+        fun parse(tracker: String, sourcesRaw: String, relayThrough: String, bootstrap: String, lan: Boolean, privateRouting: Boolean = false, mnemonicRaw: String = "", cacheMaxGb: Int = 10): Settings {
             var primary = ""
             val sources = mutableListOf<SourceSpec>()
             if (tracker.isNotBlank()) {
@@ -142,7 +146,7 @@ data class Settings(
             relays.firstOrNull { !isKey(it) }?.let { throw IllegalArgumentException("Relay key $it is not 64 hex characters.") }
             val nodes = split(bootstrap)
             nodes.firstOrNull { !isHostPort(it) }?.let { throw IllegalArgumentException("Bootstrap node $it is not host:port.") }
-            return Settings(primary, cleanMnemonic, sources, relays, nodes, lan, privateRouting)
+            return Settings(primary, cleanMnemonic, sources, relays, nodes, lan, privateRouting, cacheMaxGb)
         }
 
         private fun split(list: String) = list.split(',', ' ', '\t', '\n', '\r').filter { it.isNotEmpty() }

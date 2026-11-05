@@ -112,10 +112,17 @@ class Worker(context: Context) {
             .put("bootstrap", if (settings.bootstrap.isEmpty()) JSONObject.NULL else JSONArray(settings.bootstrap))
             .put("lan", settings.lanDiscovery)
             .put("privateRouting", settings.privateRouting)
+            .put("cacheMaxGb", settings.cacheMaxGb)
         return Status.from(call("start", params) as JSONObject)
     }
 
     suspend fun status(): Status = Status.from(call("status") as JSONObject)
+
+    /** Applies the playback cache ceiling without restarting the worklet. */
+    suspend fun setCacheMax(bytes: Long): Long {
+        val res = call("setCacheMax", JSONObject().put("maxBytes", bytes)) as JSONObject
+        return res.optLong("cacheMaxBytes", 0L)
+    }
 
     /** Every entry across subscribed trackers and channels. */
     suspend fun search(id: String? = null): List<Entry> {

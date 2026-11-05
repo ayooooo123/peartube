@@ -146,6 +146,9 @@ async function ensureCast (storageHint = null, peerStorageHint = null) {
         reclaimLowDiskReceiverStorage(peerDir)
         node = await createNode({ storage: peerDir, onchange: update, worklet: true })
         node.swarm.on('update', update)
+        // A TV box has little storage to spare: keep a small rolling window of
+        // whatever it is playing instead of the whole film.
+        node.setCacheMaxBytes(2 * 1e9)
         lanWanted = true
         await moveLan()
         return node

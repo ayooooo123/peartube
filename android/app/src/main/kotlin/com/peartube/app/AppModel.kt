@@ -197,6 +197,14 @@ class AppModel(private val app: Application) {
         if (settings.value.hasSources) starts.trySend(settings.value)
     }
 
+    /** Storage contribution: persisted, then applied to the live worklet. */
+    fun setCacheLimit(gb: Int) {
+        val next = settings.value.copy(cacheMaxGb = gb)
+        runCatching { next.save(dataDir) }
+        settings.value = next
+        scope.launch { runCatching { worker.setCacheMax(gb.toLong() * 1_000_000_000L) } }
+    }
+
     fun save(next: Settings) {
         next.save(dataDir)
         settings.value = next

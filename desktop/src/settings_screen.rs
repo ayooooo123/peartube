@@ -13,7 +13,7 @@ use peartube::settings::Settings;
 use peartube::soundfont;
 
 use crate::app::{PearTube, Screen};
-use crate::list::column;
+use crate::list::{column, format_bytes};
 use crate::theme::{CARD, DANGER, DIM, LINE};
 
 pub struct SettingsForm {
@@ -174,6 +174,11 @@ impl PearTube {
                                             btn.on_click(cx.listener(move |this, _, _, cx| this.set_cache_limit(gb, cx)))
                                         })),
                                 )
+                                .child(div().text_xs().text_color(rgb(DIM)).child(match (self.status.as_ref(), form.cache_max_gb) {
+                                    (Some(s), 0) => format!("Using {} · unlimited", format_bytes(s.cached_bytes)),
+                                    (Some(s), gb) => format!("Using {} of {} GB", format_bytes(s.cached_bytes), gb),
+                                    (None, _) => "Usage appears once the node is up.".to_string(),
+                                }))
                                 .child(div().text_xs().text_color(rgb(DIM)).child(if form.cache_max_gb == 0 {
                                     "Currently unlimited: cached blocks are only freed when you do it by hand.".to_string()
                                 } else {

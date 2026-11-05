@@ -2,6 +2,8 @@ package com.peartube.app.ui
 
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -31,6 +33,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardCapitalization
@@ -47,6 +50,11 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Icon
 
+private fun formatCacheSize(bytes: Long): String {
+    val gb = bytes / 1_000_000_000.0
+    return if (gb >= 1.0) "%.1f GB".format(gb) else "${bytes / 1_000_000} MB"
+}
+
 @Composable
 fun SettingsScreen(model: AppModel) {
     val settings by model.settings.collectAsState()
@@ -57,6 +65,7 @@ fun SettingsScreen(model: AppModel) {
     var bootstrap by rememberSaveable { mutableStateOf(settings.bootstrap.joinToString(", ")) }
     var lan by rememberSaveable { mutableStateOf(settings.lanDiscovery) }
     var privateRouting by rememberSaveable { mutableStateOf(settings.privateRouting) }
+    var cacheMaxGb by rememberSaveable { mutableStateOf(settings.cacheMaxGb) }
     var problem by remember { mutableStateOf<String?>(null) }
     var advanced by rememberSaveable { mutableStateOf(false) }
     val bankSelected by model.soundFontSelected.collectAsState()
@@ -108,6 +117,39 @@ fun SettingsScreen(model: AppModel) {
                     }
                 }
             }
+            Field("Storage contribution", "How much playback cache this phone keeps to help the network. The film you are watching always keeps a window around the playhead.") {
+                val choices = listOf(5, 10, 25, 50, 100, 0)
+                val status by model.status.collectAsState()
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Row(
+                        Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        choices.forEach { gb ->
+                            val selected = cacheMaxGb == gb
+                            Button(
+                                onClick = {
+                                    cacheMaxGb = gb
+                                    model.setCacheLimit(gb)
+                                },
+                                shape = RoundedCornerShape(99.dp),
+                                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = if (selected) Brand else CardBg,
+                                    contentColor = if (selected) Color.White else Ink,
+                                ),
+                            ) { Text(if (gb == 0) "Unlimited" else "$gb GB") }
+                        }
+                    }
+                    Hint(
+                        when {
+                            cacheMaxGb == 0 -> "Unlimited: cached blocks are only freed when you clear them."
+                            status != null -> "Using ${formatCacheSize(status!!.cachedBytes)} of $cacheMaxGb GB."
+                            else -> "At most $cacheMaxGb GB of cached blocks."
+                        }
+                    )
+                }
+            }
             HorizontalDivider(color = Line)
             Row(
                 Modifier.fillMaxWidth().background(CardBg, RoundedCornerShape(16.dp))
@@ -150,7 +192,7 @@ fun SettingsScreen(model: AppModel) {
             Button(
                 onClick = {
                     problem = try {
-                        model.save(Settings.parse(tracker, sources, relays, bootstrap, lan, privateRouting, mnemonic))
+                        model.save(Settings.parse(tracker, sources, relays, bootstrap, lan, privateRouting, mnemonic, cacheMaxGb))
                         null
                     } catch (e: Exception) {
                         e.message

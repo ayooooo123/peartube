@@ -873,10 +873,6 @@ async function openNode ({
     // 120 s window in test/network.test.js and never saw the entry. The pool exists for thousands of
     // *followed* channels; this one is one channel, and correctness wins.
     if (force) {
-      if (Date.now() - lastSwarmFlushAt > 10_000) {
-        lastSwarmFlushAt = Date.now()
-        await Promise.race([swarm.flush().catch(() => {}), new Promise(r => setTimeout(r, 3_000))])
-      }
       for (const session of wakeup.getSessions(channel.key, { discoveryKey: channel.discoveryKey })) {
         try { session.broadcastLookup() } catch {}
       }
@@ -1174,7 +1170,6 @@ async function openNode ({
       if (!rotatingSources) {
         rotatingSources = true
         try {
-          if (usePrimaryChannel || channelHasEntries) await refreshPrimaryCache({ force: true }).catch(() => {})
           const prevEpoch = viewEpoch
           // An awake channel nobody asks again keeps the view it woke with, and a frozen view
           // serves blob keys its publisher already repointed (a video that never loads).
@@ -1587,14 +1582,25 @@ async function openNode ({
       await wakeSource(filterSource, { touch: true })
     }
     const activeRefresh = []
-    if ((usePrimaryChannel || channelHasEntries) && (!filterSource || filterSource === primaryKey)) {
-      activeRefresh.push(refreshPrimaryCache())
+    // An id lookup never walks the whole view: a full scan blocks on regions the view has not
+    // downloaded yet, and that delay is exactly what made a co-writer's publish read as absent.
+    // `applied()` catches the oplog up; the range read below fetches the key it wants.
+    if (id) {
+      if (usePrimaryChannel || channelHasEntries) await applied(channel)
+      for (const s of extraSources.values()) {
+        if (filterSource && filterSource !== s.key) continue
+        if (s.bee) await applied(s.bee)
+      }
+    } else {
+      if ((usePrimaryChannel || channelHasEntries) && (!filterSource || filterSource === primaryKey)) {
+        activeRefresh.push(refreshPrimaryCache())
+      }
+      for (const s of extraSources.values()) {
+        if (filterSource && filterSource !== s.key) continue
+        if (s.bee) activeRefresh.push(refreshSourceCache(s))
+      }
+      if (activeRefresh.length > 0) await Promise.all(activeRefresh)
     }
-    for (const s of extraSources.values()) {
-      if (filterSource && filterSource !== s.key) continue
-      if (s.bee) activeRefresh.push(refreshSourceCache(s))
-    }
-    if (activeRefresh.length > 0) await Promise.all(activeRefresh)
 
     // A listing and an id lookup both union two sources of truth: the snapshot the channel was
     // hibernated with, and its live view. Either alone loses real titles — a view can stop at a

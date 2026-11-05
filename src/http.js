@@ -296,6 +296,11 @@ export function createApi (state) {
       const { key = null } = await body(req).catch(() => ({}))
       return n.clearCache(key)
     }
+    if (req.method === 'POST' && path === '/v1/cache/limit') {
+      const n = requireNode(node)
+      const { maxBytes = 0 } = await body(req).catch(() => ({}))
+      return { cacheMaxBytes: n.setCacheMaxBytes(maxBytes) }
+    }
     if (req.method === 'POST' && path === '/v1/acquire') {
       if (!acquirer) throw Object.assign(new Error('Acquire unavailable on read-only peer'), { status: 404 })
       const { id, title, source, channel, private: isPrivate = false } = await body(req)

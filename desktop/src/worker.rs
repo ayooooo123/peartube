@@ -88,6 +88,8 @@ pub struct Status {
     pub blob_bytes: u64,
     #[serde(default)]
     pub cached_bytes: u64,
+    #[serde(default)]
+    pub cache_max_bytes: u64,
     pub peers: u64,
     pub lan_peers: u64,
     #[serde(default)]

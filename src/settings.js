@@ -32,6 +32,9 @@ const SPEC = {
   replicateSources: { env: 'PEARTUBE_REPLICATE', type: 'keys', def: [], live: true, fromEnv: s => flag(s) ? [] : csv(s.toLowerCase()) },
   replicateFreeGb: { env: 'PEARTUBE_REPLICATE_FREE_GB', type: 'number', def: 20, min: 0, max: 1e6, live: true },
   replicateMbps: { env: 'PEARTUBE_REPLICATE_MBPS', type: 'number', def: 80, min: 0, max: 1e5, live: true },
+  // Playback cache ceiling. 0 leaves it unlimited (relays seed on purpose);
+  // clients set this so one watched 4K remux cannot fill the disk.
+  cacheMaxGb: { env: 'PEARTUBE_CACHE_MAX_GB', type: 'number', def: 0, min: 0, max: 1e6, live: true },
   hiverelays: { env: 'PEARTUBE_HIVERELAYS', type: 'urls', def: [] },
   hiverelayApiKey: { env: 'PEARTUBE_HIVERELAY_API_KEY', type: 'secret', def: '' },
   hiverelayDiscover: { env: 'PEARTUBE_HIVERELAY_DISCOVER', type: 'bool', def: false, fromEnv: s => Boolean(s) },

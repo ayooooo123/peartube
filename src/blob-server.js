@@ -101,6 +101,7 @@ export function createBlobRangeServer (store, opts = {}) {
 
   const connections = new Set()
   const activeStreams = new Set()
+  const progress = new Map() // hex -> farthest byte read
   let listeningPromise = null
   let closingPromise = null
 
@@ -111,6 +112,15 @@ export function createBlobRangeServer (store, opts = {}) {
     token,
     connections,
     get activeStreams () { return activeStreams.size },
+    // Hexes currently serving a Range: the cache ceiling must never evict
+    // one, or a playing film would be truncated mid-request.
+    streamingHexes () {
+      const hexes = new Set()
+      for (const rec of activeStreams) if (rec?.hex) hexes.add(rec.hex)
+      return hexes
+    },
+    // Farthest byte served per film, for the sliding-window trim.
+    streamProgress () { return progress },
     listen () {
       if (listeningPromise) return listeningPromise
       listeningPromise = (async () => {
@@ -339,10 +349,15 @@ export function createBlobRangeServer (store, opts = {}) {
 
     const streamRec = { hex, abort: () => cleanup(true) }
     activeStreams.add(streamRec)
+    let served = 0
     advanceWindow()
 
     rs.on('data', chunk => {
       chunksRead++
+      served += chunk.byteLength
+      // Where the viewer's playhead is: the ceiling keeps a window around this
+      // and trims behind it when one film alone exceeds the budget.
+      progress.set(hex, Math.max(progress.get(hex) || 0, start + served))
       advanceWindow()
       if (!res.write(chunk)) rs.pause()
     })

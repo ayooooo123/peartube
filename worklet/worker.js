@@ -210,7 +210,7 @@ function listenLoopback (srv, preferredPort) {
 }
 
 const methods = {
-  start: ({ storage, channel = null, tracker = null, mnemonic = null, join = false, sources = [], relayThrough = null, bootstrap = null, lan = false, privateRouting = false, apiPort = 8174, apiToken = null }) => serial(async () => {
+  start: ({ storage, channel = null, tracker = null, mnemonic = null, join = false, sources = [], relayThrough = null, bootstrap = null, lan = false, privateRouting = false, apiPort = 8174, apiToken = null, cacheMaxGb = 10 }) => serial(async () => {
     await close()
     castStorage = storage
     node = await createNode({
@@ -227,6 +227,8 @@ const methods = {
       onchange: update
     })
     node.swarm.on('update', update)
+    // Bound playback caching: one watched 4K remux used to fill the disk.
+    node.setCacheMaxBytes(Math.max(0, Number(cacheMaxGb) || 0) * 1e9)
     lanWanted = lan
     await moveLan()
     if (apiPort !== false) {

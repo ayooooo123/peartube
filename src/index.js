@@ -10,7 +10,7 @@ import { createBlobRangeServer } from './blob-server.js'
 import b4a from 'b4a'
 import { createHash } from 'node:crypto'
 import { pipelinePromise, Readable, Transform } from 'streamx'
-import { readdirSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs'
+import { readdirSync, readFileSync, renameSync, statfsSync, statSync, unlinkSync, writeFileSync } from 'node:fs'
 import os from 'node:os'
 import { join } from 'node:path'
 import { tuneUdxSocket } from './lan.js'
@@ -506,6 +506,46 @@ async function openNode ({
   const ownedBlobs = new Map() // blobsHex -> { length, byteLength }
   const ownedByDiscovery = new Map() // discoveryKeyHex -> blobsHex
   const cachedBlobs = new Map() // blobsHex -> { length, byteLength, blocks, slices }
+  // Cache ceiling. Clients own watch history; the peer only knows what it
+  // served, so recency comes from this node's own touch points and is persisted
+  // beside settings.json. Everything is measured against the same estimate
+  // `status()` reports, because Hypercore never shrinks `byteLength` on clear.
+  const cacheLruPath = join(storage, 'cache-lru.json')
+  const lastUsedAt = new Map() // blobsHex -> ms
+  try {
+    const savedLru = JSON.parse(readFileSync(cacheLruPath, 'utf8'))
+    for (const [hex, at] of Object.entries(savedLru)) {
+      if (/^[0-9a-f]{64}$/.test(hex) && Number.isFinite(at)) lastUsedAt.set(hex, at)
+    }
+  } catch {}
+  let lruTimer = null
+  function touchCached (hex) {
+    if (!hex || closing) return
+    lastUsedAt.set(hex, Date.now())
+    if (lruTimer) return
+    lruTimer = setTimeout(() => {
+      lruTimer = null
+      try {
+        writeFileSync(cacheLruPath, JSON.stringify(Object.fromEntries(lastUsedAt)), { mode: 0o600 })
+      } catch {}
+    }, 2000)
+    lruTimer.unref?.()
+  }
+  let cacheMaxBytes = 0
+  let cacheGrowth = 0
+  let ceilingPass = null
+  let ceilingTimer = null
+  // What the filesystem can spare, minus a reserve: the ceiling must never be
+  // the thing that fills the disk, even if the user sets a huge contribution.
+  const CACHE_DISK_RESERVE = 2 * 1024 * 1024 * 1024
+  function cacheFloorBytes () {
+    try {
+      const st = statfsSync(storage)
+      return Math.max(0, Number(st.bavail) * Number(st.bsize) - CACHE_DISK_RESERVE)
+    } catch {
+      return Infinity
+    }
+  }
   const cachedByDiscovery = new Map() // discoveryKeyHex -> blobsHex
   const encryptedBlobs = new Map() // blobsHex -> { source, epoch, wrappedKey }
   const unlockedVideoKeys = new Map() // blobsHex -> Buffer(32)
@@ -1470,10 +1510,21 @@ async function openNode ({
     c.ready = syncBlockCounter(core).then(() => {
       if (hex) recordCached(hex, core.length, core.byteLength, c.blocks, c.slices)
     }).catch(() => {})
-    core.on('download', () => {
+    core.on('download', (index, byteLength) => {
       c.blocks++
       c.slices.clear()
-      if (hex) recordCached(hex, core.length, core.byteLength, c.blocks, c.slices)
+      if (hex) {
+        recordCached(hex, core.length, core.byteLength, c.blocks, c.slices)
+        touchCached(hex)
+      }
+      // A 4K remux pulls gigabytes in seconds, so growth is bounded between
+      // passes instead of only when playback starts.
+      cacheGrowth += Number.isFinite(byteLength) && byteLength > 0 ? byteLength : 1 << 19
+      const step = Math.max(256 * 1024 * 1024, Math.floor(cacheMaxBytes / 50))
+      if (cacheMaxBytes > 0 && cacheGrowth >= step) {
+        cacheGrowth = 0
+        scheduleCeiling()
+      }
     })
     core.on('append', () => {
       syncBlockCounter(core).then(() => {
@@ -1513,7 +1564,10 @@ async function openNode ({
     if (!core.opened) await core.ready()
     await ensureBlockCounter(core, hex).ready
     recordCached(hex, core.length, core.byteLength, localBlocks(core), blockCounts.get(core)?.slices)
+    touchCached(hex)
     evictIdleBlobCores(hex)
+    // Make room before a new film lands, and never evict the one playing now.
+    scheduleCeiling({ keepHex: hex })
     return core
   }
 
@@ -1910,6 +1964,152 @@ async function openNode ({
     return (await gcStorage({ streaming: true })).reclaimedBytes
   }
 
+  // One cached per-video core: drop any open session, clear its whole range,
+  // and keep the ledger honest. Shared by `clearCache(null)` and the ceiling so
+  // both evict through exactly one body.
+  async function clearBlobHex (hex) {
+    if (!hex || isOwnedBlob(hex)) return 0
+    if (!slotSet.has(hex) && blobCores.has(hex)) {
+      const openCore = blobCores.get(hex)
+      blobCores.delete(hex)
+      await openCore.close().catch(() => {})
+    }
+    const isSlot = slotSet.has(hex)
+    const core = isSlot ? blobCores.get(hex) : store.get({ key: b4a.from(hex, 'hex'), active: false })
+    let clearedBytes = 0
+    try {
+      if (!core.opened) await core.ready()
+      if (core.writable || core.length === 0) return 0
+      const blocks = isSlot ? (await ensureBlockCounter(core, hex).ready, localBlocks(core)) : await core.count(0, core.length)
+      if (blocks > 0) {
+        clearedBytes = Math.min(core.byteLength, Math.round((blocks / core.length) * core.byteLength))
+        await clearDownloadedSpans(core)
+        if (isSlot) await syncBlockCounter(core)
+      }
+      recordCached(hex, core.length, core.byteLength, 0)
+      lastUsedAt.delete(hex)
+      return clearedBytes
+    } finally {
+      if (!isSlot) await core.close().catch(() => {})
+    }
+  }
+
+  // The one estimate the ceiling and `status()` share: open cores through their
+  // block counter, closed ones through the ledger, both normalised by length
+  // because Hypercore never shrinks `byteLength` when blocks are cleared.
+  function cachedTotalBytes () {
+    let total = 0
+    for (const [k, c] of blobCores) {
+      if (isOwnedBlob(k) || !c.opened || c.length <= 0 || c.byteLength <= 0) continue
+      ensureBlockCounter(c, k)
+      const blocks = localBlocks(c)
+      recordCached(k, c.length, c.byteLength, blocks, blockCounts.get(c)?.slices)
+      if (blocks > 0) total += Math.min(coreByteLen(c), Math.round((blocks / c.length) * coreByteLen(c)))
+    }
+    for (const [k, meta] of cachedBlobs) {
+      if (blobCores.has(k) || isOwnedBlob(k) || meta.blocks <= 0 || meta.length <= 0 || meta.byteLength <= 0) continue
+      total += Math.min(meta.byteLength, Math.round((meta.blocks / meta.length) * meta.byteLength))
+    }
+    return total
+  }
+
+  function scheduleCeiling (opts = {}) {
+    if (!(cacheMaxBytes > 0) || closing) return
+    if (ceilingTimer) return
+    ceilingTimer = setTimeout(() => {
+      ceilingTimer = null
+      enforceCacheCeiling(opts).catch(() => {})
+    }, 2000)
+    ceilingTimer.unref?.()
+  }
+
+  async function enforceCacheCeiling ({ keepHex = null } = {}) {
+    if (ceilingPass) return ceilingPass
+    ceilingPass = (async () => {
+      const budget = cacheMaxBytes
+      let total = cachedTotalBytes()
+      if (!(budget > 0)) return { evicted: 0, cachedBytes: total }
+      // The contribution is a promise to the user, but the filesystem has the
+      // final say: never fill the disk even when the budget is larger.
+      const spare = cacheFloorBytes()
+      const limit = Number.isFinite(spare) ? Math.min(budget, total + spare) : budget
+      if (total <= limit) return { evicted: 0, cachedBytes: total }
+      // Evict to 90 % of the budget: without hysteresis one film's trickle
+      // would trigger a pass every couple of seconds.
+      const target = Math.floor(limit * 0.9)
+      const progress = server.streamProgress?.() || new Map()
+      const streaming = server.streamingHexes?.() || new Set()
+      // The film being watched is the freshest one we served. If the caller did
+      // not name it, recency is the only honest signal, and a film that has
+      // actually been read must never be cleared from the head mid-playback.
+      const freshest = [...lastUsedAt.entries()].sort((a, b) => b[1] - a[1])[0]?.[0]
+      // An explicit keepHex comes from playback start and is protected
+      // outright; without one, the freshest film is protected while it is
+      // still recent, so a growth pass mid-playback cannot clear it.
+      const recent = freshest && Date.now() - (lastUsedAt.get(freshest) || 0) < 10 * 60 * 1000
+      const playing = keepHex || (recent ? freshest : null)
+      const victims = [...new Set([...blobCores.keys(), ...cachedBlobs.keys()])]
+        .filter(hex => hex && !isOwnedBlob(hex) && hex !== playing && !streaming.has(hex))
+        .filter(hex => {
+          for (const tag of warmRanges.keys()) if (tag.startsWith(`${hex}:`)) return false
+          const open = blobCores.get(hex)
+          if (open?.peers?.some(p => p.inflight > 0)) return false
+          return true
+        })
+        .sort((a, b) => (lastUsedAt.get(a) || 0) - (lastUsedAt.get(b) || 0))
+      let evicted = 0
+      for (const hex of victims) {
+        if (total <= target || closing) break
+        const freed = await clearBlobHex(hex).catch(() => 0)
+        if (freed > 0) {
+          evicted += freed
+          total = Math.max(0, total - freed)
+          // Stop announcing content this node no longer holds.
+          if (!slotSet.has(hex)) leaveContentSwarm(hex)
+        }
+      }
+      // One film can be larger than the whole budget. Keep a window around its
+      // playhead — the part the viewer can still rewind into — and drop the
+      // rest behind it, instead of clearing a film mid-playback.
+      if (total > target && playing && !isOwnedBlob(playing)) {
+        const core = blobCores.get(playing)
+        if (core?.opened && core.length > 16) {
+          const keepBehind = Math.min(64 * 1024 * 1024, Math.max(8 * 1024 * 1024, Math.floor(budget / 8)))
+          const beforeTrim = total
+          await evictBehind(
+            playing,
+            { blockOffset: 0, blockLength: core.length, byteLength: core.byteLength },
+            { playheadByte: progress.get(playing) || 0, keepBehindBytes: keepBehind, maxBytes: Math.max(0, total - target) }
+          ).catch(() => 0)
+          total = cachedTotalBytes()
+          evicted += Math.max(0, beforeTrim - total)
+        }
+      }
+      if (evicted > 0) {
+        if (ceilingTimer) { clearTimeout(ceilingTimer); ceilingTimer = null }
+        await gcStorage({ full: false }).catch(() => {})
+        update()
+      }
+      return { evicted, cachedBytes: total }
+    })().finally(() => { ceilingPass = null })
+    return ceilingPass
+  }
+
+  function setCacheMaxBytes (bytes) {
+    const next = Math.max(0, Math.floor(Number(bytes) || 0))
+    cacheMaxBytes = next
+    cacheGrowth = 0
+    if (next > 0) {
+      // The first pass must see blocks that survived a restart: the ledger is
+      // only whole after the catalog has been walked once.
+      const boot = setTimeout(() => {
+        search('').catch(() => {}).finally(() => scheduleCeiling())
+      }, 5000)
+      boot.unref?.()
+    }
+    return cacheMaxBytes
+  }
+
   async function clearCache (key = null, { keepBlobsHex = null } = {}) {
     if (key) {
       const entry = await findEntry(key)
@@ -1955,27 +2155,8 @@ async function openNode ({
     let clearedBytes = 0
     const allCachedHex = [...new Set([...blobCores.keys(), ...cachedBlobs.keys()])]
     for (const hex of allCachedHex) {
-      if (hex === keepBlobsHex || isOwnedBlob(hex)) continue
-      if (!slotSet.has(hex) && blobCores.has(hex)) {
-        const openCore = blobCores.get(hex)
-        blobCores.delete(hex)
-        await openCore.close().catch(() => {})
-      }
-      const isSlot = slotSet.has(hex)
-      const core = isSlot ? blobCores.get(hex) : store.get({ key: b4a.from(hex, 'hex'), active: false })
-      try {
-        if (!core.opened) await core.ready()
-        if (core.writable || core.length === 0) continue
-        const blocks = isSlot ? (await ensureBlockCounter(core, hex).ready, localBlocks(core)) : await core.count(0, core.length)
-        if (blocks > 0) {
-          clearedBytes += Math.min(core.byteLength, Math.round((blocks / core.length) * core.byteLength))
-          await clearDownloadedSpans(core)
-          if (isSlot) await syncBlockCounter(core)
-        }
-        recordCached(hex, core.length, core.byteLength, 0)
-      } finally {
-        if (!isSlot) await core.close().catch(() => {})
-      }
+      if (hex === keepBlobsHex) continue
+      clearedBytes += await clearBlobHex(hex).catch(() => 0)
     }
     const { reclaimedBytes } = clearedBytes > 0 ? await gcStorage({ full: true }) : { reclaimedBytes: 0 }
     update()
@@ -2543,19 +2724,8 @@ async function openNode ({
     for (const [k, c] of blobCores) {
       // Display only: Hypercore has no public in-flight count, so read it off the documented `core.peers`.
       for (const p of c.peers) inflightBlocks += p.inflight || 0
-      if (!isOwnedBlob(k) && c.opened && c.length > 0 && c.byteLength > 0) {
-        ensureBlockCounter(c, k)
-        const blocks = localBlocks(c)
-        recordCached(k, c.length, c.byteLength, blocks, blockCounts.get(c)?.slices)
-        if (blocks > 0) {
-          cachedBytes += Math.min(coreByteLen(c), Math.round((blocks / c.length) * coreByteLen(c)))
-        }
-      }
     }
-    for (const [k, meta] of cachedBlobs) {
-      if (blobCores.has(k) || isOwnedBlob(k) || meta.blocks <= 0 || meta.length <= 0 || meta.byteLength <= 0) continue
-      cachedBytes += Math.min(meta.byteLength, Math.round((meta.blocks / meta.length) * meta.byteLength))
-    }
+    cachedBytes = cachedTotalBytes()
     let ownedVideoBytes = 0
     for (const v of ownedBlobs.values()) ownedVideoBytes += v.byteLength
     const blobBytes = ownedVideoBytes + blobSlots.reduce((sum, s) => {
@@ -2575,6 +2745,7 @@ async function openNode ({
       blobs: blobsKey,
       blobBytes,
       cachedBytes,
+      cacheMaxBytes,
       peers: swarm.connections.size,
       lanPeers: lanPeers.size,
       downBps,
@@ -2718,6 +2889,8 @@ async function openNode ({
     removeAccessKey,
     setAllowedPeers,
     clearCache,
+    setCacheMaxBytes,
+    enforceCacheCeiling,
     gcStorage,
     status,
     streamUrl,

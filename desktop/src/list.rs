@@ -1383,6 +1383,14 @@ impl PearTube {
                                         .text_xs()
                                         .text_color(rgb(DIM))
                                         .child(format!("Stored {} · Cached {}", format_bytes(stored), format_bytes(cached)))
+                                        .child({
+                                            let limit = status.map_or(0, |s| s.cache_max_bytes);
+                                            if limit > 0 {
+                                                format!("Playback cache limit {}", format_bytes(limit))
+                                            } else {
+                                                "Playback cache unlimited".to_string()
+                                            }
+                                        })
                                         .when_some(lan, |t, l| t.child(format!("LAN {l}")))
                                         .when_some(api_url, |t, a| t.child(format!("Local Daemon {a}")))
                                         .when_some(p2p, |t, p| t.child(div().text_color(rgb(BRAND)).child(p))),

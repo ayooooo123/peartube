@@ -350,6 +350,7 @@ state.applySettings = changed => serial(async () => {
     const { node } = state
     if (has('allowedPeers')) node.setAllowedPeers(list(cfg('allowedPeers')))
     if (has('acquireConcurrency')) state.acquirer.setConcurrency(cfg('acquireConcurrency'))
+    if (has('cacheMaxGb')) state.node.setCacheMaxBytes(cfg('cacheMaxGb') * 1e9)
     if (has('directory')) await syncDirectory(node.listSources())
     // "Convert at every start": turning it on converts now, as a start would. Off only skips later starts.
     if (has('rechunk') && cfg('rechunk')) {

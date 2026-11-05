@@ -127,6 +127,10 @@ class Worker(context: Context) {
         call("focusSource", JSONObject().put("key", key))
     }
 
+    suspend fun setPlayerActive(active: Boolean) {
+        call("setPlayerActive", JSONObject().put("active", active))
+    }
+
     suspend fun warm(key: String) {
         call("warm", JSONObject().put("key", key))
     }

@@ -252,6 +252,7 @@ const methods = {
   },
   search: async ({ id = null, source = null, query = null, limit = 0, offset = 0 } = {}) => (await current()).search(id, { source, query, limit, offset }),
   focusSource: async ({ key }) => ({ ok: await (await current()).focusSource(key) }),
+  setPlayerActive: async ({ active }) => (await current()).setPlayerActive(active),
   warm: async ({ key }) => {
     const n = await current()
     const entry = await n.findEntry(key)

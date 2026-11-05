@@ -223,6 +223,10 @@ class AppModel(private val app: Application) {
         }
     }
 
+    fun setPlayerActive(active: Boolean) {
+        scope.launch { runCatching { worker.setPlayerActive(active) } }
+    }
+
     fun shouldKeepWorkerAwake(): Boolean =
         cast.value.session != null || downloads.value.isNotEmpty() || System.currentTimeMillis() < backgroundSyncUntil
 

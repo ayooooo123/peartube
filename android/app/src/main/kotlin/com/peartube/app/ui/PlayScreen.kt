@@ -153,6 +153,7 @@ fun PlayScreen(model: AppModel, host: PlayerHost, entry: Entry, startPositionMs:
     DisposableEffect(liveEntry.streamUrl) {
         model.playStarted = false
         openError = null
+        model.setPlayerActive(true)
         host.open()
         val soundfont = File(context.filesDir, "soundfont.sf2").takeIf { it.isFile }?.path
         val active = AtomicBoolean(true)
@@ -176,6 +177,7 @@ fun PlayScreen(model: AppModel, host: PlayerHost, entry: Entry, startPositionMs:
         onDispose {
             active.set(false)
             opening.cancel()
+            model.setPlayerActive(false)
             model.playStarted = false
             model.recordWatchProgress(liveEntry, latestState.positionMs, latestState.durationMs)
             val opened = handle

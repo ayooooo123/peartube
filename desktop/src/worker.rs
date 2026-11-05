@@ -628,6 +628,12 @@ impl Worker {
     pub async fn warm(&self, key: &str) -> Result<(), String> {
         self.call("warm", json!({ "key": key })).await.map(drop)
     }
+
+    /// A film is playing here: stop fetching blocks ahead for peers so the picture never waits
+    /// behind the seeding read-ahead. Peers still get every block on demand.
+    pub async fn set_player_active(&self, active: bool) -> Result<(), String> {
+        self.call("setPlayerActive", json!({ "active": active })).await.map(drop)
+    }
     pub async fn remove_entry(&self, key: &str) -> Result<(), String> {
         self.call("remove", json!({ "key": key })).await.map(drop)
     }

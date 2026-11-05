@@ -613,6 +613,7 @@ impl PearTube {
         cx.background_executor()
             .spawn(async move {
                 if let Ok(w) = worker() {
+                    let _ = w.set_player_active(true).await;
                     let _ = w.warm(&warm_key).await;
                 }
             })
@@ -674,6 +675,13 @@ impl PearTube {
             window.toggle_fullscreen();
         }
         self.player_events = None;
+        cx.background_executor()
+            .spawn(async move {
+                if let Ok(w) = worker() {
+                    let _ = w.set_player_active(false).await;
+                }
+            })
+            .detach();
         self.show_list(cx);
         cx.spawn(async move |this, cx| refresh(&this, cx).await).detach();
     }

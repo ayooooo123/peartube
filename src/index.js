@@ -819,6 +819,8 @@ async function openNode ({
     catalogSaveTimer.unref?.()
   }
 
+  let lastSwarmFlushAt = 0
+
   function indexChannelRecords (target, entriesList, discoveredList, peersList, { merge = false } = {}) {
     // A view can be read while it is still catching up, and a follower's scan then holds fewer
     // announces than the library already knows. Replacing wholesale let one partial read wipe the
@@ -882,8 +884,23 @@ async function openNode ({
     if (!src?.bee || closing) return
     // A forced tick is the background's own read: it gives the linearizer room to fetch (the 1 s
     // cap `applied()` uses is for foreground reads that must not hang the UI), then walks the view.
-    if (force) await Promise.race([src.bee.update().catch(() => {}), new Promise(r => setTimeout(r, 10_000))])
-    else if (waitSync) await applied(src.bee)
+    if (force) {
+      // A channel we already hold is a refresh: let the topic lookups answer first, or `update()`
+      // returns at once against whatever peer spoke last. This is throttled across the node —
+      // paying it per channel would stall rotating a large library for no extra truth.
+      if (src.hydrated && Date.now() - lastSwarmFlushAt > 10_000) {
+        lastSwarmFlushAt = Date.now()
+        await Promise.race([swarm.flush().catch(() => {}), new Promise(r => setTimeout(r, 3_000))])
+      }
+      // Autobee goes quiet once a writer looks whole against the first hint it heard, and the
+      // publisher's coupler skips announcing a core this peer already has open — so a follower
+      // that met a partial peer first stays partial forever. Asking again makes the publisher
+      // answer with its real length, which reactivates the writer and resumes the download.
+      for (const session of wakeup.getSessions(src.bee.key, { discoveryKey: src.bee.discoveryKey })) {
+        try { session.broadcastLookup() } catch {}
+      }
+      await Promise.race([src.bee.update().catch(() => {}), new Promise(r => setTimeout(r, 2_000))])
+    } else if (waitSync) await applied(src.bee)
     if (!src.bee || closing) return
     const version = src.bee.view.version
     // `force` is the background tick's read: walking the view is what makes Autobase fetch the
@@ -1384,10 +1401,19 @@ async function openNode ({
     for (let i = start; i < end; i++) core.get(i, { wait: false }).catch(() => {})
   }
   const warmAttached = new WeakSet()
+  let playerActive = false
+  function setPlayerActive (active) {
+    playerActive = Boolean(active)
+    if (playerActive) for (const ranges of warmRanges.values()) for (const r of ranges) r.destroy()
+  }
+
   function attachUploadWarmth (core) {
     if (!core || warmAttached.has(core)) return
     warmAttached.add(core)
     core.on('upload', (index, byteLen, peer) => {
+      // Watching while seeding: our own player must never wait behind the blocks we fetch ahead
+      // for someone else. Peers still get every block on demand; only the read-ahead stops.
+      if (playerActive) return
       if (peer?.remotePublicKey && bulkPeers.has(b4a.toString(peer.remotePublicKey, 'hex'))) return
       warmAhead(core, index, byteLen > 0 && byteLen <= 131072 ? 128 : 32)
     })
@@ -2642,6 +2668,7 @@ async function openNode ({
     removeSource,
     listSources,
     focusSource: key => wakeSource(key, { touch: true }).then(b => Boolean(b)),
+    setPlayerActive: active => { setPlayerActive(active); return { ok: true } },
     activeSourceCount: () => activeSources.size,
     overlayTopicCount: () => discoveries.size,
     discoveredSources,

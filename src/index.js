@@ -879,7 +879,9 @@ async function openNode ({
       await Promise.race([channel.update().catch(() => {}), new Promise(r => setTimeout(r, 2_000))])
     } else await applied(channel)
     const { entriesList, discoveredList, peersList } = await scanChannelView(channel.view, primaryKey)
-    indexChannelRecords(primaryCache, entriesList, discoveredList, peersList, { merge: true })
+    // Replace, never merge: the primary is fully applied before every scan, so an announce that is
+    // gone is really gone. Merging kept deleted titles alive for findEntry forever.
+    indexChannelRecords(primaryCache, entriesList, discoveredList, peersList)
     primaryHydrated = true
     primaryDirty = false
   }
@@ -1602,10 +1604,10 @@ async function openNode ({
       if (activeRefresh.length > 0) await Promise.all(activeRefresh)
     }
 
-    // A listing and an id lookup both union two sources of truth: the snapshot the channel was
-    // hibernated with, and its live view. Either alone loses real titles — a view can stop at a
-    // region it has not downloaded yet (a co-writer's publish read as absent, the ACL test's whole
-    // window), and a snapshot cannot know what arrived while the channel slept.
+    // A listing unions two sources of truth, but never both at once for the same channel: an awake
+    // channel's view is authoritative (a deleted announce is really gone), and the hibernated
+    // snapshot is all there is for a channel that is asleep. Merging them kept deleted titles on
+    // screen forever — the cache only ever added.
     const raw = []
     const pushRaw = new Map()
     const addRaw = rec => { if (!pushRaw.has(rec.key)) pushRaw.set(rec.key, rec) }
@@ -1620,14 +1622,13 @@ async function openNode ({
     }
     if ((usePrimaryChannel || channelHasEntries) && (!filterSource || filterSource === primaryKey)) {
       await readView(channel.view, primaryKey, null)
-      for (const { sub, entry } of primaryCache.entries) {
-        if (id && entry.id !== id) continue
-        addRaw({ key: sub, entry, source: primaryKey, sourceKind: 'channel' })
-      }
     }
     for (const s of extraSources.values()) {
       if (filterSource && filterSource !== s.key) continue
-      if (s.bee) await readView(s.bee.view, s.key, `channel:${s.key}/`)
+      if (s.bee) {
+        await readView(s.bee.view, s.key, `channel:${s.key}/`)
+        continue
+      }
       for (const { sub, entry } of s.entries) {
         if (id && entry.id !== id) continue
         addRaw({ key: `channel:${s.key}/${sub}`, entry, source: s.key, sourceKind: 'channel' })

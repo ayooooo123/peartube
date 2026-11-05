@@ -72,11 +72,11 @@ and the pieces.
 2. **Storage.** Every imported video becomes its own Hypercore with `512 KiB` blocks, opened
    lazily and closed at rest, so a viewer can start or seek before the whole file exists. Legacy
    shared-blob slots still read back, and `blob-rechunk` splits them in the background.
-3. **Transport.** Peers join the swarm for the video's core, stream HTTP Ranges from a local
-   [`hypercore-blob-server`](https://github.com/holepunchto/hypercore-blob-server) or the
-   worklet's loopback copy, and exchange blocks with anyone who has them. Backfill (replication,
-   HiveRelay seeding) yields to viewers through `peartube/bulk-busy` instead of pausing
-   connections.
+3. **Transport.** Peers join the swarm for the video's core and exchange blocks with anyone who
+   has them. The player reads HTTP Ranges from a local Range server on the same device
+   (`src/blob-server.js`, which fetches only a bounded window ahead of the viewer) or the worklet's
+   loopback copy. Backfill (replication, HiveRelay seeding) yields to viewers through
+   `peartube/bulk-busy` instead of pausing connections.
 4. **Acquisition.** Imports are a private job queue (`jobs.json`): fetch, store, announce, append durably.
    Page links download and mux natively on every attempt through `ubit get --json`, so adaptive DASH/HLS streams
    never depend on expiring media URLs. `ubit` is only needed for page links, and only on the relay — the apps never run an HTTP acquirer.

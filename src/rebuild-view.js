@@ -35,6 +35,9 @@ export async function rebuildView ({ storage, channel = null, check = false, rol
     await local.ready()
     const head = await local.getUserData('autobee/head')
     const before = { channel: channelHex, owner, local: b4a.toString(local.key, 'hex'), oplogLength: local.length, head: head ? b4a.toString(head, 'hex') : null }
+    // only the channel's own bootstrap writer stamps views followers trust; a founder-key relay owns the channel without a matching vault
+    const stamps = before.local === channelHex
+    before.stamps = stamps
     if (rollback) {
       // the old tree's blocks are still in the cores: pointing the boot record back at it restores the old
       // view, with any oplog node appended since (the stamp op included) applied on top. The oplog is kept.
@@ -66,9 +69,11 @@ export async function rebuildView ({ storage, channel = null, check = false, rol
     // the view as it is: its announce keys must all survive the rebuild, or the replay did not finish
     let bee = await open()
     const old = await summarize(bee)
+    old.writable = bee.writable
     log({ msg: 'view before', ...old, announceKeys: undefined, flushes: old.flushes })
     await bee.close()
     if (check) return { ...before, ...old, announceKeys: undefined, oplogLengthAfter: before.oplogLength }
+    if (stamps && !old.writable) throw new Error('This node must stamp the rebuilt view but cannot write to the channel; nothing was changed')
 
     writeFileSync(backupFile, JSON.stringify({ at: new Date().toISOString(), ...before }, null, 2), { mode: 0o600 })
     const cleared = ns.get({ key: b4a.from(before.local, 'hex'), active: false })
@@ -98,16 +103,15 @@ export async function rebuildView ({ storage, channel = null, check = false, rol
     if (bee.local.length !== before.oplogLength) throw new Error(`The replay appended to the oplog (${before.oplogLength} -> ${bee.local.length}); roll back`)
     const missing = [...old.announceKeys].filter(k => !rebuilt.announceKeys.has(k))
     if (missing.length) throw new Error(`The rebuilt view lacks ${missing.length} announce keys the old one had (first: ${missing[0]}); the replay is incomplete, roll back`)
-    if (owner) {
-      const rec = await bee.view.get(b4a.from('meta/owner'))
-      const ownerHex = rec ? b4a.toString(rec.value) : vault.ownerPublicKey
-      await bee.append(b4a.from(JSON.stringify({ type: 'owner', owner: ownerHex })))
+    if (stamps) {
+      // an op type no apply version accepts: it changes nothing, but its flush stamps the rebuilt view
+      await bee.append(b4a.from(JSON.stringify({ type: 'stamp' })))
       await bee.updated()
       if (bee.local.length !== before.oplogLength + 1) throw new Error(`Expected one stamp node, oplog went ${before.oplogLength} -> ${bee.local.length}`)
       log({ msg: 'owner stamped the rebuilt view', oplogLength: bee.local.length, views: viewsOf(bee) })
     }
     await bee.close()
-    return { ...before, ...rebuilt, announceKeys: undefined, oplogLengthAfter: before.oplogLength + (owner ? 1 : 0) }
+    return { ...before, ...rebuilt, announceKeys: undefined, oplogLengthAfter: before.oplogLength + (stamps ? 1 : 0) }
   } finally {
     await store.close()
   }

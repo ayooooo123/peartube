@@ -149,7 +149,7 @@ const isSystemViewKey = k => k.startsWith('peer/') || k.startsWith('source/') ||
 
 // Deterministic ACL gate at the mouth of every unified Channel: ungranted strangers get swallowed and ignored,
 // linked devices prove ownership via detached 12-word vault claims or owner grants, and owners/mods can purge any key.
-function makeApply (getChannelHex, onWriterChange = null) {
+export function makeApply (getChannelHex, onWriterChange = null) {
   return async function apply (nodes, view, host) {
     const chHex = getChannelHex()
     const roles = new Map()

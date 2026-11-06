@@ -63,7 +63,7 @@ and the pieces.
 ## How it works
 
 1. **Unified Channels.** Every account or relay is a single [Autobee](https://github.com/holepunchto/autobee)
-   Channel (`peartube://channel/<key>`) with `fastForward: false` and a deterministic ACL `apply`:
+   Channel (`peartube://channel/<key>`) with a deterministic ACL `apply`, fast-forwarding only onto views the owner's own devices stamp:
    followers replicate and seed read-only (`optimistic: false`), linked devices authenticate via a
    fork-proof 12-word BIP-39 recovery phrase (`claim`) or explicit writer grants (`owner`/`mod`/`writer`),
    owners and moderators can delete any entry or revoke writers, and optional `peartube://access/…`

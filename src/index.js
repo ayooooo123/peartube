@@ -290,6 +290,21 @@ function makeApply (getChannelHex, onWriterChange = null) {
     await flushOps()
   }
 }
+// Fast-forward trust: only the channel key and devices linked to it as owner (and not revoked) may vouch for a view.
+// The reference is this node's own view, sparse after a landing: an unbounded read here would wedge Autobee's
+// fast-forward search for good, so a record nobody serves in time counts as untrusted.
+function makeIsTrusted (getChannelHex) {
+  return async function isTrusted (key, reference) {
+    const hex = b4a.toString(key, 'hex')
+    if (hex === getChannelHex()) return true
+    if (!reference) return false
+    try {
+      if (await reference.get(b4a.from(`revoked/${hex}`), { timeout: 5_000 })) return false
+      const rec = await reference.get(b4a.from(`writer/${hex}`), { timeout: 5_000 })
+      return JSON.parse(b4a.toString(rec.value)).role === 'owner'
+    } catch { return false }
+  }
+}
 // Reads take a tracker's view as far as Autobee has applied it, waiting at most a second for more. A fresh
 // joiner of a large tracker takes minutes to catch up (V8 on a Mac: about two; a phone's QuickJS: far longer),
 // and starting, listing and playback must not wait that out: the list fills in as it applies, and Autobee's
@@ -451,16 +466,32 @@ async function openNode ({
     else secondaryWriters.delete(wHex)
   }
   const primaryApply = makeApply(() => b4a.toString(channel.key, 'hex'), onWriterChange)
-  // fastForward: false forces every peer to verify ACL grants, claims, and removals locally through apply.
+  // Fast-forward lands only on views stamped by the channel owner (makeIsTrusted); every other writer's
+  // nodes still go through apply here. A landing needs a connected peer that holds the owner's own
+  // system and view cores: the owner itself, or a node that landed on them before. A landing leaves
+  // those cores sparse here, so keep them whole and live: this node can then hand the landing on
+  // when the owner is unreachable, and never stalls on a block only the owner holds.
+  const landedCores = new Map()
+  function mirrorLanding (changes) {
+    for (const name of ['system', 'view']) {
+      const c = changes?.get(name)
+      if (!c?.to?.key || c.incremental) continue
+      const hex = b4a.toString(c.to.key, 'hex')
+      if (landedCores.has(hex)) continue
+      const core = store.get({ key: c.to.key })
+      landedCores.set(hex, core)
+      core.ready().then(() => core.download({ start: 0, end: -1 })).catch(() => {})
+    }
+  }
   let primaryDirty = true
   let primaryHydrated = false
   const primaryCache = { entries: [], byId: new Map(), discovered: [] }
   channel = new Autobee(chNs, targetKey ? b4a.from(targetKey, 'hex') : null, {
     ...(founderKeyPair ? { keyPair: founderKeyPair } : {}),
     apply: primaryApply,
-    update: () => { primaryDirty = true; update() },
+    update: (view, changes) => { mirrorLanding(changes); primaryDirty = true; update() },
     optimistic: true,
-    fastForward: false,
+    isTrusted: makeIsTrusted(() => b4a.toString(channel.key, 'hex')),
     wakeup
   })
   undo.push(() => channel.close())
@@ -1067,9 +1098,9 @@ async function openNode ({
         const subApply = makeApply(() => b4a.toString(bee.key, 'hex'))
         bee = new Autobee(store.namespace(`channel:${k}`), b4a.from(k, 'hex'), {
           apply: subApply,
-          update: () => { src.dirty = true; src.rev++; update() },
+          update: (view, changes) => { mirrorLanding(changes); src.dirty = true; src.rev++; update() },
           optimistic: true,
-          fastForward: false,
+          isTrusted: makeIsTrusted(() => b4a.toString(bee.key, 'hex')),
           wakeup
         })
         await bee.ready()
@@ -2731,6 +2762,8 @@ async function openNode ({
       weakOwned.clear()
       for (const wc of writerCores.values()) await wc.close().catch(() => {})
       writerCores.clear()
+      for (const c of landedCores.values()) await c.close().catch(() => {})
+      landedCores.clear()
       await lan?.destroy()
       if (dht) await swarm.clear()
       await swarm.destroy({ force: true })

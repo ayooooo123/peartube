@@ -212,8 +212,8 @@ test('a peer far ahead with a forging apply cannot hand its view to a new relay'
   const tracker = a.status().tracker
   await a.publish({ id: 'imdb:tt0000001', title: 'Honest' }, Readable.from([randomBytes(100)]))
 
-  // M's apply forges an entry under A's writer key. Autobee's default
-  // fast-forward would let a new relay adopt M's view without running apply.
+  // M's apply forges an entry under A's writer key. M is a granted writer, not the owner, so
+  // makeIsTrusted never trusts its stamps and a new relay replays M's nodes through apply.
   const zero = '0'.repeat(64)
   const blob = { blockOffset: 0, blockLength: 1, byteOffset: 0, byteLength: 1 }
   const forgedKey = `imdb:tt6666666/${a.status().writer}/${zero}:0`

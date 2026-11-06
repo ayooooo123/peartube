@@ -21,7 +21,7 @@ import java.util.concurrent.Executors
 class Worker(context: Context) {
     sealed interface Event {
         data object Update : Event
-        data class Sources(val list: List<SourceInfo>) : Event
+        data class Sources(val list: List<SourceSpec>) : Event
         data class Cast(val status: CastStatus) : Event
         data class Fatal(val message: String) : Event
         data object Exited : Event
@@ -43,6 +43,7 @@ class Worker(context: Context) {
         onFatal = { _events.tryEmit(Event.Exited) },
         stoppedMessage = "The P2P worker stopped",
     )
+    private val initialized = CompletableDeferred<Unit>()
 
     init {
         scope.launch(lifecycle) {
@@ -55,9 +56,13 @@ class Worker(context: Context) {
                 ready.complete(ipc)
                 scope.launch { bridge.read(ipc) }
                 // Casting works before (and between) node starts once the worklet knows where pairings live.
-                scope.launch { runCatching { call("init", JSONObject().put("castStorage", File(storeDir, "cast").path)) } }
+                scope.launch {
+                    runCatching { bridge.call("init", JSONObject().put("castStorage", File(storeDir, "cast").path)) }
+                    initialized.complete(Unit)
+                }
             } catch (e: Throwable) {
                 ready.complete(null)
+                initialized.complete(Unit)
                 bridge.fail("The P2P worker did not start: ${e.message ?: e}")
             }
         }
@@ -141,8 +146,11 @@ class Worker(context: Context) {
     suspend fun castStatus(): CastStatus =
         CastStatus.from(call("castStatus") as? JSONObject)
 
-    suspend fun castPair(params: JSONObject): CastStatus =
-        CastStatus.from(call("castPair", params) as? JSONObject)
+    /** The cast status after pairing, and the id of the receiver the pairing saved. */
+    suspend fun castPair(params: JSONObject): Pair<CastStatus, String> {
+        val res = call("castPair", params) as? JSONObject
+        return CastStatus.from(res) to (res?.optString("pairedId") ?: "")
+    }
 
     suspend fun castRemove(id: String): CastStatus =
         CastStatus.from(call("castRemove", JSONObject().put("id", id)) as? JSONObject)
@@ -177,8 +185,11 @@ class Worker(context: Context) {
         scope.launch(lifecycle) { worklet?.resume() }
     }
 
-    private suspend fun call(method: String, params: JSONObject = JSONObject()): Any? =
-        bridge.call(method, params)
+    // Every call waits for init, so no cast call reaches the worklet before it knows its storage.
+    private suspend fun call(method: String, params: JSONObject = JSONObject()): Any? {
+        initialized.await()
+        return bridge.call(method, params)
+    }
 
     private fun dispatchEvent(event: String, msg: JSONObject) {
         when (event) {
@@ -186,7 +197,7 @@ class Worker(context: Context) {
             "sources" -> {
                 val arr = msg.optJSONArray("sources")
                 if (arr != null) {
-                    _events.tryEmit(Event.Sources(List(arr.length()) { SourceInfo.from(arr.getJSONObject(it)) }))
+                    _events.tryEmit(Event.Sources(List(arr.length()) { SourceSpec.from(arr.getJSONObject(it)) }))
                 }
                 _events.tryEmit(Event.Update)
             }

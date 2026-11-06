@@ -7,12 +7,7 @@ import b4a from 'b4a'
 import { createPrivateGuard } from '../src/private-overlay.js'
 
 const env = process.env
-const bootstrap = env.PEARTUBE_BOOTSTRAP
-  ? env.PEARTUBE_BOOTSTRAP.split(',').map(s => {
-      const i = s.trim().lastIndexOf(':')
-      return i > 0 ? { host: s.trim().slice(0, i), port: Number(s.trim().slice(i + 1)) } : s.trim()
-    }).filter(Boolean)
-  : undefined
+const bootstrap = env.PEARTUBE_BOOTSTRAP ? env.PEARTUBE_BOOTSTRAP.split(',').map(s => s.trim()).filter(Boolean) : undefined
 const port = Number(env.PEARTUBE_PRIVATE_RELAY_PORT || env.PEARTUBE_DHT_PORT || 0)
 const host = env.PEARTUBE_PRIVATE_HOST || undefined
 const seed = env.PEARTUBE_GUARD_SEED && /^[0-9a-f]{64}$/i.test(env.PEARTUBE_GUARD_SEED.trim())

@@ -274,7 +274,7 @@ export function createApi (state) {
       const n = requireNode(node)
       const payload = await body(req)
       if (payload.type === 'source' || payload.sourceKey) {
-        return n.publishSource(payload, { target: payload.target || 'channel' })
+        return n.publishSource(payload)
       }
       return n.publishChannel(payload)
     }

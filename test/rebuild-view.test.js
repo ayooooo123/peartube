@@ -14,7 +14,6 @@ import b4a from 'b4a'
 import { createNode } from '../src/index.js'
 import { makeApply } from '../src/apply.js'
 import { deriveIdentity } from '../src/mnemonic.js'
-import { rebuildView } from '../src/rebuild-view.js'
 
 const tmp = () => mkdtempSync(join(tmpdir(), 'peartube-test-'))
 const zero = '0'.repeat(64)

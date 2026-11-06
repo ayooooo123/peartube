@@ -4,7 +4,7 @@ import { createBlobRangeServer } from '../blob-server.js'
 import b4a from 'b4a'
 import { createHash } from 'node:crypto'
 import { pipelinePromise, Readable, Transform } from 'streamx'
-import { readdirSync, readFileSync, renameSync, statfsSync, statSync, writeFileSync } from 'node:fs'
+import { readdirSync, readFileSync, statfsSync, statSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { unwrapVideoKey, wrapVideoKey } from '../mnemonic.js'
 import { BLOB_BLOCK_SIZE, HEX64, ID, cleanText, decodeOp, formatWatchUri, isSystemViewKey, isUniform512, str } from '../protocol.js'
@@ -29,7 +29,7 @@ export async function createBlobs (ctx) {
   try {
     const savedLru = JSON.parse(readFileSync(cacheLruPath, 'utf8'))
     for (const [hex, at] of Object.entries(savedLru)) {
-      if (/^[0-9a-f]{64}$/.test(hex) && Number.isFinite(at)) lastUsedAt.set(hex, at)
+      if (HEX64.test(hex) && Number.isFinite(at)) lastUsedAt.set(hex, at)
     }
   } catch {}
   let lruTimer = null
@@ -990,14 +990,6 @@ export async function createBlobs (ctx) {
     return { total: queue.length, migrated, deduped, remaining: Math.max(0, queue.length - migrated), migratedBytes }
   }
 
-  function clearUnlockedVideoKeys (source, epoch = null) {
-    for (const [blobsHex, meta] of encryptedBlobs) {
-      if (meta.source === source && (epoch == null || meta.epoch === Number(epoch))) {
-        unlockedVideoKeys.delete(blobsHex)
-      }
-    }
-  }
-
   async function startServer () {
     server = createBlobRangeServer(ctx.storage.store.session(), {
       host: ctx.opts.streamHost,
@@ -1056,27 +1048,19 @@ export async function createBlobs (ctx) {
     blobSlots,
     blobCores,
     ownedBlobs,
-    ownedByDiscovery,
     cachedBlobs,
     slotSet,
     blobsKey,
     lastHttpViewAt: () => lastHttpViewAt,
     isOwnedBlob,
-    registerOwned,
-    dropOwned,
     resolveVideoKey,
-    resolveBlobEncryptionKey,
     hydrateOwned,
-    openSlot,
     get server () { return server },
     streamUrl,
-    blockCounts,
     syncBlockCounter,
     localBlocks,
     ensureBlockCounter,
     bulkPeers,
-    warmAhead,
-    attachUploadWarmth,
     absentDisc,
     blobDisc,
     recordCached,
@@ -1085,15 +1069,11 @@ export async function createBlobs (ctx) {
     warmRanges,
     warm,
     entryCachedBytes,
-    dbDiskBytes,
     gcStorage,
-    hasLiveBlobReference,
     gcUnreferencedSlotBlob,
     evictBehind,
-    clearBlobHex,
     cachedTotalBytes,
     get cacheMaxBytes () { return cacheMaxBytes },
-    scheduleCeiling,
     enforceCacheCeiling,
     setCacheMaxBytes,
     clearCache,
@@ -1103,7 +1083,6 @@ export async function createBlobs (ctx) {
     syncLocalChannel,
     rechunkLegacyBlobs,
     setPlayerActive,
-    clearUnlockedVideoKeys,
     startServer,
     weakOwned,
     httpOwned

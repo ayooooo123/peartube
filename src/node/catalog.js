@@ -156,12 +156,12 @@ export function createCatalog (ctx) {
     if (off > 0 || lim > 0) {
       list = lim > 0 ? list.slice(off, off + lim) : list.slice(off)
     }
-    return list.map(({ entry, ...rest }) => ({
-      ...rest,
-      ...describeEntry(rest.id, rest.title),
-      streamUrl: ctx.blobs.streamUrl(entry),
-      magnetUrl: formatWatchUri(entry)
-    }))
+    return list.map(entryView)
+  }
+
+  // A catalog record as every view shows it: its fields, what the title/id say it is, and how to play or share it.
+  function entryView ({ entry, ...rest }) {
+    return { ...rest, ...describeEntry(rest.id, rest.title), streamUrl: ctx.blobs.streamUrl(entry), magnetUrl: formatWatchUri(entry) }
   }
 
   let discoveredCache = null
@@ -223,8 +223,7 @@ export function createCatalog (ctx) {
     const parsed = parseUri(uri)
     if (parsed.action === 'receiver') throw new Error('A TV receiver link pairs through casting, not the catalog')
     if (parsed.action === 'access') {
-      await ctx.identity.addAccessKey({ channel: parsed.channel, epoch: parsed.epoch, key: parsed.epochKey })
-      const source = await ctx.sources.addSource({ key: parsed.channel, kind: 'channel', alias: parsed.alias })
+      const source = await ctx.sources.addSource(uri)
       return { action: 'access', channel: parsed.channel, epoch: parsed.epoch, source }
     }
     if (parsed.action === 'source') return { action: 'source', source: await ctx.sources.addSource(parsed) }
@@ -240,7 +239,7 @@ export function createCatalog (ctx) {
     ctx.update()
     return {
       action: 'watch',
-      entry: {
+      entry: entryView({
         key,
         id: entry.id,
         title: entry.title,
@@ -251,12 +250,10 @@ export function createCatalog (ctx) {
         private: false,
         epoch: 0,
         locked: false,
-        ...describeEntry(entry.id, entry.title),
-        streamUrl: ctx.blobs.streamUrl(entry),
-        magnetUrl: formatWatchUri(entry),
         source: parsed.sourceKey || 'direct',
-        sourceKind: 'watch'
-      }
+        sourceKind: 'watch',
+        entry
+      })
     }
   }
 

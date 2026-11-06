@@ -79,13 +79,11 @@ export async function createChannel (ctx) {
       core.ready().then(() => core.download({ start: 0, end: -1 })).catch(() => {})
     }
   }
-  let primaryDirty = true
-  let primaryHydrated = false
   const primaryCache = { entries: [], byId: new Map(), discovered: [] }
   channel = new Autobee(chNs, targetKey ? b4a.from(targetKey, 'hex') : null, {
     ...(founderKeyPair ? { keyPair: founderKeyPair } : {}),
     apply: primaryApply,
-    update: (view, changes) => { mirrorLanding(changes); primaryDirty = true; ctx.update() },
+    update: (view, changes) => { mirrorLanding(changes); ctx.update() },
     optimistic: true,
     isTrusted: makeIsTrusted(() => b4a.toString(channel.key, 'hex')),
     wakeup
@@ -102,7 +100,6 @@ export async function createChannel (ctx) {
   if (!targetKey && channel.local.length === 0 && channel.bootstrap.writable) {
     await channel.append(b4a.from(JSON.stringify({ type: 'init', owner: ctx.identity.idVault?.ownerPublicKey || undefined, epoch: 1 })))
     await channel.updated()
-    primaryDirty = true
   }
 
   async function syncWriterCores () {
@@ -143,8 +140,6 @@ export async function createChannel (ctx) {
     // Replace, never merge: the primary is fully applied before every scan, so an announce that is
     // gone is really gone. Merging kept deleted titles alive for findEntry forever.
     ctx.sources.indexChannelRecords(primaryCache, entriesList, discoveredList)
-    primaryHydrated = true
-    primaryDirty = false
   }
 
   async function currentChannelEpoch () {
@@ -289,7 +284,6 @@ export async function createChannel (ctx) {
     hasEntries: () => channelHasEntries,
     markHasEntries: () => { channelHasEntries = true },
     viewEpoch: () => viewEpoch,
-    bumpView: () => { viewEpoch++ },
-    applied
+    bumpView: () => { viewEpoch++ }
   }
 }

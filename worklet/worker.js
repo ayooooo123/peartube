@@ -4,7 +4,8 @@
 //   worker -> app  {id, result} | {id, error} | {event: 'update' | 'sources' | 'cast' | 'receiverCommand' | 'fatal', ...}
 // Host events {event, ...} are dispatched on Bare's 'appEvent' channel; iOS
 // uses this for the system Bonjour adapter without raw multicast sockets.
-// 'update' means the tracker, the peer set or LAN discovery changed. start and
+// 'update' means the tracker, the peer set or LAN discovery changed. 'sources' carries the followed channels as
+// settings.json stores them ({key, kind, alias}; the node's own channel excluded). start and
 // status return the core's status plus `lan` (see lanNote). Stream URLs point
 // at the core's blob server on 127.0.0.1, which the app plays.
 // Some of LAN discovery's dependencies use the global `process`, which Bare
@@ -12,8 +13,8 @@
 import 'bare-process/global'
 import b4a from 'b4a'
 import os from 'bare-os'
-import { createNode } from '../src/index.js'
-import { API_PORT, RECEIVER_PORT, parseUri } from '../src/protocol.js'
+import { createNode, idleStatus } from '../src/index.js'
+import { API_PORT, parseUri } from '../src/protocol.js'
 import { nodeOptions, normalizeAppSettings } from '../src/app-settings.js'
 import { createApi } from '../src/http.js'
 // Artwork lookups without `ubit`: the app's own loopback API serves /v1/poster and /v1/backdrop.
@@ -23,6 +24,8 @@ import { createCastController, reclaimLowDiskReceiverStorage, resolvePeerStorage
 
 const ipc = Bare.IPC
 let node = null
+// The settings the last start was given: a form saved while no node runs still keeps channel names.
+let lastSettings = null
 let api = null
 let apiUrl = null
 let cast = null
@@ -174,29 +177,17 @@ function ipv4s (interfaces) {
     .join(', ')
 }
 
-// A status read can land before the node exists (the app asks as soon as Settings opens, and a
-// start or stop may still be queued); spreading the node status threw "cannot read property
-// 'status' of null" into the UI. Report an empty node instead.
-const idleBucket = () => ({ peers: 0, rxBytes: 0, txBytes: 0, downBps: 0, upBps: 0, closedRx: 0, closedTx: 0 })
-const idleReport = () => ({
-  tracker: '', channel: '', writer: '', writable: false, blobs: '', blobBytes: 0, cachedBytes: 0,
-  peers: 0, lanPeers: 0, downBps: 0, upBps: 0, rxBytes: 0, txBytes: 0,
-  routes: { private: idleBucket(), public: idleBucket(), lan: idleBucket() },
-  inflightBlocks: 0, rtt: 0, retransmits: 0, sources: [],
-  lan: lanNote, apiUrl
-})
-const report = () => (node ? { ...node.status(), lan: lanNote, apiUrl } : idleReport())
+function withDownload (e) {
+  return apiUrl && e.streamUrl ? { ...e, downloadUrl: `${apiUrl}/v1/blob${new URL(e.streamUrl).search}&download=${encodeURIComponent(e.title)}` } : e
+}
+
+const report = () => ({ ...(node ? node.status() : idleStatus()), lan: lanNote, apiUrl })
 
 // Reads wait for a queued start or stop, so they never see the node being replaced.
 async function current () {
   await lifecycle
   if (!node) throw new Error('Not started')
   return node
-}
-
-function hostPort (address) {
-  const i = address.lastIndexOf(':')
-  return { host: address.slice(0, i), port: Number(address.slice(i + 1)) }
 }
 
 function listenLoopback (srv, preferredPort) {
@@ -228,7 +219,8 @@ const methods = {
   // its node folders.
   start: ({ trackersDir, defaultFolder, settings }) => serial(async () => {
     await close()
-    const opts = nodeOptions(normalizeAppSettings(settings), { trackersDir, defaultFolder })
+    lastSettings = normalizeAppSettings(settings)
+    const opts = nodeOptions(lastSettings, { trackersDir, defaultFolder })
     node = await createNode({
       storage: opts.storage,
       tracker: opts.tracker,
@@ -236,7 +228,7 @@ const methods = {
       join: opts.join,
       sources: opts.sources,
       relayThrough: opts.relayThrough,
-      bootstrap: opts.bootstrap ? opts.bootstrap.map(hostPort) : undefined,
+      bootstrap: opts.bootstrap,
       privateRouting: opts.privateRouting,
       worklet: true,
       onchange: update
@@ -253,29 +245,28 @@ const methods = {
       backdropUrl: imdb => backdropUrl(CINEMETA_URL, imdb),
       get cast () { return cast },
       extraStatus: () => ({ lan: lanNote, apiUrl, lanStats: node?.lanStats?.() ?? null }),
-      onSourcesChanged: list => send({ event: 'sources', sources: list })
+      onSourcesChanged: list => send({ event: 'sources', sources: list.filter(s => !s.primary && !s.writable).map(({ key, kind, alias }) => ({ key, kind, alias })) })
     })
     apiUrl = await listenLoopback(srv, API_PORT)
     api = apiUrl ? srv : null
     const discovered = await node.discoveredSources()
     return { ...report(), discoveredSources: discovered }
   }),
-  // A settings form's fields (or a saved settings.json) as complete settings, or the first field error.
-  normalizeSettings: async ({ settings, requireChannel = false }) => normalizeAppSettings(settings, { requireChannel }),
+  // A settings form's fields (or a saved settings.json) as complete settings, or the first field error. A channel the
+  // running node follows (or, with no node, the last start named) keeps its name when the form lists it without one.
+  normalizeSettings: async ({ settings, requireChannel = false }) =>
+    normalizeAppSettings(settings, { requireChannel, previous: node ? { sources: node.listSources() } : lastSettings }),
   // The app asks for status the moment Settings opens, which can be before a queued start has
   // finished: answer with an empty node rather than throwing into the UI.
   status: async () => {
     await lifecycle
-    if (!node) return { ...idleReport(), discoveredSources: [] }
+    if (!node) return { ...report(), discoveredSources: [] }
     return { ...report(), discoveredSources: await node.discoveredSources() }
   },
   // `downloadUrl` saves a film through the loopback API, which names it by sniffing its container
   // (Content-Disposition), so the apps save with the right extension without sniffing bytes themselves.
-  search: async ({ id = null, source = null, query = null, limit = 0, offset = 0 } = {}) => {
-    const entries = await (await current()).search(id, { source, query, limit, offset })
-    if (!apiUrl) return entries
-    return entries.map(e => ({ ...e, downloadUrl: `${apiUrl}/v1/blob${new URL(e.streamUrl).search}&download=${encodeURIComponent(e.title)}` }))
-  },
+  search: async ({ id = null, source = null, query = null, limit = 0, offset = 0 } = {}) =>
+    (await (await current()).search(id, { source, query, limit, offset })).map(withDownload),
   focusSource: async ({ key }) => ({ ok: await (await current()).focusSource(key) }),
   setPlayerActive: async ({ active }) => (await current()).setPlayerActive(active),
   warm: async ({ key }) => {
@@ -303,7 +294,8 @@ const methods = {
     }
     await lifecycle
     if (!node && parsed.action === 'source') return { action: 'source', source: { key: parsed.key, kind: parsed.kind, alias: parsed.alias } }
-    return (await current()).openUri(uri)
+    const res = await (await current()).openUri(uri)
+    return res.entry ? { ...res, entry: withDownload(res.entry) } : res
   },
   remove: async ({ key }) => { await (await current()).remove(key); update(); return { removed: true, key } },
   identity: async ({ revealMnemonic = false } = {}) => (await current()).identity({ revealMnemonic }),
@@ -312,7 +304,8 @@ const methods = {
   clearCache: async ({ key = null } = {}) => { const res = await (await current()).clearCache(key); update(); return res },
   setCacheMax: async ({ maxBytes = 0 } = {}) => { const cacheMaxBytes = (await current()).setCacheMaxBytes(maxBytes); update(); return { cacheMaxBytes } },
   castStatus: async () => (await ensureCast()).status(),
-  castPair: async params => { const c = await ensureCast(); await c.pairReceiver(params); return c.status() },
+  // The cast status plus `pairedId`, the saved receiver the pairing produced.
+  castPair: async params => { const c = await ensureCast(); const rec = await c.pairReceiver(params); return { ...c.status(), pairedId: rec?.id || '' } },
   castRemove: async ({ id }) => { const c = await ensureCast(); c.removeReceiver(id); return c.status() },
   castPlay: async params => {
     const c = await ensureCast()
@@ -337,7 +330,6 @@ const methods = {
     const c = await ensureCast()
     return c.startLocalReceiver({
       name,
-      port: RECEIVER_PORT,
       openAuth,
       peerStorage: castPeerStorage,
       onCommand: async command => { send({ event: 'receiverCommand', command }) }

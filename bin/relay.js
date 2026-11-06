@@ -78,7 +78,7 @@ async function reconcileDirectory (list) {
   }
   for (const s of list) {
     if (s.primary || published.has(s.key)) continue
-    await node.publishSource({ sourceKey: s.key, kind: s.kind, title: s.alias || s.key.slice(0, 12) }, { target: 'both' })
+    await node.publishSource({ sourceKey: s.key, title: s.alias || s.key.slice(0, 12) })
     autoListed.add(s.key)
     saveAutoListed()
   }

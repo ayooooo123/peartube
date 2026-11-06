@@ -156,8 +156,7 @@ class AppModel(private val app: Application) {
                 when (event) {
                     Worker.Event.Update -> refreshes.trySend(Unit)
                     is Worker.Event.Sources -> {
-                        val synced = event.list.filter { !it.primary && !it.writable }.map { SourceSpec(it.key, it.kind, it.alias) }
-                        val next = settings.value.copy(sources = synced)
+                        val next = settings.value.copy(sources = event.list)
                         runCatching { next.save(dataDir) }
                         settings.value = next
                     }
@@ -293,46 +292,22 @@ class AppModel(private val app: Application) {
         }
     }
 
-    fun pairCastByCode(id: String, code: String) {
-        scope.launch {
-            val target = cast.value.receivers.firstOrNull { it.id == id }
-            runCatching { worker.castPair(JSONObject().put("id", id).put("code", code)) }
-                .onSuccess { result ->
-                    cast.value = result
-                    val receiver = result.receivers.firstOrNull { it.id == id && it.paired }
-                        ?: result.receivers.firstOrNull { it.paired && target != null &&
-                            ((it.publicKey.isNotEmpty() && it.publicKey == target.publicKey) ||
-                                (it.host != null && it.host == target.host && it.port == target.port)) }
-                    if (receiver != null) selectCastReceiver(receiver)
-                    else error.value = "This TV didn't finish connecting. Please scan its QR code."
-                }
-                .onFailure { error.value = it.message }
-        }
-    }
+    fun pairCastByCode(id: String, code: String) = pairCast(JSONObject().put("id", id).put("code", code),
+        "This TV didn't finish connecting. Please scan its QR code.")
 
     fun pairCastByUriOrHost(raw: String) {
         val trimmed = raw.trim()
-        if (trimmed.startsWith("peartube:", ignoreCase = true)) {
-            openUriOrKey(trimmed)
-            return
-        }
-        val uri = Uri.parse(if (trimmed.startsWith("http")) trimmed else "http://$trimmed")
-        if (uri.getQueryParameter("uri")?.startsWith("peartube:") == true) {
-            openUriOrKey(uri.getQueryParameter("uri")!!)
-            return
-        }
-        val payload = if (':' in trimmed || trimmed.startsWith("http")) {
-            JSONObject().put("host", uri.host).put("port", uri.port.takeIf { it > 0 } ?: 8176)
-        } else JSONObject().put("publicKey", trimmed)
+        if (trimmed.startsWith("peartube:", ignoreCase = true)) openUriOrKey(trimmed)
+        else pairCast(JSONObject().put("address", trimmed), "Couldn't identify that screen. Select it on Wi-Fi or scan its TV QR code.")
+    }
+
+    private fun pairCast(params: JSONObject, unpaired: String) {
         scope.launch {
-            runCatching { worker.castPair(payload) }
-                .onSuccess { result ->
+            runCatching { worker.castPair(params) }
+                .onSuccess { (result, pairedId) ->
                     cast.value = result
-                    val receiver = result.receivers.firstOrNull { it.paired &&
-                        (if (payload.has("publicKey")) it.publicKey == trimmed
-                        else it.host == uri.host && it.port == payload.optInt("port")) }
-                    if (receiver != null) selectCastReceiver(receiver)
-                    else error.value = "Couldn't identify that screen. Select it on Wi-Fi or scan its TV QR code."
+                    val receiver = result.receivers.firstOrNull { it.id == pairedId && it.paired }
+                    if (receiver != null) selectCastReceiver(receiver) else error.value = unpaired
                 }
                 .onFailure { error.value = it.message }
         }

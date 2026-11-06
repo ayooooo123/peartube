@@ -18,7 +18,7 @@ use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use peartube::settings::{Settings, SourceSpec};
 use peartube::soundfont;
-use peartube::worker::{CastStatus, DATA_DIR, DiscoveredSource, Entry, Event, SourceInfo, Status, worker};
+use peartube::worker::{CastStatus, DATA_DIR, DiscoveredSource, Entry, Event, Status, worker};
 use serde::{Deserialize, Serialize};
 
 use crate::cast_screen::CastSheetForm;
@@ -834,12 +834,8 @@ fn e_same_id(a: &Entry, b: &Entry) -> bool {
     a.id == b.id
 }
 
-fn sync_sources_from_daemon(settings: &mut Settings, list: Vec<SourceInfo>) {
-    settings.sources = list
-        .into_iter()
-        .filter(|s| !s.primary && !s.writable)
-        .map(|s| SourceSpec { key: s.key, kind: s.kind, alias: s.alias })
-        .collect();
+fn sync_sources_from_daemon(settings: &mut Settings, list: Vec<SourceSpec>) {
+    settings.sources = list;
     let _ = settings.save();
 }
 

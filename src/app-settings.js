@@ -39,13 +39,16 @@ function channelSpec (token) {
 
 // Raw fields (from a settings form: text or lists) or a saved settings.json, as complete settings. Throws the first
 // field error, worded for the user. A form must name at least one channel; a first-run settings.json names none.
-export function normalizeAppSettings (raw = {}, { requireChannel = false } = {}) {
+// `previous` is the settings being edited: a channel listed again without a name keeps the name it had.
+export function normalizeAppSettings (raw = {}, { requireChannel = false, previous = null } = {}) {
   const tracker = raw.tracker ? channelSpec(raw.tracker).key : ''
   const mnemonic = normalizeMnemonic(raw.mnemonic)
   if (mnemonic && !validateMnemonic(mnemonic)) throw new Error('Recovery phrase must be 12 or 24 English recovery words.')
+  const known = new Map((previous?.sources || []).map(s => [String(s.key).toLowerCase(), String(s.alias || '')]))
   const sources = []
   for (const token of list(raw.sources, /[\r\n,]+/)) {
     const spec = channelSpec(token)
+    if (!spec.alias) spec.alias = known.get(spec.key) || ''
     if (spec.key !== tracker && !sources.some(s => s.key === spec.key)) sources.push(spec)
   }
   const relayThrough = list(raw.relayThrough, /[\s,]+/).map(k => String(k).toLowerCase())

@@ -44,11 +44,7 @@ let clockWallMs = 0
 let clockPlaying = false
 let pageHidden = false
 let lastPostedBlock = -1
-let ABI = {
-  step: { eof: 0, mseInit: 1, mseSegment: 2, videoRgba: 3, audioPlanarF32: 4, subText: 5, subBitmap: 6, videoYuv420: 7, videoPacket: 8, yield: 9 },
-  mode: { software: 0, mse: 1, webcodecs: 2 },
-  limits: { maxHiddenGops: 12, maxGopPkts: 320 }
-}
+let ABI = null
 
 let streamCrop = null
 let streamCropCandidate = null
@@ -245,7 +241,7 @@ function ensureWasm (wasmUrl) {
       inst = (await WebAssembly.instantiate(bytes, imports)).instance
     }
     wasm = inst.exports
-    wasm.pt_abi_json?.()
+    wasm.pt_abi_json()
     ABI = readJson()
     return wasm
   })()

@@ -62,7 +62,7 @@ test('channels, gossip discovery, cross-channel magnet seeding, reciprocity, Str
   assert.equal((await (await fetch(`${baseDir}/v1/sources`)).json()).published.some(p => p.key === tempKey), true)
   await fetch(`${baseDir}/v1/channel/sources/${tempKey}`, { method: 'DELETE' })
   assert.equal((await (await fetch(`${baseDir}/v1/sources`)).json()).published.some(p => p.key === tempKey), false)
-  await directory.publishSource({ sourceKey: creatorChannel, kind: 'channel', title: 'Sci-Fi & Classics Vault' }, { target: 'both' })
+  await directory.publishSource({ sourceKey: creatorChannel, title: 'Sci-Fi & Classics Vault' })
   const directoryChannel = directory.status().channel
   // Viewer B starts with zero open tracker and subscribes ONLY to Directory D's channel, exposing loopback /v1 with Bearer auth.
   let apiB = null

@@ -13,7 +13,7 @@ use parking_lot::Mutex;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
-use crate::settings::Settings;
+use crate::settings::{Settings, SourceSpec};
 
 // worklet/worker.js packed by build.rs with bare-pack.
 static BUNDLE: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/worker.bundle"));
@@ -360,8 +360,8 @@ pub struct ReceiverCommand {
 pub enum Event {
     /// A tracker, channel, or peer set changed.
     Update,
-    /// Subscribed sources changed through the loopback HTTP daemon.
-    Sources(Vec<SourceInfo>),
+    /// The followed channels changed (the node's own channel excluded), as settings.json stores them.
+    Sources(Vec<SourceSpec>),
     /// Cast receivers, remote session, or local TV receiver metadata changed.
     Cast(CastStatus),
     /// A remote sender pushed a playback command into our local TV Receiver mode.
@@ -398,8 +398,6 @@ struct BareIpc {
 unsafe extern "C" {
     fn bare_worklet_create(options: *const c_void, result: *mut *mut BareWorklet) -> c_int;
     fn bare_worklet_start(worklet: *mut BareWorklet, filename: *const c_char, source: *const c_void, len: usize, argc: c_int, argv: *const *const c_char) -> c_int;
-    fn bare_worklet_suspend(worklet: *mut BareWorklet, linger: c_int) -> c_int;
-    fn bare_worklet_resume(worklet: *mut BareWorklet) -> c_int;
     fn bare_ipc_create(worklet: *mut BareWorklet, result: *mut *mut BareIpc) -> c_int;
     fn bare_ipc_read(ipc: *mut BareIpc, data: *mut c_void, len: usize) -> c_int;
     fn bare_ipc_write(ipc: *mut BareIpc, data: *const c_void, len: usize) -> c_int;
@@ -619,11 +617,6 @@ impl Worker {
         parse(self.call("search", json!({ "id": id })).await?)
     }
 
-    pub async fn add_source(&self, key: &str, kind: &str, alias: &str) -> Result<SourceInfo, String> {
-        let res = self.call("addSource", json!({ "key": key, "kind": kind, "alias": alias })).await?;
-        parse(res.get("source").cloned().unwrap_or(Value::Null))
-    }
-
     pub async fn remove_source(&self, key: &str) -> Result<(), String> {
         self.call("removeSource", json!({ "key": key })).await.map(drop)
     }
@@ -665,10 +658,6 @@ impl Worker {
         parse(self.call("castStatus", json!({})).await?)
     }
 
-    pub async fn cast_pair(&self, params: Value) -> Result<CastStatus, String> {
-        parse(self.call("castPair", params).await?)
-    }
-
     pub async fn cast_remove(&self, id: &str) -> Result<CastStatus, String> {
         parse(self.call("castRemove", json!({ "id": id })).await?)
     }
@@ -686,10 +675,6 @@ impl Worker {
             )
             .await?,
         )
-    }
-
-    pub async fn cast_attach(&self, receiver_id: &str) -> Result<CastStatus, String> {
-        parse(self.call("castAttach", json!({ "receiverId": receiver_id })).await?)
     }
 
     pub async fn cast_control(&self, params: Value) -> Result<CastStatus, String> {
@@ -711,15 +696,6 @@ impl Worker {
         let (tx, rx) = mpsc::unbounded();
         self.shared.subscribers.lock().push(tx);
         rx
-    }
-
-    /// Stop the worklet's I/O while the app is in the background.
-    pub fn suspend(&self) {
-        unsafe { bare_worklet_suspend(self.worklet, -1) };
-    }
-
-    pub fn resume(&self) {
-        unsafe { bare_worklet_resume(self.worklet) };
     }
 
     async fn call(&self, method: &str, params: Value) -> Reply {
@@ -762,7 +738,7 @@ impl Shared {
             match msg.get("event").and_then(Value::as_str) {
                 Some("update") => self.broadcast(Event::Update),
                 Some("sources") => {
-                    if let Ok(list) = serde_json::from_value::<Vec<SourceInfo>>(msg.get("sources").cloned().unwrap_or(Value::Null)) {
+                    if let Ok(list) = serde_json::from_value::<Vec<SourceSpec>>(msg.get("sources").cloned().unwrap_or(Value::Null)) {
                         self.broadcast(Event::Sources(list));
                     }
                     self.broadcast(Event::Update);

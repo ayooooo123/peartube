@@ -231,6 +231,43 @@ export async function createNetwork (ctx) {
 
   let inflightRange = ctx.storage.isMobileWorklet ? [6, 8] : (isWorklet ? [16, 48] : [12, 32])
 
+  // Bytes per route (live connections plus closed ones), whole-node totals, and rates; rates move at most every 500 ms.
+  function sample () {
+    let rttSum = 0, rttCount = 0, retransmits = 0, contributingPeers = 0
+    const now = Date.now(), dt = now - prevAt
+    function measure (path, connections) {
+      let rxBytes = path.closedRx, txBytes = path.closedTx
+      if (connections) for (const c of connections) {
+        const crx = c.rawBytesRead || c.rawStream?.bytesReceived || 0
+        if (crx > 0) contributingPeers++
+        rxBytes += crx
+        txBytes += c.rawBytesWritten || c.rawStream?.bytesTransmitted || 0
+        const r = c.rawStream
+        if (r?.rtt > 0) { rttSum += r.rtt; rttCount++ }
+        if (r?.retransmits > 0) retransmits += r.retransmits
+      }
+      if (dt >= 500) {
+        path.downBps = Math.max(0, Math.round(((rxBytes - path.prevRx) * 1000) / dt))
+        path.upBps = Math.max(0, Math.round(((txBytes - path.prevTx) * 1000) / dt))
+        path.prevRx = rxBytes; path.prevTx = txBytes
+      }
+      return { peers: connections?.size || 0, rxBytes, txBytes, downBps: path.downBps, upBps: path.upBps }
+    }
+    const routes = {
+      private: measure(traffic.private, dht ? swarm.connections : null),
+      public: measure(traffic.public, dht ? null : swarm.connections),
+      lan: measure(traffic.lan, lanPeers)
+    }
+    const rxBytes = routes.private.rxBytes + routes.public.rxBytes + routes.lan.rxBytes
+    const txBytes = routes.private.txBytes + routes.public.txBytes + routes.lan.txBytes
+    if (dt >= 500) {
+      downBps = Math.max(0, Math.round(((rxBytes - prevRx) * 1000) / dt))
+      upBps = Math.max(0, Math.round(((txBytes - prevTx) * 1000) / dt))
+      prevRx = rxBytes; prevTx = txBytes; prevAt = now
+    }
+    return { routes, rxBytes, txBytes, downBps, upBps, contributingPeers, rtt: rttCount ? Math.round(rttSum / rttCount) : 0, retransmits }
+  }
+
   function setAllowedPeers (keys) {
     allowedSet = Array.isArray(keys) && keys.length ? new Set(keys.map(k => String(k).toLowerCase())) : null
   }
@@ -243,10 +280,8 @@ export async function createNetwork (ctx) {
     lanPeers,
     peerConns,
     connListeners,
-    traffic,
+    sample,
     discoveries,
-    lanTopics,
-    contentTopics,
     joinOverlayTopic,
     leaveOverlayTopic,
     joinContentSwarm,
@@ -257,20 +292,9 @@ export async function createNetwork (ctx) {
     initLan,
     setAllowedPeers,
     attachSource,
-    trackConn,
     inflightRange: () => inflightRange,
     setInflightRange: r => { inflightRange = r },
     get downBps () { return downBps },
-    get upBps () { return upBps },
-    get prevRx () { return prevRx },
-    get prevTx () { return prevTx },
-    get prevAt () { return prevAt },
-    setRates (d, u, pr, pt, pa) {
-      downBps = d
-      upBps = u
-      if (pr !== undefined) prevRx = pr
-      if (pt !== undefined) prevTx = pt
-      if (pa !== undefined) prevAt = pa
-    }
+    get upBps () { return upBps }
   }
 }

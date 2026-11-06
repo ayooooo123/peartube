@@ -22,16 +22,6 @@ const MiB = 1024 * 1024
 const VIDEO_BYTES = 1536 * 1024
 const tmp = label => mkdtempSync(join(tmpdir(), `peartube-cache-${label}-`))
 
-async function until (fn, ms, label) {
-  const end = Date.now() + ms
-  for (;;) {
-    const value = await fn()
-    if (value) return value
-    if (Date.now() > end) throw new Error(`Timed out waiting for ${label}`)
-    await new Promise(resolve => setTimeout(resolve, 200))
-  }
-}
-
 test('cache ceiling evicts oldest-served, spares the playing film, and 0 is unlimited', { timeout: 180_000 }, async () => {
   const testnet = await createTestnet(3)
   const pub = await createNode({ storage: tmp('pub'), bootstrap: testnet.bootstrap })

@@ -129,7 +129,7 @@ final class AppModel: ObservableObject {
         case "update": Task { await refresh() }
         case "cast": cast = event.object("cast"); recordProgress(); reconcileBackground()
         case "sources":
-            settings.sources = event.objects("sources").filter { !$0.flag("primary") && !$0.flag("writable") }.map(SourceSpec.init)
+            settings.sources = event.objects("sources").map(SourceSpec.init)
             do { try storage?.save(settings, name: "settings.json") } catch { self.error = error.localizedDescription }
             Task { await refresh() }
         case "fatal": error = event.string("error").isEmpty ? "The embedded P2P worker stopped." : event.string("error")
@@ -327,41 +327,21 @@ final class AppModel: ObservableObject {
     func pairReceiver(id: String, code: String, address: String = "") async {
         let value = code.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
         guard value.count == 6, value.allSatisfy({ $0.isASCII && ($0.isLetter || $0.isNumber) }) else { error = "Enter the six-character pairing code shown on the TV."; return }
-        do {
-            let target = receivers.first { $0.id == id }
-            var params: [String: Any] = ["id": id, "code": value]
-            if id.isEmpty {
-                let raw = address.trimmingCharacters(in: .whitespacesAndNewlines)
-                if raw.count == 64 && raw.allSatisfy(\.isHexDigit) { params["publicKey"] = raw.lowercased() }
-                else if let url = URLComponents(string: raw.contains("://") ? raw : "http://\(raw)"), let host = url.host, !host.isEmpty {
-                    params["host"] = host; params["port"] = url.port ?? 8176
-                } else { throw AppFailure("Choose a screen or enter its host:port before pairing.") }
-            }
-            _ = try await castRequest("castPair", params)
-            if let receiver = receivers.first(where: {
-                guard $0.paired else { return false }
-                if !id.isEmpty && $0.id == id { return true }
-                let publicKey = params["publicKey"] as? String ?? target?.json.string("publicKey") ?? ""
-                if !publicKey.isEmpty && $0.json.string("publicKey") == publicKey { return true }
-                let host = params["host"] as? String ?? target?.json.string("host") ?? ""
-                let port = params["port"] as? Int ?? Int(target?.json.number("port") ?? 0)
-                return !host.isEmpty && $0.json.string("host") == host && Int($0.json.number("port")) == port
-            }) { await selectReceiver(receiver) }
-            else { notice = "Paired. Choose the saved screen to connect." }
-        } catch { self.error = error.localizedDescription }
+        let raw = address.trimmingCharacters(in: .whitespacesAndNewlines)
+        if id.isEmpty && raw.isEmpty { error = "Choose a screen or enter its host:port before pairing."; return }
+        await pair(id.isEmpty ? ["code": value, "address": raw] : ["id": id, "code": value], unpaired: "Paired. Choose the saved screen to connect.")
     }
     func pairURI(_ input: String) async {
         let raw = input.trimmingCharacters(in: .whitespacesAndNewlines)
         if raw.lowercased().hasPrefix("peartube:") { await openURI(raw); return }
+        await pair(["address": raw], unpaired: nil)
+    }
+    /// Pairs through the worklet (which reads a typed address) and connects to the receiver it saved.
+    private func pair(_ params: [String: Any], unpaired: String?) async {
         do {
-            let normalized = raw.contains("://") ? raw : "http://\(raw)"
-            if let c = URLComponents(string: normalized), let uri = c.queryItems?.first(where: { $0.name == "uri" })?.value, uri.lowercased().hasPrefix("peartube:") { await openURI(uri); return }
-            var params: [String: Any] = [:]
-            if raw.count == 64 && raw.allSatisfy(\.isHexDigit) { params["publicKey"] = raw.lowercased() }
-            else if let c = URLComponents(string: normalized), let host = c.host, !host.isEmpty { params = ["host": host, "port": c.port ?? 8176] }
-            else { throw AppFailure("Enter a receiver URI or host:port.") }
-            _ = try await castRequest("castPair", params)
-            if let receiver = receivers.first(where: { $0.paired && (params["publicKey"] as? String == $0.json.string("publicKey") || (params["host"] as? String == $0.json.string("host") && (params["port"] as? Int) == Int($0.json.number("port")))) }) { await selectReceiver(receiver) }
+            let pairedID = try await castRequest("castPair", params).string("pairedId")
+            if let receiver = receivers.first(where: { $0.paired && $0.id == pairedID }) { await selectReceiver(receiver) }
+            else if let unpaired { notice = unpaired }
         } catch { self.error = error.localizedDescription }
     }
     func forgetReceiver(_ id: String) async {

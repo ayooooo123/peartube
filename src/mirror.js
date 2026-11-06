@@ -9,7 +9,6 @@
 import { createReadStream, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, statSync, statfsSync, writeFileSync } from 'node:fs'
 import { basename, extname, join, resolve } from 'node:path'
 import { createHash } from 'node:crypto'
-import b4a from 'b4a'
 import { ID, MAX_TITLE, MEDIA_FILE, parseUri } from './protocol.js'
 import { createHiverelaySeeder } from './hiverelay.js'
 import { createTrafficGate } from './traffic.js'
@@ -113,8 +112,8 @@ export async function createMirrorHost ({
         onchange?.()
         return op
       },
-      async publishDirectory ({ sourceKey, kind = 'channel', title, target = 'both' }) {
-        const res = await node.publishSource({ sourceKey, kind, title }, { target })
+      async publishDirectory ({ sourceKey, title }) {
+        const res = await node.publishSource({ sourceKey, title })
         onchange?.()
         return res
       }

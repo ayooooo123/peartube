@@ -271,6 +271,7 @@ const receiver = await createReceiver({
   storage,
   peerStorage,
   name,
+  port,
   lanHost: lanIp,
   node,
   allowPeerNode: !thin,

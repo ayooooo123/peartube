@@ -52,31 +52,6 @@ impl Default for Settings {
     }
 }
 
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct RawSettings {
-    #[serde(default)]
-    tracker: String,
-    #[serde(default)]
-    mnemonic: String,
-    #[serde(default)]
-    sources: Vec<SourceSpec>,
-    #[serde(default)]
-    relay_through: Vec<String>,
-    #[serde(default)]
-    bootstrap: Vec<String>,
-    #[serde(default)]
-    lan_discovery: bool,
-    #[serde(default)]
-    private_routing: bool,
-    #[serde(default = "default_cache_max_gb")]
-    cache_max_gb: u32,
-}
-
-fn default_cache_max_gb() -> u32 {
-    10
-}
-
 impl Settings {
     pub fn has_sources(&self) -> bool {
         !self.tracker.is_empty() || !self.mnemonic.is_empty() || !self.sources.is_empty()
@@ -85,17 +60,7 @@ impl Settings {
     pub fn load() -> Settings {
         std::fs::read(DATA_DIR.join("settings.json"))
             .ok()
-            .and_then(|bytes| serde_json::from_slice::<RawSettings>(&bytes).ok())
-            .map(|r| Settings {
-                tracker: r.tracker,
-                mnemonic: r.mnemonic,
-                sources: r.sources,
-                relay_through: r.relay_through,
-                bootstrap: r.bootstrap,
-                lan_discovery: r.lan_discovery,
-                private_routing: r.private_routing,
-                cache_max_gb: r.cache_max_gb,
-            })
+            .and_then(|bytes| serde_json::from_slice::<Settings>(&bytes).ok())
             .unwrap_or_default()
     }
 

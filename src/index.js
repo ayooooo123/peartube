@@ -1,5 +1,4 @@
 import b4a from 'b4a'
-import hypercoreCrypto from 'hypercore-crypto'
 import { BLOB_BLOCK_SIZE, HEX64, str } from './protocol.js'
 import { createStorage } from './node/storage.js'
 import { createIdentity } from './node/identity.js'
@@ -8,6 +7,17 @@ import { createBlobs } from './node/blobs.js'
 import { createNetwork } from './node/network.js'
 import { createSources } from './node/sources.js'
 import { createCatalog } from './node/catalog.js'
+
+// What status() reports before a node exists (an app can ask while a start is still queued). Same fields as status().
+export function idleStatus () {
+  const bucket = () => ({ peers: 0, rxBytes: 0, txBytes: 0, downBps: 0, upBps: 0 })
+  return {
+    tracker: '', channel: '', writer: '', writable: false, blobs: '', blobBytes: 0, cachedBytes: 0, cacheMaxBytes: 0,
+    peers: 0, lanPeers: 0, downBps: 0, upBps: 0, rxBytes: 0, txBytes: 0,
+    routes: { private: bucket(), public: bucket(), lan: bucket() },
+    inflightBlocks: 0, rtt: 0, retransmits: 0, sources: []
+  }
+}
 
 // A node that fails partway through opening closes what it opened, so the same storage can be opened again.
 export async function createNode (opts) {
@@ -112,41 +122,7 @@ async function openNode ({
   }
 
   function status () {
-    let rttSum = 0, rttCount = 0, retransmits = 0, contributingPeers = 0
-    const now = Date.now(), dt = now - ctx.net.prevAt
-    function measure (path, connections) {
-      let rxBytes = path.closedRx, txBytes = path.closedTx
-      if (connections) for (const c of connections) {
-        const crx = c.rawBytesRead || c.rawStream?.bytesReceived || 0
-        const ctxBytes = c.rawBytesWritten || c.rawStream?.bytesTransmitted || 0
-        if (crx > 0) contributingPeers++
-        rxBytes += crx
-        txBytes += ctxBytes
-        const r = c.rawStream
-        if (r?.rtt > 0) { rttSum += r.rtt; rttCount++ }
-        if (r?.retransmits > 0) retransmits += r.retransmits
-      }
-      if (dt >= 500) {
-        path.downBps = Math.max(0, Math.round(((rxBytes - path.prevRx) * 1000) / dt))
-        path.upBps = Math.max(0, Math.round(((txBytes - path.prevTx) * 1000) / dt))
-        path.prevRx = rxBytes; path.prevTx = txBytes
-      }
-      return { peers: connections?.size || 0, rxBytes, txBytes, downBps: path.downBps, upBps: path.upBps }
-    }
-    const routes = {
-      private: measure(ctx.net.traffic.private, ctx.net.dht ? ctx.net.swarm.connections : null),
-      public: measure(ctx.net.traffic.public, ctx.net.dht ? null : ctx.net.swarm.connections),
-      lan: measure(ctx.net.traffic.lan, ctx.net.lanPeers)
-    }
-    const rxBytes = routes.private.rxBytes + routes.public.rxBytes + routes.lan.rxBytes
-    const txBytes = routes.private.txBytes + routes.public.txBytes + routes.lan.txBytes
-    let downBps = ctx.net.downBps
-    let upBps = ctx.net.upBps
-    if (dt >= 500) {
-      downBps = Math.max(0, Math.round(((rxBytes - ctx.net.prevRx) * 1000) / dt))
-      upBps = Math.max(0, Math.round(((txBytes - ctx.net.prevTx) * 1000) / dt))
-      ctx.net.setRates(downBps, upBps, rxBytes, txBytes, now)
-    }
+    const { routes, rxBytes, txBytes, downBps, upBps, contributingPeers, rtt, retransmits } = ctx.net.sample()
     let inflightBlocks = 0
     for (const [k, c] of ctx.blobs.blobCores) {
       // Display only: Hypercore has no public in-flight count, so read it off the documented `core.peers`.
@@ -181,15 +157,13 @@ async function openNode ({
       txBytes,
       routes,
       inflightBlocks,
-      rtt: rttCount ? Math.round(rttSum / rttCount) : 0,
+      rtt,
       retransmits,
       sources: ctx.sources.listSources(),
       reciprocity
     }
   }
   ctx.status = status
-
-  function coreByteLen (c) { return c.byteLength || 0 }
 
   // Lays bare every non-empty unified Channel core, linked-device writer core, and 512 KiB video core for supplemental HiveRelays.
   function seedableCores ({ includeCached = false } = {}) {
@@ -272,7 +246,6 @@ async function openNode ({
     bootstrap: bootstrap || null,
     relayThrough: relayThrough || null,
     hasLan: () => Boolean(ctx.net.lan),
-    hasLanPeer: ctx.net.hasLanPeer,
     lanEndpoint: () => ctx.net.lan?.port && ctx.net.lan?.host ? { host: ctx.net.lan.host, port: ctx.net.lan.port, publicKey: b4a.toString(ctx.net.swarm.keyPair.publicKey, 'hex') } : null,
     dialLanPeer: ep => { if (ep?.publicKey && ep?.host && ep?.port) ctx.net.lan?.dialDirect?.(ep.publicKey, ep.host, ep.port) },
     // This node's peer key, hex, as other peers and TV receivers name it.
@@ -291,11 +264,6 @@ async function openNode ({
     },
     evictBehind: ctx.blobs.evictBehind,
     refreshBlockCount: core => ctx.blobs.syncBlockCounter(core),
-    joinSourceSwarm: keyHex => {
-      if (ctx.net.dht || ctx.life.closing || !str(keyHex, HEX64)) return
-      const sk = b4a.from(keyHex, 'hex')
-      ctx.net.joinOverlayTopic(`source-swarm:${keyHex}`, sk, hypercoreCrypto.discoveryKey(sk))
-    },
     channel: ctx.channel.channel,
     swarm: ctx.net.swarm,
     peerConnections: () => ctx.net.peerConns,
@@ -326,8 +294,6 @@ async function openNode ({
     revokeWriter: ctx.channel.revokeWriter,
     claimWithMnemonic: ctx.identity.claimWithMnemonic,
     rotateEpoch: ctx.identity.rotateEpoch,
-    addAccessKey: ctx.identity.addAccessKey,
-    removeAccessKey: ctx.identity.removeAccessKey,
     setAllowedPeers: ctx.net.setAllowedPeers,
     clearCache: ctx.blobs.clearCache,
     setCacheMaxBytes: ctx.blobs.setCacheMaxBytes,

@@ -406,20 +406,14 @@ export async function createSources (ctx) {
   return {
     extraSources,
     activeSources,
-    get primaryAlias () { return primaryAlias },
-    set primaryAlias (val) { primaryAlias = val },
     flushCatalogCache,
-    scheduleCatalogSave,
     indexChannelRecords,
     scanChannelView,
     refreshSourceCache,
-    ensureSourceRecord,
-    hibernateSource,
     wakeSource,
     addSource,
     removeSource,
     listSources,
-    armSourceRotator,
     get sourceRotateTimer () { return sourceRotateTimer },
     set sourceRotateTimer (t) { sourceRotateTimer = t }
   }

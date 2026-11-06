@@ -80,17 +80,6 @@ export function createIdentity (ctx) {
     return { channel: c, epoch: ep }
   }
 
-  async function removeAccessKey (chHex, epoch = null) {
-    const c = String(chHex || '').trim().toLowerCase()
-    for (const k of [...accessKeys.keys()]) {
-      if (epoch != null ? k === `${c}:${Number(epoch)}` : k.startsWith(`${c}:`)) accessKeys.delete(k)
-    }
-    ctx.blobs?.clearUnlockedVideoKeys?.(c, epoch)
-    saveIdentity()
-    ctx.update()
-    return { removed: true, channel: c }
-  }
-
   async function identity ({ revealMnemonic = false } = {}) {
     const ep = await ctx.channel.currentChannelEpoch()
     const role = await ctx.channel.localRole()
@@ -119,7 +108,6 @@ export function createIdentity (ctx) {
     claimWithMnemonic,
     rotateEpoch,
     addAccessKey,
-    removeAccessKey,
     identity
   }
 }

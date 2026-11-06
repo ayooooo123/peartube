@@ -949,11 +949,6 @@ export async function createReceiver ({
       }
       peerNode = managedPeerNode
     }
-
-    if (peerNode && sourceKey) {
-      if (wantPrivate) await peerNode.addSource({ key: sourceKey, kind: sourceKind })
-      else peerNode.joinSourceSwarm?.(sourceKey)
-    }
     return peerNode
   }
 
@@ -1779,7 +1774,9 @@ export function createCastController ({
     return [...merged.values()]
   }
 
-  async function pairReceiver ({ id = '', code = '', uri = '', host = '', port = 0, publicKey = '', name = '' } = {}) {
+  // `address`: what a user typed for a screen, its 64-hex key or host[:port] (the port defaults to RECEIVER_PORT).
+  async function pairReceiver ({ id = '', code = '', uri = '', address = '', host = '', port = 0, publicKey = '', name = '' } = {}) {
+    if (address) ({ host = '', port = 0, publicKey = '' } = receiverAddress(address))
     if (uri) {
       const parsed = parseUri(uri)
       if (parsed.action !== 'receiver') throw new Error('Expected a peartube://receiver/... URI')
@@ -1869,6 +1866,14 @@ export function createCastController ({
     }
 
     throw new Error('Receiver not reachable on LAN or P2P public key')
+  }
+
+  function receiverAddress (address) {
+    const a = String(address).trim().toLowerCase().replace(/^https?:\/\//, '').replace(/\/.*$/, '')
+    if (HEX64.test(a)) return { publicKey: a }
+    const i = a.lastIndexOf(':')
+    if (!a || i === 0) throw new Error('Enter a receiver link, host:port or 64-hex key')
+    return i > 0 ? { host: a.slice(0, i), port: Number(a.slice(i + 1)) || RECEIVER_PORT } : { host: a, port: RECEIVER_PORT }
   }
 
   function removeReceiver (id) {
@@ -1978,7 +1983,8 @@ export function createCastController ({
       action: 'load',
       entry: { key: item.key, id: item.id, title: item.title, size: item.size, sha256: item.sha256 },
       httpStreamUrl,
-      magnetUrl: item.magnetUrl || formatWatchUri(raw, item.source || '', item.sourceKind || ''),
+      // With its source, so the TV's openUri follows (private) or joins the source swarm (public) of the channel.
+      magnetUrl: formatWatchUri(raw, item.source || '', 'channel'),
       senderPeerKey: node.peerKey,
       senderPrivateRouting: Boolean(node.privateRouting),
       senderLan: !node.privateRouting ? (node.lanEndpoint?.() || null) : null,

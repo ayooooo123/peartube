@@ -355,6 +355,13 @@ export function createHiverelaySeeder ({
   const bulkConns = new Map() // conn -> raw bytes written at the last tick
   let bulkTokens = bulkBytesPerTick
   let bulkPaused = false
+  // While viewers stream, paused HiveRelays get turns one at a time. A paused connection still has a window of
+  // requests queued, so resuming all of them in the same tick served every backlog at once: 8 MB/s bursts of
+  // random reads that stalled the viewer on spinning disks. Each connection still gets a turn within TURN_MS,
+  // inside Protomux's 10 s timeout.
+  const TURN_MS = 6000
+  const lastTurn = new WeakMap() // bulk conn -> time it was last resumed
+  let turnConn = null
   const rawWritten = conn => conn.rawBytesWritten || conn.rawStream?.bytesTransmitted || 0
   // Viewing: more than 1 Mbps going to non-bulk peers, held 3 s. Each relay tells its peers over `peartube/bulk-busy`;
   // p2p-replicate stops its backfill while any connected peer is busy (peersBusy()).
@@ -397,6 +404,28 @@ export function createHiverelaySeeder ({
     const nextTokens = Math.min(tickBudget * 2, bulkTokens + tickBudget - sent)
     bulkTokens = viewing ? Math.max(-tickBudget * 24, nextTokens) : nextTokens
     const pause = bulkTokens < 0
+    if (turnConn) {
+      // a turn lasts one tick: the backlog it releases is already being served
+      if (!turnConn.destroyed && bulkConns.has(turnConn) && bulkPaused) turnConn.pause()
+      turnConn = null
+    }
+    if (viewing && pause) {
+      const held = [...bulkConns.keys()].filter(conn => !busyChannels.has(conn))
+      const now = Date.now()
+      if (!bulkPaused) {
+        bulkPaused = true
+        // spread the first turns over TURN_MS instead of all coming due together
+        held.forEach((conn, i) => { conn.pause(); lastTurn.set(conn, now - Math.floor(i * TURN_MS / held.length)) })
+      }
+      let next = null
+      for (const conn of held) if (!next || (lastTurn.get(conn) || 0) < (lastTurn.get(next) || 0)) next = conn
+      if (next && now - (lastTurn.get(next) || 0) >= TURN_MS) {
+        next.resume()
+        lastTurn.set(next, now)
+        turnConn = next
+      }
+      return
+    }
     if (pause === bulkPaused) return
     bulkPaused = pause
     for (const conn of bulkConns.keys()) {

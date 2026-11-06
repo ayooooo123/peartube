@@ -105,7 +105,7 @@
     "bare-process": "4.5.1",
     "bare-subprocess": "^6.2.2",
     "bonjour-service": "^1.4.4",
-    "corestore": "^7.12.6",
+    "corestore": "github:ayooooo123/corestore#2edcbbefe23bd55bc711488b94a9f41e48632b5f",
     "hyperblobs": "^2.12.1",
     "hypercore": "github:ayooooo123/hypercore#ca652cae7aca0430a1e9d86c1acd4f783243a265",
     "hypercore-byte-stream": "2.0.4",
@@ -125,7 +125,8 @@
   "overrides": {
     "sodium-native": "$sodium-native",
     "udx-native": "$udx-native",
-    "hypercore": "$hypercore"
+    "hypercore": "$hypercore",
+    "corestore": "$corestore"
   },
   "private": true
 }

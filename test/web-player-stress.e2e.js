@@ -31,17 +31,6 @@ const PNG = Buffer.from(
   'hex'
 )
 
-function findBrowser () {
-  if (process.env.PUPPETEER_EXECUTABLE_PATH && existsSync(process.env.PUPPETEER_EXECUTABLE_PATH)) {
-    return process.env.PUPPETEER_EXECUTABLE_PATH
-  }
-  return [
-    '/Applications/Brave Browser.app/Contents/MacOS/Brave Browser',
-    '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
-    '/Applications/Chromium.app/Contents/MacOS/Chromium'
-  ].find(existsSync)
-}
-
 function buildFixtures (dir) {
   const srtPath = join(dir, 'cues.srt')
   const srt = Array.from({ length: 48 }, (_, i) => {
@@ -206,8 +195,8 @@ async function launchBrowser (exe) {
 }
 
 test('web player survives long-GOP seeks, rapid scrub storms, TrueHD slices, WebCodecs fallback, and heavy background tab switches', { timeout: 240_000 }, async () => {
-  const exe = findBrowser()
-  assert.ok(exe, 'Chromium or Brave binary required')
+  const exe = process.env.PUPPETEER_EXECUTABLE_PATH
+  assert.ok(exe && existsSync(exe), 'PUPPETEER_EXECUTABLE_PATH must point at a Chromium-family browser')
   mkdirSync(outDir, { recursive: true })
   const tmp = mkdtempSync(join(tmpdir(), 'peartube-web-stress-'))
   const files = buildFixtures(tmp)

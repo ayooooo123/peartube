@@ -299,7 +299,7 @@ test('standalone bin/private-relay.js forwarders: zero disk writes, fresh-boot 2
   writeArtifact()
 })
 
-test('adversarial scanPeers outbound joinPeer trap and wrong inner Noise key rejection', { timeout: 150_000 }, async t => {
+test('adversarial outbound joinPeer trap and wrong inner Noise key rejection', { timeout: 150_000 }, async t => {
   const testnet = await createTestnet(4)
   const guards = []
   const nodes = []
@@ -369,11 +369,11 @@ test('adversarial scanPeers outbound joinPeer trap and wrong inner Noise key rej
   })
 
   try {
-    await reader.append({ type: 'peer', publicKey: spoofPeerHex, expiresAt: Date.now() + 60_000 })
+    seeder.swarm.joinPeer(Buffer.from(spoofPeerHex, 'hex'))
     await wait(3000)
     assert.equal(wrongKeyConnectedOnSeeder, false, 'seeder rejected responder presenting wrong inner Noise key')
 
-    await reader.append({ type: 'peer', publicKey: maliciousPeerHex, expiresAt: Date.now() + 60_000 })
+    seeder.swarm.joinPeer(Buffer.from(maliciousPeerHex, 'hex'))
     await until(() => attackerAcceptedFromSeeder, 30_000, 'seeder outbound-dialed malicious peer via seeder guard')
 
     // Filter out the trap client's own registration connection to attackerGuard; inspect hop connections from the network.

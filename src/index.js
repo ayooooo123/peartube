@@ -131,7 +131,6 @@ export function decodeOp (value) {
   if (op.type === 'grant') return str(op.writer, HEX64) && ROLES.has(op.role || 'writer') ? op : null
   if (op.type === 'revoke') return str(op.writer, HEX64) ? op : null
   if (op.type === 'remove') return typeof op.key === 'string' ? op : null
-  if (op.type === 'peer') return str(op.publicKey, HEX64) && Number.isSafeInteger(op.expiresAt) && op.expiresAt > 0 ? op : null
   if (op.type === 'source') {
     if (!str(op.sourceKey, HEX64) || (op.kind !== 'tracker' && op.kind !== 'channel')) return null
     if (typeof op.title !== 'string' || op.title.length === 0 || op.title.length > MAX_TITLE) return null
@@ -183,7 +182,6 @@ function makeApply (getChannelHex, onWriterChange = null) {
     for (const node of nodes) {
       const op = decodeOp(node.value)
       if (!op) continue
-      if (op.type === 'peer' && !(await getOwner())) continue
       const writer = b4a.toString(node.key, 'hex')
       let role = writer === chHex ? 'owner' : (roles.get(writer) ?? null)
       let claimedHere = false
@@ -283,8 +281,6 @@ function makeApply (getChannelHex, onWriterChange = null) {
             ops.push(['del', b4a.from(op.key)])
           }
         }
-      } else if (op.type === 'peer') {
-        ops.push(['put', b4a.from(`peer/${writer}`), node.value])
       } else if (op.type === 'source') {
         ops.push(['put', b4a.from(`source/${writer}/${op.sourceKey}`), node.value])
       } else if (op.type === 'announce') {
@@ -381,12 +377,10 @@ async function openNode ({
     if (raw?.discoveryKey) storedDisc.add(b4a.toString(raw.discoveryKey, 'hex'))
   }
   const wakeup = new ProtomuxWakeup()
-  let onPeersChanged = null
   let viewEpoch = 1
   const update = () => {
     viewEpoch++
     if (onchange) queueMicrotask(onchange)
-    if (onPeersChanged) queueMicrotask(onPeersChanged)
   }
   // Private 0600 vault file beside settings.json/jobs.json: holds the 12-word recovery phrase and subscriber epoch passes, never in Corestore.
   const identityFile = join(storage, 'identity.json')
@@ -460,7 +454,7 @@ async function openNode ({
   // fastForward: false forces every peer to verify ACL grants, claims, and removals locally through apply.
   let primaryDirty = true
   let primaryHydrated = false
-  const primaryCache = { entries: [], byId: new Map(), discovered: [], peers: [] }
+  const primaryCache = { entries: [], byId: new Map(), discovered: [] }
   channel = new Autobee(chNs, targetKey ? b4a.from(targetKey, 'hex') : null, {
     ...(founderKeyPair ? { keyPair: founderKeyPair } : {}),
     apply: primaryApply,
@@ -705,7 +699,7 @@ async function openNode ({
   swarm.on('connection', conn => {
     if (hasLanPeer(conn.remotePublicKey)) { conn.destroy(); return }
     trackConn(conn, dht ? traffic.private : traffic.public)
-    if (dht) { channel.update().catch(() => {}); scanPeers().catch(() => {}) }
+    if (dht) channel.update().catch(() => {})
   })
   undo.push(() => swarm.destroy({ force: true }))
   undo.push(() => {
@@ -831,8 +825,7 @@ async function openNode ({
         channels[k] = {
           syncedAt: s.syncedAt || 0,
           entries: s.entries.map(it => [it.sub, it.entry]),
-          discovered: s.discovered,
-          peers: s.peers
+          discovered: s.discovered
         }
       }
       const tmp = `${catalogCacheFile}.tmp.${process.pid}`
@@ -850,7 +843,7 @@ async function openNode ({
 
   let lastSwarmFlushAt = 0
 
-  function indexChannelRecords (target, entriesList, discoveredList, peersList, { merge = false } = {}) {
+  function indexChannelRecords (target, entriesList, discoveredList, { merge = false } = {}) {
     // A view can be read while it is still catching up, and a follower's scan then holds fewer
     // announces than the library already knows. Replacing wholesale let one partial read wipe the
     // catalog down to a single title; merging keeps what was already proven and adds what is new.
@@ -870,13 +863,11 @@ async function openNode ({
     target.byId = byId
     target.bySub = bySub
     target.discovered = discoveredList
-    target.peers = peersList
   }
 
   async function scanChannelView (view, viaKey) {
     const entriesList = []
     const discoveredList = []
-    const peersList = []
     for await (const node of view.createReadStream()) {
       const sub = b4a.toString(node.key)
       if (sub.startsWith('source/')) {
@@ -884,15 +875,12 @@ async function openNode ({
         if (op?.type === 'source') {
           discoveredList.push({ key: op.sourceKey, kind: 'channel', title: cleanText(op.title, op.sourceKey.slice(0, 12)), via: viaKey })
         }
-      } else if (sub.startsWith('peer/')) {
-        const op = decodeOp(node.value)
-        if (op?.type === 'peer') peersList.push({ publicKey: op.publicKey, expiresAt: op.expiresAt })
       } else if (!isSystemViewKey(sub)) {
         const op = decodeOp(node.value)
         if (op?.type === 'announce') entriesList.push({ sub, entry: op })
       }
     }
-    return { entriesList, discoveredList, peersList }
+    return { entriesList, discoveredList }
   }
 
   async function refreshPrimaryCache ({ force = false } = {}) {
@@ -908,10 +896,10 @@ async function openNode ({
       }
       await Promise.race([channel.update().catch(() => {}), new Promise(r => setTimeout(r, 2_000))])
     } else await applied(channel)
-    const { entriesList, discoveredList, peersList } = await scanChannelView(channel.view, primaryKey)
+    const { entriesList, discoveredList } = await scanChannelView(channel.view, primaryKey)
     // Replace, never merge: the primary is fully applied before every scan, so an announce that is
     // gone is really gone. Merging kept deleted titles alive for findEntry forever.
-    indexChannelRecords(primaryCache, entriesList, discoveredList, peersList)
+    indexChannelRecords(primaryCache, entriesList, discoveredList)
     primaryHydrated = true
     primaryDirty = false
   }
@@ -958,12 +946,12 @@ async function openNode ({
         await new Promise(resolve => setTimeout(resolve, 400))
       }
     }
-    const { entriesList, discoveredList, peersList } = scan
+    const { entriesList, discoveredList } = scan
     const prevCount = src.entries.length
-    indexChannelRecords(src, entriesList, discoveredList, peersList, { merge: true })
+    indexChannelRecords(src, entriesList, discoveredList, { merge: true })
     src.cachedRev = revSnap
     src.viewVersion = version
-    if (revSnap > 0 || entriesList.length > 0 || discoveredList.length > 0 || peersList.length > 0) {
+    if (revSnap > 0 || entriesList.length > 0 || discoveredList.length > 0) {
       src.hydrated = true
     }
     src.syncedAt = Date.now()
@@ -995,8 +983,7 @@ async function openNode ({
       entries: [],
       byId: new Map(),
       bySub: new Map(),
-      discovered: [],
-      peers: []
+      discovered: []
     }
     const cached = savedCatalog[key]
     if (cached && Array.isArray(cached.entries)) {
@@ -1006,12 +993,7 @@ async function openNode ({
           entriesList.push({ sub: pair[0], entry: pair[1] })
         }
       }
-      indexChannelRecords(
-        src,
-        entriesList,
-        Array.isArray(cached.discovered) ? cached.discovered : [],
-        Array.isArray(cached.peers) ? cached.peers : []
-      )
+      indexChannelRecords(src, entriesList, Array.isArray(cached.discovered) ? cached.discovered : [])
       src.hydrated = true
       src.cachedRev = 0
       src.syncedAt = Number(cached.syncedAt) || 0
@@ -1109,7 +1091,6 @@ async function openNode ({
             refreshSourceCache(src).then(() => update()).catch(() => {})
           }
         }).catch(() => {})
-        onPeersChanged?.()
         return bee
       } finally {
         src.opening = null
@@ -1241,61 +1222,7 @@ async function openNode ({
   refreshTimer?.unref?.()
   undo.push(() => clearInterval(refreshTimer))
 
-  const roster = new Map()
-  let scanningPeers = false
-  async function scanPeers () {
-    if (!dht || closing || scanningPeers) return
-    scanningPeers = true
-    try {
-      const available = new Map()
-      const now = Date.now()
-      const selfHex = b4a.toString(swarm.keyPair.publicKey, 'hex')
-      if (usePrimaryChannel || channelHasEntries) await refreshPrimaryCache().catch(() => {})
-      for (const s of extraSources.values()) {
-        if (s.bee && s.dirty) await refreshSourceCache(s).catch(() => {})
-      }
-      const peerLists = [
-        ...(usePrimaryChannel || channelHasEntries ? [primaryCache.peers] : []),
-        ...[...extraSources.values()].map(s => s.peers)
-      ]
-      for (const list of peerLists) {
-        for (const peer of list) {
-          if (!peer || peer.expiresAt <= now || peer.expiresAt > now + 60 * 60_000 || peer.publicKey === selfHex) continue
-          if (available.size >= 64) break
-          available.set(peer.publicKey, b4a.from(peer.publicKey, 'hex'))
-        }
-      }
-      for (const [key, publicKey] of roster) if (!available.has(key)) swarm.leavePeer(publicKey)
-      for (const [key, publicKey] of available) if (!roster.has(key)) swarm.joinPeer(publicKey)
-      roster.clear()
-      for (const [key, publicKey] of available) roster.set(key, publicKey)
-    } finally {
-      scanningPeers = false
-    }
-  }
-  onPeersChanged = () => { scanPeers().catch(() => {}) }
-  let advertisingPeer = false
-  let lastPeerAdvertised = 0
-  async function advertisePeer (force = false) {
-    if (!dht || closing || advertisingPeer || (!force && Date.now() - lastPeerAdvertised < 3 * 60_000)) return
-    if (!channel.writable && !(idVault && idVault.channelKey === primaryKey)) return
-    advertisingPeer = true
-    try {
-      const peerOp = { type: 'peer', publicKey: b4a.toString(swarm.keyPair.publicKey, 'hex'), expiresAt: Date.now() + 10 * 60_000 }
-      if (usePrimaryChannel || channelHasEntries) await append(peerOp)
-      lastPeerAdvertised = Date.now()
-    } finally {
-      advertisingPeer = false
-    }
-  }
-  const peerTimer = dht ? setInterval(() => {
-    advertisePeer().catch(() => {})
-    scanPeers().catch(() => {})
-  }, 20_000) : null
-  peerTimer?.unref?.()
-  undo.push(() => clearInterval(peerTimer))
-  if (dht) swarm.listen().then(() => advertisePeer()).catch(() => {})
-  onPeersChanged()
+  if (dht) swarm.listen().catch(() => {})
 
   async function setLan (factory) {
     const previous = lan
@@ -2790,7 +2717,6 @@ async function openNode ({
     if (closingPromise) return closingPromise
     closing = true
     closingPromise = (async () => {
-      clearInterval(peerTimer)
       clearInterval(refreshTimer)
       clearInterval(rotateTimer)
       clearTimeout(sourceRotateTimer)

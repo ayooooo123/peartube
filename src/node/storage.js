@@ -9,7 +9,7 @@ export async function createStorage (ctx) {
   const { storage, worklet: isWorklet } = ctx.opts
   const csDir = join(storage, 'corestore')
   // The node owns its hypercore-storage so compaction and core lookups go through that instance, not Corestore internals.
-  // Choke client worklet RocksDB caches and open SST readers tight so 50 GB libraries ride OS page cache dry-free instead of bloating app RAM while Master's cock waits.
+  // App worklets keep RocksDB caches and open SST readers small: a 50 GB library rides the OS page cache instead of app RAM.
   const isMobileWorklet = isWorklet && os.platform() !== 'darwin'
   const storageOpts = isWorklet
     ? {

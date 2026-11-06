@@ -38,7 +38,6 @@ class Worker(context: Context) {
 
     private val bridge = WorkletBridge(
         ready = ready,
-        scope = scope,
         onEvent = ::dispatchEvent,
         onFatal = { _events.tryEmit(Event.Exited) },
         stoppedMessage = "The P2P worker stopped",
@@ -71,11 +70,8 @@ class Worker(context: Context) {
     suspend fun start(settings: Settings): Status {
         val legacyPreSynced = settings.tracker.isEmpty() && settings.mnemonic.isEmpty() && settings.sources.size == 1 &&
             File(storeDir, "trackers/${settings.sources[0].key}").isDirectory
-        val effectiveSettings = if (legacyPreSynced) {
-            settings.copy(tracker = settings.sources[0].key, sources = emptyList())
-        } else {
-            settings
-        }
+        // The source stays listed so the node's own channel keeps its name.
+        val effectiveSettings = if (legacyPreSynced) settings.copy(tracker = settings.sources[0].key) else settings
         if (effectiveSettings.tracker.isEmpty() && effectiveSettings.mnemonic.isEmpty()) {
             runCatching { File(storeDir, "trackers/default").deleteRecursively() }
             runCatching { File(storeDir, "trackers/channels").deleteRecursively() }

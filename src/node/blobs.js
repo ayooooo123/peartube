@@ -1,4 +1,5 @@
 import Hyperblobs from 'hyperblobs'
+import Hyperbee from 'hyperbee2'
 import hypercoreCrypto from 'hypercore-crypto'
 import { createBlobRangeServer } from '../blob-server.js'
 import b4a from 'b4a'
@@ -829,7 +830,6 @@ export async function createBlobs (ctx) {
 
   // One-shot zero-copy import of any pre-unification single-writer Hyperbee entries into the unified Channel.
   async function syncLocalChannel () {
-    const Hyperbee = (await import('hyperbee2')).default
     const legacyNs = ctx.storage.store.namespace('channel')
     const probe = legacyNs.get({ name: 'bee', active: false })
     await probe.ready()

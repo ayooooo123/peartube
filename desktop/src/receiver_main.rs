@@ -24,7 +24,7 @@ use gpui_kit::component::spinner::Spinner;
 use gpui_kit::component::{IconName, Sizable as _, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
-use peartube::playback::{format_clock, track_label, CODECS, FULLSCREEN_COOLDOWN, SKIP};
+use peartube::playback::{clock, track_label, CODECS, FULLSCREEN_COOLDOWN, SKIP};
 use peartube::soundfont;
 use peartube::worker::{CastEntryMeta, Event as WorkerEvent, ReceiverCommand, ReceiverInfo, worker};
 use player::{AudioOutputMode, Event, FrameRateMode, Player, PlayerOptions, State, Track, TrackKind};
@@ -429,7 +429,7 @@ impl DumbTvApp {
             .map(|(idx, c)| {
                 let active = pos >= c.start && c.end.is_none_or(|e| pos < e);
                 let title = c.title.clone().unwrap_or_else(|| format!("Chapter {}", idx + 1));
-                (format!("{} · {title}", format_clock(c.start)), c.start, active)
+                (format!("{} · {title}", clock(c.start)), c.start, active)
             })
             .collect();
         let this_click = cx.entity().downgrade();
@@ -546,7 +546,7 @@ impl Render for DumbTvApp {
         let playing = self.state.playing;
         let at_pos = self.dragging.map(|s| Duration::from_secs_f32(s.max(0.))).unwrap_or(self.state.position);
         let time_txt = match self.state.duration {
-            Some(dur) => format!("{} / {}", format_clock(at_pos), format_clock(dur)),
+            Some(dur) => format!("{} / {}", clock(at_pos), clock(dur)),
             None => "Buffering…".into(),
         };
         let title = self.entry.as_ref().map(|e| e.title.clone()).unwrap_or_else(|| "PearTube Cast".into());

@@ -12,7 +12,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { execFileSync, spawn } from 'node:child_process'
 import { createHash, randomBytes } from 'node:crypto'
-import { mkdtempSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { networkInterfaces, tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createInterface } from 'node:readline'
@@ -134,6 +134,8 @@ test('the QuickJS app worklet links via 12-word recovery phrase and decodes an e
   assert.equal(streamed.mnemonicWords, 12, 'QuickJS worklet persisted 12-word phrase')
   assert.equal(streamed.fullSha256, sha256(bytes), 'QuickJS worklet decrypted exact bytes')
   verifyPlayed(streamed.played, bytes)
+  // An app linked by phrase keeps its identity in trackers/linked, as before the worklet chose the folder.
+  assert.ok(existsSync(join(storage, 'trackers', 'linked', 'identity.json')), 'a phrase-linked app opens trackers/linked')
   save('mnemonic-encrypted-result.json', { test: 'QuickJS 12-word recovery + epoch-encrypted decode', published, relay, stages: { streamed } })
 })
 
@@ -163,6 +165,8 @@ async function drive (t, relay, published, settings, env = {}) {
     }
   }
   assert.equal(stages.timeout, undefined, `the app saw no update while waiting for ${stages.timeout?.waitingFor}`)
+  // An app on a fixed tracker keeps its identity in trackers/<tracker>; a different folder is a new device and an empty cache.
+  assert.ok(existsSync(join(storage, 'trackers', relay.status().tracker, 'identity.json')), 'a tracker app opens trackers/<tracker>')
   return { stages, secondKey }
 }
 

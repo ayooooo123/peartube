@@ -5,7 +5,7 @@ import { mkdirSync, readFileSync, writeFileSync, renameSync } from 'node:fs'
 import { join } from 'node:path'
 import os from 'node:os'
 import b4a from 'b4a'
-import { createNode } from '../src/index.js'
+import { createNode, followedSources, idleStatus } from '../src/index.js'
 import { createLan, lanAddress } from '../src/lan.js'
 import { createAcquirer, publicJob } from '../src/acquire.js'
 import { createApi } from '../src/http.js'
@@ -84,12 +84,11 @@ async function reconcileDirectory (list) {
   }
 }
 function saveSources (list) {
-  const keep = list.filter(s => !s.primary && !s.writable).map(({ key, kind, alias }) => ({ key, kind, alias }))
+  const keep = followedSources(list)
   writeFileSync(sourcesFile + '.tmp', JSON.stringify(keep), { mode: 0o600 })
   renameSync(sourcesFile + '.tmp', sourcesFile)
   syncDirectory(list).catch(() => {})
 }
-const emptyRoute = () => ({ peers: 0, rxBytes: 0, txBytes: 0, downBps: 0, upBps: 0 })
 const readOpt = p => { try { return p ? readFileSync(p) : null } catch { return null } }
 const tlsCert = readOpt(env.PEARTUBE_TLS_CERT || join(storage, 'tls.crt'))
 const tlsKey = readOpt(env.PEARTUBE_TLS_KEY || join(storage, 'tls.key'))
@@ -106,7 +105,7 @@ const state = {
   posterUrl: imdb => posterUrl(cfg('cinemetaUrl'), imdb),
   backdropUrl: imdb => backdropUrl(cfg('cinemetaUrl'), imdb),
   onSourcesChanged: saveSources,
-  fallbackStatus: { tracker: cfg('tracker'), channel: '', writer: '', blobs: '', blobBytes: 0, cachedBytes: 0, peers: 0, lanPeers: 0, downBps: 0, upBps: 0, rxBytes: 0, txBytes: 0, routes: { private: emptyRoute(), public: emptyRoute(), lan: emptyRoute() }, inflightBlocks: 0, rtt: 0, retransmits: 0, sources: [], reciprocity: { tier: 'leecher', seededBytes: 0, contributingPeers: 0, ratio: 0, inflightMax: 64 } },
+  fallbackStatus: { ...idleStatus(), tracker: cfg('tracker') },
   fallbackJobs () {
     try { return JSON.parse(readFileSync(jobsFile, 'utf8')).map(publicJob) } catch { return [] }
   }

@@ -789,30 +789,10 @@ async function handleCmd (msg) {
     self.postMessage({ type: 'flushed', seq: activeSeq, time: target })
     schedulePump(0)
     armWatchdog()
-  } else if (msg.cmd === 'clock') {
-    if (typeof msg.time === 'number') clockMedia = Math.max(0, msg.time)
-    clockWallMs = typeof msg.wallMs === 'number' ? msg.wallMs : nowWall()
-    clockPlaying = Boolean(msg.playing)
-    lastCreditAt = nowWall()
-    if (wasm) wasm.pt_set_clock?.(workerMediaTime())
-    if (typeof msg.hidden === 'boolean') setPageHidden(msg.hidden)
-    if (!eof && !bufferedAhead()) schedulePump(0)
-    if (clockPlaying) armWatchdog()
-  } else if (msg.cmd === 'consumed') {
-    if (!useMse) {
-      queuedVideoSec = Math.max(0, queuedVideoSec - (Number(msg.videoSec) || 0))
-    }
-    queuedAudioSec = Math.max(0, queuedAudioSec - (Number(msg.audioSec) || 0))
-    if (typeof msg.time === 'number') clockMedia = Math.max(0, msg.time)
-    clockWallMs = typeof msg.wallMs === 'number' ? msg.wallMs : nowWall()
-    if (typeof msg.playing === 'boolean') clockPlaying = msg.playing
-    lastCreditAt = nowWall()
-    if (wasm) wasm.pt_set_clock?.(workerMediaTime())
-    if (typeof msg.hidden === 'boolean') setPageHidden(msg.hidden)
-    if (!eof && !bufferedAhead()) schedulePump(0)
-    if (clockPlaying) armWatchdog()
+  } else if (msg.cmd === 'clock' || msg.cmd === 'consumed') {
+    applyClock(msg)
   } else if (msg.cmd === 'mem') {
-    self.postMessage({ type: 'mem', wasm: wasm && wasm.memory ? wasm.memory.buffer.byteLength : 0, blocks: blockCache.size, renderQ: 0, videoPool: freeVideoPool.length, audioPool: freeAudioPool.length, pageHidden })
+    self.postMessage({ type: 'mem', wasm: wasm && wasm.memory ? wasm.memory.buffer.byteLength : 0, blocks: blockCache.size, videoPool: freeVideoPool.length, audioPool: freeAudioPool.length, pageHidden })
   } else if (msg.cmd === 'block') {
     if (msg.buf && msg.buf.byteLength > 0) putBlock(Number(msg.block) || 0, new Uint8Array(msg.buf))
   } else if (msg.cmd === 'close') {
@@ -829,6 +809,24 @@ async function handleCmd (msg) {
     blockCache.clear()
     if (wasm) wasm.pt_close()
   }
+}
+
+// The page's clock report: `clock` sets the play state, `consumed` also returns the queue credit it played out.
+function applyClock (msg) {
+  if (msg.cmd === 'consumed') {
+    if (!useMse) queuedVideoSec = Math.max(0, queuedVideoSec - (Number(msg.videoSec) || 0))
+    queuedAudioSec = Math.max(0, queuedAudioSec - (Number(msg.audioSec) || 0))
+    if (typeof msg.playing === 'boolean') clockPlaying = msg.playing
+  } else {
+    clockPlaying = Boolean(msg.playing)
+  }
+  if (typeof msg.time === 'number') clockMedia = Math.max(0, msg.time)
+  clockWallMs = typeof msg.wallMs === 'number' ? msg.wallMs : nowWall()
+  lastCreditAt = nowWall()
+  if (wasm) wasm.pt_set_clock?.(workerMediaTime())
+  if (typeof msg.hidden === 'boolean') setPageHidden(msg.hidden)
+  if (!eof && !bufferedAhead()) schedulePump(0)
+  if (clockPlaying) armWatchdog()
 }
 
 let cmdChain = Promise.resolve()
@@ -856,30 +854,8 @@ self.onmessage = ev => {
     if (msg.buf && msg.buf.byteLength > 0) putBlock(Number(msg.block) || 0, new Uint8Array(msg.buf))
     return
   }
-  if (msg.cmd === 'consumed' && configured && !closed) {
-    if (!useMse) {
-      queuedVideoSec = Math.max(0, queuedVideoSec - (Number(msg.videoSec) || 0))
-    }
-    queuedAudioSec = Math.max(0, queuedAudioSec - (Number(msg.audioSec) || 0))
-    if (typeof msg.time === 'number') clockMedia = Math.max(0, msg.time)
-    clockWallMs = typeof msg.wallMs === 'number' ? msg.wallMs : nowWall()
-    if (typeof msg.playing === 'boolean') clockPlaying = msg.playing
-    lastCreditAt = nowWall()
-    if (wasm) wasm.pt_set_clock?.(workerMediaTime())
-    if (typeof msg.hidden === 'boolean') setPageHidden(msg.hidden)
-    if (!eof && !bufferedAhead()) schedulePump(0)
-    if (clockPlaying) armWatchdog()
-    return
-  }
-  if (msg.cmd === 'clock' && configured && !closed) {
-    if (typeof msg.time === 'number') clockMedia = Math.max(0, msg.time)
-    clockWallMs = typeof msg.wallMs === 'number' ? msg.wallMs : nowWall()
-    clockPlaying = Boolean(msg.playing)
-    lastCreditAt = nowWall()
-    if (wasm) wasm.pt_set_clock?.(workerMediaTime())
-    if (typeof msg.hidden === 'boolean') setPageHidden(msg.hidden)
-    if (!eof && !bufferedAhead()) schedulePump(0)
-    if (clockPlaying) armWatchdog()
+  if ((msg.cmd === 'consumed' || msg.cmd === 'clock') && configured && !closed) {
+    applyClock(msg)
     return
   }
   cmdChain = cmdChain.then(() => handleCmd(msg)).catch(err => {

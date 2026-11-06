@@ -13,7 +13,7 @@
 import 'bare-process/global'
 import b4a from 'b4a'
 import os from 'bare-os'
-import { createNode, idleStatus } from '../src/index.js'
+import { createNode, followedSources, idleStatus } from '../src/index.js'
 import { API_PORT, parseUri } from '../src/protocol.js'
 import { nodeOptions, normalizeAppSettings } from '../src/app-settings.js'
 import { createApi } from '../src/http.js'
@@ -31,7 +31,8 @@ let apiUrl = null
 let cast = null
 let castStorage = null
 let castPeerStorage = null
-let receiverNodeOwned = false
+// Who opened `node`: 'app' (start) or 'receiver' (a cast call before any start, as on a TV box).
+let nodeOwner = null
 let lifecycle = Promise.resolve()
 
 // Any peer can publish a title with a lone surrogate, which serde_json rejects.
@@ -72,7 +73,7 @@ async function close () {
   api = null
   apiUrl = null
   cast = null
-  receiverNodeOwned = false
+  nodeOwner = null
   lanHost = null
   lanError = null
   lanNote = null
@@ -117,7 +118,9 @@ async function moveLan () {
       seen = `cannot list interfaces (${err.message})`
     }
   }
-  if (host !== lanHost) {
+  // Compared with what is bound, not with the last attempt: a failed bind is retried on the next tick.
+  const bound = node?.hasLan() ? lanHost : null
+  if (host !== bound) {
     lanHost = host
     lanError = null
     try {
@@ -134,34 +137,43 @@ async function moveLan () {
   }
 }
 
+// Every node goes live here, so none misses the update listener or a suspend that came while it was opening.
+function attachNode (next, owner) {
+  node = next
+  nodeOwner = owner
+  node.swarm.on('update', update)
+  if (suspended) node.swarm.suspend().catch(fatal)
+}
+
+// A receiver's own node, when no start opened one. Runs inside serial, so it never races a start.
+async function openReceiverNode () {
+  if (node) return node
+  const peerDir = await resolvePeerStorage(castPeerStorage, castStorage)
+  reclaimLowDiskReceiverStorage(peerDir)
+  attachNode(await createNode({ storage: peerDir, onchange: update, worklet: true }), 'receiver')
+  // A TV box has little storage to spare: keep a small rolling window of
+  // whatever it is playing instead of the whole film.
+  node.setCacheMaxBytes(2 * 1e9)
+  lanWanted = true
+  await moveLan()
+  return node
+}
+
 async function ensureCast () {
   if (!castStorage) throw new Error('The app must send init with its cast storage first')
-  if (!cast) {
-    cast = createCastController({
-      storage: castStorage,
-      getNode: () => node,
-      ensureNode: async () => {
-        if (node) return node
-        receiverNodeOwned = true
-        const peerDir = await resolvePeerStorage(castPeerStorage, castStorage)
-        reclaimLowDiskReceiverStorage(peerDir)
-        node = await createNode({ storage: peerDir, onchange: update, worklet: true })
-        node.swarm.on('update', update)
-        // A TV box has little storage to spare: keep a small rolling window of
-        // whatever it is playing instead of the whole film.
-        node.setCacheMaxBytes(2 * 1e9)
-        lanWanted = true
-        await moveLan()
-        return node
-      },
-      getLanHost: currentDeviceIp,
-      onchange: sendCast,
-      worklet: true
-    })
-    await cast.initHub().catch(() => {})
-    await cast.setLanHost(currentDeviceIp()).catch(() => {})
-  }
-  return cast
+  if (cast) return cast
+  const c = cast = createCastController({
+    storage: castStorage,
+    getNode: () => node,
+    ensureNode: () => serial(openReceiverNode),
+    getLanHost: currentDeviceIp,
+    onchange: sendCast,
+    worklet: true
+  })
+  await c.initHub().catch(() => {})
+  await c.setLanHost(currentDeviceIp()).catch(() => {})
+  // A close (a start, or a receiver moving its storage) during those awaits retired this controller.
+  return cast === c ? c : ensureCast()
 }
 
 function noteFor (seen) {
@@ -221,7 +233,7 @@ const methods = {
     await close()
     lastSettings = normalizeAppSettings(settings)
     const opts = nodeOptions(lastSettings, { trackersDir, defaultFolder })
-    node = await createNode({
+    attachNode(await createNode({
       storage: opts.storage,
       tracker: opts.tracker,
       mnemonic: opts.mnemonic,
@@ -232,8 +244,7 @@ const methods = {
       privateRouting: opts.privateRouting,
       worklet: true,
       onchange: update
-    })
-    node.swarm.on('update', update)
+    }), 'app')
     // Bound playback caching: one watched 4K remux used to fill the disk.
     node.setCacheMaxBytes(opts.cacheMaxGb * 1e9)
     lanWanted = opts.lan
@@ -245,7 +256,7 @@ const methods = {
       backdropUrl: imdb => backdropUrl(CINEMETA_URL, imdb),
       get cast () { return cast },
       extraStatus: () => ({ lan: lanNote, apiUrl, lanStats: node?.lanStats?.() ?? null }),
-      onSourcesChanged: list => send({ event: 'sources', sources: list.filter(s => !s.primary && !s.writable).map(({ key, kind, alias }) => ({ key, kind, alias })) })
+      onSourcesChanged: list => send({ event: 'sources', sources: followedSources(list) })
     })
     apiUrl = await listenLoopback(srv, API_PORT)
     api = apiUrl ? srv : null
@@ -323,11 +334,13 @@ const methods = {
   // The TV receiver's start: `peerStorage` (or a folder beside the cast storage) holds the films it plays.
   receiverStart: ({ peerStorage = null, name = 'PearTube TV', openAuth = false }) => serial(async () => {
     const nextPeer = peerStorage || castPeerStorage
-    if (cast && nextPeer && nextPeer !== castPeerStorage && receiverNodeOwned && cast.status().receiverMode?.state?.status === 'idle') {
+    if (cast && nextPeer && nextPeer !== castPeerStorage && nodeOwner === 'receiver' && cast.status().receiverMode?.state?.status === 'idle') {
       await close()
     }
     if (nextPeer) castPeerStorage = nextPeer
     const c = await ensureCast()
+    // Already inside serial: open the node here, so the controller's ensureNode (which queues) is never needed.
+    await openReceiverNode()
     return c.startLocalReceiver({
       name,
       openAuth,

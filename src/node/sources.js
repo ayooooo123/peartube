@@ -118,10 +118,10 @@ export async function createSources (ctx) {
     // `force` is the background tick's read: walking the view is what makes Autobase fetch the
     // blocks it linearizes next, so a view that still owes announces gets them. Gating every read
     // on `version` alone deadlocks — no read, no progress, no new version.
-    if (!force && !src.dirty && src.hydrated && src.cachedRev === src.rev && src.viewVersion === version) return
+    // A rescan is due when the view moved, a change landed since the last scan (rev), or the record was (re)opened (cachedRev -1).
+    if (!force && src.hydrated && src.cachedRev === src.rev && src.viewVersion === version) return
     const revSnap = src.rev
     const previousVersion = src.viewVersion
-    src.dirty = false
     // A follower's view grows only while something walks it. One pass can leave the linearizer
     // parked on a block nobody asked for, so the background tick keeps reading until the count
     // stops moving (bounded); that is exactly the scanning `search()` used to do on every call.
@@ -163,7 +163,6 @@ export async function createSources (ctx) {
       closing: null,
       rev: 0,
       cachedRev: -1,
-      dirty: true,
       viewVersion: -1,
       hydrated: false,
       touchedAt: 0,
@@ -195,7 +194,7 @@ export async function createSources (ctx) {
     if (src.closing) return src.closing
     src.closing = (async () => {
       try {
-        if (!ctx.life.closing && (src.dirty || src.rev !== src.cachedRev || src.viewVersion !== src.bee.view.version)) {
+        if (!ctx.life.closing && (src.rev !== src.cachedRev || src.viewVersion !== src.bee.view.version)) {
           await refreshSourceCache(src, { waitSync: false }).catch(() => {})
         }
       } finally {
@@ -255,7 +254,7 @@ export async function createSources (ctx) {
         const subApply = makeApply(() => b4a.toString(bee.key, 'hex'))
         bee = new Autobee(ctx.storage.store.namespace(`channel:${k}`), b4a.from(k, 'hex'), {
           apply: subApply,
-          update: (view, changes) => { ctx.channel.mirrorLanding(changes); src.dirty = true; src.rev++; ctx.update() },
+          update: (view, changes) => { ctx.channel.mirrorLanding(changes); src.rev++; ctx.update() },
           optimistic: true,
           isTrusted: makeIsTrusted(() => b4a.toString(bee.key, 'hex')),
           wakeup: ctx.channel.wakeup
@@ -267,7 +266,6 @@ export async function createSources (ctx) {
         }
         src.bee = bee
         src.conns = new WeakSet()
-        src.dirty = true
         src.cachedRev = -1
         src.touchedAt = touch ? ++touchClock : 0
         activeSources.add(k)
@@ -275,7 +273,7 @@ export async function createSources (ctx) {
         for (const conn of ctx.net.peerConns) ctx.net.attachSource(src, conn)
         bee.update().then(() => {
           if (!ctx.life.closing && src.bee === bee) {
-            src.dirty = true
+            src.cachedRev = -1
             refreshSourceCache(src).then(() => ctx.update()).catch(() => {})
           }
         }).catch(() => {})

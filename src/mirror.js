@@ -175,15 +175,13 @@ export async function createMirrorHost ({
     }
   })
 
-  let rechunkRunning = false
   let rechunkProgress = { running: false, total: 0, migrated: 0, deduped: 0, remaining: 0, migratedBytes: 0, currentId: null, currentTitle: null }
   register({
     name: 'blob-rechunk',
     description: 'Re-chunks legacy variable-block local blobs into uniform 512 KiB blocks with SHA-256 verification and space reclamation',
     async run (payload = {}) {
-      if (rechunkRunning) return { busy: true, ...rechunkProgress }
+      if (rechunkProgress.running) return { busy: true, ...rechunkProgress }
       if (typeof node.rechunkLegacyBlobs !== 'function') return { skipped: true }
-      rechunkRunning = true
       rechunkProgress = { ...rechunkProgress, running: true }
       try {
         const res = await node.rechunkLegacyBlobs({
@@ -196,7 +194,6 @@ export async function createMirrorHost ({
         rechunkProgress = { running: false, ...res, currentId: null, currentTitle: null }
         return res
       } finally {
-        rechunkRunning = false
         rechunkProgress.running = false
       }
     },
@@ -315,8 +312,6 @@ export async function createMirrorHost ({
     replicateEnabled = Boolean(value) && (!Array.isArray(value) || Boolean(allowReplicateKeys?.size))
   }
   setReplicate(replicate)
-  // Bumped when replication is switched off, so a running pass stops taking new slices.
-  let replicateGen = 0
   const activeReplicaRanges = new Set()
   const deadReplicaCores = new Map()
   let replicating = false
@@ -572,11 +567,11 @@ export async function createMirrorHost ({
     repState.skippedUnavailable = skippedDead
 
     let idx = 0
-    const gen = replicateGen
     const activeTitles = new Set()
     const workerCount = Math.max(1, Math.min(replicateConcurrency, pending.length))
     async function worker () {
-      while (!closed && gen === replicateGen) {
+      // Switching replication off stops every worker at its next slice.
+      while (!closed && replicateEnabled) {
         const s = pending[idx++]
         if (!s) break
         const core = cores.get(s.blobs)
@@ -674,6 +669,7 @@ export async function createMirrorHost ({
     name: 'p2p-replicate',
     description: 'Replicates remote Hyperblobs slices across P2P/LAN up to a free-disk reserve with zero duplicate catalog entries',
     async run (payload) {
+      if (!replicateEnabled) return { running: false, ...this.info() }
       if (replicating) {
         replicateRerun = true
         return { running: true, ...this.info() }
@@ -684,7 +680,7 @@ export async function createMirrorHost ({
         do {
           replicateRerun = false
           result = await runReplicatePass(payload)
-        } while (replicateRerun && !closed && !payload?.once)
+        } while (replicateRerun && replicateEnabled && !closed && !payload?.once)
         return result
       } finally {
         replicating = false
@@ -744,7 +740,7 @@ export async function createMirrorHost ({
   } else if (!closed) {
     // Count legacy blobs without moving any, so the UI can offer the migration only when there is something to migrate.
     node.rechunkLegacyBlobs?.({ limit: 0 }).then(res => {
-      if (!rechunkRunning) rechunkProgress = { ...rechunkProgress, ...res, running: false }
+      if (!rechunkProgress.running) rechunkProgress = { ...rechunkProgress, ...res, running: false }
     }).catch(() => {})
   }
   // The folder import stops between files once the host is closed.
@@ -812,7 +808,6 @@ export async function createMirrorHost ({
       const was = replicateEnabled
       setReplicate(rep)
       if (was && !replicateEnabled) {
-        replicateGen++
         for (const r of activeReplicaRanges) r.destroy()
         activeReplicaRanges.clear()
       }

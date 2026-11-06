@@ -15,8 +15,15 @@ export function idleStatus () {
     tracker: '', channel: '', writer: '', writable: false, blobs: '', blobBytes: 0, cachedBytes: 0, cacheMaxBytes: 0,
     peers: 0, lanPeers: 0, downBps: 0, upBps: 0, rxBytes: 0, txBytes: 0,
     routes: { private: bucket(), public: bucket(), lan: bucket() },
-    inflightBlocks: 0, rtt: 0, retransmits: 0, sources: []
+    inflightBlocks: 0, rtt: 0, retransmits: 0, sources: [],
+    reciprocity: { tier: 'leecher', seededBytes: 0, contributingPeers: 0, ratio: 0, inflightMax: 0 }
   }
+}
+
+// listSources() as a host saves it: the channels followed, not the node's own writable one, as {key, kind, alias}.
+// A followed tracker the user named stays, so its name survives the next save.
+export function followedSources (list) {
+  return list.filter(s => !s.writable && (!s.primary || s.alias)).map(({ key, kind, alias }) => ({ key, kind, alias }))
 }
 
 // A node that fails partway through opening closes what it opened, so the same storage can be opened again.

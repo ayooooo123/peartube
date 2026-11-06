@@ -105,7 +105,6 @@ class ReceiverWorker(private val appContext: Context) {
 
     private val bridge = WorkletBridge(
         ready = ready,
-        scope = scope,
         onEvent = ::dispatchEvent,
         onFatal = { error.value = it },
         stoppedMessage = "Receiver engine stopped",

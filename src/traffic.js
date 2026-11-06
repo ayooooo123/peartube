@@ -54,8 +54,8 @@ export function createTrafficGate ({ node, uploadMbps = 0 }) {
     let sent = 0
     for (const [conn, prev] of bulkConns) {
       if (conn.destroyed) {
-        bulkConns.delete(conn)
-        if (conn.remotePublicKey) node.markBulkPeer?.(b4a.toString(conn.remotePublicKey, 'hex'), false)
+        // Same rule as an unmark: the peer stays bulk while another of its connections still is (a LAN dial replacing a DHT one).
+        unmarkBulk(conn)
         continue
       }
       const now = rawWritten(conn)

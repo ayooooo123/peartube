@@ -274,7 +274,7 @@ data class Entry(
             episode = if (json.isNull("episode")) null else json.optInt("episode"),
             seriesKey = json.optString("seriesKey"),
             baseTitle = json.optString("baseTitle", json.getString("title")),
-            year = json.optString("year").takeIf { it.isNotEmpty() },
+            year = if (json.isNull("year")) null else json.optString("year").takeIf { it.isNotEmpty() },
         )
     }
 }

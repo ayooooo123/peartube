@@ -38,7 +38,7 @@ struct LibraryScreen: View {
             }.padding(.leading, 14).background(.white.opacity(0.07), in: RoundedRectangle(cornerRadius: 22)).padding(.horizontal).padding(.vertical, 8)
             if model.contextualQuery {
                 Button { Task { await model.openURI(model.query) } } label: {
-                    HStack { Label(model.smartAction, systemImage: "link"); Spacer(); Image(systemName: "arrow.right.circle.fill") }.padding()
+                    HStack { Label("Open link", systemImage: "link"); Spacer(); Image(systemName: "arrow.right.circle.fill") }.padding()
                 }.background(.mint.opacity(0.1), in: RoundedRectangle(cornerRadius: 14)).padding(.horizontal).accessibilityIdentifier("search.open")
             }
             ScrollView(.horizontal, showsIndicators: false) {

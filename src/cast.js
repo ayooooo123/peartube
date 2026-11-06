@@ -997,7 +997,11 @@ export async function createReceiver ({
           if (targetBlobs) lastLoadedBlobs = targetBlobs
           if (!netCfg.privateRouting && cmd.senderLan) peerNode.dialLanPeer?.(cmd.senderLan)
           peerNode.joinPeer(String(cmd.senderPeerKey || '').toLowerCase(), { lanFirst: true })
-          const opened = await peerNode.openUri(magnetUrl, { joinSource: netCfg.privateRouting })
+          // Older senders name the channel only in `network.sourceKey`; put it in the link so openUri joins it.
+          const link = parsedWatch?.action === 'watch' && !parsedWatch.sourceKey && HEX64.test(netCfg.sourceKey)
+            ? formatWatchUri(parsedWatch.entry, netCfg.sourceKey, 'channel')
+            : magnetUrl
+          const opened = await peerNode.openUri(link, { joinSource: netCfg.privateRouting })
           localP2PUrl = opened?.entry?.streamUrl || null
           if (parsedWatch?.action === 'watch') {
             blob = parsedWatch.entry.blob
@@ -1537,6 +1541,8 @@ export function createCastController ({
       res.end(JSON.stringify(payload))
     }))
     castHubPort = await listenHttp(srv, 8177, '0.0.0.0', true).catch(() => 0)
+    // Closed while it was binding: release the port rather than keep a hub nobody owns.
+    if (closing) { await srv.closeAllAndStop().catch(() => {}); castHubPort = 0; return 0 }
     castHubServer = castHubPort ? srv : null
     return castHubPort
   }
@@ -1885,12 +1891,24 @@ export function createCastController ({
     return { removed }
   }
 
+  // Each cast or attach owns the session only while no newer cast, attach or stop came after it: those take
+  // seconds, and one that finishes after it was replaced must not install its connection.
+  let attempt = 0
   function closeActiveTransport () {
+    attempt++
     if (!active) return
     clearInterval(active.pollTimer)
     try { active.sseReq?.destroy() } catch {}
     try { active.noiseRpc?.close() } catch {}
     active = null
+  }
+  function claim (mine, session) {
+    if (mine !== attempt) {
+      try { session.noiseRpc?.close() } catch {}
+      throw new Error('A newer cast or stop replaced this one')
+    }
+    active = session
+    return session
   }
 
   function subscribeHttpSse (baseUrl, token, sessionRef) {
@@ -2025,6 +2043,7 @@ export function createCastController ({
     }
 
     closeActiveTransport()
+    const mine = attempt
 
     if (targetHost && targetPort > 0) {
       const localLoad = (!httpStreamUrl && targetHost === '127.0.0.1')
@@ -2038,13 +2057,12 @@ export function createCastController ({
         const res = await httpJson(`${baseUrl}/cast/v1/command`, { method: 'POST', headers, body: localLoad, timeoutMs: 12_000 })
         if (!node.privateRouting && res.state?.peerLan) node.dialLanPeer?.(res.state.peerLan)
         node.joinPeer(String(res.state?.peerSwarmKey || ''), { lanFirst: targetHost !== '127.0.0.1' })
-        const sessionRef = { receiverId, receiverName, transport: 'lan', baseUrl, token, publicKey: targetPk, state: res.state || idleCastState(), sseReq: null, noiseRpc: null }
-        active = sessionRef
+        const sessionRef = claim(mine, { receiverId, receiverName, transport: 'lan', baseUrl, token, publicKey: targetPk, state: res.state || idleCastState(), sseReq: null, noiseRpc: null })
         subscribeHttpSse(baseUrl, token, sessionRef)
         emitChange()
         return status()
       } catch (err) {
-        if (!targetPk || /unauthorized|pair/i.test(err.message)) throw err
+        if (!targetPk || mine !== attempt || /unauthorized|pair/i.test(err.message)) throw err
       }
     }
 
@@ -2065,7 +2083,7 @@ export function createCastController ({
         await rpc.call('subscribe', { token })
         const res = await rpc.call('cmd', { token, ...loadPayload }, 20_000)
         node.joinPeer(String(res.state?.peerSwarmKey || ''))
-        active = { receiverId, receiverName, transport: 'p2p', baseUrl: null, token, publicKey: targetPk, state: res.state || idleCastState(), sseReq: null, noiseRpc: rpc }
+        claim(mine, { receiverId, receiverName, transport: 'p2p', baseUrl: null, token, publicKey: targetPk, state: res.state || idleCastState(), sseReq: null, noiseRpc: rpc })
         return status()
       } catch (err) {
         rpc.close()
@@ -2086,12 +2104,12 @@ export function createCastController ({
     const token = pair?.token || ''
     const receiverName = disc?.name || pair?.name || 'PearTube TV'
     closeActiveTransport()
+    const mine = attempt
     if (targetHost && targetPort > 0) {
       const baseUrl = `http://${targetHost}:${targetPort}`
       const headers = token ? { authorization: `Bearer ${token}` } : {}
       const res = await httpJson(`${baseUrl}/cast/v1/command`, { method: 'POST', headers, body: { action: 'status' }, timeoutMs: 5000 })
-      const sessionRef = { receiverId, receiverName, transport: 'lan', baseUrl, token, publicKey: targetPk, state: res.state || idleCastState(), sseReq: null, noiseRpc: null }
-      active = sessionRef
+      const sessionRef = claim(mine, { receiverId, receiverName, transport: 'lan', baseUrl, token, publicKey: targetPk, state: res.state || idleCastState(), sseReq: null, noiseRpc: null })
       subscribeHttpSse(baseUrl, token, sessionRef)
       emitChange()
       return status()
@@ -2106,7 +2124,7 @@ export function createCastController ({
       })
       await rpc.call('subscribe', { token })
       const res = await rpc.call('cmd', { token, action: 'status' })
-      active = { receiverId, receiverName, transport: 'p2p', baseUrl: null, token, publicKey: targetPk, state: res.state || idleCastState(), sseReq: null, noiseRpc: rpc }
+      claim(mine, { receiverId, receiverName, transport: 'p2p', baseUrl: null, token, publicKey: targetPk, state: res.state || idleCastState(), sseReq: null, noiseRpc: rpc })
       emitChange()
       return status()
     }
@@ -2147,7 +2165,8 @@ export function createCastController ({
   }
 
   async function castStop ({ stopPlayback = true } = {}) {
-    if (!active) return status()
+    // Also retires a cast still negotiating, so it can't take over after this stop.
+    if (!active) { closeActiveTransport(); return status() }
     if (stopPlayback) await castControl({ action: 'stop' }).catch(() => {})
     closeActiveTransport()
     allowedCastBlobs.clear()

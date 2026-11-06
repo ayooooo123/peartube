@@ -18,8 +18,6 @@ pub fn clock(d: Duration) -> String {
     }
 }
 
-pub use clock as format_clock;
-
 pub fn track_label(t: &Track) -> String {
     let mut name = t
         .title

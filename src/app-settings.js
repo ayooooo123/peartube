@@ -49,7 +49,8 @@ export function normalizeAppSettings (raw = {}, { requireChannel = false, previo
   for (const token of list(raw.sources, /[\r\n,]+/)) {
     const spec = channelSpec(token)
     if (!spec.alias) spec.alias = known.get(spec.key) || ''
-    if (spec.key !== tracker && !sources.some(s => s.key === spec.key)) sources.push(spec)
+    // A source equal to the tracker stays: addSource gives the node's own channel that name.
+    if (!sources.some(s => s.key === spec.key)) sources.push(spec)
   }
   const relayThrough = list(raw.relayThrough, /[\s,]+/).map(k => String(k).toLowerCase())
   const badRelay = relayThrough.find(k => !HEX64.test(k))

@@ -1,8 +1,6 @@
 package com.peartube.shared
 
 import kotlinx.coroutines.CompletableDeferred
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.launch
 import org.json.JSONObject
 import to.holepunch.bare.kit.BareKitException
 import to.holepunch.bare.kit.Ipc
@@ -14,7 +12,6 @@ class WorkerException(message: String) : Exception(message)
 
 class WorkletBridge(
     private val ready: CompletableDeferred<Ipc?>,
-    private val scope: CoroutineScope,
     private val onEvent: (event: String, msg: JSONObject) -> Unit,
     private val onFatal: ((message: String) -> Unit)? = null,
     private val stoppedMessage: String = "The P2P worker stopped",

@@ -91,7 +91,6 @@ pub struct PearTube {
     pub downloads: HashMap<String, ActiveDownload>,
     pub notice: Option<DownloadNotice>,
     pending_watch: Option<(Entry, u64)>,
-    pending_cast_target: Option<(String, String, u64)>,
     start: Option<Task<()>>,
     player_events: Option<Subscription>,
     _worker: Task<()>,
@@ -167,7 +166,6 @@ impl PearTube {
             downloads: HashMap::new(),
             notice: None,
             pending_watch: None,
-            pending_cast_target: None,
             start: None,
             player_events: None,
             _worker: cx.spawn(async move |this, cx| follow(this, cx).await),
@@ -260,7 +258,7 @@ impl PearTube {
             return;
         }
         let had_sources = self.settings.has_sources();
-        let pending_cast = self.pending_cast_target.clone();
+        let pending_cast = self.cast_modal.as_ref().and_then(|f| f.pending_entry.clone());
         cx.spawn(async move |this, cx| {
             let Ok(w) = worker() else { return };
             match w.open_uri(&trimmed).await {
@@ -295,7 +293,6 @@ impl PearTube {
                             if let Ok(st) = w.cast_play(&rec_id, &key, "auto", start_pos).await {
                                 let _ = this.update(cx, |this, cx| {
                                     this.cast = st;
-                                    this.pending_cast_target = None;
                                     this.cast_modal = None;
                                     this.show_list(cx);
                                 });
@@ -424,7 +421,6 @@ impl PearTube {
 
     pub fn open_cast_sheet(&mut self, pending_entry: Option<(String, String, u64)>, _window: &mut Window, cx: &mut Context<Self>) {
         self.hood_open = false;
-        self.pending_cast_target = pending_entry.clone();
         self.cast_modal = Some(CastSheetForm::new(pending_entry));
         if let Screen::Play(play) = &self.screen {
             play.update(cx, |s, cx| s.set_cast_open(true, cx));
@@ -435,7 +431,6 @@ impl PearTube {
 
     pub fn close_cast_modal(&mut self, cx: &mut Context<Self>) {
         self.cast_modal = None;
-        self.pending_cast_target = None;
         if let Screen::Play(play) = &self.screen {
             play.update(cx, |s, cx| s.set_cast_open(false, cx));
         }
@@ -511,11 +506,7 @@ impl PearTube {
     }
 
     pub fn cast_to_receiver(&mut self, receiver_id: String, window: &mut Window, cx: &mut Context<Self>) {
-        let mut pending = self
-            .cast_modal
-            .as_ref()
-            .and_then(|f| f.pending_entry.clone())
-            .or_else(|| self.pending_cast_target.clone());
+        let mut pending = self.cast_modal.as_ref().and_then(|f| f.pending_entry.clone());
         if let (Some((p_key, _, p_pos)), Screen::Play(play)) = (&mut pending, &self.screen)
             && play.read(cx).entry_key() == p_key
         {
@@ -531,7 +522,6 @@ impl PearTube {
                 Ok(st) => {
                     let _ = this.update_in(cx, |this, window, cx| {
                         this.cast = st;
-                        this.pending_cast_target = None;
                         this.cast_modal = None;
                         if matches!(this.screen, Screen::Play(_)) {
                             this.close_player(window, cx);
@@ -657,7 +647,6 @@ impl PearTube {
 
     fn close_player(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.cast_modal = None;
-        self.pending_cast_target = None;
         window.set_background_appearance(WindowBackgroundAppearance::Opaque);
         if window.is_fullscreen() {
             window.toggle_fullscreen();
@@ -890,25 +879,6 @@ async fn refresh(this: &WeakEntity<PearTube>, cx: &mut AsyncApp) {
     }
 }
 
-fn percent_decode_filename(input: &str) -> Result<String, ()> {
-    let bytes = input.as_bytes();
-    let mut out = Vec::with_capacity(bytes.len());
-    let mut i = 0;
-    while i < bytes.len() {
-        if bytes[i] == b'%' && i + 2 < bytes.len()
-            && let Ok(hex) = std::str::from_utf8(&bytes[i + 1..i + 3])
-            && let Ok(val) = u8::from_str_radix(hex, 16)
-        {
-            out.push(val);
-            i += 3;
-        } else {
-            out.push(bytes[i]);
-            i += 1;
-        }
-    }
-    String::from_utf8(out).map_err(|_| ())
-}
-
 fn sanitize_download_stem(raw: &str) -> String {
     let cleaned: String = raw
         .chars()
@@ -977,41 +947,22 @@ fn stream_entry_to_downloads(
         return Err(format!("Stream server answered {status_line}"));
     }
 
-    let mut cd_filename = None;
-    for line in header_str.lines() {
-        if let Some((k, v)) = line.split_once(':') {
-            if k.trim().eq_ignore_ascii_case("content-disposition") {
-                if let Some(idx) = v.find("filename*=") {
-                    let rest = &v[idx + 10..];
-                    let rest = rest.split(';').next().unwrap_or(rest).trim();
-                    if let Some(encoded) = rest.strip_prefix("UTF-8''").or_else(|| rest.strip_prefix("utf-8''")) {
-                        if let Ok(decoded) = percent_decode_filename(encoded) {
-                            cd_filename = Some(decoded);
-                        }
-                    }
-                }
-                if cd_filename.is_none() {
-                    if let Some(idx) = v.find("filename=") {
-                        let rest = &v[idx + 9..];
-                        let val = rest.split(';').next().unwrap_or(rest).trim().trim_matches('"');
-                        if !val.is_empty() {
-                            cd_filename = Some(val.to_string());
-                        }
-                    }
-                }
-            }
-        }
-    }
+    // The server sniffs the container; only its extension is used, the name stays the app's (episode suffix, any script).
+    let ext = header_str
+        .lines()
+        .filter_map(|line| line.split_once(':'))
+        .find(|(k, _)| k.trim().eq_ignore_ascii_case("content-disposition"))
+        .and_then(|(_, v)| v.split("filename=\"").nth(1)?.split('"').next().map(str::to_string))
+        .and_then(|name| name.rfind('.').map(|i| name[i..].to_string()))
+        .unwrap_or_else(|| ".mkv".into());
 
     let home = std::env::var_os("HOME").map(PathBuf::from).ok_or_else(|| "HOME directory unavailable".to_string())?;
     let downloads_dir = home.join("Downloads");
     std::fs::create_dir_all(&downloads_dir).map_err(|e| format!("Create Downloads folder: {e}"))?;
     let stem = sanitize_download_stem(title);
-    let final_path = if let Some(name) = cd_filename {
-        unique_download_path(&downloads_dir, &name, "")
-    } else {
-        unique_download_path(&downloads_dir, &stem, ".mkv")
-    };
+    // A title that already ends in the container's extension keeps it once.
+    let ext = if stem.to_ascii_lowercase().ends_with(&ext.to_ascii_lowercase()) { String::new() } else { ext };
+    let final_path = unique_download_path(&downloads_dir, &stem, &ext);
     let part_path = downloads_dir.join(format!(
         "{}.part",
         final_path.file_name().and_then(|s| s.to_str()).unwrap_or("video.mkv")

@@ -471,6 +471,8 @@ private fun DumbTvReceiverScreen(activity: Activity, worker: ReceiverWorker, hos
                         return@collect
                     }
                     closeStream()
+                    // Set before the open, which takes seconds: a storage re-probe meanwhile must not restart the receiver under it.
+                    worker.isStreaming = true
                     openError = null
                     overlaySheet = null
                     activeTitle = cmd.title
@@ -485,8 +487,8 @@ private fun DumbTvReceiverScreen(activity: Activity, worker: ReceiverWorker, hos
                         .getOrDefault(0L)
                     if (opened != 0L) {
                         handle = opened
-                        worker.isStreaming = true
                     } else {
+                        worker.isStreaming = false
                         host.close()
                     }
                 }

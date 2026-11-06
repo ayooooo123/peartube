@@ -26,15 +26,20 @@ final class AppModel: ObservableObject {
     @Published var notice: String?
     @Published var downloads: [String: Double] = [:]
     private var downloadTasks: [String: Task<Void, Never>] = [:]
-    @Published var busy = false
+    /// True while the node is starting; follows `node`.
+    @Published private(set) var busy = false
     @Published var soundfontBusy = false
     @Published var soundfontPresent = false
     let player = NativePlayer()
     private(set) var storage: AppStorage?
     private var worker: Worker?
-    private var started = false
+    /// The node's lifecycle. A second start while one runs waits for it instead of reopening the node.
+    private enum NodePhase { case idle, starting(Task<Void, Never>), running }
+    private var node = NodePhase.idle {
+        didSet { if case .starting = node { busy = true } else { busy = false } }
+    }
+    private var running: Bool { if case .running = node { return true } else { return false } }
     private var background = false
-    private var workerSuspended = false
     private var refreshInFlight = false
     private var refreshAgain = false
     private var pollTask: Task<Void, Never>?
@@ -80,10 +85,13 @@ final class AppModel: ObservableObject {
         return try JSONDecoder().decode(Settings.self, from: data)
     }
 
+    // Launch arguments (UI tests, dev runs) apply once per launch, so a later Settings save sticks.
+    private var launchArgumentsApplied = false
     private func applyLaunchArguments() async throws {
+        guard !launchArgumentsApplied else { return }
         let args = ProcessInfo.processInfo.arguments
         func argument(_ name: String) -> String? { guard let i = args.firstIndex(of: name), args.indices.contains(i + 1) else { return nil }; return args[i + 1] }
-        guard ["-peartube-tracker", "-peartube-bootstrap", "-peartube-lan", "-peartube-relays", "-peartube-private"].contains(where: { argument($0) != nil }) else { return }
+        guard ["-peartube-tracker", "-peartube-bootstrap", "-peartube-lan", "-peartube-relays", "-peartube-private"].contains(where: { argument($0) != nil }) else { launchArgumentsApplied = true; return }
         let raw: [String: Any] = [
             "tracker": argument("-peartube-tracker") ?? settings.tracker,
             "sources": settings.sources.map(\.json),
@@ -96,11 +104,17 @@ final class AppModel: ObservableObject {
         next.configured = true
         settings = next
         try storage?.save(settings, name: "settings.json")
+        launchArgumentsApplied = true
     }
     func start() async {
-        guard let worker, let storage else { return }
-        busy = true; started = false
-        defer { busy = false; writeEvidence(force: true) }
+        if case .starting(let current) = node { await current.value; return }
+        let task = Task { await runStart() }
+        node = .starting(task)
+        await task.value
+    }
+    private func runStart() async {
+        defer { writeEvidence(force: true) }
+        guard let worker, let storage else { node = .idle; return }
         do {
             try await applyLaunchArguments()
             _ = try await worker.request("init", ["castStorage": castStorage])
@@ -110,10 +124,10 @@ final class AppModel: ObservableObject {
                 "settings": settings.json
             ]
             status = try await worker.request("start", params) as? [String: Any] ?? [:]
-            started = true
+            node = .running
             await refreshCast()
             await refresh()
-        } catch { self.error = error.localizedDescription }
+        } catch { node = .idle; self.error = error.localizedDescription }
     }
     func save(_ next: Settings) async {
         guard !busy else { return }
@@ -138,7 +152,7 @@ final class AppModel: ObservableObject {
         writeEvidence(force: true)
     }
     func refresh() async {
-        guard started, !background || !session.isEmpty else { return }
+        guard running, !background || !session.isEmpty else { return }
         if refreshInFlight { refreshAgain = true; return }
         refreshInFlight = true
         defer { refreshInFlight = false }
@@ -153,7 +167,7 @@ final class AppModel: ObservableObject {
                 entries = rows.map(MediaEntry.init).filter { !$0.key.isEmpty && seen.insert($0.key).inserted }
                 if showCast || showRemote || !session.isEmpty { await refreshCast() }
             } catch { self.error = error.localizedDescription; break }
-        } while refreshAgain && started
+        } while refreshAgain && running
         writeEvidence(force: true)
     }
     var sources: [[String: Any]] { status.objects("sources") }
@@ -162,12 +176,6 @@ final class AppModel: ObservableObject {
     var session: [String: Any] { cast.object("session") }
     var remoteState: PlaybackState { PlaybackState(json: session.object("state")) }
     var contextualQuery: Bool { (query.count == 64 && query.allSatisfy(\.isHexDigit)) || query.lowercased().hasPrefix("peartube:") }
-    var smartAction: String {
-        let q = query.lowercased()
-        if q.contains("watch/") || q.contains("stream/") { return "Play Stream" }
-        if q.contains("access/") { return "Unlock Channel" }
-        return "Connect Channel"
-    }
     var visibleEntries: [MediaEntry] {
         entries.filter { entry in
             (contextualQuery || query.isEmpty || "\(entry.title) \(entry.mediaID)".localizedCaseInsensitiveContains(query)) &&
@@ -230,8 +238,8 @@ final class AppModel: ObservableObject {
         guard !input.isEmpty else { return }
         do {
             guard let worker else { throw AppFailure("The embedded worker is unavailable.") }
-            if !started { await start() }
-            guard started else { throw AppFailure("The P2P worker has not started.") }
+            if !running { await start() }
+            guard running else { throw AppFailure("The P2P worker has not started.") }
             let result = try await worker.request("openUri", ["uri": input]) as? [String: Any] ?? [:]
             if !result.object("source").isEmpty {
                 let spec = SourceSpec(result.object("source")); settings.add(spec); settings.configured = true
@@ -250,7 +258,7 @@ final class AppModel: ObservableObject {
     func addSource(_ spec: SourceSpec) async {
         do {
             guard let worker else { return }
-            if !started { await start() }
+            if !running { await start() }
             _ = try await worker.request("addSource", spec.json)
             settings.add(spec); settings.configured = true
             try storage?.save(settings, name: "settings.json"); await refresh()
@@ -374,15 +382,14 @@ final class AppModel: ObservableObject {
             background = true; recordProgress(force: true); player.suspend(); reconcileBackground(); writeEvidence(force: true)
         } else if phase == .active {
             background = false
-            if workerSuspended { worker?.resume(); workerSuspended = false }
+            worker?.resume()
             worker?.refreshDiscovery()
             player.resume(); Task { await refresh() }
         }
     }
     private func reconcileBackground() {
         let keepAwake = !session.isEmpty || !downloads.isEmpty
-        if background && !keepAwake && !workerSuspended { worker?.suspend(); workerSuspended = true }
-        else if keepAwake && workerSuspended { worker?.resume(); workerSuspended = false }
+        if background && !keepAwake { worker?.suspend() } else { worker?.resume() }
     }
     func download(_ entry: MediaEntry) {
         guard downloadTasks[entry.key] == nil, let url = URL(string: entry.downloadURL.isEmpty ? entry.streamURL : entry.downloadURL) else { return }
@@ -512,7 +519,7 @@ final class AppModel: ObservableObject {
         evidenceSaved = Date()
         let document = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first
         let playerState = player.state.json
-        let evidence: [String: Any] = ["schemaVersion": 1, "timestamp": Date().timeIntervalSince1970, "workerStarted": started,
+        let evidence: [String: Any] = ["schemaVersion": 1, "timestamp": Date().timeIntervalSince1970, "workerStarted": running,
             "screen": player.entry != nil ? "player" : showSettings ? "settings" : "library", "background": background,
             "settings": ["tracker": settings.tracker, "sources": settings.sources.map(\.json), "bootstrap": settings.bootstrap, "lanDiscovery": settings.lanDiscovery, "privateRouting": settings.privateRouting],
             "status": status, "entries": entries.map(\.evidence), "visibleEntryKeys": visibleEntries.map(\.key),

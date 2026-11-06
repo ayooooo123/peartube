@@ -3,6 +3,7 @@ package com.peartube.app
 import android.app.Application
 import android.content.ContentValues
 import android.net.Uri
+import android.net.wifi.WifiManager
 import android.os.Environment
 import android.provider.MediaStore
 import android.util.AtomicFile
@@ -129,6 +130,10 @@ class AppModel(private val app: Application) {
         screen.value = Screen.Play(entry)
     }
     @Volatile var inForeground: Boolean = true
+    // LAN discovery's mDNS needs the multicast lock; a cast stream needs Wi-Fi at full speed with the screen locked.
+    private val wifi = app.getSystemService(WifiManager::class.java)
+    private val multicastLock = wifi.createMulticastLock("PearTube LAN discovery").apply { setReferenceCounted(false) }
+    private val wifiLock = wifi.createWifiLock(WifiManager.WIFI_MODE_FULL_LOW_LATENCY, "PearTube Cast stream").apply { setReferenceCounted(false) }
     val soundFontSelected = MutableStateFlow(SoundFont.file(dataDir).isFile)
     val soundFontBusy = MutableStateFlow(false)
     val soundFontError = MutableStateFlow<String?>(null)
@@ -162,7 +167,7 @@ class AppModel(private val app: Application) {
                     }
                     is Worker.Event.Cast -> {
                         cast.value = event.status
-                        if (!inForeground && !shouldKeepWorkerAwake()) worker.suspend()
+                        applyBackgroundPolicy()
                     }
                     is Worker.Event.Fatal -> error.value = event.message
                     Worker.Event.Exited -> error.value = "The P2P worker stopped"
@@ -220,22 +225,37 @@ class AppModel(private val app: Application) {
     private val backgroundSyncWindowMs = 2 * 60_000L
 
     fun onBackground() {
-        if (!settings.value.hasSources) return
-        backgroundSyncUntil = System.currentTimeMillis() + backgroundSyncWindowMs
-        scope.launch {
-            kotlinx.coroutines.delay(backgroundSyncWindowMs + 1_000L)
-            if (!inForeground && System.currentTimeMillis() >= backgroundSyncUntil && !shouldKeepWorkerAwake()) {
-                worker.suspend()
+        if (settings.value.hasSources) {
+            backgroundSyncUntil = System.currentTimeMillis() + backgroundSyncWindowMs
+            scope.launch {
+                kotlinx.coroutines.delay(backgroundSyncWindowMs + 1_000L)
+                applyBackgroundPolicy()
             }
         }
+        applyBackgroundPolicy()
     }
 
     fun setPlayerActive(active: Boolean) {
         scope.launch { runCatching { worker.setPlayerActive(active) } }
     }
 
-    fun shouldKeepWorkerAwake(): Boolean =
+    private fun shouldKeepWorkerAwake(): Boolean =
         cast.value.session != null || downloads.value.isNotEmpty() || System.currentTimeMillis() < backgroundSyncUntil
+
+    // The one rule for the background: in front, or behind with a cast, a download or the sync window open, the
+    // worklet runs and both locks are held; otherwise both stop. Called whenever any of those inputs changes.
+    @Synchronized
+    fun applyBackgroundPolicy() {
+        if (inForeground || shouldKeepWorkerAwake()) {
+            multicastLock.acquire()
+            wifiLock.acquire()
+            worker.resume()
+        } else {
+            worker.suspend()
+            if (wifiLock.isHeld) wifiLock.release()
+            if (multicastLock.isHeld) multicastLock.release()
+        }
+    }
 
     fun openUriOrKey(raw: String) {
         val trimmed = raw.trim()
@@ -342,7 +362,7 @@ class AppModel(private val app: Application) {
         scope.launch {
             runCatching { worker.castStop(true) }.onSuccess {
                 cast.value = it
-                if (!inForeground && !shouldKeepWorkerAwake()) worker.suspend()
+                applyBackgroundPolicy()
             }
         }
     }
@@ -352,7 +372,7 @@ class AppModel(private val app: Application) {
         scope.launch {
             runCatching { worker.castStop(false) }.onSuccess {
                 cast.value = it
-                if (!inForeground && !shouldKeepWorkerAwake()) worker.suspend()
+                applyBackgroundPolicy()
             }
         }
     }
@@ -439,14 +459,11 @@ class AppModel(private val app: Application) {
                 }
                 val status = conn.responseCode
                 if (status != 200 && status != 206) error("Stream answered HTTP $status")
-                val disp = conn.getHeaderField("Content-Disposition") ?: ""
-                val headerName = Regex("filename\\*?=(?:UTF-8'')?\"?([^\";]+)\"?", RegexOption.IGNORE_CASE)
-                    .find(disp)?.groupValues?.get(1)?.trim()
+                // The server sniffs the container; only its extension is used, the name stays the app's (episode suffix, any script).
+                val ext = Regex("filename=\"[^\"]*(\\.[A-Za-z0-9]{1,5})\"").find(conn.getHeaderField("Content-Disposition") ?: "")?.groupValues?.get(1) ?: ".mkv"
                 val mime = conn.contentType ?: "application/octet-stream"
                 val cleanBase = rawTitle.replace(Regex("[/\\\\:*?\"<>|\\x00-\\x1f]+"), " ").replace(Regex("\\s+"), " ").trim().take(160).ifEmpty { "PearTube Video" }
-                val fileName = (headerName?.takeIf { it.isNotBlank() } ?: cleanBase).let {
-                    if (it.contains('.')) it else "$it.mkv"
-                }
+                val fileName = if (cleanBase.endsWith(ext, ignoreCase = true)) cleanBase else "$cleanBase$ext"
 
                 val values = ContentValues().apply {
                     put(MediaStore.MediaColumns.DISPLAY_NAME, fileName)
@@ -494,9 +511,7 @@ class AppModel(private val app: Application) {
                 runCatching { conn?.disconnect() }
                 downloadJobs.remove(entry.key)
                 downloads.value = downloads.value - entry.key
-                if (!inForeground && !shouldKeepWorkerAwake()) {
-                    withContext(Dispatchers.Main) { worker.suspend() }
-                }
+                applyBackgroundPolicy()
             }
         }
         downloadJobs[entry.key] = job

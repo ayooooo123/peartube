@@ -277,6 +277,7 @@ async function openNode ({
     onConnection: fn => { ctx.net.connListeners.add(fn); return () => ctx.net.connListeners.delete(fn) },
     search: ctx.catalog.search,
     put: ctx.blobs.put,
+    dropStore: ctx.blobs.dropStore,
     append: ctx.channel.append,
     publish: ctx.blobs.publish,
     publishChannel: ctx.blobs.publishChannel,

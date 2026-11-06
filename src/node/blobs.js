@@ -725,7 +725,11 @@ export async function createBlobs (ctx) {
   // The write session is inactive: an owned core never downloads, so peers see it as an uploader from the first
   // block. Otherwise it reports "downloading" for Hypercore's 20-40 s linger after the write, and a peer whose
   // channel closes when Corestore collects the at-rest core does not reopen it.
-  async function put ({ id, title, expectedSize = null, private: isPrivate = false, epoch: explicitEpoch = null }, source, onData = null) {
+  // A named `store` keeps a half-written core across a restart so the next attempt appends instead of re-downloading a
+  // 60 GB remux; an unnamed one is one-shot (watch-dir, plugins) and is purged when its write fails. `source` may be a
+  // factory: it receives the byte offset already on disk and returns the stream from there.
+  async function put (meta, source, onData = null) {
+    const { id, title, private: isPrivate = false, epoch: explicitEpoch = null, store: storeName = null } = meta
     if (!str(id, ID)) throw new Error(`Invalid id ${id}`)
     const wantPrivate = Boolean(isPrivate || explicitEpoch)
     let videoKey = null
@@ -734,22 +738,28 @@ export async function createBlobs (ctx) {
     if (wantPrivate) {
       if (!ctx.identity.idVault) throw new Error('12-word recovery vault required to encrypt private channel media')
       ep = explicitEpoch || await ctx.channel.currentChannelEpoch()
-      videoKey = hypercoreCrypto.randomBytes(32)
+      // A resumed private core must keep the key it was started with, so the job carries it across restarts.
+      videoKey = meta.storeKey ? b4a.from(meta.storeKey, 'hex') : hypercoreCrypto.randomBytes(32)
       wrappedKey = wrapVideoKey(videoKey, ctx.identity.idVault.epochKey(ctx.channel.primaryKey, ep))
     }
     const core = ctx.storage.store.get({
-      name: `video:${b4a.toString(hypercoreCrypto.randomBytes(16), 'hex')}`,
+      name: storeName || `video:${b4a.toString(hypercoreCrypto.randomBytes(16), 'hex')}`,
       active: false,
       ...(videoKey ? { encryption: { key: videoKey } } : {})
     })
     try {
+      await core.ready()
+      // Appends are durable, so a named core holds every block an earlier attempt wrote; resume from there.
+      // shortcut: hyperblobs commits 16-block batches, so a restart can lose the unflushed tail (at most 8 MiB).
+      const start = storeName ? core.byteLength : 0
+      const resumed = start > 0
       const hash = createHash('sha256')
-      let size = 0
+      let size = start
       let buf = []
       let bufLen = 0
       const hasher = new Transform({
         transform (chunk, cb) {
-          hash.update(chunk)
+          if (!resumed) hash.update(chunk)
           size += chunk.length
           if (onData) onData(size)
           buf.push(chunk)
@@ -768,15 +778,25 @@ export async function createBlobs (ctx) {
           cb(null)
         }
       })
+      const complete = resumed && Number.isSafeInteger(meta.expectedSize) && start === meta.expectedSize
       const blobs = new Hyperblobs(core, { blockSize: BLOB_BLOCK_SIZE })
-      const writer = blobs.createWriteStream()
-      await pipelinePromise(source, hasher, writer)
-      if (Number.isSafeInteger(expectedSize) && expectedSize >= 0 && size !== expectedSize) {
-        throw new Error(`Truncated transfer for ${id}: expected ${expectedSize} bytes, got ${size}`)
+      // A crash between the last block and the announce leaves a complete core: finish it instead of asking the
+      // source for `bytes=<size>-`, which answers 416 and would throw away the whole film.
+      let writer = null
+      if (!complete) {
+        writer = blobs.createWriteStream()
+        await pipelinePromise(typeof source === 'function' ? await source(start) : source, hasher, writer)
       }
-      await core.ready()
+      // Blocks from the earlier attempt never crossed the hasher, so hash the finished core in one local pass.
+      if (resumed) for await (const block of core.createReadStream({ start: 0 })) hash.update(block)
+      if (Number.isSafeInteger(meta.expectedSize) && meta.expectedSize >= 0 && size !== meta.expectedSize) {
+        throw new Error(`Truncated transfer for ${id}: expected ${meta.expectedSize} bytes, got ${size}`)
+      }
       const keyHex = b4a.toString(core.key, 'hex')
-      const blob = writer.id
+      // A resumed stream only reports its tail; one video per core always starts at block 0.
+      const blob = !writer || (resumed && !writer.id.blockMap)
+        ? { blockOffset: 0, byteOffset: 0, blockLength: core.length, byteLength: core.byteLength }
+        : writer.id
       registerOwned(keyHex, { length: core.length, byteLength: core.byteLength })
       if (videoKey) {
         encryptedBlobs.set(keyHex, { source: ctx.channel.primaryKey, epoch: ep, wrappedKey })
@@ -795,8 +815,23 @@ export async function createBlobs (ctx) {
         ...(videoKey ? { epoch: ep, wrappedKey } : {})
       }
     } catch (err) {
+      // A restart, a dropped connection or a shutdown leaves a named core on disk for the next attempt; a source that
+      // changed under us (`restart`) or a one-shot ingest is purged so it cannot sit there as a half-file.
+      if (storeName && !err.restart) { await core.close().catch(() => {}); throw err }
       await core.ready().then(() => core.purge()).catch(() => core.close().catch(() => {}))
       throw err
+    }
+  }
+
+  // Drops a job's half-written core when its job is cancelled or dead-lettered, so 60 GB never lies abandoned on disk.
+  async function dropStore (name) {
+    if (!name) return
+    const core = ctx.storage.store.get({ name, active: false })
+    try {
+      await core.ready()
+      await core.purge()
+    } catch {
+      await core.close().catch(() => {})
     }
   }
 
@@ -1078,6 +1113,7 @@ export async function createBlobs (ctx) {
     setCacheMaxBytes,
     clearCache,
     put,
+    dropStore,
     publish,
     publishChannel,
     syncLocalChannel,

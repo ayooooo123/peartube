@@ -1,5 +1,5 @@
 import { createReadStream, mkdtempSync, readdirSync, readFileSync, writeFileSync, renameSync, rmSync, statSync } from 'node:fs'
-import { randomUUID } from 'node:crypto'
+import { randomUUID, randomBytes } from 'node:crypto'
 import { request as httpRequest } from 'node:http'
 import { request as httpsRequest } from 'node:https'
 import { dirname, join } from 'node:path'
@@ -28,8 +28,8 @@ function waitAbortable (ms, controller) {
 
 // Jobs hold private source URLs and auth headers, so they stay collared inside a 0600 file and
 // never leak into Corestore where replication would serve them to any stranger who names the core.
-// What anyone may see of a job: no source secrets, no internal announce payload.
-export const publicJob = ({ source, announce, ...job }) => job
+// What anyone may see of a job: no source secrets, no internal announce payload, no per-video key.
+export const publicJob = ({ source, announce, storeKey, etag, lastModified, ...job }) => job
 
 export function createAcquirer (node, file, {
   concurrency = 4,
@@ -108,11 +108,11 @@ export function createAcquirer (node, file, {
   }
 
   // Re-stitches stalled or dropped mid-film HTTP streams via Range: bytes=offset- so node.put never purges partial cores.
-  function readResumable (job, url, baseHeaders, first, total, controller) {
+  function readResumable (job, url, baseHeaders, first, total, controller, startOffset = 0) {
     const etag = typeof first.headers.etag === 'string' && !first.headers.etag.startsWith('W/') ? first.headers.etag : null
     return Readable.from((async function * () {
       let cur = first
-      let offset = 0
+      let offset = startOffset
       let reconnects = 0
       let retryAfter = 0
       let lastErr = null
@@ -180,6 +180,8 @@ export function createAcquirer (node, file, {
   // A job is spent only once its announce is durable; save the stored blob's announce immediately after put()
   // without triggering foreign-cache GC so a restart re-announces instead of orphaning the core and re-fetching.
   async function run (job) {
+    // Older jobs (and every job on its first attempt) get a durable core name, so the next restart resumes this attempt.
+    if (!job.source.page && !job.store) { job.store = newStore(); save() }
     job.status = job.announce ? 'announcing' : 'running'
     job.error = null
     save()
@@ -213,12 +215,39 @@ export function createAcquirer (node, file, {
           }
         } else {
           const baseHeaders = mergeHeaders(job.source.headers)
-          const first = await openSource(job.source.url, baseHeaders, controller)
-          const cl = Number(first.headers['content-length'])
-          job.total = Number.isSafeInteger(cl) && cl >= 0 ? cl : null
-          job.bytes = 0
-          const stream = readResumable(job, job.source.url, baseHeaders, first, job.total, controller)
-          op = await node.put({ id: job.id, title: job.title, expectedSize: job.total, private: Boolean(job.private) }, stream, bytes => { job.bytes = bytes })
+          // A named core keeps the blocks earlier attempts wrote; the factory is handed that byte offset and asks the
+          // source for the rest, so a restart costs one Range request instead of the whole film again.
+          const meta = {
+            id: job.id,
+            title: job.title,
+            expectedSize: job.total,
+            private: Boolean(job.private),
+            store: job.store,
+            ...(job.private && job.storeKey ? { storeKey: job.storeKey } : {})
+          }
+          op = await node.put(meta, async start => {
+            const resumeHeaders = start > 0
+              ? { ...baseHeaders, range: `bytes=${start}-`, ...(job.etag || job.lastModified ? { 'if-range': job.etag || job.lastModified } : {}) }
+              : baseHeaders
+            const first = await openSource(job.source.url, resumeHeaders, controller)
+            if (start > 0) {
+              const m = String(first.headers['content-range'] || '').match(/^bytes\s+(\d+)-/i)
+              // The bytes on disk only belong to this film if the source still serves the same file from that offset;
+              // a rotated ETag means a different encode, and stitching two encodes would make a corrupt film.
+              const rotated = job.etag && typeof first.headers.etag === 'string' && first.headers.etag !== job.etag
+              if (rotated || first.statusCode !== 206 || !m || Number(m[1]) !== start) throw Object.assign(new Error(`Source changed while resuming ${job.id}`), { restart: true })
+              job.bytes = start
+            } else {
+              const cl = Number(first.headers['content-length'])
+              job.total = Number.isSafeInteger(cl) && cl >= 0 ? cl : null
+              job.bytes = 0
+              // Strong validators only: a weak ETag (`W/`) cannot prove two halves are the same bytes.
+              job.etag = typeof first.headers.etag === 'string' && !first.headers.etag.startsWith('W/') ? first.headers.etag : null
+              job.lastModified = typeof first.headers['last-modified'] === 'string' ? first.headers['last-modified'] : null
+            }
+            meta.expectedSize = job.total
+            return readResumable(job, job.source.url, baseHeaders, first, job.total, controller, start)
+          }, bytes => { job.bytes = bytes })
         }
         if (job.status === 'cancelled') throw new Error('Cancelled')
         // Closed for a reopen: the next acquirer runs this job again from jobs.json, so this one must not announce it.
@@ -237,6 +266,8 @@ export function createAcquirer (node, file, {
         // Dead-letter 401/403/404/410 sources once instead of choking concurrency slots forever.
         if (TERMINAL_STATUS.has(err.status) || job.attempts >= maxAttempts) job.source = null
       }
+      // A job that will never run again must not leave a half-written core sitting on the array.
+      if (job.store && (job.status === 'cancelled' || (job.status === 'failed' && !job.source))) node.dropStore?.(job.store)?.catch?.(() => {})
       if (!closed && job.status === 'failed' && job.source && retryDelay > 0) {
         const delay = err.retryAfter || Math.min(retryDelay * 2 ** ((job.attempts || 1) - 1), 300_000)
         setTimeout(() => {
@@ -260,9 +291,14 @@ export function createAcquirer (node, file, {
       run(job)
     }
   }
+  // A 32-hex name per job: the Corestore key for that video is derived from it, so a restart reopens the same core.
+  const newStore = () => `video:${randomUUID().replace(/-/g, '')}`
+
   function add ({ id, title, source, channel = defaultChannel, private: isPrivate = false, plugin = 'http-acquire' }) {
     if (typeof source?.url !== 'string' || !/^https?:\/\//.test(source.url)) throw new Error('source.url must be http(s)')
-    const job = { jobId: randomUUID(), id, title, plugin, channel: Boolean(channel), private: Boolean(isPrivate || source.private), status: 'queued', created: Date.now(), source: { url: source.url, headers: source.headers || {}, page: Boolean(source.page) } }
+    const job = { jobId: randomUUID(), id, title, plugin, channel: Boolean(channel), private: Boolean(isPrivate || source.private), status: 'queued', created: Date.now(), store: newStore(), source: { url: source.url, headers: source.headers || {}, page: Boolean(source.page) } }
+    // Private media is encrypted with a per-video key; a resumed core must be reopened with the same one.
+    if (job.private) job.storeKey = randomBytes(32).toString('hex')
     jobs.push(job)
     save()
     next()

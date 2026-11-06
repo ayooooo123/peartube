@@ -157,7 +157,7 @@ async function main () {
     const discovery = node.swarm.status(topic)
     const proof = { at: new Date().toISOString(), started, phase, error, role, tracker: status.tracker, published, received, progress,
       status, routingState: node.swarm.dht.privateRouting.status(), discovery: { listening, server: !!discovery?.isServer, client: !!discovery?.isClient },
-      exposure, directTrackerAnnouncement: node.swarm.status(node.tracker.discoveryKey) !== null }
+      exposure, directTrackerAnnouncement: node.swarm.status(node.channel.discoveryKey) !== null }
     writeFileSync(join(out, 'result.json'), JSON.stringify(proof, null, 2) + '\n')
     if (exposure.directDestinationSends !== 0 || proof.directTrackerAnnouncement) throw new Error('Private-only endpoint leaked a direct destination or tracker announcement')
   }

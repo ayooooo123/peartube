@@ -157,14 +157,14 @@ test('rebuild-view replays the owner\'s oplog with the current apply, keeps the 
   const c = await createNode({ storage: tmp(), bootstrap: testnet.bootstrap, tracker })
   closers.push(() => c.close())
   const landed = []
-  c.tracker.on('move-to', to => landed.push({ key: b4a.toString(to.key, 'hex'), length: to.length }))
+  c.channel.on('move-to', to => landed.push({ key: b4a.toString(to.key, 'hex'), length: to.length }))
   await until(async () => (await c.search(null, { limit: 1000 })).length === 22)
-  assert.equal(c.tracker.stats.fastForwards, 1, 'the follower did not fast-forward')
+  assert.equal(c.channel.stats.fastForwards, 1, 'the follower did not fast-forward')
   assert.equal(landed[0].key, b4a.toString(oldSystem.key, 'hex'))
   assert.ok(landed[0].length > oldSystem.length, `landed on the old tree: ${JSON.stringify(landed)} vs old length ${oldSystem.length}`)
-  const cView = await dump(c.tracker)
+  const cView = await dump(c.channel)
   assert.ok(cView.has(`writer/${b.status().writer}`))
-  assert.deepEqual(cView, await dump(a.tracker))
+  assert.deepEqual(cView, await dump(a.channel))
   assert.equal((await a.search('imdb:tt0000002')).length, 1, 'the owner now lists the granted writer\'s announce')
 
   // 6a. rollback after going online: the boot record goes back to the old tree, the oplog (stamp op and the

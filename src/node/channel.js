@@ -18,7 +18,6 @@ export function applied (bee) {
 
 export async function createChannel (ctx) {
   const {
-    channel: channelOpt = null,
     tracker: trackerOpt = null,
     join: joinOpt = false,
     sources: initialSources = [],
@@ -28,7 +27,7 @@ export async function createChannel (ctx) {
   const wakeup = new ProtomuxWakeup()
   let viewEpoch = 1
 
-  let targetKey = String(channelOpt || trackerOpt || '').trim().toLowerCase() || null
+  let targetKey = String(trackerOpt || '').trim().toLowerCase() || null
   if (targetKey && !HEX64.test(targetKey)) throw new Error('Channel key must be 64 hex characters')
   if (joinOpt && ctx.identity.idVault && !targetKey) targetKey = ctx.identity.idVault.channelKey
 

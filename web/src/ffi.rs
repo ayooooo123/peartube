@@ -57,7 +57,6 @@ pub fn pack_audio_f32(out: &mut Vec<u8>, left: &[f32], right: &[f32]) {
     }
 }
 
-/// f32le -> clamped f32, the SIMD fast path over two safe slices.
 #[cfg(target_arch = "wasm32")]
 pub fn decode_f32le_clamped_simd(src_bytes: &[u8], dst: &mut [f32]) {
     let n = dst.len().min(src_bytes.len() / 4);
@@ -83,7 +82,6 @@ pub fn decode_f32le_clamped_simd(src_bytes: &[u8], dst: &mut [f32]) {
     }
 }
 
-/// One source plane into the stereo buses with per-channel gains, the SIMD fast path.
 #[cfg(target_arch = "wasm32")]
 pub fn accum_f32le_plane_simd(src_bytes: &[u8], gl: f32, gr: f32, dst_l: &mut [f32], dst_r: &mut [f32]) {
     let n = dst_l.len().min(dst_r.len()).min(src_bytes.len() / 4);
@@ -119,7 +117,6 @@ pub fn accum_f32le_plane_simd(src_bytes: &[u8], gl: f32, gr: f32, dst_l: &mut [f
     }
 }
 
-/// Clamp both stereo buses in place, the SIMD fast path.
 #[cfg(target_arch = "wasm32")]
 pub fn clamp_stereo_simd(dst_l: &mut [f32], dst_r: &mut [f32]) {
     let min_v = f32x4_splat(-1.0);

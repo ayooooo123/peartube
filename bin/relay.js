@@ -371,7 +371,6 @@ state.applySettings = changed => serial(async () => {
   await applyGuard()
   api.notify('update')
 })
-// Reopens the node, then brings back an opted-in guard whose process has gone.
 state.recoverMnemonic = (mnemonic, alias = '') => serial(async () => {
   if (!state.node) throw new Error('Node still starting')
   const res = await state.node.claimWithMnemonic(mnemonic, { alias })
@@ -383,6 +382,7 @@ state.recoverMnemonic = (mnemonic, alias = '') => serial(async () => {
   api.notify('update')
   return state.node ? state.node.identity() : res
 })
+// Reopens the node, then brings back an opted-in guard whose process has gone.
 state.restart = () => serial(async () => {
   await reopen()
   await applyGuard()

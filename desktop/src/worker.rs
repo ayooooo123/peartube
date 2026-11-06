@@ -540,7 +540,6 @@ unsafe impl Sync for Worker {}
 
 static WORKER: LazyLock<Result<Worker, String>> = LazyLock::new(Worker::spawn);
 
-/// The process's one worklet, started on first use.
 pub fn worker() -> Result<&'static Worker, String> {
     WORKER.as_ref().map_err(Clone::clone)
 }
@@ -708,7 +707,6 @@ impl Worker {
     pub async fn receiver_report_state(&self, state: Value) -> Result<(), String> {
         self.call("receiverReportState", json!({ "state": state })).await.map(drop)
     }
-    /// Events from the worker, until it exits.
     pub fn subscribe(&self) -> mpsc::UnboundedReceiver<Event> {
         let (tx, rx) = mpsc::unbounded();
         self.shared.subscribers.lock().push(tx);

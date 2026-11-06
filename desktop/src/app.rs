@@ -475,7 +475,6 @@ impl PearTube {
             })
             .detach();
         } else if self.cast.receivers.len() == 1 && self.cast.receivers[0].online {
-            // Single online TV on Wi-Fi: zero-question 1-click cast!
             let rec_id = self.cast.receivers[0].id.clone();
             let key = entry.key.clone();
             cx.spawn(async move |this, cx| {
@@ -649,7 +648,6 @@ impl PearTube {
                 this.play(target, at, window, cx);
             }
             PlayEvent::Cast(entry, pos_ms) => {
-                // Open the Cast chooser popup directly over the playing video without stopping playback.
                 this.open_cast_sheet(Some((entry.key.clone(), entry.title.clone(), *pos_ms)), window, cx);
             }
         }));

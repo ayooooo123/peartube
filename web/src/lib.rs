@@ -1961,7 +1961,6 @@ impl WebSession {
         {
             let byte_len = frames * 2 * 4;
             let mut out = self.take_pooled_buf(byte_len);
-            // Both f32 planes little-endian, L then R, straight into the pooled buffer.
             ffi::pack_audio_f32(&mut out, &self.audio_left, &self.audio_right);
             self.audio_left.clear();
             self.audio_right.clear();

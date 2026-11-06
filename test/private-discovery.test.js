@@ -81,11 +81,6 @@ function spawnGuardDaemon ({ cwd, bootstrap }) {
 }
 
 test('fail-closed <2 guards and non-loopback /24 prefix diversity enforcement', { timeout: 90_000 }, async t => {
-  await assert.rejects(
-    () => createNode({ storage: tmp(), privateRelay: true }),
-    /Embedded privateRelay was removed/,
-    'createNode refuses embedded privateRelay so guards never share a Corestore process'
-  )
   // Non-loopback IPv4 addresses in the same /24 share one diversity bucket and cannot form a 2-hop pair;
   // loopback ports are isolated ONLY when allowLoopback=true for local 127.0.0.1 testnets.
   assert.equal(
@@ -245,7 +240,7 @@ test('standalone bin/private-relay.js forwarders: zero disk writes, fresh-boot 2
   const guardPubSet = new Set(guardDaemons.map(g => g.info.publicKey))
 
   for (const contentTopic of [
-    seeder.tracker.discoveryKey,
+    seeder.channel.discoveryKey,
     hypercoreCrypto.discoveryKey(Buffer.from(entry.magnetUrl.match(/^peartube:\/\/watch\/([0-9a-f]{64})/)[1], 'hex'))
   ]) {
     const leaked = new Set()

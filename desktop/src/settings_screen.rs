@@ -157,7 +157,6 @@ impl PearTube {
                                     ),
                             ))
                         })
-                        // One clear promise about how much of the disk this app will take.
                         .child(card_section(
                             "Storage Contribution",
                             "How much playback cache this Mac keeps to help the network. Applies immediately; the film you are watching always keeps a window around the playhead.",
@@ -192,7 +191,6 @@ impl PearTube {
                                     format!("At most {} GB of cached blocks; the least recently watched are freed first.", form.cache_max_gb)
                                 })),
                         ))
-                        // Progressive disclosure: Advanced Network & Engine
                         .child(
                             v_flex()
                                 .gap_2()

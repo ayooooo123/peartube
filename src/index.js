@@ -24,7 +24,6 @@ export async function createNode (opts) {
 
 async function openNode ({
   storage,
-  channel: channelOpt = null,
   tracker: trackerOpt = null,
   mnemonic: mnemonicOpt = null,
   join: joinOpt = false,
@@ -36,22 +35,16 @@ async function openNode ({
   privateHost = null,
   dhtPort,
   privateRouting = false,
-  privateRelay = false,
   relayThrough = null,
   lan: createLan = null,
-  // Set by the apps' worklet (worklet/worker.js): small request windows for phones' UDP buffers.
   maxActiveSources = null,
+  // Set by the apps' worklet (worklet/worker.js): small request windows for phones' UDP buffers.
   worklet: isWorklet = false,
   onchange = null
 }, undo) {
-  if (privateRelay) {
-    throw new Error('Embedded privateRelay was removed; run standalone peartube-private-relay (bin/private-relay.js) so guard forwarders never open Corestore or tracker state')
-  }
-
   const life = { closing: false }
   const parsedOpts = {
     storage,
-    channel: channelOpt,
     tracker: trackerOpt,
     mnemonic: mnemonicOpt,
     join: joinOpt,
@@ -63,7 +56,6 @@ async function openNode ({
     privateHost,
     dhtPort,
     privateRouting,
-    privateRelay,
     relayThrough,
     lan: createLan,
     maxActiveSources,
@@ -283,6 +275,20 @@ async function openNode ({
     hasLanPeer: ctx.net.hasLanPeer,
     lanEndpoint: () => ctx.net.lan?.port && ctx.net.lan?.host ? { host: ctx.net.lan.host, port: ctx.net.lan.port, publicKey: b4a.toString(ctx.net.swarm.keyPair.publicKey, 'hex') } : null,
     dialLanPeer: ep => { if (ep?.publicKey && ep?.host && ep?.port) ctx.net.lan?.dialDirect?.(ep.publicKey, ep.host, ep.port) },
+    // This node's peer key, hex, as other peers and TV receivers name it.
+    peerKey: b4a.toString(ctx.net.swarm.keyPair.publicKey, 'hex'),
+    // The DHT casting opens its Noise RPC sessions on (the private overlay's own when private routing is on).
+    dht: ctx.net.swarm.dht,
+    // Connects to a peer by key. `lanFirst`: a LAN dial was just started, so give it 1.5 s before also joining through
+    // the DHT, which would otherwise open a second connection to the same peer.
+    joinPeer: (keyHex, { lanFirst = false } = {}) => {
+      if (!str(keyHex, HEX64)) return
+      const key = b4a.from(keyHex, 'hex')
+      if (b4a.equals(key, ctx.net.swarm.keyPair.publicKey)) return
+      const join = () => { try { ctx.net.swarm.joinPeer(key) } catch {} }
+      if (!lanFirst || ctx.net.dht || !ctx.net.lan) return join()
+      setTimeout(() => { if (!ctx.life.closing && !ctx.net.hasLanPeer(key)) join() }, 1500).unref?.()
+    },
     evictBehind: ctx.blobs.evictBehind,
     refreshBlockCount: core => ctx.blobs.syncBlockCounter(core),
     joinSourceSwarm: keyHex => {
@@ -291,7 +297,6 @@ async function openNode ({
       ctx.net.joinOverlayTopic(`source-swarm:${keyHex}`, sk, hypercoreCrypto.discoveryKey(sk))
     },
     channel: ctx.channel.channel,
-    tracker: ctx.channel.channel,
     swarm: ctx.net.swarm,
     peerConnections: () => ctx.net.peerConns,
     onConnection: fn => { ctx.net.connListeners.add(fn); return () => ctx.net.connListeners.delete(fn) },
@@ -301,7 +306,6 @@ async function openNode ({
     publish: ctx.blobs.publish,
     publishChannel: ctx.blobs.publishChannel,
     remove: ctx.channel.remove,
-    removeChannel: ctx.blobs.removeChannel,
     publishSource: ctx.channel.publishSource,
     syncLocalChannel: ctx.blobs.syncLocalChannel,
     rechunkLegacyBlobs: ctx.blobs.rechunkLegacyBlobs,
@@ -318,7 +322,6 @@ async function openNode ({
     openUri: ctx.catalog.openUri,
     warm: ctx.blobs.warm,
     identity: ctx.identity.identity,
-    listWriters: ctx.channel.listWriters,
     grantWriter: ctx.channel.grantWriter,
     revokeWriter: ctx.channel.revokeWriter,
     claimWithMnemonic: ctx.identity.claimWithMnemonic,

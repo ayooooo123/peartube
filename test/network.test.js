@@ -7,9 +7,6 @@ import { mkdtempSync, readdirSync, readFileSync, statSync, mkdirSync, writeFileS
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import createTestnet from 'hyperdht/testnet.js'
-import Autobee from 'autobee'
-import Corestore from 'corestore'
-import Hyperswarm from 'hyperswarm'
 import { createNode } from '../src/index.js'
 import { createAcquirer } from '../src/acquire.js'
 import { createApi } from '../src/http.js'
@@ -87,12 +84,12 @@ test('channel ACL blocks ungranted strangers, stops co-writers deleting peers, a
 
   // Ungranted stranger with the public channel key tries an optimistic write -> ignored by every peer!
   const zero = '0'.repeat(64)
-  await stranger.tracker.append(Buffer.from(JSON.stringify({ type: 'announce', id: 'imdb:tt9999991', title: 'Spam', size: 1, sha256: zero, blobs: zero, blob: { blockOffset: 0, blockLength: 1, byteOffset: 0, byteLength: 1 } })), { optimistic: true })
+  await stranger.channel.append(Buffer.from(JSON.stringify({ type: 'announce', id: 'imdb:tt9999991', title: 'Spam', size: 1, sha256: zero, blobs: zero, blob: { blockOffset: 0, blockLength: 1, byteOffset: 0, byteLength: 1 } })), { optimistic: true })
 
   await b.publish({ id: 'imdb:tt0068646', title: 'Kept' }, Readable.from([randomBytes(1000)]))
   const [entry] = await until(async () => (await a.search('imdb:tt0068646')).length && a.search('imdb:tt0068646'))
   assert.equal((await a.search('imdb:tt9999991')).length, 0, 'ungranted optimistic write rejected')
-  assert.equal(stranger.tracker.writable, false, 'stranger never becomes writable')
+  assert.equal(stranger.channel.writable, false, 'stranger never becomes writable')
 
   // Co-writer `c` (`role: 'writer'`) cannot delete `b`'s entry.
   await c.remove(entry.key)
@@ -139,12 +136,12 @@ test('a source that dies mid-transfer fails its job and does not block the next 
 test('a malformed announce from a peer does not break anyone\'s tracker', async t => {
   const { a, b } = await network(t)
   const hostile = { type: 'announce', id: { toString: null, valueOf: null }, blobs: { toString: null }, sha256: 'x', title: 't', size: 1, blob: {} }
-  await b.tracker.append(Buffer.from(JSON.stringify(hostile)), { optimistic: true })
+  await b.channel.append(Buffer.from(JSON.stringify(hostile)), { optimistic: true })
   await a.publish({ id: 'imdb:tt0000003', title: 'After' }, Readable.from([randomBytes(500)]))
   const [hit] = await until(async () => (await b.search('imdb:tt0000003')).length && b.search('imdb:tt0000003'))
   assert.equal(hit.title, 'After')
-  assert.equal(a.tracker.closed, false)
-  assert.equal(b.tracker.closed, false)
+  assert.equal(a.channel.closed, false)
+  assert.equal(b.channel.closed, false)
 })
 
 test('relays keep publishing and converging after the founder goes offline', async t => {
@@ -206,52 +203,6 @@ test('an acquire finished before first sync survives a restart and is announced'
   assert.equal(hit.sha256, createHash('sha256').update(bytes).digest('hex'))
 })
 
-test('a peer far ahead with a forging apply cannot hand its view to a new relay', async t => {
-  const testnet = await createTestnet(3)
-  const a = await createNode({ storage: tmp(), bootstrap: testnet.bootstrap })
-  const tracker = a.status().tracker
-  await a.publish({ id: 'imdb:tt0000001', title: 'Honest' }, Readable.from([randomBytes(100)]))
-
-  // M's apply forges an entry under A's writer key. M is a granted writer, not the owner, so
-  // makeIsTrusted never trusts its stamps and a new relay replays M's nodes through apply.
-  const zero = '0'.repeat(64)
-  const blob = { blockOffset: 0, blockLength: 1, byteOffset: 0, byteLength: 1 }
-  const forgedKey = `imdb:tt6666666/${a.status().writer}/${zero}:0`
-  const forged = JSON.stringify({ type: 'announce', id: 'imdb:tt6666666', title: 'Forged', size: 1, sha256: zero, blobs: zero, blob })
-  async function forgingApply (nodes, view, host) {
-    for (const node of nodes) {
-      await host.addWriter(node.key, { isIndexer: false })
-      const w = view.write()
-      w.tryPut(Buffer.from(forgedKey), Buffer.from(forged))
-      await w.flush()
-    }
-  }
-  const mStore = new Corestore(tmp())
-  const m = new Autobee(mStore.namespace('tracker'), Buffer.from(tracker, 'hex'), { apply: forgingApply, optimistic: true })
-  await m.ready()
-  await a.grantWriter(m.local.key.toString('hex'), { role: 'writer' })
-  const mSwarm = new Hyperswarm({ bootstrap: testnet.bootstrap })
-  mSwarm.on('connection', conn => m.replicate(conn))
-  mSwarm.join(m.discoveryKey)
-  let c = null
-  t.after(async () => { await c?.close(); await a.close(); await mSwarm.destroy(); await m.close(); await mStore.close(); await testnet.destroy() })
-
-  // Well past Autobee's 32-flush fast-forward distance, each write durable.
-  for (let i = 0; i <= 40; i++) {
-    const before = m.local.length
-    await m.append(Buffer.from(JSON.stringify({ type: 'announce', id: `imdb:tt${5000000 + i}`, title: 'M', size: 1, sha256: zero, blobs: zero, blob })), { optimistic: !m.writable })
-    while (m.local.length <= before) { await new Promise(resolve => setTimeout(resolve, 300)); await m.update() }
-  }
-  assert.ok(await m.view.get(Buffer.from(forgedKey)), 'the forging peer built the forged view')
-
-  c = await createNode({ storage: tmp(), bootstrap: testnet.bootstrap, tracker })
-  const forgedOn = async node => (await node.search('imdb:tt6666666')).length
-  await until(async () => (await c.search('imdb:tt0000001')).length || await forgedOn(c), 120000)
-  assert.equal(await forgedOn(c), 0, 'the new relay adopted a view with a forged entry')
-  await until(async () => (await c.search('imdb:tt5000040')).length, 120000)
-  assert.equal(await forgedOn(c), 0)
-})
-
 test('ten peers with 2-hop private routing sync the tracker and stream exact bytes over stateless guards', async t => {
   const testnet = await createTestnet(4)
   const guards = await Promise.all([
@@ -288,7 +239,7 @@ test('ten peers with 2-hop private routing sync the tracker and stream exact byt
   assert.equal(createHash('sha256').update(full).digest('hex'), expectedSha)
   for (const n of nodes) {
     assert.equal(n.swarm.dht.privateRouting.exposureReport().directDestinationSends, 0)
-    assert.equal(n.swarm.status(n.tracker.discoveryKey), null, 'private routing uses a blinded rotating topic, never tracker.discoveryKey')
+    assert.equal(n.swarm.status(n.channel.discoveryKey), null, 'private routing uses a blinded rotating topic, never tracker.discoveryKey')
   }
 })
 

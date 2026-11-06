@@ -65,10 +65,10 @@ async function forgerScenario (t, { granted, ownerOffline = false }) {
   }
   assert.ok(await m.view.get(Buffer.from(forgedKey)), 'the forging peer built the forged view')
   assert.ok(m.system.flushes > 40, 'M is far ahead')
-  const ownerSystem = a.tracker.views()[0].key.toString('hex')
+  const ownerSystem = a.channel.views()[0].key.toString('hex')
   if (ownerOffline) {
     // M holds A's oplog, so the new relay can still replay the honest history from M alone
-    await until(() => m.system.flushes >= 44 && a.tracker.flushes >= 44)
+    await until(() => m.system.flushes >= 44 && a.channel.flushes >= 44)
     aClosed = true
     await a.close()
   }
@@ -77,7 +77,7 @@ async function forgerScenario (t, { granted, ownerOffline = false }) {
   // A applies M's optimistic nodes too, so A's own stamp runs far ahead and C may legitimately
   // land on A's view; it must never land on M's.
   const landed = []
-  c.tracker.on('move-to', to => landed.push(to.key.toString('hex')))
+  c.channel.on('move-to', to => landed.push(to.key.toString('hex')))
   const forgedOn = async node => (await node.search('imdb:tt6666666')).length
   await until(async () => (await c.search('imdb:tt0000001')).length || await forgedOn(c), 120000)
   assert.equal(await forgedOn(c), 0, 'the new relay adopted a view with a forged entry')
@@ -93,8 +93,8 @@ async function forgerScenario (t, { granted, ownerOffline = false }) {
   assert.notEqual(ownerSystem, forgerSystem)
   for (const key of landed) assert.equal(key, ownerSystem, 'the new relay fast-forwarded onto a view that is not the owner\'s')
   assert.ok(!landed.includes(forgerSystem))
-  if (ownerOffline) assert.equal(c.tracker.stats.fastForwards, 0, 'with the owner offline the only stamp on offer is the forger\'s')
-  t.diagnostic(`fastForwards=${c.tracker.stats.fastForwards} applies=${c.tracker.stats.applies} landed=${landed.map(k => k.slice(0, 6)).join(',') || 'none'} owner=${ownerSystem.slice(0, 6)} forger=${forgerSystem.slice(0, 6)}`)
+  if (ownerOffline) assert.equal(c.channel.stats.fastForwards, 0, 'with the owner offline the only stamp on offer is the forger\'s')
+  t.diagnostic(`fastForwards=${c.channel.stats.fastForwards} applies=${c.channel.stats.applies} landed=${landed.map(k => k.slice(0, 6)).join(',') || 'none'} owner=${ownerSystem.slice(0, 6)} forger=${forgerSystem.slice(0, 6)}`)
 }
 
 test('an ungranted optimistic stranger far ahead with a forging apply cannot hand its view to a new relay', async t => {
@@ -121,13 +121,13 @@ test('a new relay fast-forwards onto the channel owner\'s view instead of replay
   t.after(async () => { await c?.close(); await a.close(); await testnet.destroy() })
   // past the 16-flush fast-forward distance
   for (let i = 0; i < 30; i++) await a.append(announce(`imdb:tt${7000000 + i}`, 'Owner'))
-  assert.ok(a.tracker.flushes >= 30)
+  assert.ok(a.channel.flushes >= 30)
 
   c = await createNode({ storage: tmp(), bootstrap: testnet.bootstrap, tracker })
   await until(async () => (await c.search('imdb:tt7000029')).length, 120000)
   assert.equal((await c.search(null, { limit: 1000 })).length, 30)
-  assert.equal(c.tracker.stats.fastForwards, 1, 'the new relay did not fast-forward onto the owner\'s view')
-  assert.ok(c.tracker.stats.applies < 30, `the new relay replayed ${c.tracker.stats.applies} batches instead of landing`)
+  assert.equal(c.channel.stats.fastForwards, 1, 'the new relay did not fast-forward onto the owner\'s view')
+  assert.ok(c.channel.stats.applies < 30, `the new relay replayed ${c.channel.stats.applies} batches instead of landing`)
 })
 
 test('a relay that landed on the owner\'s view hands the landing on while the owner is offline', async t => {
@@ -142,17 +142,17 @@ test('a relay that landed on the owner\'s view hands the landing on while the ow
 
   b = await createNode({ storage: tmp(), bootstrap: testnet.bootstrap, tracker })
   await until(async () => (await b.search(null, { limit: 1000 })).length === 30, 120000)
-  assert.equal(b.tracker.stats.fastForwards, 1)
-  const ownerSystem = a.tracker.views()[0].key.toString('hex')
+  assert.equal(b.channel.stats.fastForwards, 1)
+  const ownerSystem = a.channel.views()[0].key.toString('hex')
   aClosed = true
   await a.close()
 
   c = await createNode({ storage: tmp(), bootstrap: testnet.bootstrap, tracker })
   const landed = []
-  c.tracker.on('move-to', to => landed.push(to.key.toString('hex')))
+  c.channel.on('move-to', to => landed.push(to.key.toString('hex')))
   await until(async () => (await c.search(null, { limit: 1000 })).length === 30, 120000)
-  t.diagnostic(`fastForwards=${c.tracker.stats.fastForwards} applies=${c.tracker.stats.applies} landed=${landed.map(k => k.slice(0, 6)).join(',') || 'none'} owner=${ownerSystem.slice(0, 6)}`)
-  assert.equal(c.tracker.stats.fastForwards, 1, 'the second relay did not land via the first one')
+  t.diagnostic(`fastForwards=${c.channel.stats.fastForwards} applies=${c.channel.stats.applies} landed=${landed.map(k => k.slice(0, 6)).join(',') || 'none'} owner=${ownerSystem.slice(0, 6)}`)
+  assert.equal(c.channel.stats.fastForwards, 1, 'the second relay did not land via the first one')
   assert.deepEqual(landed, [ownerSystem])
 })
 
@@ -169,8 +169,8 @@ test('a relay keeps the owner\'s landed cores whole and hands the newest stamp o
 
   b = await createNode({ storage: tmp(), bootstrap: testnet.bootstrap, tracker })
   await until(async () => (await b.search(null, { limit: 1000 })).length === 30, 120000)
-  assert.equal(b.tracker.stats.fastForwards, 1)
-  const [sys, view] = a.tracker.views()
+  assert.equal(b.channel.stats.fastForwards, 1)
+  const [sys, view] = a.channel.views()
   const bSys = b.store.get({ key: sys.key })
   const bView = b.store.get({ key: view.key })
   sessions.push(bSys, bView)
@@ -180,8 +180,8 @@ test('a relay keeps the owner\'s landed cores whole and hands the newest stamp o
   // the owner moves on by less than the 16-flush fast-forward distance: B applies, it does not re-land
   for (let i = 30; i < 35; i++) await a.append(announce(`imdb:tt${9000000 + i}`, 'Owner'))
   await until(async () => (await b.search(null, { limit: 1000 })).length === 35, 120000)
-  assert.equal(b.tracker.stats.fastForwards, 1)
-  const [sys2, view2] = a.tracker.views()
+  assert.equal(b.channel.stats.fastForwards, 1)
+  const [sys2, view2] = a.channel.views()
   assert.ok(sys2.length > sys.length && view2.length > view.length)
   await until(() => bSys.contiguousLength >= sys2.length && bView.contiguousLength >= view2.length, 60000)
   aClosed = true
@@ -189,10 +189,10 @@ test('a relay keeps the owner\'s landed cores whole and hands the newest stamp o
 
   c = await createNode({ storage: tmp(), bootstrap: testnet.bootstrap, tracker })
   const landed = []
-  c.tracker.on('move-to', to => landed.push(to.key.toString('hex')))
+  c.channel.on('move-to', to => landed.push(to.key.toString('hex')))
   await until(async () => (await c.search(null, { limit: 1000 })).length === 35, 120000)
-  t.diagnostic(`fastForwards=${c.tracker.stats.fastForwards} applies=${c.tracker.stats.applies} landed=${landed.map(k => k.slice(0, 6)).join(',') || 'none'}`)
-  assert.equal(c.tracker.stats.fastForwards, 1, 'the new relay did not land on the newest stamp via the mirroring relay')
+  t.diagnostic(`fastForwards=${c.channel.stats.fastForwards} applies=${c.channel.stats.applies} landed=${landed.map(k => k.slice(0, 6)).join(',') || 'none'}`)
+  assert.equal(c.channel.stats.fastForwards, 1, 'the new relay did not land on the newest stamp via the mirroring relay')
   assert.deepEqual(landed, [sys2.key.toString('hex')])
-  assert.ok(c.tracker.stats.applies < 10, `replayed ${c.tracker.stats.applies} batches`)
+  assert.ok(c.channel.stats.applies < 10, `replayed ${c.channel.stats.applies} batches`)
 })

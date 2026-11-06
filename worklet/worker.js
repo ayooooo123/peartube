@@ -168,7 +168,6 @@ function noteFor (seen) {
   return lanError ? `failed on ${lanHost}: ${lanError}` : `on ${lanHost}`
 }
 
-// Every interface's own IPv4 addresses, as "wlan0 10.0.0.5, rmnet0 100.64.0.2".
 function ipv4s (interfaces) {
   return Object.entries(interfaces)
     .flatMap(([name, entries]) => entries.filter(e => (e.family === 'IPv4' || e.family === 4) && !e.internal).map(e => `${name} ${e.address}`))

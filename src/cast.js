@@ -842,7 +842,7 @@ export async function createReceiver ({
       deviceId: identity.deviceId,
       name: identity.name,
       publicKey,
-      swarmKey: pNode ? b4a.toString(pNode.swarm.keyPair.publicKey, 'hex') : '',
+      swarmKey: pNode ? pNode.peerKey : '',
       host: currentHost || null,
       port: actualPort,
       capabilities: capabilities(),
@@ -1001,21 +1001,7 @@ export async function createReceiver ({
           }
           if (targetBlobs) lastLoadedBlobs = targetBlobs
           if (!netCfg.privateRouting && cmd.senderLan) peerNode.dialLanPeer?.(cmd.senderLan)
-          if (HEX64.test(String(cmd.senderPeerKey || '').toLowerCase())) {
-            const senderKeyBuf = b4a.from(String(cmd.senderPeerKey).toLowerCase(), 'hex')
-            if (!b4a.equals(senderKeyBuf, peerNode.swarm.keyPair.publicKey)) {
-              if (!netCfg.privateRouting && peerNode.hasLan?.()) {
-                const targetNode = peerNode
-                setTimeout(() => {
-                  if (!targetNode.closing && !targetNode.hasLanPeer?.(senderKeyBuf)) {
-                    try { targetNode.swarm.joinPeer(senderKeyBuf) } catch {}
-                  }
-                }, 1500).unref?.()
-              } else {
-                try { peerNode.swarm.joinPeer(senderKeyBuf) } catch {}
-              }
-            }
-          }
+          peerNode.joinPeer(String(cmd.senderPeerKey || '').toLowerCase(), { lanFirst: true })
           const opened = await peerNode.openUri(magnetUrl, { joinSource: netCfg.privateRouting })
           localP2PUrl = opened?.entry?.streamUrl || null
           if (parsedWatch?.action === 'watch') {
@@ -1078,7 +1064,7 @@ export async function createReceiver ({
       streamUrl,
       httpFallbackUrl: effectiveHttpUrl,
       localP2PUrl,
-      peerSwarmKey: peerNode ? b4a.toString(peerNode.swarm.keyPair.publicKey, 'hex') : '',
+      peerSwarmKey: peerNode ? peerNode.peerKey : '',
       peerLan: !netCfg.privateRouting ? (peerNode?.lanEndpoint?.() || null) : null
     }
   }
@@ -1258,7 +1244,7 @@ export async function createReceiver ({
           deviceId: identity.deviceId,
           name: identity.name,
           publicKey,
-          swarmKey: node ? b4a.toString(node.swarm.keyPair.publicKey, 'hex') : '',
+          swarmKey: node ? node.peerKey : '',
           port: actualPort,
           token: identity.pairToken,
           capabilities: capabilities()
@@ -1282,8 +1268,8 @@ export async function createReceiver ({
   actualPort = await listenHttp(httpSrv, port, bindHost, anyPort)
 
   let noiseServer = null
-  if (node?.swarm?.dht && keyPair) {
-    noiseServer = node.swarm.dht.createServer(conn => {
+  if (node?.dht && keyPair) {
+    noiseServer = node.dht.createServer(conn => {
       activeNoiseConns.add(conn)
       conn.on('error', () => {})
       conn.once('close', () => {
@@ -1859,8 +1845,8 @@ export function createCastController ({
 
     if (targetPk) {
       const node = getNode() || (ensureNode ? await ensureNode() : null)
-      if (!node?.swarm?.dht) throw new Error('Start PearTube P2P node before pairing over Noise public key')
-      const rpc = await connectNoiseRpc(node.swarm.dht, targetPk, { relayThrough: node.swarm.relayThrough })
+      if (!node?.dht) throw new Error('Start PearTube P2P node before pairing over Noise public key')
+      const rpc = await connectNoiseRpc(node.dht, targetPk, { relayThrough: node.swarm.relayThrough })
       try {
         const res = await rpc.call('pair', { code: cleanCode, clientName: 'PearTube' })
         const recId = res.deviceId || targetPk
@@ -1993,7 +1979,7 @@ export function createCastController ({
       entry: { key: item.key, id: item.id, title: item.title, size: item.size, sha256: item.sha256 },
       httpStreamUrl,
       magnetUrl: item.magnetUrl || formatWatchUri(raw, item.source || '', item.sourceKind || ''),
-      senderPeerKey: b4a.toString(node.swarm.keyPair.publicKey, 'hex'),
+      senderPeerKey: node.peerKey,
       senderPrivateRouting: Boolean(node.privateRouting),
       senderLan: !node.privateRouting ? (node.lanEndpoint?.() || null) : null,
       network: {
@@ -2007,7 +1993,6 @@ export function createCastController ({
       preferMode,
       startPositionMs: Math.max(0, Number(startPositionMs) || 0)
     }
-    // 1. Hosted Smart TV Web Receiver connected directly to our hub.
     if (webReceivers.has(receiverId)) {
       const rec = webReceivers.get(receiverId)
       if (!httpStreamUrl) throw new Error('Smart TV Web Receiver needs a LAN IPv4 address for HTTP streaming')
@@ -2035,7 +2020,6 @@ export function createCastController ({
 
     closeActiveTransport()
 
-    // 2. Fast LAN HTTP + SSE baseline when receiver is reachable on the local network.
     if (targetHost && targetPort > 0) {
       const localLoad = (!httpStreamUrl && targetHost === '127.0.0.1')
         ? { ...loadPayload, httpStreamUrl: blobSrv.getLink(b4a.from(raw.blobs, 'hex'), { host: '127.0.0.1', blob: raw.blob, type: guessMediaMime(raw) }) }
@@ -2043,27 +2027,11 @@ export function createCastController ({
       try {
         const baseUrl = `http://${targetHost}:${targetPort}`
         const info = await httpJson(`${baseUrl}/cast/v1/info`, { timeoutMs: 2500 }).catch(() => null)
-        if (HEX64.test(String(info?.swarmKey || ''))) {
-          const sk = b4a.from(info.swarmKey, 'hex')
-          if (!b4a.equals(sk, node.swarm.keyPair.publicKey)) try { node.swarm.joinPeer(sk) } catch {}
-        }
+        node.joinPeer(String(info?.swarmKey || ''))
         const headers = token ? { authorization: `Bearer ${token}` } : {}
         const res = await httpJson(`${baseUrl}/cast/v1/command`, { method: 'POST', headers, body: localLoad, timeoutMs: 12_000 })
         if (!node.privateRouting && res.state?.peerLan) node.dialLanPeer?.(res.state.peerLan)
-        if (HEX64.test(String(res.state?.peerSwarmKey || ''))) {
-          const psk = b4a.from(res.state.peerSwarmKey, 'hex')
-          if (!b4a.equals(psk, node.swarm.keyPair.publicKey)) {
-            if (!node.privateRouting && node.hasLan?.() && targetHost !== '127.0.0.1') {
-              setTimeout(() => {
-                if (!node.closing && !node.hasLanPeer?.(psk)) {
-                  try { node.swarm.joinPeer(psk) } catch {}
-                }
-              }, 1500).unref?.()
-            } else {
-              try { node.swarm.joinPeer(psk) } catch {}
-            }
-          }
-        }
+        node.joinPeer(String(res.state?.peerSwarmKey || ''), { lanFirst: targetHost !== '127.0.0.1' })
         const sessionRef = { receiverId, receiverName, transport: 'lan', baseUrl, token, publicKey: targetPk, state: res.state || idleCastState(), sseReq: null, noiseRpc: null }
         active = sessionRef
         subscribeHttpSse(baseUrl, token, sessionRef)
@@ -2074,9 +2042,8 @@ export function createCastController ({
       }
     }
 
-    // 3. Cross-subnet / remote P2P Noise stream over HyperDHT using paired publicKey.
     if (targetPk) {
-      const rpc = await connectNoiseRpc(node.swarm.dht, targetPk, {
+      const rpc = await connectNoiseRpc(node.dht, targetPk, {
         relayThrough: node.swarm.relayThrough,
         onState: nextState => {
           if (active?.noiseRpc === rpc) {
@@ -2091,10 +2058,7 @@ export function createCastController ({
       try {
         await rpc.call('subscribe', { token })
         const res = await rpc.call('cmd', { token, ...loadPayload }, 20_000)
-        if (HEX64.test(String(res.state?.peerSwarmKey || ''))) {
-          const psk = b4a.from(res.state.peerSwarmKey, 'hex')
-          if (!b4a.equals(psk, node.swarm.keyPair.publicKey)) try { node.swarm.joinPeer(psk) } catch {}
-        }
+        node.joinPeer(String(res.state?.peerSwarmKey || ''))
         active = { receiverId, receiverName, transport: 'p2p', baseUrl: null, token, publicKey: targetPk, state: res.state || idleCastState(), sseReq: null, noiseRpc: rpc }
         return status()
       } catch (err) {
@@ -2128,8 +2092,8 @@ export function createCastController ({
     }
     if (targetPk) {
       const node = getNode() || (ensureNode ? await ensureNode() : null)
-      if (!node?.swarm?.dht) throw new Error('Start PearTube P2P node before attaching over Noise public key')
-      const rpc = await connectNoiseRpc(node.swarm.dht, targetPk, {
+      if (!node?.dht) throw new Error('Start PearTube P2P node before attaching over Noise public key')
+      const rpc = await connectNoiseRpc(node.dht, targetPk, {
         relayThrough: node.swarm.relayThrough,
         onState: nextState => { if (active?.noiseRpc === rpc) { active.state = nextState; emitChange() } },
         onClose: () => { if (active?.noiseRpc === rpc) emitChange() }

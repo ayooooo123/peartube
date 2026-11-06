@@ -622,7 +622,6 @@ export async function createBlobs (ctx) {
         if (freed > 0) {
           evicted += freed
           total = Math.max(0, total - freed)
-          // Stop announcing content this node no longer holds.
           if (!slotSet.has(hex)) ctx.net.leaveContentSwarm(hex)
         }
       }
@@ -826,10 +825,6 @@ export async function createBlobs (ctx) {
       streamUrl: streamUrl(op),
       magnetUrl: formatWatchUri(op)
     }
-  }
-
-  async function removeChannel (key) {
-    return ctx.channel.remove(key)
   }
 
   // One-shot zero-copy import of any pre-unification single-writer Hyperbee entries into the unified Channel.
@@ -1105,7 +1100,6 @@ export async function createBlobs (ctx) {
     put,
     publish,
     publishChannel,
-    removeChannel,
     syncLocalChannel,
     rechunkLegacyBlobs,
     setPlayerActive,

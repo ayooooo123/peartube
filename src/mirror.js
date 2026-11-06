@@ -12,6 +12,7 @@ import { createHash } from 'node:crypto'
 import b4a from 'b4a'
 import { ID, MAX_TITLE, MEDIA_FILE, parseUri } from './protocol.js'
 import { createHiverelaySeeder } from './hiverelay.js'
+import { createTrafficGate } from './traffic.js'
 import { send } from './art.js'
 
 async function fetchJson (url, headers = {}) {
@@ -149,7 +150,6 @@ export async function createMirrorHost ({
     }
   }
 
-  // 1. Built-in plugin: durable HTTP/HTTPS debrid acquirer (`jobs.json`).
   register({
     name: 'http-acquire',
     description: 'Durable HTTP/HTTPS stream acquirer backed by jobs.json',
@@ -168,7 +168,6 @@ export async function createMirrorHost ({
     }
   })
 
-  // 2. Built-in plugin: zero-copy backfill of existing saved tracker blobs into the single-writer Hyperbee channel.
   register({
     name: 'channel-backfill',
     description: 'Backfills previously saved local tracker blobs into this relay\'s single-writer channel with zero byte duplication',
@@ -177,7 +176,6 @@ export async function createMirrorHost ({
     }
   })
 
-  // 2b. Built-in plugin: SHA-256-verified migration of legacy variable-block blobs into uniform 512 KiB slots.
   let rechunkRunning = false
   let rechunkProgress = { running: false, total: 0, migrated: 0, deduped: 0, remaining: 0, migratedBytes: 0, currentId: null, currentTitle: null }
   register({
@@ -208,7 +206,6 @@ export async function createMirrorHost ({
     }
   })
 
-  // 3. Built-in plugin: local directory Drop/Watch folder mirror (e.g. /data/import on Unraid).
   let scanningWatchDir = false
   async function scanFolder (dir, ctx) {
     if (!dir || !existsSync(dir)) return { scanned: 0, ingested: 0, items: [] }
@@ -260,7 +257,6 @@ export async function createMirrorHost ({
     info: () => ({ watching: Boolean(watchDir), trackedFiles: Object.keys(watchLedger).length })
   })
 
-  // 4. Built-in plugin: JSON manifest & remote PearTube relay `/v1/entries` mirror.
   const configuredFeeds = [...feeds]
   async function mirrorFeedItems (items, headers, ctx) {
     let enqueued = 0
@@ -311,7 +307,6 @@ export async function createMirrorHost ({
     info: () => ({ feeds: configuredFeeds.length })
   })
 
-  // 5. Built-in plugin: greedy P2P Hyperblobs block replicator — sucks every announced peer slice onto disk up to the free-space floor without forging duplicate tracker entries.
   let allowReplicateKeys = null
   let replicateEnabled = false
   function setReplicate (value) {
@@ -410,7 +405,7 @@ export async function createMirrorHost ({
     : Promise.resolve(0)
 
   // Backfill stands down while any connected relay reports it is serving viewers (`peartube/bulk-busy`).
-  const peersBusy = () => hiverelayPlugin.peersBusy() === true
+  const peersBusy = () => traffic.peersBusy()
   async function waitWhilePeersBusy () {
     while (!closed && peersBusy()) await new Promise(resolve => setTimeout(resolve, 500))
   }
@@ -714,19 +709,19 @@ export async function createMirrorHost ({
     })
   })
 
-  // 6. Built-in plugin: supplemental HiveRelay seeder bridge (operator HTTP `/seed-core` + zero-key P2P `hiverelay-seed` DHT).
   const hrOpts = typeof hiverelay === 'boolean'
     ? { discover: hiverelay }
     : (typeof hiverelay === 'string' || Array.isArray(hiverelay))
         ? { relays: hiverelay }
         : (hiverelay && typeof hiverelay === 'object' ? hiverelay : {})
+  const traffic = createTrafficGate({ node, uploadMbps: hrOpts.uploadMbps })
   const hiverelayPlugin = register(createHiverelaySeeder({
     node,
     ...hrOpts,
+    traffic,
     onchange
   }))
 
-  // Load any external user plugins placed in `/data/plugins/*.mjs` or `*.js`.
   if (pluginsDir && existsSync(pluginsDir)) {
     for (const file of readdirSync(pluginsDir).sort()) {
       if (!file.endsWith('.mjs') && !file.endsWith('.js')) continue
@@ -742,7 +737,6 @@ export async function createMirrorHost ({
 
   let timer = null
   onstarting?.({ close })
-  // Backfill any previously saved tracker entries into this relay's single-writer channel right on boot!
   if (mirrorChannel) {
     await run('channel-backfill').catch(() => {})
   }
@@ -832,6 +826,7 @@ export async function createMirrorHost ({
     closed = true
     clearInterval(timer)
     for (const p of plugins.values()) await p.stop?.()
+    traffic.stop()
   }
 
   return { register, run, list, configure, close }

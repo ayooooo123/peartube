@@ -50,7 +50,6 @@ let ABI = {
   limits: { maxHiddenGops: 12, maxGopPkts: 320 }
 }
 
-// Zero-GC recycled buffer pools
 let streamCrop = null
 let streamCropCandidate = null
 let streamCropSame = 0
@@ -213,7 +212,6 @@ function readAtSync (offset, dstPtr, len) {
       if (xhr.status !== 200 && xhr.status !== 206) continue
       const src = new Uint8Array(xhr.response || new ArrayBuffer(0))
       if (src.byteLength === 0) continue
-      // Only a whole block belongs in the cache; a short read is served directly.
       const wholeBlock = src.byteLength >= Math.min(STREAM_BLOCK, streamLen - fetchStart)
       if (wholeBlock) putBlock(bIdx, src)
       const offInSrc = offset - fetchStart

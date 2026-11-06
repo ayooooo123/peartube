@@ -568,7 +568,6 @@ function say (id, text, bad) {
   m.textContent = text || ''
   m.classList.toggle('err', Boolean(bad))
 }
-// Runs an action from a button: disables it meanwhile and reports failures.
 async function act (btn, fn, msgId) {
   if (btn) btn.disabled = true
   try { return await fn() } catch (err) {
@@ -662,7 +661,6 @@ async function refresh () {
   render()
   if (tab === 'settings') refreshSettingsView()
 }
-// Redraws the Settings tab when what it shows changed, unless the user is in one of its fields.
 let settingsShown = ''
 function refreshSettingsView () {
   const shown = JSON.stringify([S.settings, S.status.privateGuard ? S.status.privateGuard.port : 0])
@@ -1217,7 +1215,6 @@ async function keepCopy (key, on) {
   const next = (only.length ? only : followed.concat(key)).filter(k => k !== key)
   return saveSettings(next.length ? { replicateSources: [...new Set(next)] } : { replicate: false, replicateSources: [] })
 }
-// A setting that still follows its env var says so.
 function envNote (key) {
   const s = setting(key)
   return s && s.source === 'env' ? 'From ' + s.env : ''
@@ -1675,7 +1672,6 @@ events.onmessage = ev => {
   if (event === 'cast') loadCast()
   else soon()
 }
-// Progress polls only while something is moving.
 setInterval(() => {
   const busy = S.jobs.some(j => j.status === 'running' || j.status === 'queued' || j.status === 'announcing') || plugin('p2p-replicate').replicating || plugin('blob-rechunk').running
   if (busy || document.visibilityState === 'visible') refresh()

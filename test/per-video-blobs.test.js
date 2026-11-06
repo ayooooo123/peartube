@@ -281,7 +281,7 @@ test('1-Hypercore-per-video ingests, lazy wakeup, shared-ref purge guard, and le
   const aliasStreamed = Buffer.from(await (await fetch(aliasPub.streamUrl)).arrayBuffer())
   assert.equal(sha256(aliasStreamed), sha256(v1Bytes), 'alias entry still streams intact bytes after first reference removed')
 
-  await pub.removeChannel(aliasPub.key)
+  await pub.remove(aliasPub.key)
   assert.equal(pub.status().blobBytes, v2Bytes.byteLength, 'final reference removal purges dedicated per-video core from blobBytes')
   assert.equal(pub.seedableCores().some(c => c.key === p1.blobs), false, 'purged per-video core removed from seedableCores()')
 

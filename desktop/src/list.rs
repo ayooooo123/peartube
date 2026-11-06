@@ -83,7 +83,6 @@ impl PearTube {
         let raw_input = self.search.read(cx).value().to_string();
         let query = raw_input.trim().to_lowercase();
 
-        // Filter entries
         let filtered: Vec<&Entry> = self
             .entries
             .iter()
@@ -104,7 +103,6 @@ impl PearTube {
             })
             .collect();
 
-        // Build clean catalog items (Movies vs grouped Series)
         let mut movies: Vec<&Entry> = Vec::new();
         let mut series_map: std::collections::BTreeMap<String, (String, Option<String>, Vec<&Entry>)> = std::collections::BTreeMap::new();
         for e in filtered {
@@ -176,7 +174,6 @@ impl PearTube {
             .size_full()
             .relative()
             .child(
-                // Minimalist 56pt Top Bar
                 div().border_b_1().border_color(rgb(LINE)).child(
                     column()
                         .py_3()
@@ -238,13 +235,11 @@ impl PearTube {
                                         ),
                                 ),
                         )
-                        // Single Unified Smart Omnibar
                         .child(
                             v_flex()
                                 .gap_2()
                                 .child(Input::new(&self.search).prefix(Icon::new(Lucide::Search).text_color(rgb(DIM))).cleanable(true)),
                         )
-                        // Quiet Filter Pills
                         .child({
                             let mut pills = vec![
                                 self.filter_pill("flt-all", "All", LibraryFilter::All, cx),
@@ -306,9 +301,7 @@ impl PearTube {
                         }),
                 ),
             )
-            // Cheeky "Under the Hood" Drawer when the wordmark/pulse is clicked
             .when(self.hood_open, |this| this.child(self.render_under_the_hood(cx)))
-            // Scrollable Cinema Catalog
             .child(
                 div().id("entries").flex_1().min_h_0().overflow_y_scrollbar().child(
                     column()
@@ -726,7 +719,6 @@ impl PearTube {
             .into_iter()
             .collect();
 
-        // Pick best episode to Resume or Play first
         let resume_ep = episodes
             .iter()
             .filter_map(|e| self.watch_history.get(&e.id).map(|w| (*e, w.updated_at, self.resume_position_for(e))))
@@ -1059,7 +1051,6 @@ impl PearTube {
                                     ),
                             ),
                     )
-                    // Subscribed & Discovered Channels
                     .when(!self.settings.sources.is_empty() || !discovered.is_empty(), |this| {
                         this.child(
                             v_flex()
@@ -1104,8 +1095,6 @@ impl PearTube {
                                 }),
                         )
                     })
-                    // Share My Channel Card with QR
-                    // Share My Channel, Device Key, Recovery Phrase & Paid Subscriber Pass
                     .when(!channel.is_empty(), |this| {
                         let ch_uri = format!("peartube://channel/{channel}");
                         let copy_uri = ch_uri.clone();
@@ -1226,7 +1215,6 @@ impl PearTube {
                                 }),
                         )
                     })
-                    // Collapsed Engine Room toggle for raw telemetry
                     .child(
                         v_flex()
                             .gap_2()

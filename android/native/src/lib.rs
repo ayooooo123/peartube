@@ -28,7 +28,6 @@ static ALLOCATOR: mimalloc::MiMalloc = mimalloc::MiMalloc;
 /// Every container and decoder the player can use, built once.
 static CODECS: LazyLock<Arc<RuntimeContext>> = LazyLock::new(|| Arc::new(codecs::context()));
 
-/// The backend every playback uses.
 static BACKEND: LazyLock<Arc<AndroidBackend>> = LazyLock::new(AndroidBackend::new);
 
 // ---- Playback ----
@@ -37,34 +36,6 @@ fn player<'a>(handle: jlong) -> &'a Player {
     // SAFETY: handles come from `open` and stay valid until `close`, which the
     // Kotlin side calls once, after its last use.
     unsafe { &*(handle as *const Player) }
-}
-
-/// Opens `url` and starts playing. `soundfont`: the user's SF2 bank for MIDI, or null.
-#[unsafe(no_mangle)]
-pub extern "system" fn Java_com_peartube_app_player_NativePlayer_open(
-    mut env: JNIEnv, _class: JClass, url: JString, soundfont: JString,
-) -> jlong {
-    let url: String = match env.get_string(&url) {
-        Ok(url) => url.into(),
-        Err(err) => {
-            let _ = env.throw_new("java/lang/IllegalArgumentException", err.to_string());
-            return 0;
-        }
-    };
-    let soundfont = if soundfont.is_null() {
-        None
-    } else {
-        env.get_string(&soundfont).ok().map(|path| PathBuf::from(String::from(path)))
-    };
-    let options = PlayerOptions {
-        soundfont,
-        steep_dsd_filter: true,
-        ..PlayerOptions::default()
-    };
-    let backend = BACKEND.clone();
-    // The app polls state(); events would only wake it sooner.
-    let player = Player::open(&url, backend, CODECS.clone(), options, |_| {});
-    Box::into_raw(Box::new(player)) as jlong
 }
 
 /// Opens `url` with explicit audio routing (`"auto"`, `"passthrough"`, `"bitperfect"`, `"stereo"`),

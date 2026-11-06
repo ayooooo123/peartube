@@ -203,7 +203,7 @@ async function run (options) {
       Date.parse(event.startedAt) <= Date.parse(result.completedAt) && Date.parse(event.finishedAt) >= Date.parse(result.requestedAt)
     ))) throw new Error('No relay actually restarted during an active reader transfer')
     observer = new HyperDHT({ host: '127.0.0.1', bootstrap: testnet.bootstrap, port: 0 })
-    for (const contentTopic of [seeder.tracker.discoveryKey]) {
+    for (const contentTopic of [seeder.channel.discoveryKey]) {
       const leaked = new Set()
       for await (const reply of observer.lookup(contentTopic)) {
         for (const peer of reply.peers) leaked.add(Buffer.from(peer.publicKey).toString('hex'))

@@ -12,16 +12,15 @@ import HyperDHT from 'hyperdht'
 import { createBlobRangeServer } from './blob-server.js'
 import ByteStream from 'hypercore-byte-stream'
 import b4a from 'b4a'
-import { createNode, formatWatchUri, parseUri } from './index.js'
+import { createNode } from './index.js'
+import { BLOB_BLOCK_SIZE, HEX64, cleanName, formatReceiverUri, formatWatchUri, parseUri } from './protocol.js'
 import { createLan, interfaceAdapter, selfAddressAdapter } from './lan.js'
 import { receiverPage } from './cast-ui.js'
 import { qrSvg } from './qr.js'
 
-const HEX64 = /^[0-9a-f]{64}$/
 const CODE_ALPHABET = '23456789ABCDEFGHJKLMNPQRSTUVWXYZ'
 const CAST_SERVICE_TYPE = 'peartube-cast'
 const MAX_JSON_BODY = 64 * 1024
-const BLOB_BLOCK_BYTES = 512 * 1024
 const CORS = {
   'access-control-allow-origin': '*',
   'access-control-allow-methods': 'GET, HEAD, POST, DELETE, OPTIONS',
@@ -123,44 +122,7 @@ function randomHex (bytes = 16) {
   return b4a.toString(randomBytes(bytes), 'hex')
 }
 
-function cleanName (v, fallback = 'PearTube TV') {
-  return String(v || fallback).trim().slice(0, 80).toWellFormed() || fallback
-}
-
 // Safari/WebKit TV browsers demand video/* on 206 Range slices while native OxideAV/mpv probes raw bytes.
-
-// Mints a pairing leash so phones and desktops can mount a receiver over LAN HTTP or Noise P2P.
-export function formatReceiverUri ({ publicKey = '', deviceId = '', name = '', token = '', host = '', port = 0, p2p = false } = {}) {
-  const target = (publicKey || deviceId || (host && port ? `${host}:${port}` : '')).toLowerCase()
-  const q = []
-  if (name) q.push(`name=${encodeURIComponent(cleanName(name))}`)
-  if (token) q.push(`token=${encodeURIComponent(token)}`)
-  if (host) q.push(`host=${encodeURIComponent(host)}`)
-  if (port > 0) q.push(`port=${Number(port)}`)
-  q.push(`p2p=${p2p ? 1 : 0}`)
-  return `peartube://receiver/${target}${q.length ? `?${q.join('&')}` : ''}`
-}
-
-export function parseReceiverUri (input) {
-  const m = String(input || '').trim().match(/^peartube:(?:\/\/)?(?:receiver|cast)\/([^?#]+)(?:\?([^#]*))?/i)
-  if (!m) throw new Error('Expected a peartube://receiver/... URI')
-  const clean = m[1].trim().toLowerCase()
-  const q = {}
-  for (const part of String(m[2] || '').split('&')) {
-    if (!part) continue
-    const eq = part.indexOf('=')
-    const k = eq === -1 ? part : part.slice(0, eq)
-    const v = eq === -1 ? '' : part.slice(eq + 1)
-    try { q[decodeURIComponent(k)] = decodeURIComponent(v.replace(/\+/g, ' ')) } catch { q[k] = v }
-  }
-  const publicKey = HEX64.test(clean) ? clean : (HEX64.test(String(q.pk || '').toLowerCase()) ? String(q.pk).toLowerCase() : '')
-  const hp = !publicKey && clean.includes(':') ? clean : ''
-  const host = q.host || (hp ? hp.slice(0, hp.lastIndexOf(':')) : '')
-  const port = Number(q.port || (hp ? hp.slice(hp.lastIndexOf(':') + 1) : 0)) || 0
-  const deviceId = !publicKey && !hp ? clean.replace(/[^0-9a-z_-]/g, '').slice(0, 64) : String(q.id || '').slice(0, 64)
-  if (!publicKey && !deviceId && !(host && port > 0)) throw new Error('Receiver URI needs a 64-hex key, device ID, or host:port')
-  return { action: 'receiver', publicKey, deviceId, host, port, token: String(q.token || ''), name: cleanName(q.name || q.alias || '', 'Paired TV'), p2p: q.p2p === '1' || Boolean(publicKey) }
-}
 function guessMediaMime (entry) {
   const s = `${entry?.title || ''} ${entry?.id || ''}`.toLowerCase()
   if (s.includes('.webm')) return 'video/webm'
@@ -280,7 +242,7 @@ function adapterForHost (host, customAdapter) {
 }
 
 function estimateBlobBlock (blob, byteStart) {
-  const avgBs = Math.max(4096, Math.round((blob.byteLength || BLOB_BLOCK_BYTES) / Math.max(1, blob.blockLength)))
+  const avgBs = Math.max(4096, Math.round((blob.byteLength || BLOB_BLOCK_SIZE) / Math.max(1, blob.blockLength)))
   return blob.blockOffset + Math.min(blob.blockLength - 1, Math.floor(Math.max(0, byteStart) / avgBs))
 }
 
@@ -1838,7 +1800,8 @@ export function createCastController ({
 
   async function pairReceiver ({ id = '', code = '', uri = '', host = '', port = 0, publicKey = '', name = '' } = {}) {
     if (uri) {
-      const parsed = parseReceiverUri(uri)
+      const parsed = parseUri(uri)
+      if (parsed.action !== 'receiver') throw new Error('Expected a peartube://receiver/... URI')
       const recId = parsed.deviceId || parsed.publicKey || `${parsed.host}:${parsed.port}`
       const record = {
         id: recId,

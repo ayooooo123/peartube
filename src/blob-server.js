@@ -8,6 +8,7 @@ import HypercoreId from 'hypercore-id-encoding'
 import hypercoreCrypto from 'hypercore-crypto'
 import ByteStream from 'hypercore-byte-stream'
 import b4a from 'b4a'
+import { BLOB_BLOCK_SIZE, isUniform512 } from './protocol.js'
 
 const noop = () => {}
 
@@ -281,15 +282,14 @@ export function createBlobRangeServer (store, opts = {}) {
     }
 
     const needPrefetch = windowBytes > 0 && !core.writable && resolved.active !== false && info.blob.blockLength > 0
-    const uniform512 = info.blob.byteOffset === 0 && info.blob.blockLength > 0 &&
-      (info.blob.blockLength - 1) * 524288 < total && total <= info.blob.blockLength * 524288
-    const bs = uniform512 ? 524288 : (info.blob.blockLength > 0 ? Math.max(4096, Math.ceil(total / info.blob.blockLength)) : 524288)
+    const uniform512 = info.blob.byteOffset === 0 && info.blob.blockLength > 0 && isUniform512(info.blob)
+    const bs = uniform512 ? BLOB_BLOCK_SIZE : (info.blob.blockLength > 0 ? Math.max(4096, Math.ceil(total / info.blob.blockLength)) : BLOB_BLOCK_SIZE)
     let startBlock = info.blob.blockOffset
     let endBlock = info.blob.blockOffset + info.blob.blockLength
     if (needPrefetch) {
       if (uniform512) {
-        startBlock = info.blob.blockOffset + Math.floor(start / 524288)
-        endBlock = Math.min(endBlock, info.blob.blockOffset + Math.ceil((start + length) / 524288))
+        startBlock = info.blob.blockOffset + Math.floor(start / BLOB_BLOCK_SIZE)
+        endBlock = Math.min(endBlock, info.blob.blockOffset + Math.ceil((start + length) / BLOB_BLOCK_SIZE))
       } else {
         if (start > 0) {
           const s0 = await core.seek(info.blob.byteOffset + start).catch(() => null)

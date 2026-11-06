@@ -13,6 +13,7 @@ import 'bare-process/global'
 import b4a from 'b4a'
 import os from 'bare-os'
 import { createNode } from '../src/index.js'
+import { parseUri } from '../src/protocol.js'
 import { createApi } from '../src/http.js'
 // Artwork lookups without `ubit`: the app's own loopback API serves /v1/poster and /v1/backdrop.
 import { posterUrl, backdropUrl } from '../src/art.js'
@@ -293,7 +294,7 @@ const methods = {
     return { ...res, sources: n.listSources(), discovered: await n.discoveredSources() }
   },
   openUri: async ({ uri, storage = null }) => {
-    if (typeof uri === 'string' && /^peartube:(?:\/\/)?(?:receiver|cast)\//i.test(uri.trim())) {
+    if (parseUri(uri).action === 'receiver') {
       const c = await ensureCast(storage)
       const receiver = await c.pairReceiver({ uri: uri.trim() })
       return { action: 'receiver', receiver }

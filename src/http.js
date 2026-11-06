@@ -6,6 +6,7 @@ import b4a from 'b4a'
 import { page } from './ui.js'
 import { receiverPage } from './cast-ui.js'
 import { videoSize, resolutionLabel } from './resolution.js'
+import { parseUri } from './protocol.js'
 
 const MAX_BODY = 64 * 1024
 // Loopback, RFC 1918, CGNAT/Tailscale (100.64/10), link-local, and IPv6 ULA/link-local, plain or IPv4-mapped.
@@ -283,7 +284,7 @@ export function createApi (state) {
     }
     if ((req.method === 'POST' && path === '/v1/open') || (req.method === 'GET' && path === '/v1/resolve')) {
       const uri = req.method === 'GET' ? url.searchParams.get('uri') : (await body(req)).uri
-      if (uri && /^peartube:(?:\/\/)?(?:receiver|cast)\//i.test(uri) && state.cast) {
+      if (state.cast && parseUri(uri).action === 'receiver') {
         return { action: 'receiver', receiver: await state.cast.pairReceiver({ uri }) }
       }
       const n = requireNode(node)

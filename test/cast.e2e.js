@@ -22,7 +22,8 @@ import { Readable } from 'node:stream'
 import createTestnet from 'hyperdht/testnet.js'
 import { createNode } from '../src/index.js'
 import { createPrivateGuard } from '../src/private-overlay.js'
-import { createCastController, createReceiver, formatReceiverUri, parseReceiverUri } from '../src/cast.js'
+import { createCastController, createReceiver } from '../src/cast.js'
+import { formatReceiverUri, parseUri } from '../src/protocol.js'
 import { mdnsBus } from './mdns.js'
 
 const sha256 = bytes => createHash('sha256').update(bytes).digest('hex')
@@ -269,7 +270,7 @@ test('cross-subnet Noise P2P keypair pairing casts and controls a remote receive
   const [entry] = await sender.search('imdb:tt0088763')
 
   // Pair strictly via publicKey + token URI (zero host/port metadata!).
-  const { token: pairToken } = parseReceiverUri(tv.info().pairingUri)
+  const { token: pairToken } = parseUri(tv.info().pairingUri)
   const remoteUri = formatReceiverUri({
     publicKey: tv.publicKey,
     deviceId: tv.deviceId,

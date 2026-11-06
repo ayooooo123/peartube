@@ -12,10 +12,9 @@ import { request as httpsRequest } from 'node:https'
 import { basename, extname, join, resolve } from 'node:path'
 import { createHash } from 'node:crypto'
 import b4a from 'b4a'
-import { parseUri } from './index.js'
+import { ID, MAX_TITLE, parseUri } from './protocol.js'
 import { createHiverelaySeeder } from './hiverelay.js'
 
-const VALID_ID = /^[a-z0-9]+:[a-z0-9]+(:s\d{2}e\d{2,3})?$/
 const MEDIA_EXT = new Set(['.mp4', '.mkv', '.webm', '.avi', '.mov', '.m4v', '.ts', '.m2ts', '.mpg', '.mpeg', '.ogv', '.ogg', '.flac', '.mp3', '.opus', '.wav', '.aac'])
 
 function fetchJson (url, headers = {}, redirects = 0) {
@@ -54,8 +53,8 @@ function fetchJson (url, headers = {}, redirects = 0) {
 // Infers a canonical PearTube ID (`imdb:tt...:s01e02`, `imdb:tt...`, or `clip:<slug>`) from a filename or sidecar.
 export function inferMediaMeta (filePath, sidecar = null) {
   const stem = basename(filePath, extname(filePath))
-  if (sidecar && typeof sidecar.id === 'string' && VALID_ID.test(sidecar.id.toLowerCase())) {
-    return { id: sidecar.id.toLowerCase(), title: String(sidecar.title || stem).slice(0, 300) }
+  if (sidecar && typeof sidecar.id === 'string' && ID.test(sidecar.id.toLowerCase())) {
+    return { id: sidecar.id.toLowerCase(), title: String(sidecar.title || stem).slice(0, MAX_TITLE) }
   }
   const imdb = stem.match(/\b(tt\d{6,10})\b/i)
   const ep = stem.match(/\bs(\d{2})e(\d{2,3})\b/i)
@@ -297,7 +296,7 @@ export async function createMirrorHost ({
     for (const item of items) {
       if (!item || typeof item !== 'object') continue
       const id = String(item.id || '').toLowerCase()
-      if (!VALID_ID.test(id)) continue
+      if (!ID.test(id)) continue
       const sha256 = typeof item.sha256 === 'string' && /^[0-9a-f]{64}$/i.test(item.sha256) ? item.sha256.toLowerCase() : null
       if (await ctx.has({ id, sha256 })) { skipped++; continue }
       const url = item.source?.url || item.url || item.streamUrl

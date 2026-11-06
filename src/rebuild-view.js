@@ -10,11 +10,9 @@ import b4a from 'b4a'
 import Autobee from 'autobee'
 import Corestore from 'corestore'
 import CoreStorage from 'hypercore-storage'
-import { makeApply, decodeOp } from './index.js'
+import { makeApply } from './apply.js'
 import { deriveIdentity } from './mnemonic.js'
-
-const HEX64 = /^[0-9a-f]{64}$/
-const isSystemKey = k => k.startsWith('meta/') || k.startsWith('writer/') || k.startsWith('revoked/') || k.startsWith('source/') || k.startsWith('peer/')
+import { HEX64, decodeOp, isSystemViewKey } from './protocol.js'
 
 export async function rebuildView ({ storage, channel = null, check = false, rollback = false, log = () => {} }) {
   const identity = JSON.parse(readFileSync(join(storage, 'identity.json'), 'utf8'))
@@ -129,7 +127,7 @@ async function summarize (bee) {
     const k = b4a.toString(node.key)
     if (k.startsWith('writer/')) writers++
     else if (k.startsWith('peer/')) peers++
-    else if (!isSystemKey(k) && decodeOp(node.value)?.type === 'announce') announceKeys.add(k)
+    else if (!isSystemViewKey(k) && decodeOp(node.value)?.type === 'announce') announceKeys.add(k)
   }
   return { flushes: bee.flushes, keys, announces: announceKeys.size, writers, peers, views: viewsOf(bee), announceKeys }
 }

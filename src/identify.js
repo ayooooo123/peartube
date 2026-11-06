@@ -165,16 +165,30 @@ export function downloadPage (pageUrl, outDir, { configDir = '', stallTimeout = 
   })
 }
 
+// A debrid/CDN link hides the release name in ?filename= or content-disposition while its path is an opaque
+// id (`/dld/<uuid>`), so the path alone would read a 60 GB MKV as a webpage.
+function fileName (raw, headers = {}) {
+  const u = new URL(raw)
+  const cd = String(headers['content-disposition'] || '')
+  const star = cd.match(/filename\*=UTF-8''([^;]+)/i)
+  let named = null
+  try { named = star ? decodeURIComponent(star[1]) : null } catch {}
+  const names = [u.searchParams.get('filename'), named, (cd.match(/filename="([^"]+)"/i) || [])[1]]
+  const fromPath = decodeURIComponent(u.pathname.split('/').pop() || '')
+  return names.find(n => n && MEDIA_FILE.test(n)) || fromPath
+}
+
 async function probe (url, opts) {
   let head = null
   try { head = await send(url, { method: 'HEAD' }) } catch {}
   const type = String(head?.headers['content-type'] || '').toLowerCase()
   const finalUrl = head?.url || url
-  const looksMedia = type.startsWith('video/') || type.includes('matroska') || (MEDIA_FILE.test(new URL(finalUrl).pathname) && !type.startsWith('text/'))
+  const name = fileName(finalUrl, head?.headers)
+  const looksMedia = type.startsWith('video/') || type.includes('matroska') || (MEDIA_FILE.test(name) && !type.startsWith('text/'))
   if (head && head.status < 400 && looksMedia) {
-    return { kind: 'file', name: decodeURIComponent(new URL(finalUrl).pathname.split('/').pop() || ''), size: Number(head.headers['content-length']) || null, contentType: type || null }
+    return { kind: 'file', name, size: Number(head.headers['content-length']) || null, contentType: type || null }
   }
-  if (head && head.status >= 400 && MEDIA_FILE.test(new URL(url).pathname)) throw new Error(`The link answered ${head.status}`)
+  if (head && head.status >= 400 && MEDIA_FILE.test(name)) throw new Error(`The link answered ${head.status}`)
   const info = await ubitInfo(url, opts)
   const formats = Array.isArray(info.formats) ? info.formats : []
   const height = Math.max(0, ...formats.map(f => Number(f.height) || 0)) || Number(info.height) || 0

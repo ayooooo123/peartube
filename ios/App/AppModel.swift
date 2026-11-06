@@ -92,14 +92,13 @@ final class AppModel: ObservableObject {
         let args = ProcessInfo.processInfo.arguments
         func argument(_ name: String) -> String? { guard let i = args.firstIndex(of: name), args.indices.contains(i + 1) else { return nil }; return args[i + 1] }
         guard ["-peartube-tracker", "-peartube-bootstrap", "-peartube-lan", "-peartube-relays", "-peartube-private"].contains(where: { argument($0) != nil }) else { launchArgumentsApplied = true; return }
-        let raw: [String: Any] = [
-            "tracker": argument("-peartube-tracker") ?? settings.tracker,
-            "sources": settings.sources.map(\.json),
-            "relayThrough": argument("-peartube-relays") ?? settings.relayThrough.joined(separator: "\n"),
-            "bootstrap": argument("-peartube-bootstrap") ?? settings.bootstrap.joined(separator: "\n"),
-            "lanDiscovery": argument("-peartube-lan").map { $0.lowercased() == "true" } ?? settings.lanDiscovery,
-            "privateRouting": argument("-peartube-private").map { $0.lowercased() == "true" } ?? settings.privateRouting
-        ]
+        // Start from everything saved (phrase, cache limit, …) and overlay only what the arguments name.
+        var raw = settings.json
+        if let v = argument("-peartube-tracker") { raw["tracker"] = v }
+        if let v = argument("-peartube-relays") { raw["relayThrough"] = v }
+        if let v = argument("-peartube-bootstrap") { raw["bootstrap"] = v }
+        if let v = argument("-peartube-lan") { raw["lanDiscovery"] = v.lowercased() == "true" }
+        if let v = argument("-peartube-private") { raw["privateRouting"] = v.lowercased() == "true" }
         var next = try await normalizeSettings(raw, requireChannel: false)
         next.configured = true
         settings = next

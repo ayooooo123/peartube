@@ -96,7 +96,9 @@ struct SettingsScreen: View {
                                     "relayThrough": relay,
                                     "bootstrap": bootstrap,
                                     "lanDiscovery": lan,
-                                    "privateRouting": privateRouting
+                                    "privateRouting": privateRouting,
+                                    // No control for it here: keep what is saved.
+                                    "cacheMaxGb": model.settings.cacheMaxGb
                                 ]
                                 var next = try await model.normalizeSettings(raw, requireChannel: true)
                                 next.configured = true

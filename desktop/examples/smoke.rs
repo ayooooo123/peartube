@@ -17,6 +17,7 @@ use std::sync::atomic::{AtomicU8, AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 use futures_util::StreamExt;
+use peartube::playback::CODECS;
 use peartube::settings::Settings;
 use peartube::worker::{Event, worker};
 use sha2::{Digest, Sha256};
@@ -54,7 +55,7 @@ fn main() {
             let use_warm = std::env::var("PEARTUBE_WARM").is_ok_and(|v| v == "1");
             DEADLINE.fetch_add(120, Ordering::SeqCst);
             let headless = player::Headless::new();
-            let ctx = std::sync::Arc::new(codecs::context());
+            let ctx = CODECS.clone();
             let click_t0 = Instant::now();
             let warm_handle = use_warm.then(|| {
                 let warm_key = entry.key.clone();
@@ -152,7 +153,7 @@ fn play(url: &str) -> serde_json::Value {
     use player::{Headless, Player, PlayerOptions};
     let started = Instant::now();
     let headless = Headless::new();
-    let ctx = std::sync::Arc::new(codecs::context());
+    let ctx = CODECS.clone();
     let options = PlayerOptions { realtime: false, ..PlayerOptions::default() };
     let player = Player::open(url, headless.clone(), ctx, options, |_| {});
     let state = player.wait();

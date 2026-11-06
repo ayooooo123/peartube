@@ -5,7 +5,10 @@ import { request as httpRequest } from 'node:http'
 import { request as httpsRequest } from 'node:https'
 import b4a from 'b4a'
 
-export function send (url, { method = 'GET', headers = {}, timeoutMs = 10_000, redirects = 0 } = {}) {
+export const CINEMETA_URL = 'https://v3-cinemeta.strem.io'
+
+// A small buffered http(s) request that follows redirects. `maxBytes` bounds what a remote server can make us hold.
+export function send (url, { method = 'GET', headers = {}, timeoutMs = 10_000, maxBytes = Infinity, redirects = 0 } = {}) {
   return new Promise((resolve, reject) => {
     let u
     try { u = new URL(url) } catch { return reject(new Error('Not a valid link')) }
@@ -13,11 +16,18 @@ export function send (url, { method = 'GET', headers = {}, timeoutMs = 10_000, r
     const req = (u.protocol === 'https:' ? httpsRequest : httpRequest)(u, { method, headers: { 'user-agent': 'PearTube', ...headers } }, res => {
       if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location && redirects < 5) {
         res.resume()
-        resolve(send(new URL(res.headers.location, u).href, { method, headers, timeoutMs, redirects: redirects + 1 }))
+        resolve(send(new URL(res.headers.location, u).href, { method, headers, timeoutMs, maxBytes, redirects: redirects + 1 }))
         return
       }
       const chunks = []
-      res.on('data', c => { if (method !== 'HEAD') chunks.push(c) })
+      let total = 0
+      res.on('data', c => {
+        if (method === 'HEAD') return
+        const buf = typeof c === 'string' ? b4a.from(c) : c
+        total += buf.length
+        if (total > maxBytes) { req.destroy(new Error(`Reply exceeded ${maxBytes} bytes`)); return }
+        chunks.push(buf)
+      })
       res.on('end', () => resolve({ status: res.statusCode, headers: res.headers, url: u.href, body: b4a.toString(b4a.concat(chunks), 'utf8') }))
       res.on('error', reject)
     })

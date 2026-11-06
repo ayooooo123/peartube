@@ -17,7 +17,6 @@ mod abi;
 use std::cell::RefCell;
 use std::collections::VecDeque;
 use std::io::{self, Read, Seek, SeekFrom};
-use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, LazyLock};
 
@@ -28,6 +27,9 @@ use oxideav_core::{
 };
 use oxideav_pixfmt::{ConvertOptions, FrameInfo};
 use serde_json::json;
+
+pub const MAX_HIDDEN_GOPS: usize = 12;
+pub const MAX_GOP_PKTS: usize = 320;
 
 const PROBE_PAGE_SIZE: usize = 128 * 1024;
 const STREAM_PAGE_SIZE: usize = 256 * 1024;
@@ -1546,14 +1548,9 @@ fn collect_segments_text(items: &[Segment], out: &mut String, depth: u8) {
             | Segment::Font { children, .. }
             | Segment::Karaoke { children, .. }
             | Segment::Voice { children, .. }
-            | Segment::Class { children, .. } => collect_segments_text(c_slice(children), out, depth + 1),
+            | Segment::Class { children, .. } => collect_segments_text(children, out, depth + 1),
         }
     }
-}
-
-#[inline]
-fn c_slice(v: &[Segment]) -> &[Segment] {
-    v
 }
 
 fn extract_visible_rgba(vf: &VideoFrame) -> Option<(i32, i32, u32, u32, u32, u32, Vec<u8>)> {
@@ -1828,17 +1825,13 @@ impl WebSession {
                 h264_framing,
             });
             if self.video_mode == VideoOutputMode::Software {
-                self.video_dec = catch_unwind(AssertUnwindSafe(|| ctx.codecs.first_decoder(&s.params)))
-                    .ok()
-                    .and_then(Result::ok);
+                self.video_dec = ctx.codecs.first_decoder(&s.params).ok();
             }
         }
         if let Some(ai) = self.audio_idx
             && let Some(s) = self.stream_info(ai).cloned()
         {
-            self.audio_dec = catch_unwind(AssertUnwindSafe(|| ctx.codecs.first_decoder(&s.params)))
-                .ok()
-                .and_then(Result::ok);
+            self.audio_dec = ctx.codecs.first_decoder(&s.params).ok();
             self.audio_meta = Some(ActiveAudioMeta {
                 time_base: s.time_base,
                 params: s.params,
@@ -1863,9 +1856,7 @@ impl WebSession {
                     params.height = Some(h);
                 }
             }
-            self.sub_dec = catch_unwind(AssertUnwindSafe(|| ctx.codecs.first_decoder(&params)))
-                .ok()
-                .and_then(Result::ok);
+            self.sub_dec = ctx.codecs.first_decoder(&params).ok();
             self.sub_meta = Some((s.time_base, s.params.codec_id.as_str().to_string()));
         }
     }
@@ -1900,7 +1891,7 @@ impl WebSession {
         }
         if self.video_mode == VideoOutputMode::Software {
             if let Some(dec) = self.video_dec.as_mut() {
-                let _ = catch_unwind(AssertUnwindSafe(|| dec.flush()));
+                let _ = dec.flush();
             }
             self.drop_until_keyframe = false;
             self.video_seeded = false;
@@ -1918,8 +1909,6 @@ impl WebSession {
     }
 
     fn stash_hidden_gop_packet(&mut self, pkt: Packet) {
-        const MAX_HIDDEN_GOPS: usize = 12;
-        const MAX_GOP_PKTS: usize = 320;
         const MAX_HIDDEN_BYTES: usize = 48 * 1024 * 1024;
         if pkt.flags.keyframe {
             // Audio buffers up to 5 s ahead while hidden; on 1 s Blu-ray GOPs that spans several keyframes,
@@ -2053,10 +2042,8 @@ impl WebSession {
         }
 
         let info = FrameInfo::new(fmt, w, h);
-        let converted = catch_unwind(AssertUnwindSafe(|| {
-            oxideav_pixfmt::convert(vf, info, PixelFormat::Rgba, &ConvertOptions::default())
-        }));
-        if let Ok(Ok(rgba_frame)) = converted
+        let converted = oxideav_pixfmt::convert(vf, info, PixelFormat::Rgba, &ConvertOptions::default());
+        if let Ok(rgba_frame) = converted
             && let Some(plane) = rgba_frame.planes.first()
         {
             let row_bytes = wu * 4;
@@ -2158,7 +2145,7 @@ impl WebSession {
             self.drop_until_keyframe = false;
             self.video_seeded = false;
             if let Some(dec) = self.video_dec.as_mut() {
-                let _ = catch_unwind(AssertUnwindSafe(|| dec.flush()));
+                let _ = dec.flush();
             }
         } else if let Some(est) = pkt_pts_secs {
             if !self.replaying_hidden_gop && self.client_clock > 0.5 && est + 1.50 < self.client_clock && !pkt.flags.keyframe {
@@ -2179,14 +2166,13 @@ impl WebSession {
         let mut decoded_frames = Vec::new();
         let is_avi = self.container == "avi";
         if let Some(dec) = self.video_dec.as_mut() {
-            if catch_unwind(AssertUnwindSafe(|| dec.send_packet(&pkt))).is_err() {
+            if dec.send_packet(&pkt).is_err() {
                 return;
             }
             loop {
-                let recv = catch_unwind(AssertUnwindSafe(|| dec.receive_frame()));
-                let vf = match recv {
-                    Ok(Ok(Frame::Video(vf))) => vf,
-                    Ok(Ok(_)) => continue,
+                let vf = match dec.receive_frame() {
+                    Ok(Frame::Video(vf)) => vf,
+                    Ok(_) => continue,
                     _ => break,
                 };
                 let (w, h) = dec.output_video_dimensions().unwrap_or((vm.width, vm.height));
@@ -2228,20 +2214,19 @@ impl WebSession {
         let Some(am) = self.audio_meta.as_ref() else { return };
         let tb = am.time_base;
         let mut pkt_pts = pkt.pts.or(pkt.dts);
-        if catch_unwind(AssertUnwindSafe(|| dec.send_packet(&pkt))).is_err() {
+        if dec.send_packet(&pkt).is_err() {
             return;
         }
         let mut raw_frames = Vec::new();
         loop {
-            let recv = catch_unwind(AssertUnwindSafe(|| dec.receive_frame()));
-            match recv {
-                Ok(Ok(Frame::Audio(af))) => {
+            match dec.receive_frame() {
+                Ok(Frame::Audio(af)) => {
                     if af.samples > 0 {
                         let out_fmt = dec.output_audio_format();
                         raw_frames.push((af, out_fmt));
                     }
                 }
-                Ok(Ok(_)) => continue,
+                Ok(_) => continue,
                 _ => break,
             }
         }
@@ -2332,18 +2317,17 @@ impl WebSession {
 
         let mut sub_items = Vec::new();
         if let Some(dec) = self.sub_dec.as_mut() {
-            if catch_unwind(AssertUnwindSafe(|| dec.send_packet(&pkt))).is_err() {
+            if dec.send_packet(&pkt).is_err() {
                 return;
             }
             loop {
-                let recv = catch_unwind(AssertUnwindSafe(|| dec.receive_frame()));
-                match recv {
-                    Ok(Ok(Frame::Subtitle(cue))) => {
+                match dec.receive_frame() {
+                    Ok(Frame::Subtitle(cue)) => {
                         if let Some(item) = make_subtitle_cue(&cue, pkt_start, pkt_dur) {
                             sub_items.push(item);
                         }
                     }
-                    Ok(Ok(Frame::Video(vf))) => {
+                    Ok(Frame::Video(vf)) => {
                         let dur = vf
                             .display_duration()
                             .map(|d| d.as_secs_f64())
@@ -2363,7 +2347,7 @@ impl WebSession {
                             });
                         }
                     }
-                    Ok(Ok(_)) => continue,
+                    Ok(_) => continue,
                     _ => break,
                 }
             }
@@ -2391,10 +2375,9 @@ impl WebSession {
             let vm = self.video_meta.clone();
             let mut tail_frames = Vec::new();
             if let (Some(dec), Some(vm)) = (self.video_dec.as_mut(), vm) {
-                let _ = catch_unwind(AssertUnwindSafe(|| dec.flush()));
+                let _ = dec.flush();
                 loop {
-                    let Ok(Ok(Frame::Video(vf))) = catch_unwind(AssertUnwindSafe(|| dec.receive_frame()))
-                    else {
+                    let Ok(Frame::Video(vf)) = dec.receive_frame() else {
                         break;
                     };
                     let (w, h) = dec.output_video_dimensions().unwrap_or((vm.width, vm.height));

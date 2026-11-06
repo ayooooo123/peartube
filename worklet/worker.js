@@ -1,7 +1,7 @@
 // The app's P2P worker: a Bare worklet running the same core as the relay.
-// The Rust app talks to it over Bare.IPC in newline-delimited JSON:
-//   app -> worker  {id, method, params}   start | status | search | stop
-//   worker -> app  {id, result} | {id, error} | {event: 'update'} | {event: 'fatal', error}
+// Every app (Mac, Android phone and TV, iOS) talks to it over Bare.IPC in newline-delimited JSON:
+//   app -> worker  {id, method, params}   a key of `methods` below
+//   worker -> app  {id, result} | {id, error} | {event: 'update' | 'sources' | 'cast' | 'receiverCommand' | 'fatal', ...}
 // Host events {event, ...} are dispatched on Bare's 'appEvent' channel; iOS
 // uses this for the system Bonjour adapter without raw multicast sockets.
 // 'update' means the tracker, the peer set or LAN discovery changed. start and
@@ -13,12 +13,11 @@ import 'bare-process/global'
 import b4a from 'b4a'
 import os from 'bare-os'
 import { createNode } from '../src/index.js'
-import { parseUri } from '../src/protocol.js'
+import { API_PORT, RECEIVER_PORT, parseUri } from '../src/protocol.js'
+import { nodeOptions, normalizeAppSettings } from '../src/app-settings.js'
 import { createApi } from '../src/http.js'
 // Artwork lookups without `ubit`: the app's own loopback API serves /v1/poster and /v1/backdrop.
-import { posterUrl, backdropUrl } from '../src/art.js'
-
-const CINEMETA = 'https://v3-cinemeta.strem.io'
+import { CINEMETA_URL, posterUrl, backdropUrl } from '../src/art.js'
 import { createLan, interfaceAdapter, lanAddress } from '../src/lan.js'
 import { createCastController, reclaimLowDiskReceiverStorage, resolvePeerStorage } from '../src/cast.js'
 
@@ -132,10 +131,8 @@ async function moveLan () {
   }
 }
 
-async function ensureCast (storageHint = null, peerStorageHint = null) {
-  if (storageHint) castStorage = storageHint
-  if (peerStorageHint) castPeerStorage = peerStorageHint
-  if (!castStorage) throw new Error('Storage path required before initializing Cast')
+async function ensureCast () {
+  if (!castStorage) throw new Error('The app must send init with its cast storage first')
   if (!cast) {
     cast = createCastController({
       storage: castStorage,
@@ -225,44 +222,47 @@ function listenLoopback (srv, preferredPort) {
 }
 
 const methods = {
-  start: ({ storage, channel = null, tracker = null, mnemonic = null, join = false, sources = [], relayThrough = null, bootstrap = null, lan = false, privateRouting = false, apiPort = 8174, apiToken = null, cacheMaxGb = 10 }) => serial(async () => {
+  // Sent once, right after the host spawns the worklet: where this device keeps its TV pairings, so casting works
+  // before (and between) node starts.
+  init: async ({ castStorage: castDir }) => { castStorage = castDir; return { ok: true } },
+  // `settings` is the app's settings.json as saved; `trackersDir` and `defaultFolder` say where this platform keeps
+  // its node folders.
+  start: ({ trackersDir, defaultFolder, settings }) => serial(async () => {
     await close()
-    castStorage = storage
+    const opts = nodeOptions(normalizeAppSettings(settings), { trackersDir, defaultFolder })
     node = await createNode({
-      storage,
-      channel: channel || null,
-      tracker: tracker || null,
-      mnemonic: mnemonic || null,
-      join: Boolean(join),
-      sources,
-      relayThrough,
-      bootstrap: bootstrap ? bootstrap.map(hostPort) : undefined,
-      privateRouting,
+      storage: opts.storage,
+      tracker: opts.tracker,
+      mnemonic: opts.mnemonic,
+      join: opts.join,
+      sources: opts.sources,
+      relayThrough: opts.relayThrough,
+      bootstrap: opts.bootstrap ? opts.bootstrap.map(hostPort) : undefined,
+      privateRouting: opts.privateRouting,
       worklet: true,
       onchange: update
     })
     node.swarm.on('update', update)
     // Bound playback caching: one watched 4K remux used to fill the disk.
-    node.setCacheMaxBytes(Math.max(0, Number(cacheMaxGb) || 0) * 1e9)
-    lanWanted = lan
+    node.setCacheMaxBytes(opts.cacheMaxGb * 1e9)
+    lanWanted = opts.lan
     await moveLan()
-    if (apiPort !== false) {
-      const srv = createApi({
-        node,
-        acquirer: null,
-        posterUrl: imdb => posterUrl(CINEMETA, imdb),
-        backdropUrl: imdb => backdropUrl(CINEMETA, imdb),
-        get cast () { return cast },
-        apiToken,
-        extraStatus: () => ({ lan: lanNote, apiUrl, lanStats: node?.lanStats?.() ?? null }),
-        onSourcesChanged: list => send({ event: 'sources', sources: list })
-      })
-      apiUrl = await listenLoopback(srv, Number(apiPort) || 8174)
-      api = apiUrl ? srv : null
-    }
+    const srv = createApi({
+      node,
+      acquirer: null,
+      posterUrl: imdb => posterUrl(CINEMETA_URL, imdb),
+      backdropUrl: imdb => backdropUrl(CINEMETA_URL, imdb),
+      get cast () { return cast },
+      extraStatus: () => ({ lan: lanNote, apiUrl, lanStats: node?.lanStats?.() ?? null }),
+      onSourcesChanged: list => send({ event: 'sources', sources: list })
+    })
+    apiUrl = await listenLoopback(srv, API_PORT)
+    api = apiUrl ? srv : null
     const discovered = await node.discoveredSources()
     return { ...report(), discoveredSources: discovered }
   }),
+  // A settings form's fields (or a saved settings.json) as complete settings, or the first field error.
+  normalizeSettings: async ({ settings, requireChannel = false }) => normalizeAppSettings(settings, { requireChannel }),
   // The app asks for status the moment Settings opens, which can be before a queued start has
   // finished: answer with an empty node rather than throwing into the UI.
   status: async () => {
@@ -270,7 +270,13 @@ const methods = {
     if (!node) return { ...idleReport(), discoveredSources: [] }
     return { ...report(), discoveredSources: await node.discoveredSources() }
   },
-  search: async ({ id = null, source = null, query = null, limit = 0, offset = 0 } = {}) => (await current()).search(id, { source, query, limit, offset }),
+  // `downloadUrl` saves a film through the loopback API, which names it by sniffing its container
+  // (Content-Disposition), so the apps save with the right extension without sniffing bytes themselves.
+  search: async ({ id = null, source = null, query = null, limit = 0, offset = 0 } = {}) => {
+    const entries = await (await current()).search(id, { source, query, limit, offset })
+    if (!apiUrl) return entries
+    return entries.map(e => ({ ...e, downloadUrl: `${apiUrl}/v1/blob${new URL(e.streamUrl).search}&download=${encodeURIComponent(e.title)}` }))
+  },
   focusSource: async ({ key }) => ({ ok: await (await current()).focusSource(key) }),
   setPlayerActive: async ({ active }) => (await current()).setPlayerActive(active),
   warm: async ({ key }) => {
@@ -278,10 +284,6 @@ const methods = {
     const entry = await n.findEntry(key)
     if (entry) await n.warm(entry)
     return { ok: Boolean(entry) }
-  },
-  sources: async () => {
-    const n = await current()
-    return { sources: n.listSources(), discovered: await n.discoveredSources(), channel: n.status().channel }
   },
   addSource: async params => {
     const n = await current()
@@ -293,30 +295,28 @@ const methods = {
     const res = await n.removeSource(key)
     return { ...res, sources: n.listSources(), discovered: await n.discoveredSources() }
   },
-  openUri: async ({ uri, storage = null }) => {
-    if (parseUri(uri).action === 'receiver') {
-      const c = await ensureCast(storage)
-      const receiver = await c.pairReceiver({ uri: uri.trim() })
+  // Before the first start (no channel yet) a channel link is only parsed: the app saves it and starts.
+  openUri: async ({ uri }) => {
+    const parsed = parseUri(uri)
+    if (parsed.action === 'receiver') {
+      const receiver = await (await ensureCast()).pairReceiver({ uri: uri.trim() })
       return { action: 'receiver', receiver }
     }
+    await lifecycle
+    if (!node && parsed.action === 'source') return { action: 'source', source: { key: parsed.key, kind: parsed.kind, alias: parsed.alias } }
     return (await current()).openUri(uri)
   },
-  publishSource: async params => (await current()).publishSource(params),
   remove: async ({ key }) => { await (await current()).remove(key); update(); return { removed: true, key } },
   identity: async ({ revealMnemonic = false } = {}) => (await current()).identity({ revealMnemonic }),
-  grantWriter: async ({ writer, role = 'writer', alias = '' }) => { const res = await (await current()).grantWriter(writer, { role, alias }); update(); return res },
   revokeWriter: async ({ writer, purgeEntries = false }) => { const res = await (await current()).revokeWriter(writer, { purgeEntries }); update(); return res },
   rotateEpoch: async () => { const res = await (await current()).rotateEpoch(); update(); return res },
-  claimWithMnemonic: async ({ mnemonic, alias = '' }) => { const res = await (await current()).claimWithMnemonic(mnemonic, { alias }); update(); return res },
-  addAccessKey: async params => { const res = await (await current()).addAccessKey(params); update(); return res },
-  removeAccessKey: async ({ channel, epoch = null }) => { const res = await (await current()).removeAccessKey(channel, epoch); update(); return res },
   clearCache: async ({ key = null } = {}) => { const res = await (await current()).clearCache(key); update(); return res },
   setCacheMax: async ({ maxBytes = 0 } = {}) => { const cacheMaxBytes = (await current()).setCacheMaxBytes(maxBytes); update(); return { cacheMaxBytes } },
-  castStatus: async ({ storage = null } = {}) => (await ensureCast(storage)).status(),
-  castPair: async params => { const c = await ensureCast(params.storage); await c.pairReceiver(params); return c.status() },
-  castRemove: async ({ id, storage = null }) => { const c = await ensureCast(storage); c.removeReceiver(id); return c.status() },
+  castStatus: async () => (await ensureCast()).status(),
+  castPair: async params => { const c = await ensureCast(); await c.pairReceiver(params); return c.status() },
+  castRemove: async ({ id }) => { const c = await ensureCast(); c.removeReceiver(id); return c.status() },
   castPlay: async params => {
-    const c = await ensureCast(params.storage)
+    const c = await ensureCast()
     if (node && !node.privateRouting && !lanWanted) {
       lanWanted = true
       await serial(moveLan).catch(() => {})
@@ -325,38 +325,26 @@ const methods = {
     }
     return c.castPlay(params)
   },
-  castAttach: async params => (await ensureCast(params.storage)).castAttach(params),
-  castControl: async params => (await ensureCast(params.storage)).castControl(params),
-  castStop: async params => (await ensureCast(params.storage)).castStop(params),
-  receiverStart: ({ storage = null, peerStorage = null, name = 'PearTube TV', port = 8176, openAuth = false } = {}) => serial(async () => {
+  castAttach: async params => (await ensureCast()).castAttach(params),
+  castControl: async params => (await ensureCast()).castControl(params),
+  castStop: async params => (await ensureCast()).castStop(params),
+  // The TV receiver's start: `peerStorage` (or a folder beside the cast storage) holds the films it plays.
+  receiverStart: ({ peerStorage = null, name = 'PearTube TV', openAuth = false }) => serial(async () => {
     const nextPeer = peerStorage || castPeerStorage
     if (cast && nextPeer && nextPeer !== castPeerStorage && receiverNodeOwned && cast.status().receiverMode?.state?.status === 'idle') {
       await close()
     }
     if (nextPeer) castPeerStorage = nextPeer
-    const c = await ensureCast(storage, castPeerStorage)
+    const c = await ensureCast()
     return c.startLocalReceiver({
       name,
-      port,
+      port: RECEIVER_PORT,
       openAuth,
       peerStorage: castPeerStorage,
       onCommand: async command => { send({ event: 'receiverCommand', command }) }
     })
   }),
-  receiverStop: () => serial(async () => {
-    if (cast) await cast.stopLocalReceiver()
-    if (receiverNodeOwned && node) {
-      const open = node
-      node = null
-      receiverNodeOwned = false
-      open.swarm.off('update', update)
-      await open.close().catch(() => {})
-    }
-    return cast ? cast.status() : null
-  }),
-  receiverRotateCode: async ({ storage = null } = {}) => (await ensureCast(storage)).rotateLocalReceiverCode(),
-  receiverReportState: async params => (await ensureCast(params.storage)).reportLocalReceiverState(params.state || params),
-  stop: () => serial(close)
+  receiverReportState: async params => (await ensureCast()).reportLocalReceiverState(params.state || params)
 }
 
 async function handle (line) {

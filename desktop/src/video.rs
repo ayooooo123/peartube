@@ -40,8 +40,4 @@ impl VideoView {
         self.slot.set_frame(rect);
     }
 
-    #[allow(dead_code)]
-    pub fn metrics(&self) -> Option<player::WindowSlotMetrics> {
-        self.slot.metrics()
-    }
 }

@@ -10,7 +10,7 @@ mod theme;
 mod video;
 
 use std::borrow::Cow;
-use std::sync::{Arc, LazyLock};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use futures_channel::mpsc::unbounded;
@@ -24,7 +24,7 @@ use gpui_kit::component::spinner::Spinner;
 use gpui_kit::component::{IconName, Sizable as _, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
-use oxideav_core::RuntimeContext;
+use peartube::playback::{format_clock, track_label, CODECS, FULLSCREEN_COOLDOWN, SKIP};
 use peartube::soundfont;
 use peartube::worker::{CastEntryMeta, Event as WorkerEvent, ReceiverCommand, ReceiverInfo, worker};
 use player::{AudioOutputMode, Event, FrameRateMode, Player, PlayerOptions, State, Track, TrackKind};
@@ -34,12 +34,9 @@ use crate::qr::qr_card;
 use crate::theme::{ACCENT, BG, CARD, DANGER, DIM, INK, LINE};
 use crate::video::VideoView;
 
-static CODECS: LazyLock<Arc<RuntimeContext>> = LazyLock::new(|| Arc::new(codecs::context()));
 
 const CONTEXT: &str = "TvReceiver";
-const SKIP: Duration = Duration::from_secs(10);
 const SHOW_HUD: Duration = Duration::from_secs(4);
-const FULLSCREEN_COOLDOWN: Duration = Duration::from_millis(550);
 
 actions!(tv_receiver, [Quit, TogglePlay, SkipBack, SkipForward, ToggleFullscreen, StopCast]);
 
@@ -53,22 +50,6 @@ impl AssetSource for ReceiverAssets {
     }
 }
 
-fn format_clock(d: Duration) -> String {
-    let s = d.as_secs();
-    if s >= 3600 { format!("{}:{:02}:{:02}", s / 3600, s / 60 % 60, s % 60) } else { format!("{}:{:02}", s / 60, s % 60) }
-}
-
-fn track_label(t: &Track) -> String {
-    let mut name = t
-        .title
-        .clone()
-        .or_else(|| t.language.as_ref().map(|l| l.to_uppercase()))
-        .unwrap_or_else(|| format!("Track {}", t.stream));
-    if let (Some(_), Some(lang)) = (&t.title, &t.language) {
-        name = format!("{name} ({})", lang.to_uppercase());
-    }
-    format!("{name} · {}", t.codec.to_uppercase())
-}
 
 struct DumbTvApp {
     info: Option<ReceiverInfo>,

@@ -11,6 +11,8 @@ use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use peartube::settings::Settings;
 use peartube::soundfont;
+use peartube::worker::worker;
+use serde_json::json;
 
 use crate::app::{PearTube, Screen};
 use crate::list::{column, format_bytes};
@@ -270,29 +272,50 @@ impl PearTube {
 
     fn save_settings(&mut self, cx: &mut Context<Self>) {
         let Screen::Settings(form) = &mut self.screen else { return };
-        let parsed = Settings::parse(
-            &form.tracker.read(cx).value(),
-            &form.mnemonic.read(cx).value(),
-            &form.sources.read(cx).value(),
-            &form.relays.read(cx).value(),
-            &form.bootstrap.read(cx).value(),
-            form.lan,
-            form.private_routing,
-            form.cache_max_gb,
-        );
-        match parsed.and_then(|new| new.save().map(|()| new)) {
-            Err(err) => {
-                form.error = Some(err.into());
-                cx.notify();
-            }
-            Ok(new) => {
-                self.settings = new.clone();
-                self.status = None;
-                self.entries.clear();
-                self.show_list(cx);
-                self.start(new, cx);
-            }
-        }
+        let tracker = form.tracker.read(cx).value();
+        let mnemonic = form.mnemonic.read(cx).value();
+        let sources = form.sources.read(cx).value();
+        let relay_through = form.relays.read(cx).value();
+        let bootstrap = form.bootstrap.read(cx).value();
+        let lan_discovery = form.lan;
+        let private_routing = form.private_routing;
+        let cache_max_gb = form.cache_max_gb;
+
+        let raw = json!({
+            "tracker": tracker,
+            "mnemonic": mnemonic,
+            "sources": sources,
+            "relayThrough": relay_through,
+            "bootstrap": bootstrap,
+            "lanDiscovery": lan_discovery,
+            "privateRouting": private_routing,
+            "cacheMaxGb": cache_max_gb,
+        });
+
+        cx.spawn(async move |this, cx| {
+            let normalized = match worker() {
+                Ok(w) => w.normalize_settings(raw, true).await,
+                Err(err) => Err(err),
+            };
+            let _ = this.update(cx, |this, cx| {
+                match normalized.and_then(|new| new.save().map(|()| new)) {
+                    Err(err) => {
+                        if let Screen::Settings(form) = &mut this.screen {
+                            form.error = Some(err.into());
+                            cx.notify();
+                        }
+                    }
+                    Ok(new) => {
+                        this.settings = new.clone();
+                        this.status = None;
+                        this.entries.clear();
+                        this.show_list(cx);
+                        this.start(new, cx);
+                    }
+                }
+            });
+        })
+        .detach();
     }
 
     fn choose_soundfont(&mut self, cx: &mut Context<Self>) {

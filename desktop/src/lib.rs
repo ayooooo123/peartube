@@ -3,6 +3,7 @@
 //! The GPUI window (src/main.rs) and test/desktop.e2e.js's smoke example both
 //! drive it. Android has its own app in android/.
 
+pub mod playback;
 pub mod settings;
 #[forbid(unsafe_code)]
 pub mod soundfont;

@@ -107,7 +107,7 @@ android {
 
     sourceSets {
         getByName("main") {
-            java.srcDirs("src/main/kotlin", "../app/src/main/java", "../app/src/main/kotlin/com/peartube/app/player")
+            java.srcDirs("src/main/kotlin", "../app/src/main/java", "../app/src/main/kotlin/com/peartube/app/player", "../app/src/main/kotlin/com/peartube/shared")
             res.srcDirs("src/main/res", "../app/src/main/res")
         }
     }

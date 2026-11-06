@@ -7,51 +7,25 @@
 //   - Recruits existing HiveRelays (`hiverelay-seed`) via HTTP `/seed-core` and P2P `hiverelay-seed` DHT as supplemental seeders
 //   - Dynamically loads custom user plugins dropped into `/data/plugins/*.mjs` or `*.js`
 import { createReadStream, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, statSync, statfsSync, writeFileSync } from 'node:fs'
-import { request as httpRequest } from 'node:http'
-import { request as httpsRequest } from 'node:https'
 import { basename, extname, join, resolve } from 'node:path'
 import { createHash } from 'node:crypto'
 import b4a from 'b4a'
-import { ID, MAX_TITLE, parseUri } from './protocol.js'
+import { ID, MAX_TITLE, MEDIA_FILE, parseUri } from './protocol.js'
 import { createHiverelaySeeder } from './hiverelay.js'
+import { send } from './art.js'
 
-const MEDIA_EXT = new Set(['.mp4', '.mkv', '.webm', '.avi', '.mov', '.m4v', '.ts', '.m2ts', '.mpg', '.mpeg', '.ogv', '.ogg', '.flac', '.mp3', '.opus', '.wav', '.aac'])
-
-function fetchJson (url, headers = {}, redirects = 0) {
-  return new Promise((resolveJson, reject) => {
-    const parsed = new URL(url)
-    const fn = parsed.protocol === 'https:' ? httpsRequest : httpRequest
-    const req = fn(parsed, { headers: { accept: 'application/json', ...headers } }, res => {
-      if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location && redirects < 5) {
-        res.resume?.()
-        resolveJson(fetchJson(new URL(res.headers.location, parsed).href, headers, redirects + 1))
-        return
-      }
-      if (res.statusCode < 200 || res.statusCode >= 300) {
-        res.resume?.()
-        // Plugin errors are public on /v1/plugins: name the feed by host and path, never its query or credentials.
-        reject(new Error(`Feed ${parsed.host}${parsed.pathname} answered ${res.statusCode}`))
-        return
-      }
-      const chunks = []
-      let total = 0
-      res.on('data', chunk => {
-        const buf = typeof chunk === 'string' ? b4a.from(chunk) : chunk
-        total += buf.length
-        if (total > 8 * 1024 * 1024) { req.destroy(new Error('Feed payload exceeded 8 MiB')); return }
-        chunks.push(buf)
-      })
-      res.on('end', () => {
-        try { resolveJson(JSON.parse(b4a.toString(b4a.concat(chunks)))) } catch (err) { reject(err) }
-      })
-    })
-    req.on('error', reject)
-    req.end()
-  })
+async function fetchJson (url, headers = {}) {
+  const res = await send(url, { headers: { accept: 'application/json', ...headers }, timeoutMs: 60_000, maxBytes: 8 * 1024 * 1024 })
+  if (res.status < 200 || res.status >= 300) {
+    const { host, pathname } = new URL(res.url)
+    // Plugin errors are public on /v1/plugins: name the feed by host and path, never its query or credentials.
+    throw new Error(`Feed ${host}${pathname} answered ${res.status}`)
+  }
+  return JSON.parse(res.body)
 }
 
 // Infers a canonical PearTube ID (`imdb:tt...:s01e02`, `imdb:tt...`, or `clip:<slug>`) from a filename or sidecar.
-export function inferMediaMeta (filePath, sidecar = null) {
+function inferMediaMeta (filePath, sidecar = null) {
   const stem = basename(filePath, extname(filePath))
   if (sidecar && typeof sidecar.id === 'string' && ID.test(sidecar.id.toLowerCase())) {
     return { id: sidecar.id.toLowerCase(), title: String(sidecar.title || stem).slice(0, MAX_TITLE) }
@@ -247,8 +221,7 @@ export async function createMirrorHost ({
       const ingested = []
       for (const name of names) {
         if (closed) break
-        const ext = extname(name).toLowerCase()
-        if (!MEDIA_EXT.has(ext)) continue
+        if (!MEDIA_FILE.test(name)) continue
         const full = join(root, name)
         let st
         try { st = statSync(full) } catch { continue }

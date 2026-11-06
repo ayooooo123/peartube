@@ -21,7 +21,7 @@ struct SettingsScreen: View {
         self.model = model
         _tracker = State(initialValue: model.settings.tracker)
         _mnemonic = State(initialValue: model.settings.mnemonic)
-        _sources = State(initialValue: model.settings.sources.map(\.uri).joined(separator: "\n"))
+        _sources = State(initialValue: model.settings.sources.map(\.key).joined(separator: "\n"))
         _relay = State(initialValue: model.settings.relayThrough.joined(separator: "\n"))
         _bootstrap = State(initialValue: model.settings.bootstrap.joined(separator: "\n"))
         _lan = State(initialValue: model.settings.lanDiscovery)
@@ -55,7 +55,7 @@ struct SettingsScreen: View {
                 if !model.sources.isEmpty || !model.discovered.isEmpty {
                     Section("Channels & Sources") {
                         ForEach(model.sources, id: \.selfKey) { source in
-                            SourceRow(source: source, canRemove: !source.flag("writable") || source.flag("primary"), share: { share = SourceSpec(source).uri }, remove: {
+                            SourceRow(source: source, canRemove: !source.flag("writable") || source.flag("primary"), share: { share = "peartube://channel/\(source.string("key"))" }, remove: {
                                 Task { await model.removeSource(source.string("key")); syncFields() }
                             })
                         }
@@ -87,10 +87,22 @@ struct SettingsScreen: View {
                 }
                 Section {
                     Button {
-                        do {
-                            let next = try Settings.parse(tracker: tracker, sources: sources, relays: relay, bootstrap: bootstrap, lan: lan, privateRouting: privateRouting, mnemonic: mnemonic)
-                            Task { await model.save(next) }
-                        } catch { model.error = error.localizedDescription }
+                        Task {
+                            do {
+                                let raw: [String: Any] = [
+                                    "tracker": tracker,
+                                    "sources": sources,
+                                    "mnemonic": mnemonic,
+                                    "relayThrough": relay,
+                                    "bootstrap": bootstrap,
+                                    "lanDiscovery": lan,
+                                    "privateRouting": privateRouting
+                                ]
+                                var next = try await model.normalizeSettings(raw, requireChannel: true)
+                                next.configured = true
+                                await model.save(next)
+                            } catch { model.error = error.localizedDescription }
+                        }
                     } label: { HStack { Spacer(); if model.busy { ProgressView() }; Text("Save & Connect").bold(); Spacer() } }
                         .disabled(model.busy).accessibilityIdentifier("settings.save")
                 }
@@ -104,7 +116,7 @@ struct SettingsScreen: View {
         .sheet(isPresented: $scanner) { QRScanner { uri in scanner = false; Task { await model.openURI(uri); syncFields() } } }
         .sheet(isPresented: Binding(get: { share != nil }, set: { if !$0 { share = nil } })) { if let share { ShareQR(uri: share) } }
     }
-    private func syncFields() { tracker = model.settings.tracker; mnemonic = model.settings.mnemonic; sources = model.settings.sources.map(\.uri).joined(separator: "\n") }
+    private func syncFields() { tracker = model.settings.tracker; mnemonic = model.settings.mnemonic; sources = model.settings.sources.map(\.key).joined(separator: "\n") }
 }
 
 struct SourceRow: View {
@@ -164,7 +176,7 @@ struct DiagnosticsScreen: View {
                     LabeledContent("Inflight Maximum", value: String(Int(r.number("inflightMax"))))
                 }
                 Section("Channels & Sources") {
-                    ForEach(model.sources, id: \.selfKey) { source in SourceRow(source: source, canRemove: !source.flag("writable") || source.flag("primary"), share: { share = SourceSpec(source).uri }, remove: { Task { await model.removeSource(source.string("key")) } }) }
+                    ForEach(model.sources, id: \.selfKey) { source in SourceRow(source: source, canRemove: !source.flag("writable") || source.flag("primary"), share: { share = "peartube://channel/\(source.string("key"))" }, remove: { Task { await model.removeSource(source.string("key")) } }) }
                     ForEach(model.discovered, id: \.selfKey) { source in
                         HStack {
                             VStack(alignment: .leading) { Text(source.string("title")); Text(source.string("via")).font(.caption).foregroundStyle(.secondary) }

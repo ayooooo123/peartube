@@ -18,6 +18,7 @@ import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import com.peartube.shared.formatBytes
 import org.json.JSONObject
 import java.io.File
 import java.net.HttpURLConnection
@@ -45,7 +46,6 @@ class AppModel(private val app: Application) {
     val entries = MutableStateFlow<List<Entry>>(emptyList())
     val error = MutableStateFlow<String?>(null)
     val query = MutableStateFlow("")
-    val quickAdd = MutableStateFlow("")
     val screen = MutableStateFlow<Screen>(if (!settings.value.hasSources) Screen.Settings else Screen.List)
 
     val cast = MutableStateFlow(CastStatus())
@@ -241,24 +241,17 @@ class AppModel(private val app: Application) {
     fun openUriOrKey(raw: String) {
         val trimmed = raw.trim()
         if (trimmed.isEmpty()) return
-        val isReceiverUri = trimmed.startsWith("peartube://receiver/", ignoreCase = true) ||
-            trimmed.startsWith("peartube://cast/", ignoreCase = true)
-        if (!settings.value.hasSources && !isReceiverUri) {
-            val candidate = if (trimmed.startsWith("peartube:", ignoreCase = true)) trimmed else "peartube://channel/$trimmed"
-            runCatching { Settings.parseSourceToken(candidate, "channel") }.onSuccess { spec ->
-                val next = settings.value.withSource(spec)
-                runCatching { save(next) }.onFailure { error.value = it.message }
-                return
-            }
-        }
         scope.launch {
             try {
+                val hadSources = settings.value.hasSources
                 val res = worker.openUri(trimmed)
                 res.source?.let { src ->
                     val next = settings.value.withSource(SourceSpec(src.key, src.kind, src.alias))
                     next.save(dataDir)
                     settings.value = next
                     screen.value = Screen.List
+                    // Before the first channel the node never started; the worklet only parsed the link.
+                    if (!hadSources) starts.trySend(next)
                 }
                 res.entry?.let { entry ->
                     screen.value = Screen.Play(entry)
@@ -438,17 +431,9 @@ class AppModel(private val app: Application) {
                 notice.value = "Clearing cache & compacting storage…"
                 val (cleared, reclaimed) = worker.clearCache(key)
                 refresh()
-                fun fmt(b: Long): String {
-                    val mb = b / (1024.0 * 1024.0)
-                    return when {
-                        b >= 1024L * 1024L * 1024L -> String.format(java.util.Locale.US, "%.2f GB", mb / 1024.0)
-                        b >= 1024L * 1024L -> String.format(java.util.Locale.US, "%.1f MB", mb)
-                        else -> "${maxOf(1L, b / 1024L)} KB"
-                    }
-                }
                 notice.value = when {
-                    reclaimed > 0L -> "Freed ${fmt(reclaimed)} on device"
-                    cleared > 0L -> "Cleared ${fmt(cleared)} from cache"
+                    reclaimed > 0L -> "Freed ${formatBytes(reclaimed)} on device"
+                    cleared > 0L -> "Cleared ${formatBytes(cleared)} from cache"
                     else -> "Storage cache compacted"
                 }
             } catch (e: Exception) {
@@ -459,7 +444,8 @@ class AppModel(private val app: Application) {
 
     fun downloadEntry(entry: Entry, nameOverride: String? = null) {
         if (downloadJobs.containsKey(entry.key)) return
-        if (entry.streamUrl.isBlank()) {
+        val url = entry.downloadUrl ?: entry.streamUrl
+        if (url.isBlank()) {
             error.value = "This video has no local stream URL yet"
             return
         }
@@ -471,26 +457,21 @@ class AppModel(private val app: Application) {
             var conn: HttpURLConnection? = null
             try {
                 runCatching { worker.warm(entry.key) }
-                conn = (URL(entry.streamUrl).openConnection() as HttpURLConnection).apply {
+                conn = (URL(url).openConnection() as HttpURLConnection).apply {
                     connectTimeout = 15_000
                     readTimeout = 45_000
                     requestMethod = "GET"
                 }
                 val status = conn.responseCode
                 if (status != 200 && status != 206) error("Stream answered HTTP $status")
-                val input = conn.inputStream
-                val head = ByteArray(256)
-                var headLen = 0
-                while (headLen < head.size) {
-                    ensureActive()
-                    val n = input.read(head, headLen, head.size - headLen)
-                    if (n < 0) break
-                    headLen += n
-                }
-                val (ext, mime) = sniffContainer(head, headLen)
+                val disp = conn.getHeaderField("Content-Disposition") ?: ""
+                val headerName = Regex("filename\\*?=(?:UTF-8'')?\"?([^\";]+)\"?", RegexOption.IGNORE_CASE)
+                    .find(disp)?.groupValues?.get(1)?.trim()
+                val mime = conn.contentType ?: "application/octet-stream"
                 val cleanBase = rawTitle.replace(Regex("[/\\\\:*?\"<>|\\x00-\\x1f]+"), " ").replace(Regex("\\s+"), " ").trim().take(160).ifEmpty { "PearTube Video" }
-                val knownExt = Regex("\\.(mkv|mp4|webm|mov|avi|m4v|ts|ogv|ogg|flac|mp3)$", RegexOption.IGNORE_CASE)
-                val fileName = if (knownExt.containsMatchIn(cleanBase)) cleanBase else "$cleanBase$ext"
+                val fileName = (headerName?.takeIf { it.isNotBlank() } ?: cleanBase).let {
+                    if (it.contains('.')) it else "$it.mkv"
+                }
 
                 val values = ContentValues().apply {
                     put(MediaStore.MediaColumns.DISPLAY_NAME, fileName)
@@ -505,12 +486,8 @@ class AppModel(private val app: Application) {
                 var written = 0L
                 var lastTick = 0L
                 val buf = ByteArray(256 * 1024)
+                val input = conn.inputStream
                 resolver.openOutputStream(uri)?.use { out ->
-                    if (headLen > 0) {
-                        out.write(head, 0, headLen)
-                        written += headLen
-                        downloads.value = downloads.value + (entry.key to DownloadProgress(written, entry.size))
-                    }
                     while (true) {
                         ensureActive()
                         val n = input.read(buf)
@@ -553,23 +530,6 @@ class AppModel(private val app: Application) {
     fun cancelDownload(key: String) {
         downloadJobs.remove(key)?.cancel()
         downloads.value = downloads.value - key
-    }
-
-    private fun sniffContainer(b: ByteArray, len: Int): Pair<String, String> {
-        fun ascii(off: Int, n: Int) = if (off + n <= len) String(b, off, n, Charsets.ISO_8859_1) else ""
-        if (len >= 4 && b[0] == 0x1a.toByte() && b[1] == 0x45.toByte() && b[2] == 0xdf.toByte() && b[3] == 0xa3.toByte()) {
-            return if (ascii(0, minOf(len, 128)).lowercase().contains("webm")) ".webm" to "video/webm"
-            else ".mkv" to "video/x-matroska"
-        }
-        if (len >= 12 && ascii(4, 4) in setOf("ftyp", "moov", "mdat", "free", "wide", "skip")) {
-            return if (ascii(8, 4) == "qt  ") ".mov" to "video/quicktime" else ".mp4" to "video/mp4"
-        }
-        if (len >= 12 && ascii(0, 4) == "RIFF" && ascii(8, 4) == "AVI ") return ".avi" to "video/x-msvideo"
-        if (len >= 4 && ascii(0, 4) == "OggS") return ".ogv" to "video/ogg"
-        if (len >= 4 && ascii(0, 4) == "fLaC") return ".flac" to "audio/flac"
-        if (len >= 3 && ascii(0, 3) == "ID3") return ".mp3" to "audio/mpeg"
-        if (len >= 1 && b[0] == 0x47.toByte() && (len < 189 || b[188] == 0x47.toByte())) return ".ts" to "video/mp2t"
-        return ".mkv" to "application/octet-stream"
     }
     fun importSoundFont(uri: Uri) = soundFontJob { SoundFont.import(app.contentResolver, uri, dataDir) }
 

@@ -186,7 +186,7 @@ function penaltyScore (mat, size) {
   return score + k * 10
 }
 
-export function encodeQrMatrix (text) {
+function encodeQrMatrix (text) {
   const bytes = b4a.from(String(text || ''))
   const { ver, codewords } = buildCodewords(bytes)
   const size = ver * 4 + 17

@@ -6,7 +6,7 @@ import b4a from 'b4a'
 import { page } from './ui.js'
 import { receiverPage } from './cast-ui.js'
 import { videoSize, resolutionLabel } from './resolution.js'
-import { parseUri } from './protocol.js'
+import { MEDIA_FILE, parseUri } from './protocol.js'
 
 const MAX_BODY = 64 * 1024
 // Loopback, RFC 1918, CGNAT/Tailscale (100.64/10), link-local, and IPv6 ULA/link-local, plain or IPv4-mapped.
@@ -98,7 +98,7 @@ function sniffDownloadFormat (head) {
 
 function contentDispositionFor (rawTitle, ext) {
   const base = String(rawTitle || 'video').replace(/[/\\:*?"<>|\x00-\x1f]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 180) || 'video'
-  const hasExt = /\.(mkv|mp4|webm|mov|avi|m4v|ts|m2ts|mpg|mpeg|ogv|ogg|flac|mp3|opus|wav|aac)$/i.test(base)
+  const hasExt = MEDIA_FILE.test(base)
   const full = hasExt ? base : base + ext
   const ascii = full.replace(/[^\x20-\x7e]/g, '_').replace(/["\\]/g, '_')
   return `attachment; filename="${ascii}"; filename*=UTF-8''${encodeURIComponent(full)}`
@@ -297,11 +297,6 @@ export function createApi (state) {
       const { key = null } = await body(req).catch(() => ({}))
       return n.clearCache(key)
     }
-    if (req.method === 'POST' && path === '/v1/cache/limit') {
-      const n = requireNode(node)
-      const { maxBytes = 0 } = await body(req).catch(() => ({}))
-      return { cacheMaxBytes: n.setCacheMaxBytes(maxBytes) }
-    }
     if (req.method === 'POST' && path === '/v1/acquire') {
       if (!acquirer) throw Object.assign(new Error('Acquire unavailable on read-only peer'), { status: 404 })
       const { id, title, source, channel, private: isPrivate = false } = await body(req)
@@ -333,18 +328,12 @@ export function createApi (state) {
         const st = state.cast.status()
         return { ...st, webReceiverQrSvg: st.webReceiverUrl ? state.cast.webSetupQrSvg(st.webReceiverUrl) : '' }
       }
-      if (req.method === 'POST' && path === '/v1/cast/web-register') return state.cast.registerWebReceiver(await body(req))
-      if (req.method === 'POST' && path === '/v1/cast/web-state') return state.cast.updateWebReceiverState(await body(req))
       if (req.method === 'POST' && path === '/v1/cast/pair') return state.cast.pairReceiver(await body(req))
       const recDel = req.method === 'DELETE' && path.match(/^\/v1\/cast\/receivers\/([^/]+)$/)
       if (recDel) return state.cast.removeReceiver(decodeURIComponent(recDel[1]))
       if (req.method === 'POST' && path === '/v1/cast/play') return state.cast.castPlay(await body(req))
-      if (req.method === 'POST' && path === '/v1/cast/attach') return state.cast.castAttach(await body(req))
       if (req.method === 'POST' && path === '/v1/cast/control') return state.cast.castControl(await body(req))
       if (req.method === 'POST' && path === '/v1/cast/stop') return state.cast.castStop(await body(req))
-      if (req.method === 'POST' && path === '/v1/cast/receiver/start') return state.cast.startLocalReceiver(await body(req))
-      if (req.method === 'POST' && path === '/v1/cast/receiver/stop') { await state.cast.stopLocalReceiver(); return { stopped: true } }
-      if (req.method === 'POST' && path === '/v1/cast/receiver/rotate') return state.cast.rotateLocalReceiverCode()
     }
     // Stremio v3 Addon endpoints: zero-account plug-and-play P2P streams for Stremio, Omni, and Fusion.
     if (req.method === 'GET' && path === '/manifest.json') {

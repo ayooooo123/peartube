@@ -27,7 +27,6 @@ import { createNode } from '../src/index.js'
 import { parseUri } from '../src/protocol.js'
 import { createAcquirer } from '../src/acquire.js'
 import { createMirrorHost } from '../src/mirror.js'
-import { signSeedRequest } from '../src/hiverelay.js'
 
 const tmp = label => mkdtempSync(join(tmpdir(), `peartube-pvb-${label}-`))
 const sha256 = buf => createHash('sha256').update(buf).digest('hex')
@@ -187,7 +186,6 @@ async function startCappedHiveRelay ({ bootstrap, availableBytes }) {
 }
 
 test('1-Hypercore-per-video ingests, lazy wakeup, shared-ref purge guard, and legacy-slot split migration work end to end', { timeout: 240_000 }, async t => {
-  void signSeedRequest
   const testnet = await createTestnet(3)
   const cleanups = []
   t.after(async () => {

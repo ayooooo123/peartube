@@ -12,6 +12,7 @@ import b4a from 'b4a'
 import { createNode } from '../src/index.js'
 import { createLan, interfaceAdapter, lanAddress } from '../src/lan.js'
 import { createReceiver, resolvePeerStorage } from '../src/cast.js'
+import { RECEIVER_PORT } from '../src/protocol.js'
 
 if (typeof globalThis.Bare !== 'undefined') {
   await import('bare-process/global')
@@ -29,7 +30,7 @@ const hasFlag = flag => args.includes(flag)
 const storage = argVal('--storage', env.PEARTUBE_STORAGE || './peartube-receiver-data')
 const peerStorageArg = argVal('--peer-storage', env.PEARTUBE_PEER_STORAGE || '')
 const name = argVal('--name', env.PEARTUBE_RECEIVER_NAME || `${os.hostname?.() || 'PearTube'} TV`)
-const port = Number(argVal('--port', env.PEARTUBE_RECEIVER_PORT || 8176))
+const port = Number(argVal('--port', env.PEARTUBE_RECEIVER_PORT || RECEIVER_PORT))
 const thin = hasFlag('--thin') || env.PEARTUBE_RECEIVER_THIN === '1'
 const openAuth = hasFlag('--open') || env.PEARTUBE_RECEIVER_OPEN === '1'
 const playerKind = argVal('--player', env.PEARTUBE_RECEIVER_PLAYER || 'web')

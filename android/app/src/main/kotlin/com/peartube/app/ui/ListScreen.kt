@@ -32,6 +32,8 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.peartube.app.*
+import com.peartube.shared.formatBytes
+import com.peartube.shared.QrCodeView
 
 @Composable
 internal fun CinemaIcon(icon: ImageVector, description: String, tint: androidx.compose.ui.graphics.Color = Dim, onClick: () -> Unit) {
@@ -65,14 +67,14 @@ fun ListScreen(model: AppModel) {
         entries.distinctBy { it.key }.filter {
             (contextual || query.isBlank() || "${it.title} ${it.id}".contains(query, true)) &&
                 (source == null || it.source == source) && when (filter) {
-                    "Movies" -> label(it.id) == "Movie"
-                    "Series" -> label(it.id) != "Movie"
+                    "Movies" -> !it.isEpisode
+                    "Series" -> it.isEpisode
                     "On Device" -> it.local || (it.size > 0 && it.cachedBytes >= it.size)
                     else -> true
                 }
-        }.sortedWith(compareBy({ it.title.lowercase() }, { label(it.id) }))
+        }.sortedWith(compareBy({ it.baseTitle.lowercase() }, { it.season ?: 0 }, { it.episode ?: 0 }))
     }
-    val groups = remember(rows) { rows.groupBy { if (label(it.id) == "Movie") it.id else seriesKey(it) } }
+    val groups = remember(rows) { rows.groupBy { if (it.season == null) it.id else it.seriesKey } }
     Column(Modifier.fillMaxSize().navigationBarsPadding()) {
         Row(Modifier.fillMaxWidth().statusBarsPadding().height(56.dp).padding(start = 16.dp, end = 4.dp), verticalAlignment = Alignment.CenterVertically) {
             Row(Modifier.weight(1f).clickable { hood = true }, verticalAlignment = Alignment.CenterVertically) {
@@ -96,13 +98,7 @@ fun ListScreen(model: AppModel) {
             modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp))
         AnimatedVisibility(contextual) {
             Row(Modifier.padding(horizontal = 16.dp).fillMaxWidth().clip(RoundedCornerShape(16.dp)).background(CardElevated).padding(start = 16.dp), verticalAlignment = Alignment.CenterVertically) {
-                val action = when {
-                    query.contains("://receiver/", true) || query.contains("://cast/", true) -> "Connect TV"
-                    query.contains("://watch/", true) || query.contains("://stream/", true) -> "Play Stream"
-                    query.contains("://access/", true) -> "Unlock Channel"
-                    else -> "Connect Channel"
-                }
-                Text(action, color = Ink, modifier = Modifier.weight(1f))
+                Text("Open link", color = Ink, modifier = Modifier.weight(1f))
                 TextButton(onClick = { connect() }) { Text("Let's go", color = Brand) }
             }
         }
@@ -134,7 +130,7 @@ fun ListScreen(model: AppModel) {
             }
             groups.forEach { (key, episodes) ->
                 item(key = key) {
-                    if (label(episodes.first().id) == "Movie") MovieCard(model, episodes.first(), history[episodes.first().key], downloads[episodes.first().key])
+                    if (episodes.first().season == null) MovieCard(model, episodes.first(), history[episodes.first().key], downloads[episodes.first().key])
                     else SeriesCard(model, episodes, history, downloads, query.isNotBlank() && !contextual)
                 }
             }
@@ -145,23 +141,10 @@ fun ListScreen(model: AppModel) {
     if (scanner) QrScannerSheet(onScanned = { scanner = false; if (it.startsWith("peartube:", true)) model.openUriOrKey(it) else model.pairCastByUriOrHost(it) }, onClose = { scanner = false })
 }
 
-private fun seriesKey(entry: Entry): String = Regex("(?i)(?:imdb:)?(tt\\d+)").find(entry.id)?.groupValues?.get(1)?.lowercase()
-    ?: entry.title.replace(Regex("(?i)[ ._-]*s\\d+e\\d+.*$"), "").trim()
-
-internal fun episodeOrder(id: String): Int {
-    val code = label(id)
-    return (code.substringAfter('S').substringBefore('E').toIntOrNull() ?: 0) * 10_000 +
-        (code.substringAfter('E', "0").toIntOrNull() ?: 0)
-}
-
-private fun displayTitle(raw: String): Pair<String, String?> {
-    val match = Regex("[ ._-]*\\(?((?:19|20)\\d{2})\\)?$").find(raw.trim())
-    return if (match != null) raw.substring(0, match.range.first).trim() to match.groupValues[1] else raw to null
-}
-
 @Composable
 private fun MovieCard(model: AppModel, entry: Entry, progress: WatchProgress?, dl: com.peartube.app.DownloadProgress?) {
-    val (title, year) = displayTitle(entry.title)
+    val title = entry.baseTitle.ifBlank { entry.title }
+    val year = entry.year
     Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(20.dp)).background(CardBg).clickable { model.playEntry(entry) }) {
         Row(Modifier.padding(start = 18.dp, end = 4.dp, top = 12.dp, bottom = 12.dp), verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(7.dp)) {
@@ -180,15 +163,15 @@ private fun MovieCard(model: AppModel, entry: Entry, progress: WatchProgress?, d
 
 @Composable
 private fun SeriesCard(model: AppModel, rows: List<Entry>, history: Map<String, WatchProgress>, downloads: Map<String, com.peartube.app.DownloadProgress>, searching: Boolean) {
-    val episodes = rows.distinctBy { it.id }.sortedBy { episodeOrder(it.id) }
-    val seasons = episodes.map { label(it.id).substringBefore('E') }.distinct()
-    var expanded by remember(seriesKey(episodes.first())) { mutableStateOf(false) }
-    var season by remember(seasons) { mutableStateOf(seasons.first()) }
+    val episodes = rows.distinctBy { it.id }.sortedWith(compareBy({ it.season ?: 0 }, { it.episode ?: 0 }))
+    val seasons = episodes.mapNotNull { it.seasonLabel }.distinct()
+    var expanded by remember(episodes.first().seriesKey) { mutableStateOf(false) }
+    var season by remember(seasons) { mutableStateOf(seasons.firstOrNull() ?: "") }
     val latest = episodes.mapNotNull { e -> history[e.key]?.let { e to it } }.maxByOrNull { it.second.updatedAt }
     val resume = latest?.takeIf { it.second.partial }?.first
         ?: latest?.let { pair -> episodes.getOrNull(episodes.indexOf(pair.first) + 1) }
     val next = resume ?: episodes.first()
-    val title = episodes.first().title.replace(Regex("(?i)[ ._-]*s\\d+e\\d+.*$"), "").ifBlank { episodes.first().title }
+    val title = episodes.first().baseTitle.ifBlank { episodes.first().title }
     Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(20.dp)).background(CardBg)) {
         Row(Modifier.fillMaxWidth().clickable { expanded = !expanded }.padding(start = 18.dp, top = 14.dp, end = 4.dp), verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(5.dp)) {
@@ -199,15 +182,15 @@ private fun SeriesCard(model: AppModel, rows: List<Entry>, history: Map<String, 
         }
         TextButton(onClick = { model.playEntry(next) }, modifier = Modifier.padding(start = 8.dp, bottom = 4.dp)) {
             Icon(PlayIcon, null, tint = Brand, modifier = Modifier.size(18.dp))
-            Text("${if (latest != null && resume != null) "Resume" else "Play"} ${label(next.id)}", color = Brand, modifier = Modifier.padding(start = 4.dp))
+            Text("${if (latest != null && resume != null) "Resume" else "Play"} ${next.episodeLabel}", color = Brand, modifier = Modifier.padding(start = 4.dp))
         }
         AnimatedVisibility(expanded || searching || rows.size <= 2) {
             Column {
                 Row(Modifier.horizontalScroll(rememberScrollState()).padding(horizontal = 14.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     seasons.forEach { s -> FilterChip(selected = season == s, onClick = { season = s }, label = { Text(s) }) }
                 }
-                episodes.filter { label(it.id).startsWith(season) }.forEach { episode ->
-                    val epCode = label(episode.id)
+                episodes.filter { it.seasonLabel == season }.forEach { episode ->
+                    val epCode = episode.episodeLabel
                     val dlName = if (episode.title.contains(epCode, ignoreCase = true)) episode.title else "${episode.title} $epCode"
                     val epDl = downloads[episode.key]
                     HorizontalDivider(color = Line.copy(alpha = .5f))

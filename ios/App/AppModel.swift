@@ -51,10 +51,13 @@ final class AppModel: ObservableObject {
             settings = storage.load("settings.json", fallback: Settings())
             history = storage.load("watch-history.json", fallback: [String: WatchProgress]())
             soundfontPresent = FileManager.default.fileExists(atPath: storage.soundfont.path)
-            try applyLaunchArguments()
             let worker = try Worker(); self.worker = worker
             worker.onEvent = { [weak self] event in self?.receive(event) }
-            showSettings = !settings.configured && !settings.hasSources
+            let hasLaunchArgs = ["-peartube-tracker", "-peartube-bootstrap", "-peartube-lan", "-peartube-relays", "-peartube-private"].contains(where: { name in
+                guard let i = args.firstIndex(of: name), args.indices.contains(i + 1) else { return false }
+                return true
+            })
+            showSettings = !hasLaunchArgs && !settings.configured && !settings.hasSources
             Task { await start() }
             pollTask = Task { [weak self] in
                 while !Task.isCancelled {
@@ -70,11 +73,28 @@ final class AppModel: ObservableObject {
         } catch { self.error = error.localizedDescription; showSettings = true }
     }
 
-    private func applyLaunchArguments() throws {
+    func normalizeSettings(_ raw: [String: Any], requireChannel: Bool = false) async throws -> Settings {
+        guard let worker else { throw AppFailure("The embedded worker is unavailable.") }
+        let res = try await worker.request("normalizeSettings", ["settings": raw, "requireChannel": requireChannel]) as? [String: Any] ?? [:]
+        let data = try JSONSerialization.data(withJSONObject: res)
+        return try JSONDecoder().decode(Settings.self, from: data)
+    }
+
+    private func applyLaunchArguments() async throws {
         let args = ProcessInfo.processInfo.arguments
         func argument(_ name: String) -> String? { guard let i = args.firstIndex(of: name), args.indices.contains(i + 1) else { return nil }; return args[i + 1] }
         guard ["-peartube-tracker", "-peartube-bootstrap", "-peartube-lan", "-peartube-relays", "-peartube-private"].contains(where: { argument($0) != nil }) else { return }
-        settings = try Settings.parse(tracker: argument("-peartube-tracker") ?? settings.tracker, sources: settings.sources.map(\.uri).joined(separator: "\n"), relays: argument("-peartube-relays") ?? settings.relayThrough.joined(separator: "\n"), bootstrap: argument("-peartube-bootstrap") ?? settings.bootstrap.joined(separator: "\n"), lan: argument("-peartube-lan").map { $0.lowercased() == "true" } ?? settings.lanDiscovery, privateRouting: argument("-peartube-private").map { $0.lowercased() == "true" } ?? settings.privateRouting)
+        let raw: [String: Any] = [
+            "tracker": argument("-peartube-tracker") ?? settings.tracker,
+            "sources": settings.sources.map(\.json),
+            "relayThrough": argument("-peartube-relays") ?? settings.relayThrough.joined(separator: "\n"),
+            "bootstrap": argument("-peartube-bootstrap") ?? settings.bootstrap.joined(separator: "\n"),
+            "lanDiscovery": argument("-peartube-lan").map { $0.lowercased() == "true" } ?? settings.lanDiscovery,
+            "privateRouting": argument("-peartube-private").map { $0.lowercased() == "true" } ?? settings.privateRouting
+        ]
+        var next = try await normalizeSettings(raw, requireChannel: false)
+        next.configured = true
+        settings = next
         try storage?.save(settings, name: "settings.json")
     }
     func start() async {
@@ -82,18 +102,12 @@ final class AppModel: ObservableObject {
         busy = true; started = false
         defer { busy = false; writeEvidence(force: true) }
         do {
-            let storeKey = !settings.tracker.isEmpty ? settings.tracker : (settings.mnemonic.isEmpty ? "" : "linked")
-            let folder = try storage.trackerStore(storeKey)
+            try await applyLaunchArguments()
+            _ = try await worker.request("init", ["castStorage": castStorage])
             let params: [String: Any] = [
-                "storage": folder.path,
-                "tracker": settings.tracker.isEmpty ? NSNull() : settings.tracker as Any,
-                "mnemonic": settings.mnemonic.isEmpty ? NSNull() : settings.mnemonic as Any,
-                "join": !settings.mnemonic.isEmpty && settings.tracker.isEmpty,
-                "sources": settings.sources.map(\.json),
-                "relayThrough": settings.relayThrough.isEmpty ? NSNull() : settings.relayThrough as Any,
-                "bootstrap": settings.bootstrap.isEmpty ? NSNull() : settings.bootstrap as Any,
-                "lan": settings.lanDiscovery,
-                "privateRouting": settings.privateRouting
+                "trackersDir": storage.trackers.path,
+                "defaultFolder": "default",
+                "settings": settings.json
             ]
             status = try await worker.request("start", params) as? [String: Any] ?? [:]
             started = true
@@ -118,7 +132,7 @@ final class AppModel: ObservableObject {
             settings.sources = event.objects("sources").filter { !$0.flag("primary") && !$0.flag("writable") }.map(SourceSpec.init)
             do { try storage?.save(settings, name: "settings.json") } catch { self.error = error.localizedDescription }
             Task { await refresh() }
-        case "fatal", "exited": error = event.string("error").isEmpty ? "The embedded P2P worker stopped." : event.string("error")
+        case "fatal": error = event.string("error").isEmpty ? "The embedded P2P worker stopped." : event.string("error")
         default: break
         }
         writeEvidence(force: true)
@@ -147,10 +161,9 @@ final class AppModel: ObservableObject {
     var receivers: [CastReceiver] { cast.objects("receivers").map { CastReceiver(json: $0) } }
     var session: [String: Any] { cast.object("session") }
     var remoteState: PlaybackState { PlaybackState(json: session.object("state")) }
-    var contextualQuery: Bool { isKey(query.trimmingCharacters(in: .whitespacesAndNewlines)) || query.lowercased().hasPrefix("peartube:") }
+    var contextualQuery: Bool { (query.count == 64 && query.allSatisfy(\.isHexDigit)) || query.lowercased().hasPrefix("peartube:") }
     var smartAction: String {
         let q = query.lowercased()
-        if q.contains("receiver/") || q.contains("cast/") { return "Connect TV" }
         if q.contains("watch/") || q.contains("stream/") { return "Play Stream" }
         if q.contains("access/") { return "Unlock Channel" }
         return "Connect Channel"
@@ -219,7 +232,7 @@ final class AppModel: ObservableObject {
             guard let worker else { throw AppFailure("The embedded worker is unavailable.") }
             if !started { await start() }
             guard started else { throw AppFailure("The P2P worker has not started.") }
-            let result = try await worker.request("openUri", ["uri": input, "storage": castStorage]) as? [String: Any] ?? [:]
+            let result = try await worker.request("openUri", ["uri": input]) as? [String: Any] ?? [:]
             if !result.object("source").isEmpty {
                 let spec = SourceSpec(result.object("source")); settings.add(spec); settings.configured = true
                 try storage?.save(settings, name: "settings.json"); showSettings = false
@@ -289,8 +302,7 @@ final class AppModel: ObservableObject {
     private var castStorage: String { storage?.privateFiles.appendingPathComponent("cast", isDirectory: true).path ?? "" }
     private func castRequest(_ method: String, _ params: [String: Any] = [:]) async throws -> [String: Any] {
         guard let worker else { throw AppFailure("The embedded worker is unavailable.") }
-        var payload = params; payload["storage"] = castStorage
-        let result = try await worker.request(method, payload) as? [String: Any] ?? [:]
+        let result = try await worker.request(method, params) as? [String: Any] ?? [:]
         cast = result; reconcileBackground(); writeEvidence(force: true)
         return result
     }
@@ -320,7 +332,7 @@ final class AppModel: ObservableObject {
             var params: [String: Any] = ["id": id, "code": value]
             if id.isEmpty {
                 let raw = address.trimmingCharacters(in: .whitespacesAndNewlines)
-                if isKey(raw) { params["publicKey"] = raw.lowercased() }
+                if raw.count == 64 && raw.allSatisfy(\.isHexDigit) { params["publicKey"] = raw.lowercased() }
                 else if let url = URLComponents(string: raw.contains("://") ? raw : "http://\(raw)"), let host = url.host, !host.isEmpty {
                     params["host"] = host; params["port"] = url.port ?? 8176
                 } else { throw AppFailure("Choose a screen or enter its host:port before pairing.") }
@@ -345,7 +357,7 @@ final class AppModel: ObservableObject {
             let normalized = raw.contains("://") ? raw : "http://\(raw)"
             if let c = URLComponents(string: normalized), let uri = c.queryItems?.first(where: { $0.name == "uri" })?.value, uri.lowercased().hasPrefix("peartube:") { await openURI(uri); return }
             var params: [String: Any] = [:]
-            if isKey(raw) { params["publicKey"] = raw.lowercased() }
+            if raw.count == 64 && raw.allSatisfy(\.isHexDigit) { params["publicKey"] = raw.lowercased() }
             else if let c = URLComponents(string: normalized), let host = c.host, !host.isEmpty { params = ["host": host, "port": c.port ?? 8176] }
             else { throw AppFailure("Enter a receiver URI or host:port.") }
             _ = try await castRequest("castPair", params)
@@ -393,7 +405,7 @@ final class AppModel: ObservableObject {
         else if keepAwake && workerSuspended { worker?.resume(); workerSuspended = false }
     }
     func download(_ entry: MediaEntry) {
-        guard downloadTasks[entry.key] == nil, let url = URL(string: entry.streamURL) else { return }
+        guard downloadTasks[entry.key] == nil, let url = URL(string: entry.downloadURL.isEmpty ? entry.streamURL : entry.downloadURL) else { return }
         downloads[entry.key] = 0
         notice = "Downloading \(entry.title) to Files…"
         let key = entry.key
@@ -402,7 +414,7 @@ final class AppModel: ObservableObject {
             guard let self else { return }
             _ = try? await self.worker?.request("warm", ["key": key])
             do {
-                let savedName = try await Self.streamToDocuments(url: url, title: rawTitle, expectedSize: Int64(entry.size)) { written in
+                let savedName = try await Self.streamToDocuments(url: url, fallbackTitle: rawTitle, expectedSize: Int64(entry.size)) { written in
                     await MainActor.run { self.downloads[key] = Double(written) }
                 }
                 self.notice = "Saved \(savedName) to Files"
@@ -421,23 +433,42 @@ final class AppModel: ObservableObject {
         downloads.removeValue(forKey: key)
         reconcileBackground()
     }
-    nonisolated private static func streamToDocuments(url: URL, title: String, expectedSize: Int64, onProgress: @Sendable @escaping (Int64) async -> Void) async throws -> String {
+    nonisolated private static func filenameFromDisposition(_ disposition: String?) -> String? {
+        guard let disposition else { return nil }
+        if let match = disposition.range(of: "filename\\*\\s*=\\s*UTF-8''([^;]+)", options: [.regularExpression, .caseInsensitive]) {
+            let encoded = String(disposition[match]).replacingOccurrences(of: "filename*=", with: "", options: .caseInsensitive)
+                .trimmingCharacters(in: .whitespaces)
+                .replacingOccurrences(of: "UTF-8''", with: "", options: .caseInsensitive)
+                .trimmingCharacters(in: CharacterSet(charactersIn: "\""))
+            if let decoded = encoded.removingPercentEncoding, !decoded.isEmpty {
+                return decoded
+            }
+        }
+        if let match = disposition.range(of: "filename\\s*=\\s*\"([^\"]+)\"", options: [.regularExpression, .caseInsensitive]) {
+            let raw = String(disposition[match])
+            if let firstQuote = raw.firstIndex(of: "\""), let lastQuote = raw.lastIndex(of: "\""), firstQuote < lastQuote {
+                let name = String(raw[raw.index(after: firstQuote)..<lastQuote]).trimmingCharacters(in: .whitespaces)
+                if !name.isEmpty { return name }
+            }
+        }
+        if let match = disposition.range(of: "filename\\s*=\\s*([^;\\s]+)", options: [.regularExpression, .caseInsensitive]) {
+            let raw = String(disposition[match]).replacingOccurrences(of: "filename=", with: "", options: .caseInsensitive).trimmingCharacters(in: .whitespaces)
+            if !raw.isEmpty { return raw }
+        }
+        return nil
+    }
+    nonisolated private static func streamToDocuments(url: URL, fallbackTitle: String, expectedSize: Int64, onProgress: @Sendable @escaping (Int64) async -> Void) async throws -> String {
         let (bytes, response) = try await URLSession.shared.bytes(from: url)
         if let http = response as? HTTPURLResponse, http.statusCode != 200 && http.statusCode != 206 {
             throw AppFailure("Stream answered HTTP \(http.statusCode)")
         }
-        var iterator = bytes.makeAsyncIterator()
-        var head = Data()
-        head.reserveCapacity(256)
-        while head.count < 256, let b = try await iterator.next() {
-            try Task.checkCancellation()
-            head.append(b)
-        }
-        let ext = sniffExtension(head)
-        let clean = title.replacingOccurrences(of: "[/\\\\:*?\"<>|\\x00-\\x1f]+", with: " ", options: .regularExpression)
+        let clean = fallbackTitle.replacingOccurrences(of: "[/\\\\:*?\"<>|\\x00-\\x1f]+", with: " ", options: .regularExpression)
             .split(whereSeparator: \.isWhitespace).joined(separator: " ")
-        let stem = clean.isEmpty ? "PearTube Video" : String(clean.prefix(160))
-        let fileName = stem.range(of: "\\.(mkv|mp4|webm|mov|avi|m4v|ts|ogv|ogg|flac|mp3)$", options: [.regularExpression, .caseInsensitive]) != nil ? stem : "\(stem)\(ext)"
+        let fallback = clean.isEmpty ? "PearTube Video.mkv" : (clean.hasSuffix(".mkv") ? clean : "\(clean).mkv")
+        let disposition = (response as? HTTPURLResponse)?.value(forHTTPHeaderField: "Content-Disposition")
+        let rawName = filenameFromDisposition(disposition) ?? fallback
+        let fileName = rawName.replacingOccurrences(of: "[/\\\\:*?\"<>|\\x00-\\x1f]+", with: " ", options: .regularExpression)
+            .split(whereSeparator: \.isWhitespace).joined(separator: " ")
         let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!.appendingPathComponent("Downloads", isDirectory: true)
         try FileManager.default.createDirectory(at: docs, withIntermediateDirectories: true)
         let finalURL = docs.appendingPathComponent(fileName)
@@ -447,15 +478,10 @@ final class AppModel: ObservableObject {
         let handle = try FileHandle(forWritingTo: partURL)
         var written: Int64 = 0
         do {
-            if !head.isEmpty {
-                try handle.write(contentsOf: head)
-                written += Int64(head.count)
-                await onProgress(written)
-            }
             var buf = Data()
             buf.reserveCapacity(262_144)
             var lastUpdate = Date.distantPast
-            while let b = try await iterator.next() {
+            for try await b in bytes {
                 buf.append(b)
                 if buf.count >= 262_144 {
                     try Task.checkCancellation()
@@ -486,24 +512,6 @@ final class AppModel: ObservableObject {
             try? FileManager.default.removeItem(at: partURL)
             throw error
         }
-    }
-    nonisolated private static func sniffExtension(_ head: Data) -> String {
-        let bytes = [UInt8](head)
-        func ascii(_ off: Int, _ len: Int) -> String {
-            off + len <= bytes.count ? String(bytes: bytes[off..<(off + len)], encoding: .isoLatin1) ?? "" : ""
-        }
-        if bytes.count >= 4 && bytes[0] == 0x1a && bytes[1] == 0x45 && bytes[2] == 0xdf && bytes[3] == 0xa3 {
-            return ascii(0, min(bytes.count, 128)).lowercased().contains("webm") ? ".webm" : ".mkv"
-        }
-        if bytes.count >= 12 && ["ftyp", "moov", "mdat", "free", "wide", "skip"].contains(ascii(4, 4)) {
-            return ascii(8, 4) == "qt  " ? ".mov" : ".mp4"
-        }
-        if bytes.count >= 12 && ascii(0, 4) == "RIFF" && ascii(8, 4) == "AVI " { return ".avi" }
-        if bytes.count >= 4 && ascii(0, 4) == "OggS" { return ".ogv" }
-        if bytes.count >= 4 && ascii(0, 4) == "fLaC" { return ".flac" }
-        if bytes.count >= 3 && ascii(0, 3) == "ID3" { return ".mp3" }
-        if !bytes.isEmpty && bytes[0] == 0x47 && (bytes.count < 189 || bytes[188] == 0x47) { return ".ts" }
-        return ".mkv"
     }
     func importSoundfont(_ url: URL) async {
         guard let storage, !soundfontBusy else { return }

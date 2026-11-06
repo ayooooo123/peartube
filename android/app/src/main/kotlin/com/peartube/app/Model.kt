@@ -4,7 +4,7 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
 import java.io.IOException
-import java.net.URLDecoder
+import com.peartube.shared.formatBytes
 import java.util.Locale
 
 data class SourceSpec(
@@ -34,15 +34,9 @@ data class Settings(
     val bootstrap: List<String> = emptyList(),
     val lanDiscovery: Boolean = true,
     val privateRouting: Boolean = false,
-    /** Playback cache ceiling in GB kept to help the network; 0 = unlimited. */
     val cacheMaxGb: Int = 10,
 ) {
     val hasSources: Boolean get() = tracker.isNotEmpty() || mnemonic.isNotEmpty() || sources.isNotEmpty()
-
-    fun formatSources(): String = sources.joinToString("\n") { s ->
-        if (s.alias.isEmpty()) "peartube://channel/${s.key}"
-        else "peartube://channel/${s.key}?name=${s.alias}"
-    }
 
     fun withSource(spec: SourceSpec): Settings {
         if (tracker == spec.key) return this
@@ -51,112 +45,45 @@ data class Settings(
         return copy(sources = updated)
     }
 
+    fun toJson(): JSONObject = JSONObject()
+        .put("tracker", tracker)
+        .apply { if (mnemonic.isNotEmpty()) put("mnemonic", mnemonic) }
+        .put("sources", JSONArray().apply { sources.forEach { put(it.toJson()) } })
+        .put("relayThrough", JSONArray(relayThrough))
+        .put("bootstrap", JSONArray(bootstrap))
+        .put("lanDiscovery", lanDiscovery)
+        .put("privateRouting", privateRouting)
+        .put("cacheMaxGb", cacheMaxGb)
+
     fun save(dir: File) {
         dir.mkdirs()
-        val srcArray = JSONArray().apply { sources.forEach { put(it.toJson()) } }
-        val json = JSONObject()
-            .put("tracker", tracker)
-            .apply { if (mnemonic.isNotEmpty()) put("mnemonic", mnemonic) }
-            .put("sources", srcArray)
-            .put("relayThrough", JSONArray(relayThrough))
-            .put("bootstrap", JSONArray(bootstrap))
-            .put("lanDiscovery", lanDiscovery)
-            .put("privateRouting", privateRouting)
-            .put("cacheMaxGb", cacheMaxGb)
         val tmp = File(dir, "settings.json.tmp")
-        tmp.writeText(json.toString(2))
+        tmp.writeText(toJson().toString(2))
         if (!tmp.renameTo(File(dir, "settings.json"))) throw IOException("Cannot save settings.json")
     }
 
     companion object {
-        fun load(dir: File): Settings = try {
-            val json = JSONObject(File(dir, "settings.json").readText())
+        fun fromJson(json: JSONObject): Settings {
             val srcArr = json.optJSONArray("sources")
-            val parsedSources = if (srcArr == null) emptyList() else List(srcArr.length()) { SourceSpec.from(srcArr.getJSONObject(it)) }.filter { isKey(it.key) }
-            Settings(
+            val parsedSources = if (srcArr == null) emptyList() else List(srcArr.length()) { SourceSpec.from(srcArr.getJSONObject(it)) }
+            return Settings(
                 tracker = json.optString("tracker"),
                 mnemonic = json.optString("mnemonic"),
                 sources = parsedSources,
                 relayThrough = json.optJSONArray("relayThrough").strings(),
                 bootstrap = json.optJSONArray("bootstrap").strings(),
-                lanDiscovery = json.optBoolean("lanDiscovery", false),
+                lanDiscovery = json.optBoolean("lanDiscovery", true),
                 privateRouting = json.optBoolean("privateRouting"),
                 cacheMaxGb = json.optInt("cacheMaxGb", 10),
             )
+        }
+
+        fun load(dir: File): Settings = try {
+            val file = File(dir, "settings.json")
+            if (!file.exists()) Settings()
+            else fromJson(JSONObject(file.readText()))
         } catch (_: Exception) {
             Settings()
-        }
-
-        fun parseSourceToken(raw: String, defaultKind: String = "channel"): SourceSpec {
-            val trimmed = raw.trim()
-            val lower = trimmed.lowercase()
-            if (isKey(lower)) return SourceSpec(lower, defaultKind, "")
-            if (':' in lower && !lower.startsWith("peartube:")) {
-                val prefix = lower.substringBefore(':')
-                val restKey = lower.substringAfter(':')
-                if ((prefix == "channel" || prefix == "tracker") && isKey(restKey)) {
-                    return SourceSpec(restKey, prefix, "")
-                }
-            }
-            val body = when {
-                trimmed.startsWith("peartube://", ignoreCase = true) -> trimmed.substring(11)
-                trimmed.startsWith("peartube:", ignoreCase = true) -> trimmed.substring(9)
-                else -> throw IllegalArgumentException("Invalid key or peartube:// URI: $trimmed")
-            }
-            val path = body.substringBefore('?')
-            val query = body.substringAfter('?', "")
-            val slash = path.indexOf('/')
-            require(slash > 0) { "Invalid peartube:// URI: $trimmed" }
-            val verb = path.substring(0, slash).lowercase()
-            val key = path.substring(slash + 1).trim().lowercase()
-            require(isKey(key)) { "Source key in $trimmed is not 64 hex characters." }
-            val kind = when (verb) {
-                "channel", "tracker", "add", "source" -> defaultKind
-                else -> throw IllegalArgumentException("Expected peartube://channel/..., got $verb")
-            }
-            var alias = ""
-            for (pair in query.split('&').filter { it.isNotEmpty() }) {
-                val eq = pair.indexOf('=')
-                if (eq > 0) {
-                    val k = pair.substring(0, eq)
-                    val v = runCatching { URLDecoder.decode(pair.substring(eq + 1), "UTF-8") }.getOrDefault(pair.substring(eq + 1))
-                    if (k == "name" || k == "alias") alias = v
-                }
-            }
-            return SourceSpec(key, kind, alias)
-        }
-
-        fun parse(tracker: String, sourcesRaw: String, relayThrough: String, bootstrap: String, lan: Boolean, privateRouting: Boolean = false, mnemonicRaw: String = "", cacheMaxGb: Int = 10): Settings {
-            var primary = ""
-            val sources = mutableListOf<SourceSpec>()
-            if (tracker.isNotBlank()) {
-                primary = parseSourceToken(tracker, "channel").key
-            }
-            val words = mnemonicRaw.trim().lowercase(Locale.US).split(Regex("\\s+")).filter { it.isNotEmpty() }
-            if (words.isNotEmpty() && (words.size != 12 && words.size != 24 || words.any { w -> w.any { ch -> ch !in 'a'..'z' } })) {
-                throw IllegalArgumentException("Recovery phrase must be 12 or 24 lowercase English words.")
-            }
-            val cleanMnemonic = words.joinToString(" ")
-            for (token in sourcesRaw.split('\n', '\r', ',').map { it.trim() }.filter { it.isNotEmpty() }) {
-                val spec = parseSourceToken(token, "channel").copy(kind = "channel")
-                if (spec.key != primary && sources.none { it.key == spec.key }) sources += spec
-            }
-            require(primary.isNotEmpty() || cleanMnemonic.isNotEmpty() || sources.isNotEmpty()) { "Add a channel key, a 12-word recovery phrase, or a peartube://channel/ link." }
-            val relays = split(relayThrough).map { it.lowercase() }
-            relays.firstOrNull { !isKey(it) }?.let { throw IllegalArgumentException("Relay key $it is not 64 hex characters.") }
-            val nodes = split(bootstrap)
-            nodes.firstOrNull { !isHostPort(it) }?.let { throw IllegalArgumentException("Bootstrap node $it is not host:port.") }
-            return Settings(primary, cleanMnemonic, sources, relays, nodes, lan, privateRouting, cacheMaxGb)
-        }
-
-        private fun split(list: String) = list.split(',', ' ', '\t', '\n', '\r').filter { it.isNotEmpty() }
-
-        fun isKey(key: String) = key.length == 64 && key.all { it in '0'..'9' || it in 'a'..'f' || it in 'A'..'F' }
-
-        private fun isHostPort(node: String): Boolean {
-            val i = node.lastIndexOf(':')
-            val port = node.substring(i + 1).toIntOrNull()
-            return i > 0 && port != null && port in 1..65535
         }
     }
 }
@@ -313,9 +240,19 @@ data class Entry(
     val locked: Boolean = false,
     val streamUrl: String,
     val magnetUrl: String = "",
+    val downloadUrl: String? = null,
     val source: String = "",
     val sourceKind: String = "",
+    val season: Int? = null,
+    val episode: Int? = null,
+    val seriesKey: String = "",
+    val baseTitle: String = "",
+    val year: String? = null,
 ) {
+    val isEpisode: Boolean get() = season != null && episode != null
+    val episodeLabel: String get() = if (season != null && episode != null) "S%02dE%02d".format(Locale.ROOT, season, episode) else "Movie"
+    val seasonLabel: String? get() = if (season != null) "S%02d".format(Locale.ROOT, season) else null
+
     companion object {
         fun from(json: JSONObject) = Entry(
             key = json.getString("key"),
@@ -330,11 +267,18 @@ data class Entry(
             locked = json.optBoolean("locked"),
             streamUrl = json.getString("streamUrl"),
             magnetUrl = json.optString("magnetUrl"),
+            downloadUrl = json.optString("downloadUrl").takeIf { it.isNotEmpty() },
             source = json.optString("source"),
             sourceKind = json.optString("sourceKind"),
+            season = if (json.isNull("season")) null else json.optInt("season"),
+            episode = if (json.isNull("episode")) null else json.optInt("episode"),
+            seriesKey = json.optString("seriesKey"),
+            baseTitle = json.optString("baseTitle", json.getString("title")),
+            year = json.optString("year").takeIf { it.isNotEmpty() },
         )
     }
 }
+
 
 data class WriterInfo(
     val key: String,
@@ -509,33 +453,10 @@ data class CastSession(
     }
 }
 
-data class ReceiverInfo(
-    val deviceId: String = "",
-    val name: String = "PearTube TV",
-    val publicKey: String = "",
-    val port: Int = 0,
-    val pairCode: String = "",
-    val pairingUri: String = "",
-    val listenUrl: String = "",
-) {
-    companion object {
-        fun from(json: JSONObject) = ReceiverInfo(
-            deviceId = json.optString("deviceId"),
-            name = json.optString("name", "PearTube TV"),
-            publicKey = json.optString("publicKey"),
-            port = json.optInt("port"),
-            pairCode = json.optString("pairCode"),
-            pairingUri = json.optString("pairingUri"),
-            listenUrl = json.optString("listenUrl"),
-        )
-    }
-}
-
 data class CastStatus(
     val webReceiverUrl: String? = null,
     val receivers: List<CastReceiver> = emptyList(),
     val session: CastSession? = null,
-    val receiverMode: ReceiverInfo? = null,
 ) {
     companion object {
         fun from(json: JSONObject?): CastStatus {
@@ -545,54 +466,13 @@ data class CastStatus(
                 webReceiverUrl = json.optString("webReceiverUrl").takeUnless { json.isNull("webReceiverUrl") || it.isEmpty() },
                 receivers = if (arr == null) emptyList() else List(arr.length()) { CastReceiver.from(arr.getJSONObject(it)) },
                 session = json.optJSONObject("session")?.let(CastSession::from),
-                receiverMode = json.optJSONObject("receiverMode")?.let(ReceiverInfo::from),
             )
         }
     }
 }
 
-data class ReceiverCommand(
-    val seq: Long = 0L,
-    val action: String,
-    val entry: CastEntryMeta? = null,
-    val mode: String? = null,
-    val streamUrl: String? = null,
-    val httpStreamUrl: String? = null,
-    val startPositionMs: Long = 0L,
-    val positionMs: Long? = null,
-    val deltaMs: Long? = null,
-    val stream: Int? = null,
-) {
-    companion object {
-        fun from(json: JSONObject) = ReceiverCommand(
-            seq = json.optLong("seq"),
-            action = json.optString("action"),
-            entry = json.optJSONObject("entry")?.let(CastEntryMeta::from),
-            mode = json.optString("mode").takeUnless { json.isNull("mode") || it.isEmpty() },
-            streamUrl = json.optString("streamUrl").takeUnless { json.isNull("streamUrl") || it.isEmpty() },
-            httpStreamUrl = json.optString("httpStreamUrl").takeUnless { json.isNull("httpStreamUrl") || it.isEmpty() },
-            startPositionMs = json.optLong("startPositionMs"),
-            positionMs = if (json.isNull("positionMs")) null else json.optLong("positionMs"),
-            deltaMs = if (json.isNull("deltaMs")) null else json.optLong("deltaMs"),
-            stream = if (json.isNull("stream")) null else json.optInt("stream"),
-        )
-    }
-}
-
 private fun JSONArray?.strings(): List<String> =
     if (this == null) emptyList() else List(length()) { getString(it) }
-
-fun formatBytes(bytes: Long): String {
-    val kb = 1024.0
-    val mb = kb * 1024
-    val gb = mb * 1024
-    return when {
-        bytes >= gb -> "%.1f GB".format(Locale.ROOT, bytes / gb)
-        bytes >= mb -> "%.1f MB".format(Locale.ROOT, bytes / mb)
-        bytes >= kb -> "%.1f KB".format(Locale.ROOT, bytes / kb)
-        else -> "$bytes B"
-    }
-}
 
 fun p2pSummary(status: Status?): String? {
     val st = status ?: return null
@@ -604,14 +484,4 @@ fun p2pSummary(status: Status?): String? {
         "$name ↓ ${formatBytes(route.rxBytes)} ↑ ${formatBytes(route.txBytes)}"
     }
     return "P2P ↓ ${formatBytes(st.downBps)}/s · ↑ ${formatBytes(st.upBps)}/s · ${st.inflightBlocks} blks$rtt\n$paths"
-}
-
-/** "S01E02" for an episode id (`tt…:s01e02`), else "Movie". */
-fun label(id: String): String {
-    val s = id.substringAfterLast(':', "")
-    val episode = (s.length == 6 || s.length == 7) &&
-        s[0].lowercaseChar() == 's' && s[1].isDigit() && s[2].isDigit() &&
-        s[3].lowercaseChar() == 'e' && s[4].isDigit() && s[5].isDigit() &&
-        (s.length == 6 || s[6].isDigit())
-    return if (episode) s.uppercase() else "Movie"
 }

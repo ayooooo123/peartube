@@ -31,6 +31,10 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.rememberCoroutineScope
+import kotlinx.coroutines.launch
+import org.json.JSONObject
+import com.peartube.shared.formatBytes
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -50,16 +54,12 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Icon
 
-private fun formatCacheSize(bytes: Long): String {
-    val gb = bytes / 1_000_000_000.0
-    return if (gb >= 1.0) "%.1f GB".format(gb) else "${bytes / 1_000_000} MB"
-}
 
 @Composable
 fun SettingsScreen(model: AppModel) {
     val settings by model.settings.collectAsState()
     var tracker by rememberSaveable { mutableStateOf(settings.tracker) }
-    var sources by rememberSaveable { mutableStateOf(settings.formatSources()) }
+    var sources by rememberSaveable { mutableStateOf(settings.sources.joinToString("\n") { it.key }) }
     var mnemonic by rememberSaveable { mutableStateOf(settings.mnemonic) }
     var relays by rememberSaveable { mutableStateOf(settings.relayThrough.joinToString(", ")) }
     var bootstrap by rememberSaveable { mutableStateOf(settings.bootstrap.joinToString(", ")) }
@@ -144,7 +144,7 @@ fun SettingsScreen(model: AppModel) {
                     Hint(
                         when {
                             cacheMaxGb == 0 -> "Unlimited: cached blocks are only freed when you clear them."
-                            status != null -> "Using ${formatCacheSize(status!!.cachedBytes)} of $cacheMaxGb GB."
+                            status != null -> "Using ${formatBytes(status!!.cachedBytes)} of $cacheMaxGb GB."
                             else -> "At most $cacheMaxGb GB of cached blocks."
                         }
                     )
@@ -189,13 +189,26 @@ fun SettingsScreen(model: AppModel) {
             }
             }
             }
+            val scope = rememberCoroutineScope()
             Button(
                 onClick = {
-                    problem = try {
-                        model.save(Settings.parse(tracker, sources, relays, bootstrap, lan, privateRouting, mnemonic, cacheMaxGb))
-                        null
-                    } catch (e: Exception) {
-                        e.message
+                    scope.launch {
+                        problem = try {
+                            val raw = JSONObject()
+                                .put("tracker", tracker)
+                                .put("sources", sources)
+                                .put("mnemonic", mnemonic)
+                                .put("relayThrough", relays)
+                                .put("bootstrap", bootstrap)
+                                .put("lanDiscovery", lan)
+                                .put("privateRouting", privateRouting)
+                                .put("cacheMaxGb", cacheMaxGb)
+                            val normalized = model.worker.normalizeSettings(raw, requireChannel = true)
+                            model.save(normalized)
+                            null
+                        } catch (e: Exception) {
+                            e.message
+                        }
                     }
                 },
                 colors = ButtonDefaults.buttonColors(containerColor = Brand),

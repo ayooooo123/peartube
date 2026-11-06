@@ -25,7 +25,15 @@ const wasmPath = join(root, 'web/assets/peartube_web.wasm')
 const outDir = join(root, 'desktop/target/e2e')
 const FPS = 24000 / 1001
 const FRAMES = 72
-const MODE = { software: 0, mse: 1, webcodecs: 2 }
+const ABI = await (async () => {
+  const wasmBytes = readFileSync(wasmPath)
+  const { instance } = await WebAssembly.instantiate(wasmBytes, { env: { host_stream_len: () => 0n, host_read_at: () => 0 } })
+  instance.exports.pt_abi_json()
+  const ptr = instance.exports.pt_json_ptr() >>> 0
+  const len = instance.exports.pt_json_len() >>> 0
+  return JSON.parse(new TextDecoder().decode(new Uint8Array(instance.exports.memory.buffer, ptr, len)))
+})()
+const MODE = ABI.mode
 
 // The two bodies: a normal file and the same movie with every stamp pulled back to its decode time.
 function twins (name, videoArgs) {
@@ -73,21 +81,21 @@ async function run (bytes, mode) {
   const out = { manifest, frames: [], audio: [], segments: [], packets: [], bytes: [] }
   let code
   let guard = 0
-  while ((code = wasm.pt_step()) !== 0 && guard++ < 100000) {
+  while ((code = wasm.pt_step()) !== ABI.step.eof && guard++ < 100000) {
     assert.ok(code > 0, 'decode stops only at the end: ' + JSON.stringify(json()))
-    if (code === 3 || code === 7) {
+    if (code === ABI.step.videoRgba || code === ABI.step.videoYuv420) {
       out.frames.push(wasm.pt_out_pts())
       if (mode === MODE.software) wasm.pt_set_clock(out.frames.length / FPS)
-    } else if (code === 4) {
+    } else if (code === ABI.step.audioPlanarF32) {
       out.audio.push(wasm.pt_out_pts())
-    } else if (code === 1 || code === 2) {
+    } else if (code === ABI.step.mseInit || code === ABI.step.mseSegment) {
       const ptr = wasm.pt_out_ptr() >>> 0
       const len = wasm.pt_out_len() >>> 0
       const data = Buffer.from(new Uint8Array(wasm.memory.buffer, ptr, len))
       const digest = createHash('sha256').update(data).digest('hex')
       out.segments.push({ code, start: wasm.pt_out_pts(), end: wasm.pt_out_dur(), digest })
       out.bytes.push(data)
-    } else if (code === 8) {
+    } else if (code === ABI.step.videoPacket) {
       out.packets.push(wasm.pt_out_pts())
     }
   }
@@ -180,7 +188,7 @@ test('the browser engine remuxes variable-rate VP8 to WebM for MSE', async () =>
     const played = await run(readFileSync(source), MODE.mse)
     assert.equal(played.manifest.mseType, 'video/webm; codecs="vp8"')
     assert.ok(played.segments.length > 2, `VP8 MSE emits an init and media segments: ${played.segments.length}`)
-    assert.equal(played.segments[0].code, 1, 'the init segment comes first')
+    assert.equal(played.segments[0].code, ABI.step.mseInit, 'the init segment comes first')
 
     const remuxed = join(dir, 'remuxed.webm')
     writeFileSync(remuxed, Buffer.concat(played.bytes))

@@ -13,7 +13,7 @@ use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use peartube::worker::{Entry, Status};
 
-use crate::app::{LibraryFilter, PearTube, detect_smart_action};
+use crate::app::{LibraryFilter, PearTube};
 use crate::qr::qr_card;
 use crate::theme::{ACCENT, BG, BRAND, CARD, CARD_ELEVATED, DIM, INK, LINE};
 
@@ -27,61 +27,12 @@ pub fn format_bytes(bytes: u64) -> String {
     else { format!("{bytes} B") }
 }
 
-pub fn parse_season_episode(id: &str) -> Option<(u32, u32)> {
-    let (_, tail) = id.rsplit_once(':')?;
-    let b = tail.as_bytes();
-    if (b.len() != 6 && b.len() != 7) || (b[0] != b's' && b[0] != b'S') || (b[3] != b'e' && b[3] != b'E') {
-        return None;
-    }
-    let season: u32 = std::str::from_utf8(&b[1..3]).ok()?.parse().ok()?;
-    let ep: u32 = std::str::from_utf8(&b[4..]).ok()?.parse().ok()?;
-    Some((season, ep))
-}
-
-pub fn is_episode_id(id: &str) -> bool {
-    parse_season_episode(id).is_some()
-}
-
-pub fn label(id: &str) -> String {
-    if let Some((s, e)) = parse_season_episode(id) {
+pub fn label(entry: &Entry) -> String {
+    if let (Some(s), Some(e)) = (entry.season, entry.episode) {
         format!("S{s:02}E{e:02}")
     } else {
         "Movie".to_string()
     }
-}
-
-pub fn series_group_key(entry: &Entry) -> String {
-    if is_episode_id(&entry.id)
-        && let Some((prefix, _)) = entry.id.rsplit_once(':')
-    {
-        return prefix.to_lowercase();
-    }
-    entry.title.to_lowercase()
-}
-
-/// Splits an unambiguous trailing year like `"Angels & Demons (2009)"` or `"Angels & Demons 2009"` into `("Angels & Demons", Some("2009"))`.
-pub fn split_title_year(raw: &str) -> (String, Option<String>) {
-    let trimmed = raw.trim();
-    if trimmed.len() > 6 && trimmed.ends_with(')')
-        && let Some(open) = trimmed.rfind('(')
-    {
-        let yr = &trimmed[open + 1..trimmed.len() - 1];
-        if yr.len() == 4 && yr.bytes().all(|b| b.is_ascii_digit()) && (yr.starts_with("19") || yr.starts_with("20")) {
-            let base = trimmed[..open].trim();
-            if !base.is_empty() {
-                return (base.to_string(), Some(yr.to_string()));
-            }
-        }
-    }
-    if let Some((base, last)) = trimmed.rsplit_once(' ')
-        && last.len() == 4
-        && last.bytes().all(|b| b.is_ascii_digit())
-        && (last.starts_with("19") || last.starts_with("20"))
-        && !base.trim().is_empty()
-    {
-        return (base.trim().to_string(), Some(last.to_string()));
-    }
-    (trimmed.to_string(), None)
 }
 
 pub fn origin(entry: &Entry) -> &'static str {
@@ -113,23 +64,13 @@ pub fn column() -> Div {
     v_flex().w_full().max_w(px(920.)).mx_auto().px_6()
 }
 
-/// The poster the app's own loopback API serves for an IMDb-identified title.
-pub fn poster_uri(entry: &Entry) -> Option<String> {
-    let tt = entry.id.strip_prefix("imdb:")?.split(':').next()?;
-    if tt.len() < 7 || tt.len() > 11 || !tt.starts_with("tt") || !tt[2..].bytes().all(|b| b.is_ascii_digit()) {
-        return None;
-    }
-    // Blocked on the artwork crash: GPUI's image path aborts the app the moment a fetch runs.
-    // The worklet already serves /v1/poster/{tt}; this hook returns None until that pipeline lands.
-    let _ = tt;
-    None
-}
 
 enum CatalogItem<'a> {
     Movie(&'a Entry, usize),
     Series {
         group_key: String,
         title: String,
+        year: Option<String>,
         episodes: Vec<&'a Entry>,
     },
 }
@@ -140,15 +81,14 @@ impl PearTube {
         let peers = status.map_or(0, |s| s.peers + s.lan_peers);
         let transferring = status.is_some_and(|s| s.down_bps > 0 || s.up_bps > 0 || s.inflight_blocks > 0);
         let raw_input = self.search.read(cx).value().to_string();
-        let smart_action = detect_smart_action(&raw_input);
-        let query = if smart_action.is_some() { String::new() } else { raw_input.trim().to_lowercase() };
+        let query = raw_input.trim().to_lowercase();
 
         // Filter entries
         let filtered: Vec<&Entry> = self
             .entries
             .iter()
             .filter(|e| {
-                let is_ep = is_episode_id(&e.id);
+                let is_ep = e.season.is_some();
                 let on_device = e.local || (e.size > 0 && e.cached_bytes >= e.size);
                 let pass_filter = match &self.filter {
                     LibraryFilter::All => true,
@@ -166,12 +106,11 @@ impl PearTube {
 
         // Build clean catalog items (Movies vs grouped Series)
         let mut movies: Vec<&Entry> = Vec::new();
-        let mut series_map: std::collections::BTreeMap<String, (String, Vec<&Entry>)> = std::collections::BTreeMap::new();
+        let mut series_map: std::collections::BTreeMap<String, (String, Option<String>, Vec<&Entry>)> = std::collections::BTreeMap::new();
         for e in filtered {
-            if is_episode_id(&e.id) {
-                let gk = series_group_key(e);
-                let slot = series_map.entry(gk).or_insert_with(|| (e.title.clone(), Vec::new()));
-                slot.1.push(e);
+            if e.season.is_some() {
+                let slot = series_map.entry(e.series_key.clone()).or_insert_with(|| (e.base_title.clone(), e.year.clone(), Vec::new()));
+                slot.2.push(e);
             } else {
                 movies.push(e);
             }
@@ -184,10 +123,10 @@ impl PearTube {
             let best = chunk[0];
             catalog.push((best.title.to_lowercase(), CatalogItem::Movie(best, chunk.len())));
         }
-        for (gk, (title, mut eps)) in series_map {
-            eps.sort_by(|a, b| parse_season_episode(&a.id).cmp(&parse_season_episode(&b.id)).then(b.size.cmp(&a.size)));
+        for (gk, (title, year, mut eps)) in series_map {
+            eps.sort_by(|a, b| (a.season, a.episode).cmp(&(b.season, b.episode)).then(b.size.cmp(&a.size)));
             eps.dedup_by(|a, b| a.id == b.id);
-            catalog.push((title.to_lowercase(), CatalogItem::Series { group_key: gk, title, episodes: eps }));
+            catalog.push((title.to_lowercase(), CatalogItem::Series { group_key: gk, title, year, episodes: eps }));
         }
         catalog.sort_by(|a, b| a.0.cmp(&b.0));
 
@@ -212,7 +151,7 @@ impl PearTube {
             ub.cmp(&ua)
         });
         let mut seen_titles = BTreeSet::new();
-        resume.retain(|(e, _, _)| seen_titles.insert(series_group_key(e)));
+        resume.retain(|(e, _, _)| seen_titles.insert(e.series_key.clone()));
         resume.truncate(8);
         let browse = query.is_empty();
 
@@ -282,14 +221,12 @@ impl PearTube {
                                         .items_center()
                                         .gap_1p5()
                                         .child({
-                                            let casting = self.cast.session.is_some();
                                             let btn = Button::new("open-cast-header").icon(Icon::new(Lucide::Cast));
                                             let btn = if let Some(s) = &self.cast.session {
                                                 btn.primary().small().label(s.receiver_name.clone())
                                             } else {
                                                 btn.ghost().tooltip("Cast to TV")
                                             };
-                                            let _ = casting;
                                             btn.on_click(cx.listener(|this, _, window, cx| this.open_cast_sheet(None, window, cx)))
                                         })
                                         .child(
@@ -305,34 +242,7 @@ impl PearTube {
                         .child(
                             v_flex()
                                 .gap_2()
-                                .child(Input::new(&self.search).prefix(Icon::new(Lucide::Search).text_color(rgb(DIM))).cleanable(true))
-                                .when_some(smart_action, |this, (act_label, _)| {
-                                    this.child(
-                                        h_flex()
-                                            .justify_between()
-                                            .items_center()
-                                            .px_3p5()
-                                            .py_2()
-                                            .rounded(px(12.))
-                                            .bg(hsla(264. / 360., 0.85, 0.60, 0.14))
-                                            .border_1()
-                                            .border_color(rgb(BRAND))
-                                            .child(
-                                                h_flex()
-                                                    .items_center()
-                                                    .gap_2()
-                                                    .child(Icon::new(Lucide::Sparkles).text_color(rgb(BRAND)))
-                                                    .child(div().text_sm().font_weight(FontWeight::MEDIUM).child("PearTube link detected")),
-                                            )
-                                            .child(
-                                                Button::new("smart-bar-go")
-                                                    .primary()
-                                                    .small()
-                                                    .label(act_label)
-                                                    .on_click(cx.listener(|this, _, window, cx| this.submit_smart_bar_action(window, cx))),
-                                            ),
-                                    )
-                                }),
+                                .child(Input::new(&self.search).prefix(Icon::new(Lucide::Search).text_color(rgb(DIM))).cleanable(true)),
                         )
                         // Quiet Filter Pills
                         .child({
@@ -427,8 +337,8 @@ impl PearTube {
                                 .take(limit)
                                 .map(|(_, item)| match item {
                                     CatalogItem::Movie(entry, alt_count) => self.render_movie_card(entry, alt_count, cx).into_any_element(),
-                                    CatalogItem::Series { group_key, title, episodes } => {
-                                        self.render_series_card(group_key, title, episodes, !query.is_empty(), cx).into_any_element()
+                                    CatalogItem::Series { group_key, title, year, episodes } => {
+                                        self.render_series_card(group_key, title, year, episodes, !query.is_empty(), cx).into_any_element()
                                     }
                                 })
                                 .collect();
@@ -484,10 +394,10 @@ impl PearTube {
     /// The one thing you were watching, at the size it deserves.
     fn render_hero(&self, item: &(Entry, u64, f32), cx: &mut Context<Self>) -> impl IntoElement {
         let (entry, resume_ms, ratio) = item;
-        let (title, year) = split_title_year(&entry.title);
-        let mut meta = vec![label(&entry.id), format_bytes(entry.size)];
-        if let Some(y) = year {
-            meta.push(y);
+        let title = entry.base_title.clone();
+        let mut meta = vec![label(entry), format_bytes(entry.size)];
+        if let Some(y) = &entry.year {
+            meta.push(y.clone());
         }
         let meta_line = meta.join(" · ");
         let pct = (ratio * 100.).round() as u32;
@@ -503,69 +413,52 @@ impl PearTube {
             .border_color(rgb(LINE))
             .p_6()
             .child(
-                h_flex()
-                    .gap_5()
-                    .items_start()
-                    .when_some(poster_uri(entry), |this, uri| {
-                        this.child(
-                            div()
-                                .w(px(132.))
-                                .h(px(198.))
-                                .flex_none()
-                                .rounded(px(12.))
-                                .overflow_hidden()
-                                .bg(rgb(BG))
-                                .child(img(uri).size_full().object_fit(ObjectFit::Cover)),
-                        )
-                    })
+                v_flex()
+                    .flex_1()
+                    .min_w_0()
+                    .gap_3()
                     .child(
-                        v_flex()
-                            .flex_1()
-                            .min_w_0()
+                        div()
+                            .text_xs()
+                            .font_weight(FontWeight::BOLD)
+                            .text_color(rgb(DIM))
+                            .child("CONTINUE WATCHING"),
+                    )
+                    .child(div().text_3xl().font_weight(FontWeight::BOLD).child(title))
+                    .child(div().text_sm().text_color(rgb(DIM)).child(meta_line))
+                    .child(
+                        h_flex()
+                            .items_center()
                             .gap_3()
                             .child(
                                 div()
-                                    .text_xs()
-                                    .font_weight(FontWeight::BOLD)
-                                    .text_color(rgb(DIM))
-                                    .child("CONTINUE WATCHING"),
-                            )
-                            .child(div().text_3xl().font_weight(FontWeight::BOLD).child(title))
-                            .child(div().text_sm().text_color(rgb(DIM)).child(meta_line))
-                            .child(
-                                h_flex()
-                                    .items_center()
-                                    .gap_3()
+                                    .flex_1()
+                                    .h(px(4.))
+                                    .rounded(px(2.))
+                                    .bg(hsla(0., 0., 1., 0.08))
                                     .child(
                                         div()
-                                            .flex_1()
-                                            .h(px(4.))
+                                            .h_full()
                                             .rounded(px(2.))
-                                            .bg(hsla(0., 0., 1., 0.08))
-                                            .child(
-                                                div()
-                                                    .h_full()
-                                                    .rounded(px(2.))
-                                                    .w(relative(*ratio))
-                                                    .bg(rgb(BRAND)),
-                                            ),
-                                    )
-                                    .child(div().text_xs().text_color(rgb(DIM)).child(format!("{pct}%"))),
+                                            .w(relative(*ratio))
+                                            .bg(rgb(BRAND)),
+                                    ),
                             )
-                            .child(
-                                h_flex()
-                                    .gap_2()
-                                    .child(Button::new("hero-resume").primary().label("Resume").on_click(
-                                        cx.listener(move |this, _, window, cx| {
-                                            this.activate_entry(resume_entry.clone(), Some(start_at), window, cx)
-                                        }),
-                                    ))
-                                    .child(Button::new("hero-restart").label("Start over").on_click(
-                                        cx.listener(move |this, _, window, cx| {
-                                            this.activate_entry(restart_entry.clone(), Some(0), window, cx)
-                                        }),
-                                    )),
-                            ),
+                            .child(div().text_xs().text_color(rgb(DIM)).child(format!("{pct}%"))),
+                    )
+                    .child(
+                        h_flex()
+                            .gap_2()
+                            .child(Button::new("hero-resume").primary().label("Resume").on_click(
+                                cx.listener(move |this, _, window, cx| {
+                                    this.activate_entry(resume_entry.clone(), Some(start_at), window, cx)
+                                }),
+                            ))
+                            .child(Button::new("hero-restart").label("Start over").on_click(
+                                cx.listener(move |this, _, window, cx| {
+                                    this.activate_entry(restart_entry.clone(), Some(0), window, cx)
+                                }),
+                            )),
                     ),
             )
     }
@@ -588,8 +481,8 @@ impl PearTube {
                     .gap_3()
                     .overflow_x_scroll()
                     .children(items.iter().map(|(entry, pos, ratio)| {
-                        let (title, _) = split_title_year(&entry.title);
-                        let kind = label(&entry.id);
+                        let title = entry.base_title.clone();
+                        let kind = label(entry);
                         let play = entry.clone();
                         let start_at = *pos;
                         let fill = *ratio;
@@ -602,15 +495,6 @@ impl PearTube {
                             .border_1()
                             .border_color(rgb(LINE))
                             .overflow_hidden()
-                            .when_some(poster_uri(entry), |this, uri| {
-                                this.child(
-                                    div()
-                                        .w_full()
-                                        .h(px(255.))
-                                        .bg(rgb(BG))
-                                        .child(img(uri).size_full().object_fit(ObjectFit::Cover)),
-                                )
-                            })
                             .cursor_pointer()
                             .hover(|s| {
                                 s.bg(rgb(CARD_ELEVATED))
@@ -636,7 +520,8 @@ impl PearTube {
     }
 
     fn render_movie_card(&self, entry: &Entry, alt_count: usize, cx: &mut Context<Self>) -> impl IntoElement {
-        let (clean_title, year) = split_title_year(&entry.title);
+        let clean_title = entry.base_title.clone();
+        let year = &entry.year;
         let play_entry = entry.clone();
         let cast_entry = entry.clone();
         let menu_cast = entry.clone();
@@ -663,7 +548,7 @@ impl PearTube {
 
         let mut meta_parts = vec!["Movie".to_string()];
         if let Some(y) = year {
-            meta_parts.push(y);
+            meta_parts.push(y.clone());
         }
         meta_parts.push(format_bytes(entry.size));
         if let Some((got, tot, _)) = active_dl {
@@ -712,18 +597,6 @@ impl PearTube {
                     .gap_4()
                     .px_4()
                     .py_3p5()
-                    .when_some(poster_uri(entry), |this, uri| {
-                        this.child(
-                            div()
-                                .w(px(44.))
-                                .h(px(66.))
-                                .flex_none()
-                                .rounded(px(8.))
-                                .overflow_hidden()
-                                .bg(rgb(BG))
-                                .child(img(uri).size_full().object_fit(ObjectFit::Cover)),
-                        )
-                    })
                     .child(
                         v_flex()
                             .flex_1()
@@ -845,11 +718,10 @@ impl PearTube {
             })
     }
 
-    fn render_series_card(&self, group_key: String, title: String, episodes: Vec<&Entry>, force_open: bool, cx: &mut Context<Self>) -> impl IntoElement {
-        let (clean_title, year) = split_title_year(&title);
+    fn render_series_card(&self, group_key: String, clean_title: String, year: Option<String>, episodes: Vec<&Entry>, force_open: bool, cx: &mut Context<Self>) -> impl IntoElement {
         let seasons: Vec<u32> = episodes
             .iter()
-            .filter_map(|e| parse_season_episode(&e.id).map(|(s, _)| s))
+            .filter_map(|e| e.season)
             .collect::<BTreeSet<_>>()
             .into_iter()
             .collect();
@@ -863,9 +735,9 @@ impl PearTube {
             .map(|(e, _, _)| e);
         let quick_ep = resume_ep.unwrap_or(episodes[0]).clone();
         let quick_label = if resume_ep.is_some() {
-            format!("Resume {}", label(&quick_ep.id))
+            format!("Resume {}", label(&quick_ep))
         } else {
-            format!("Play {}", label(&quick_ep.id))
+            format!("Play {}", label(&quick_ep))
         };
 
         let expanded = force_open || self.expanded_series.contains(&group_key);
@@ -874,7 +746,7 @@ impl PearTube {
             .get(&group_key)
             .copied()
             .filter(|s| seasons.contains(s))
-            .or_else(|| parse_season_episode(&quick_ep.id).map(|(s, _)| s))
+            .or_else(|| quick_ep.season)
             .or_else(|| seasons.first().copied())
             .unwrap_or(1);
 
@@ -947,7 +819,7 @@ impl PearTube {
                 let season_eps: Vec<&Entry> = episodes
                     .iter()
                     .copied()
-                    .filter(|e| force_open || seasons.len() <= 1 || parse_season_episode(&e.id).is_none_or(|(s, _)| s == active_season))
+                    .filter(|e| force_open || seasons.len() <= 1 || e.season.is_none_or(|s| s == active_season))
                     .collect();
                 this.child(
                     v_flex()
@@ -987,7 +859,7 @@ impl PearTube {
         let ep_menu_cast = entry.clone();
         let ep_dl = entry.clone();
         let ep_menu_dl = entry.clone();
-        let ep_code = label(&entry.id);
+        let ep_code = label(entry);
         let ep_dl_name = if entry.title.to_ascii_lowercase().contains(&ep_code.to_ascii_lowercase()) {
             entry.title.clone()
         } else {

@@ -143,6 +143,18 @@ pub struct Entry {
     pub source: String,
     #[serde(default)]
     pub source_kind: String,
+    #[serde(default)]
+    pub season: Option<u32>,
+    #[serde(default)]
+    pub episode: Option<u32>,
+    #[serde(default)]
+    pub series_key: String,
+    #[serde(default)]
+    pub base_title: String,
+    #[serde(default)]
+    pub year: Option<String>,
+    #[serde(default)]
+    pub download_url: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Deserialize)]
@@ -570,34 +582,27 @@ impl Worker {
             bare_ipc_poll_set_data(poll, Arc::as_ptr(&ctx) as *const c_void as *mut c_void);
             check(bare_ipc_poll_start(poll, IPC_READABLE, ipc_callback), "IPC poll start")?;
         }
-        Ok(Worker { worklet, ipc, poll, ctx, next_id: AtomicU64::new(1), shared })
+        let worker = Worker { worklet, ipc, poll, ctx, next_id: AtomicU64::new(1), shared };
+        // First line on the pipe, ahead of any call: casting works before (and between) node starts.
+        let mut init = serde_json::to_vec(&json!({ "id": 0, "method": "init", "params": { "castStorage": STORE_DIR.join("cast").to_string_lossy() } }))
+            .map_err(|err| err.to_string())?;
+        init.push(b'\n');
+        worker.ctx.send(init)?;
+        Ok(worker)
     }
 
     pub async fn start(&self, settings: &Settings) -> Result<Status, String> {
-        let folder = if !settings.tracker.is_empty() {
-            settings.tracker.as_str()
-        } else if !settings.mnemonic.is_empty() {
-            "linked"
-        } else {
-            "default"
-        };
-        let storage = STORE_DIR.join("trackers").join(folder);
-        let tracker = if settings.tracker.is_empty() { Value::Null } else { json!(settings.tracker) };
-        let mnemonic = if settings.mnemonic.is_empty() { Value::Null } else { json!(settings.mnemonic) };
-        let join = !settings.mnemonic.is_empty() && settings.tracker.is_empty();
         let params = json!({
-            "storage": storage.to_string_lossy(),
-            "tracker": tracker,
-            "mnemonic": mnemonic,
-            "join": join,
-            "sources": settings.sources,
-            "relayThrough": non_empty(&settings.relay_through),
-            "bootstrap": non_empty(&settings.bootstrap),
-            "lan": settings.lan_discovery,
-            "privateRouting": settings.private_routing,
-            "cacheMaxGb": settings.cache_max_gb,
+            "trackersDir": STORE_DIR.join("trackers").to_string_lossy(),
+            "defaultFolder": "default",
+            "settings": settings,
         });
         parse(self.call("start", params).await?)
+    }
+
+    pub async fn normalize_settings(&self, raw: Value, require_channel: bool) -> Result<Settings, String> {
+        let res = self.call("normalizeSettings", json!({ "settings": raw, "requireChannel": require_channel })).await?;
+        parse(res)
     }
 
     /// Applies the playback cache ceiling without restarting the worklet.
@@ -629,8 +634,7 @@ impl Worker {
     }
 
     pub async fn open_uri(&self, uri: &str) -> Result<OpenUriResult, String> {
-        let storage = STORE_DIR.join("cast").to_string_lossy().to_string();
-        parse(self.call("openUri", json!({ "uri": uri, "storage": storage })).await?)
+        parse(self.call("openUri", json!({ "uri": uri })).await?)
     }
 
 
@@ -649,9 +653,6 @@ impl Worker {
     pub async fn identity(&self, reveal_mnemonic: bool) -> Result<IdentityInfo, String> {
         parse(self.call("identity", json!({ "revealMnemonic": reveal_mnemonic })).await?)
     }
-    pub async fn grant_writer(&self, writer: &str, role: &str, alias: &str) -> Result<(), String> {
-        self.call("grantWriter", json!({ "writer": writer, "role": role, "alias": alias })).await.map(drop)
-    }
     pub async fn revoke_writer(&self, writer: &str, purge_entries: bool) -> Result<(), String> {
         self.call("revokeWriter", json!({ "writer": writer, "purgeEntries": purge_entries })).await.map(drop)
     }
@@ -661,24 +662,16 @@ impl Worker {
     pub async fn clear_cache(&self, key: Option<&str>) -> Result<(), String> {
         self.call("clearCache", json!({ "key": key })).await.map(drop)
     }
-    fn cast_dir() -> String {
-        STORE_DIR.join("cast").to_string_lossy().to_string()
-    }
-
     pub async fn cast_status(&self) -> Result<CastStatus, String> {
-        parse(self.call("castStatus", json!({ "storage": Self::cast_dir() })).await?)
+        parse(self.call("castStatus", json!({})).await?)
     }
 
     pub async fn cast_pair(&self, params: Value) -> Result<CastStatus, String> {
-        let mut body = params;
-        if let Some(obj) = body.as_object_mut() {
-            obj.entry("storage").or_insert_with(|| json!(Self::cast_dir()));
-        }
-        parse(self.call("castPair", body).await?)
+        parse(self.call("castPair", params).await?)
     }
 
     pub async fn cast_remove(&self, id: &str) -> Result<CastStatus, String> {
-        parse(self.call("castRemove", json!({ "id": id, "storage": Self::cast_dir() })).await?)
+        parse(self.call("castRemove", json!({ "id": id })).await?)
     }
 
     pub async fn cast_play(&self, receiver_id: &str, key: &str, prefer_mode: &str, start_position_ms: u64) -> Result<CastStatus, String> {
@@ -686,7 +679,6 @@ impl Worker {
             self.call(
                 "castPlay",
                 json!({
-                    "storage": Self::cast_dir(),
                     "receiverId": receiver_id,
                     "key": key,
                     "preferMode": prefer_mode,
@@ -698,35 +690,23 @@ impl Worker {
     }
 
     pub async fn cast_attach(&self, receiver_id: &str) -> Result<CastStatus, String> {
-        parse(self.call("castAttach", json!({ "storage": Self::cast_dir(), "receiverId": receiver_id })).await?)
+        parse(self.call("castAttach", json!({ "receiverId": receiver_id })).await?)
     }
 
     pub async fn cast_control(&self, params: Value) -> Result<CastStatus, String> {
-        let mut body = params;
-        if let Some(obj) = body.as_object_mut() {
-            obj.entry("storage").or_insert_with(|| json!(Self::cast_dir()));
-        }
-        parse(self.call("castControl", body).await?)
+        parse(self.call("castControl", params).await?)
     }
 
     pub async fn cast_stop(&self, stop_playback: bool) -> Result<CastStatus, String> {
-        parse(self.call("castStop", json!({ "storage": Self::cast_dir(), "stopPlayback": stop_playback })).await?)
+        parse(self.call("castStop", json!({ "stopPlayback": stop_playback })).await?)
     }
 
     pub async fn receiver_start(&self, name: &str, open_auth: bool) -> Result<ReceiverInfo, String> {
-        parse(self.call("receiverStart", json!({ "storage": Self::cast_dir(), "name": name, "openAuth": open_auth })).await?)
-    }
-
-    pub async fn receiver_stop(&self) -> Result<(), String> {
-        self.call("receiverStop", json!({})).await.map(drop)
-    }
-
-    pub async fn receiver_rotate_code(&self) -> Result<ReceiverInfo, String> {
-        parse(self.call("receiverRotateCode", json!({ "storage": Self::cast_dir() })).await?)
+        parse(self.call("receiverStart", json!({ "name": name, "openAuth": open_auth })).await?)
     }
 
     pub async fn receiver_report_state(&self, state: Value) -> Result<(), String> {
-        self.call("receiverReportState", json!({ "storage": Self::cast_dir(), "state": state })).await.map(drop)
+        self.call("receiverReportState", json!({ "state": state })).await.map(drop)
     }
     /// Events from the worker, until it exits.
     pub fn subscribe(&self) -> mpsc::UnboundedReceiver<Event> {
@@ -814,10 +794,6 @@ fn check(code: c_int, what: &str) -> Result<(), String> {
     if code == 0 { Ok(()) } else { Err(format!("bare-kit {what} failed ({code})")) }
 }
 
-
-fn non_empty(list: &[String]) -> Option<&[String]> {
-    if list.is_empty() { None } else { Some(list) }
-}
 
 fn parse<T: serde::de::DeserializeOwned>(value: Value) -> Result<T, String> {
     serde_json::from_value(value).map_err(|err| format!("Unexpected reply from the P2P worker: {err}"))

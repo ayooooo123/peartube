@@ -31,6 +31,7 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.LocalLifecycleOwner
+import com.peartube.shared.QrCodeView
 import com.google.zxing.*
 import com.google.zxing.common.HybridBinarizer
 import com.google.zxing.qrcode.QRCodeReader
@@ -40,25 +41,6 @@ import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.math.min
 
-@Composable
-fun QrCodeView(data: String, modifier: Modifier = Modifier) {
-    val matrix = remember(data) {
-        QRCodeWriter().encode(data, BarcodeFormat.QR_CODE, 1, 1, mapOf(
-            EncodeHintType.ERROR_CORRECTION to ErrorCorrectionLevel.M,
-            EncodeHintType.MARGIN to 4,
-        ))
-    }
-    Canvas(modifier.aspectRatio(1f).clip(RoundedCornerShape(18.dp)).background(Color.White)) {
-        val module = (min(size.width, size.height) / matrix.width).toInt()
-        if (module > 0) {
-            val left = ((size.width - matrix.width * module) / 2).toInt()
-            val top = ((size.height - matrix.height * module) / 2).toInt()
-            for (y in 0 until matrix.height) for (x in 0 until matrix.width) {
-                if (matrix[x, y]) drawRect(Color.Black, Offset((left + x * module).toFloat(), (top + y * module).toFloat()), Size(module.toFloat(), module.toFloat()))
-            }
-        }
-    }
-}
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable

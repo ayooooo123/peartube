@@ -2,21 +2,21 @@ import { spawn } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import b4a from 'b4a'
 import { send } from './art.js'
+import { MEDIA_FILE } from './protocol.js'
 
 export { posterUrl, backdropUrl } from './art.js'
 
 // Licks a link before acquiring it so Master knows what is inside: a direct media file (parsed from its name) or a
 // web page cracked open by `ubit` (YouTube, Vimeo, and 30+ extractors). Movie and episode names get Cinemeta
 // suggestions; an accepted match becomes the `imdb:tt…` id MediaStorm searches for.
-const MEDIA_EXT = /\.(mp4|m4v|mkv|webm|avi|mov|ts|m2ts|mts|mpg|mpeg|wmv|flv|ogv|3gp)$/i
 const NOISE = /\b(2160p|1080p|720p|576p|480p|4k|uhd|hdr10?|dv|bluray|blu-ray|bdrip|brrip|web-?dl|webrip|web|hdtv|dvdrip|remux|proper|repack|extended|unrated|x26[45]|h\.?26[45]|hevc|avc|av1|xvid|divx|aac|ac3|e?ac-?3|ddp?|dts|truehd|atmos|flac|opus|mp3)\b/i
 
 export function parseName (raw) {
   let name = String(raw || '')
   try { name = decodeURIComponent(new URL(name).pathname.split('/').pop() || name) } catch {}
-  const ext = (name.match(MEDIA_EXT) || [])[1]?.toLowerCase() || ''
+  const ext = (name.match(MEDIA_FILE) || [])[1]?.toLowerCase() || ''
   // A second media extension (`.mkv.mp4`) is part of the release name, not the title.
-  const stem = name.replace(MEDIA_EXT, '').replace(MEDIA_EXT, '')
+  const stem = name.replace(MEDIA_FILE, '').replace(MEDIA_FILE, '')
   const words = stem.replace(/[._]+/g, ' ').replace(/\s+/g, ' ').trim()
   const ep = words.match(/\bS(\d{1,2})\s?E(\d{1,3})\b/i) || words.match(/\b(\d{1,2})x(\d{2,3})\b/)
   const year = [...words.matchAll(/[([]?\b(19[2-9]\d|20[0-4]\d)\b[)\]]?/g)].pop()
@@ -170,11 +170,11 @@ async function probe (url, opts) {
   try { head = await send(url, { method: 'HEAD' }) } catch {}
   const type = String(head?.headers['content-type'] || '').toLowerCase()
   const finalUrl = head?.url || url
-  const looksMedia = type.startsWith('video/') || type.includes('matroska') || (MEDIA_EXT.test(new URL(finalUrl).pathname) && !type.startsWith('text/'))
+  const looksMedia = type.startsWith('video/') || type.includes('matroska') || (MEDIA_FILE.test(new URL(finalUrl).pathname) && !type.startsWith('text/'))
   if (head && head.status < 400 && looksMedia) {
     return { kind: 'file', name: decodeURIComponent(new URL(finalUrl).pathname.split('/').pop() || ''), size: Number(head.headers['content-length']) || null, contentType: type || null }
   }
-  if (head && head.status >= 400 && MEDIA_EXT.test(new URL(url).pathname)) throw new Error(`The link answered ${head.status}`)
+  if (head && head.status >= 400 && MEDIA_FILE.test(new URL(url).pathname)) throw new Error(`The link answered ${head.status}`)
   const info = await ubitInfo(url, opts)
   const formats = Array.isArray(info.formats) ? info.formats : []
   const height = Math.max(0, ...formats.map(f => Number(f.height) || 0)) || Number(info.height) || 0

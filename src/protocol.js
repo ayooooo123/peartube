@@ -9,6 +9,8 @@ export const HEX144 = /^[0-9a-f]{144}$/
 export const ROLES = new Set(['owner', 'mod', 'writer'])
 export const MAX_TITLE = 300
 export const BLOB_BLOCK_SIZE = 512 * 1024
+// A file name PearTube treats as a video or audio file (folder imports, direct links, download names).
+export const MEDIA_FILE = /\.(mp4|m4v|mkv|webm|avi|mov|ts|m2ts|mts|mpg|mpeg|wmv|flv|ogv|3gp|ogg|flac|mp3|opus|wav|aac)$/i
 export const isUniform512 = blob => Boolean(blob && (
   blob.byteLength === 0 || (
     blob.blockLength > 0 &&
@@ -16,6 +18,24 @@ export const isUniform512 = blob => Boolean(blob && (
     blob.byteLength <= blob.blockLength * BLOB_BLOCK_SIZE
   )
 ))
+
+// What an entry is, for every catalog view: an episode (its id ends `:sNNeNN`, per ID) of a series, or a film. A
+// title with an unambiguous trailing year ("Dune (2021)", "Dune 2021") shows the year apart.
+export function describeEntry (id, title) {
+  const ep = /:s(\d{2})e(\d{2,3})$/i.exec(id || '')
+  const raw = String(title || '').trim()
+  const year = /^(.*\S)\s*\((19|20)(\d{2})\)$/.exec(raw) || /^(.*\S)\s+(19|20)(\d{2})$/.exec(raw)
+  return {
+    season: ep ? Number(ep[1]) : null,
+    episode: ep ? Number(ep[2]) : null,
+    seriesKey: ep ? id.slice(0, ep.index).toLowerCase() : raw.toLowerCase(),
+    baseTitle: year ? year[1].trim() : raw,
+    year: year ? year[2] + year[3] : null
+  }
+}
+// Where peers and the apps reach a node: its HTTP API and a TV receiver's pairing/command server.
+export const API_PORT = 8174
+export const RECEIVER_PORT = 8176
 
 // Every peer value is untrusted until decodeOp blesses it; typeof guards every regex.
 export const str = (v, re) => typeof v === 'string' && re.test(v)

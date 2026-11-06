@@ -76,6 +76,9 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import com.peartube.shared.clock
+import com.peartube.shared.prettyCodec
+import com.peartube.shared.setImmersive
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
@@ -91,8 +94,7 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.peartube.app.AppModel
 import com.peartube.app.Entry
 import com.peartube.app.Screen
-import com.peartube.app.formatBytes
-import com.peartube.app.label
+import com.peartube.shared.formatBytes
 import com.peartube.app.p2pSummary
 import com.peartube.app.player.NativePlayer
 import com.peartube.app.player.PlayerHost
@@ -254,11 +256,11 @@ fun PlayScreen(model: AppModel, host: PlayerHost, entry: Entry, startPositionMs:
 
     val exitOrientation = if (isTv) ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED else ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
     DisposableEffect(activity, exitOrientation) {
-        activity.immersive(true, view)
+        activity.setImmersive(true, view)
         activity.window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         onDispose {
             activity.requestedOrientation = exitOrientation
-            activity.immersive(false, view)
+            activity.setImmersive(false, view)
             activity.window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         }
     }
@@ -285,7 +287,7 @@ fun PlayScreen(model: AppModel, host: PlayerHost, entry: Entry, startPositionMs:
     }
     fun leave() {
         model.recordWatchProgress(entry, state.positionMs, state.durationMs)
-        activity.immersive(false, view)
+        activity.setImmersive(false, view)
         activity.requestedOrientation = exitOrientation
         model.screen.value = Screen.List
     }
@@ -439,39 +441,6 @@ fun PlayScreen(model: AppModel, host: PlayerHost, entry: Entry, startPositionMs:
     }
 }
 
-private fun prettyCodec(raw: String): String = when (raw.lowercase(Locale.ROOT)) {
-    "hevc", "h265" -> "HEVC · H.265"
-    "h264", "avc", "avc1" -> "AVC · H.264"
-    "av1" -> "AV1"
-    "vp9" -> "VP9"
-    "vp8" -> "VP8"
-    "mpeg4", "xvid", "divx" -> "MPEG-4"
-    "mpeg2video", "mpeg2" -> "MPEG-2"
-    "vc1" -> "VC-1"
-    "eac3", "ec-3" -> "Dolby E-AC-3"
-    "ac3" -> "Dolby AC-3"
-    "truehd" -> "Dolby TrueHD"
-    "mlp" -> "Meridian Lossless"
-    "dts", "dca" -> "DTS-HD / DTS"
-    "flac" -> "FLAC Lossless"
-    "alac" -> "ALAC Lossless"
-    "wavpack" -> "WavPack Lossless"
-    "als" -> "MPEG-4 ALS"
-    "ape" -> "Monkey's Audio"
-    "tak" -> "TAK Lossless"
-    "tta" -> "True Audio"
-    "shorten" -> "Shorten Lossless"
-    "dsd_lsbf", "dsd_msbf", "dsd_lsbf_planar", "dsd_msbf_planar" -> "DSD SACD"
-    "aac" -> "AAC"
-    "opus" -> "Opus"
-    "vorbis" -> "Vorbis"
-    "mp3" -> "MP3"
-    "subrip", "srt" -> "SubRip"
-    "ass", "ssa" -> "ASS"
-    "hdmv_pgs_subtitle", "pgs" -> "PGS"
-    "dvd_subtitle", "vobsub" -> "VobSub"
-    else -> raw.uppercase(Locale.ROOT)
-}
 
 private fun resolutionTier(w: Int?, h: Int?): String? {
     if (w == null || h == null || w <= 0 || h <= 0) return null
@@ -516,18 +485,15 @@ private fun PlayerInfoPanel(
 ) {
     val entries by model.entries.collectAsState()
     val status by model.status.collectAsState()
-    val showId = Regex("(?i)(?:imdb:)?(tt\\d+)").find(entry.id)?.groupValues?.get(1)
-    val episodes = remember(entries, entry.id) {
-        if (label(entry.id) == "Movie") emptyList()
-        else entries.filter { candidate ->
-            label(candidate.id) != "Movie" &&
-                (candidate.title == entry.title || (showId != null &&
-                    Regex("(?i)(?:imdb:)?(tt\\d+)").find(candidate.id)?.groupValues?.get(1) == showId))
-        }.distinctBy { it.id }.sortedBy { episodeOrder(it.id) }
+    val episodes = remember(entries, entry.id, entry.seriesKey) {
+        if (entry.season == null) emptyList()
+        else entries.filter { it.season != null && it.seriesKey == entry.seriesKey }
+            .distinctBy { it.id }
+            .sortedWith(compareBy({ it.season ?: 0 }, { it.episode ?: 0 }))
     }
     val formats = entries.filter { it.id == entry.id }.distinctBy { it.key }
-    val seasons = episodes.map { label(it.id).substringBefore('E') }.distinct()
-    var season by remember(entry.id) { mutableStateOf(label(entry.id).substringBefore('E')) }
+    val seasons = episodes.mapNotNull { it.seasonLabel }.distinct()
+    var season by remember(entry.id) { mutableStateOf(entry.seasonLabel ?: "") }
 
     val videoTrack = state.tracks.firstOrNull { it.kind == "video" }
     val audioTracks = state.tracks.filter { it.kind == "audio" }
@@ -600,7 +566,7 @@ private fun PlayerInfoPanel(
         Row(verticalAlignment = Alignment.Top) {
             Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                 Text(entry.title, color = Ink, fontSize = 18.sp, fontWeight = FontWeight.Bold, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                Text(label(entry.id), color = Dim, fontSize = 12.sp)
+                Text(entry.episodeLabel, color = Dim, fontSize = 12.sp)
             }
             CinemaIcon(CloseIcon, "Close content info", Ink, onClose)
         }
@@ -701,7 +667,7 @@ private fun PlayerInfoPanel(
                     }
                 }
                 Column(Modifier.heightIn(max = 176.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                    episodes.filter { seasons.size <= 1 || label(it.id).startsWith(season) }.forEach { episode ->
+                    episodes.filter { seasons.size <= 1 || it.seasonLabel == season }.forEach { episode ->
                         Row(
                             Modifier
                                 .fillMaxWidth()
@@ -711,7 +677,7 @@ private fun PlayerInfoPanel(
                                 .padding(horizontal = 12.dp, vertical = 10.dp),
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
-                            Text(label(episode.id), color = if (episode.id == entry.id) Brand else Ink, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
+                            Text(episode.episodeLabel, color = if (episode.id == entry.id) Brand else Ink, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
                             Text(formatBytes(episode.size), color = Dim, fontSize = 12.sp, modifier = Modifier.padding(end = 8.dp))
                             if (episode.id == entry.id) Icon(PlayIcon, "Playing", tint = Brand, modifier = Modifier.size(16.dp))
                         }
@@ -849,33 +815,6 @@ private fun TrackPicker(options: List<Option>, onSelect: (Int) -> Unit, onOpen: 
 }
 
 
-internal fun clock(ms: Long): String {
-    val s = ms.coerceAtLeast(0L) / 1000
-    return if (s >= 3600) "%d:%02d:%02d".format(Locale.ROOT, s / 3600, s / 60 % 60, s % 60)
-    else "%d:%02d".format(Locale.ROOT, s / 60, s % 60)
-}
-
-/**
- * Fullscreen hides the system bars and lays the window out edge to edge, past the camera
- * cutout: the picture centres on the whole display, and the controls pad themselves clear
- * of the cutout.
- */
-internal fun Activity.immersive(on: Boolean, view: View) {
-    WindowCompat.setDecorFitsSystemWindows(window, false)
-    val bars = WindowCompat.getInsetsController(window, view)
-    if (on) {
-        bars.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
-        bars.hide(WindowInsetsCompat.Type.systemBars())
-    } else {
-        bars.isAppearanceLightStatusBars = false
-        bars.isAppearanceLightNavigationBars = false
-        bars.show(WindowInsetsCompat.Type.systemBars())
-    }
-    window.attributes = window.attributes.apply {
-        layoutInDisplayCutoutMode = if (on) WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
-        else WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_DEFAULT
-    }
-}
 
 internal tailrec fun Context.activity(): Activity = when (this) {
     is Activity -> this

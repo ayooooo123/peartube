@@ -28,17 +28,20 @@ function waitAbortable (ms, controller) {
 
 // Jobs hold private source URLs and auth headers, so they stay collared inside a 0600 file and
 // never leak into Corestore where replication would serve them to any stranger who names the core.
+// What anyone may see of a job: no source secrets, no internal announce payload.
+export const publicJob = ({ source, announce, ...job }) => job
+
 export function createAcquirer (node, file, {
-  concurrency = Number(process.env.PEARTUBE_ACQUIRE_CONCURRENCY || 4),
+  concurrency = 4,
   retryDelay = 15_000,
   stallTimeout = 30_000,
   maxReconnects = 8,
   maxAttempts = 4,
-  defaultChannel = Boolean(process.env.PEARTUBE_PUBLISH_CHANNEL),
+  defaultChannel = false,
+  ubitConfigDir = join(dirname(file), 'ubit'),
   onDone = null
 } = {}) {
   const workRoot = dirname(file)
-  const ubitConfigDir = process.env.UBIT_CONFIG_DIR || join(workRoot, 'ubit')
   try {
     for (const entry of readdirSync(workRoot)) {
       if (entry.startsWith('ubit-dl-')) rmSync(join(workRoot, entry), { recursive: true, force: true })
@@ -60,9 +63,6 @@ export function createAcquirer (node, file, {
     writeFileSync(file + '.tmp', JSON.stringify(jobs), { mode: 0o600 })
     renameSync(file + '.tmp', file)
   }
-
-  // Public view of a job: strip raw source secrets and internal announce payloads clean.
-  const view = ({ source, announce, ...job }) => job
 
   function openSource (url, headers, controller, redirects = 0, timeout = stallTimeout) {
     return new Promise((resolve, reject) => {
@@ -228,7 +228,7 @@ export function createAcquirer (node, file, {
       }
       await node.append(job.announce)
       Object.assign(job, { status: 'done', size: job.announce.size, sha256: job.announce.sha256 })
-      onDone?.(view(job), job.announce)
+      onDone?.(publicJob(job), job.announce)
     } catch (err) {
       if (job.status !== 'cancelled') job.status = job.announce ? 'announcing' : 'failed'
       job.error = err.message
@@ -266,7 +266,7 @@ export function createAcquirer (node, file, {
     jobs.push(job)
     save()
     next()
-    return view(job)
+    return publicJob(job)
   }
 
   // Cancels a queued or running job; a finished, failed or cancelled one is dismissed from the list.
@@ -283,7 +283,7 @@ export function createAcquirer (node, file, {
       job.status = 'removed'
       save()
     }
-    return view(job)
+    return publicJob(job)
   }
 
   function repointBlob (oldTag, target) {
@@ -303,8 +303,8 @@ export function createAcquirer (node, file, {
     add,
     cancel,
     repointBlob,
-    get: jobId => { const job = jobs.find(j => j.jobId === jobId); return job ? view(job) : null },
-    list: () => jobs.map(view),
+    get: jobId => { const job = jobs.find(j => j.jobId === jobId); return job ? publicJob(job) : null },
+    list: () => jobs.map(publicJob),
     setConcurrency (n) {
       concurrency = n
       next()

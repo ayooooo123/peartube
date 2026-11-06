@@ -7,12 +7,13 @@ import os from 'node:os'
 import b4a from 'b4a'
 import { createNode } from '../src/index.js'
 import { createLan, lanAddress } from '../src/lan.js'
-import { createAcquirer } from '../src/acquire.js'
+import { createAcquirer, publicJob } from '../src/acquire.js'
 import { createApi } from '../src/http.js'
 import { createMirrorHost } from '../src/mirror.js'
 import { createCastController } from '../src/cast.js'
 import { createSettings } from '../src/settings.js'
 import { identify, posterUrl, backdropUrl } from '../src/identify.js'
+import { API_PORT } from '../src/protocol.js'
 
 const env = process.env
 
@@ -30,6 +31,7 @@ mkdirSync(storage, { recursive: true, mode: 0o700 })
 const settings = createSettings(storage, env)
 const cfg = settings.get
 const jobsFile = join(storage, 'jobs.json')
+const ubitConfigDir = env.UBIT_CONFIG_DIR || join(storage, 'ubit')
 const sourcesFile = join(storage, 'sources.json')
 function loadSavedSources () {
   const saved = (() => { try { return JSON.parse(readFileSync(sourcesFile, 'utf8')) } catch { return [] } })()
@@ -100,17 +102,17 @@ const state = {
   cast: null,
   apiToken: env.PEARTUBE_API_TOKEN || null,
   settings,
-  identify: link => identify(link, { cinemetaUrl: cfg('cinemetaUrl'), configDir: env.UBIT_CONFIG_DIR || join(storage, 'ubit') }),
+  identify: link => identify(link, { cinemetaUrl: cfg('cinemetaUrl'), configDir: ubitConfigDir }),
   posterUrl: imdb => posterUrl(cfg('cinemetaUrl'), imdb),
   backdropUrl: imdb => backdropUrl(cfg('cinemetaUrl'), imdb),
   onSourcesChanged: saveSources,
   fallbackStatus: { tracker: cfg('tracker'), channel: '', writer: '', blobs: '', blobBytes: 0, cachedBytes: 0, peers: 0, lanPeers: 0, downBps: 0, upBps: 0, rxBytes: 0, txBytes: 0, routes: { private: emptyRoute(), public: emptyRoute(), lan: emptyRoute() }, inflightBlocks: 0, rtt: 0, retransmits: 0, sources: [], reciprocity: { tier: 'leecher', seededBytes: 0, contributingPeers: 0, ratio: 0, inflightMax: 64 } },
   fallbackJobs () {
-    try { return JSON.parse(readFileSync(jobsFile, 'utf8')).map(({ source, announce, ...j }) => j) } catch { return [] }
+    try { return JSON.parse(readFileSync(jobsFile, 'utf8')).map(publicJob) } catch { return [] }
   }
 }
 const api = createApi(state)
-const apiPort = Number(env.PEARTUBE_API_PORT || 8174)
+const apiPort = Number(env.PEARTUBE_API_PORT || API_PORT)
 const httpsPort = Number(env.PEARTUBE_HTTPS_PORT ?? 8443)
 const apiHost = env.PEARTUBE_API_HOST || '0.0.0.0'
 api.listen(apiPort, apiHost)
@@ -139,8 +141,6 @@ for (const signal of ['SIGINT', 'SIGTERM']) {
   process.on(signal, shutdown)
 }
 
-const stagger = env.PEARTUBE_LAN_HOST ? Math.max(0, (Number(env.PEARTUBE_LAN_HOST.split('.')[3]) - 111) * 3000) : 0
-if (stagger > 0) await new Promise(resolve => setTimeout(resolve, stagger))
 const list = value => value.length ? value : null
 const replicateValue = () => cfg('replicate') ? (cfg('replicateSources').length ? cfg('replicateSources') : true) : false
 const lanHost = () => cfg('lanHost') || lanAddress(os.networkInterfaces())
@@ -213,6 +213,7 @@ async function start () {
   state.acquirer = createAcquirer(node, jobsFile, {
     concurrency: cfg('acquireConcurrency'),
     defaultChannel: cfg('publishChannel'),
+    ubitConfigDir,
     onDone: () => {
       api.notify('update')
       scheduleReplicate()
@@ -222,7 +223,8 @@ async function start () {
     storage,
     getNode: () => state.node,
     getLanHost: lanHost,
-    onchange: () => api.notify('cast')
+    onchange: () => api.notify('cast'),
+    apiPort
   })
   await state.cast.setLanHost(lanHost()).catch(() => {})
   const hiverelay = hiverelayOpt()

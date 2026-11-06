@@ -1,3 +1,13 @@
+import { readFileSync } from 'node:fs'
+
+const lockHash = (() => {
+  try {
+    return readFileSync(new URL('../web/assets/peartube_web.lock.sha256', import.meta.url), 'utf8').trim()
+  } catch {}
+  return ''
+})()
+const ASSET_VER = lockHash ? '?v=' + lockHash.slice(0, 16) : ''
+
 // Single-page dashboard for relays & local client daemons; textContent guards every peer string.
 export const page = `<!doctype html>
 <html lang="en">
@@ -1760,14 +1770,16 @@ function audioOutTime (ctx) {
   return (ts && ts.contextTime > 0) ? ts.contextTime : ctx.currentTime
 }
 // One shared WASM Worker, compiled when a Play button is about to be used, so playback opens without a compile wait.
-const ASSET_VER = '?v=11'
+const ASSET_VER = ${JSON.stringify(ASSET_VER)}
 let sharedWorker = null
-let workerCanvasTransferred = false
-let workerOffscreenReady = false
+let streamBlockBytes = 0
 function nowWallMs () { return (performance.timeOrigin || 0) + performance.now() }
 function getWorker () {
   if (!sharedWorker) {
     sharedWorker = new Worker('/web/player-worker.js' + ASSET_VER)
+    sharedWorker.onmessage = ev => {
+      if (ev.data?.streamBlock) streamBlockBytes = ev.data.streamBlock
+    }
     // The Worker's OffscreenCanvas renderer dropped pictures on long titles (18 fps on Batman's
     // VC-1 where this page-side GL holds 24). Keep the canvas here and let the worker post frames.
     sharedWorker.postMessage({ cmd: 'warmup', wasmUrl: location.origin + '/web/peartube_web.wasm' + ASSET_VER })
@@ -2199,7 +2211,7 @@ function openPlayer (entry, at = 0) {
     const at = p.manifest.tracks.find(t => t.stream === p.audioStream)
     const parts = [p.manifest.container]
     if (vt) {
-      const hasGpu = workerOffscreenReady || Boolean(getYuvGl())
+      const hasGpu = Boolean(getYuvGl())
       const tag = p.useMse ? ' (MSE+WASM)' : (p.usingWebCodecs ? ' (WebCodecs+WASM)' : (hasGpu ? ' (WASM+GPU)' : ' (WASM)'))
       parts.push(vt.codec + tag)
     }
@@ -2216,8 +2228,7 @@ function openPlayer (entry, at = 0) {
   worker.onmessage = ev => {
     if (player !== p) return
     const m = ev.data || {}
-    if (m.type === 'warm') return
-    if (m.type === 'canvasReady') { workerOffscreenReady = Boolean(m.offscreen); return }
+    if (m.type === 'warm') { if (m.streamBlock) streamBlockBytes = m.streamBlock; return }
     if (m.seq && m.seq !== p.seq) return
     if (m.type === 'error') {
       $('pStatus').style.display = ''
@@ -2226,6 +2237,7 @@ function openPlayer (entry, at = 0) {
       return
     }
     if (m.type === 'manifest') {
+      if (m.streamBlock) streamBlockBytes = m.streamBlock
       const mf = m.manifest
       p.manifest = mf
       p.duration = mf.duration || 0
@@ -2255,7 +2267,6 @@ function openPlayer (entry, at = 0) {
       }))
       sSel.disabled = subs.length === 0
 
-      if (typeof m.offscreen === 'boolean') workerOffscreenReady = m.offscreen
       p.webCodecsSupported = Boolean(m.webCodecsSupported)
       const MS = window.MediaSource || window.ManagedMediaSource
       p.mseSupported = Boolean(p.videoStream >= 0 && mf.mseType && MS && MS.isTypeSupported(mf.mseType))
@@ -2268,7 +2279,7 @@ function openPlayer (entry, at = 0) {
         setupMse(p.startAt)
       } else {
         video.style.display = 'none'
-        glCanvas.style.display = (workerOffscreenReady || Boolean(getYuvGl())) ? 'block' : 'none'
+        glCanvas.style.display = Boolean(getYuvGl()) ? 'block' : 'none'
         canvas.style.display = 'none'
       }
       updateBadge()
@@ -2340,9 +2351,8 @@ function openPlayer (entry, at = 0) {
 
   // Blocks the demuxer is about to need, fetched here where fetch() is reliable (the Worker's own
   // prefetch can hang, and one blocked sync read drops every picture due behind it).
-  const BLOCK_BYTES = 2 * 1024 * 1024
   function pumpPrefetch (p) {
-    if (!p || player !== p || !p.worker || !p.streamUrl) return
+    if (!p || player !== p || !p.worker || !p.streamUrl || !streamBlockBytes) return
     // While hidden or occluded, let any already-started page fetches finish into blockCache, then yield new ones to the Worker.
     if (effectiveHidden()) return
     const base = p.lastReadBlock
@@ -2362,8 +2372,8 @@ function openPlayer (entry, at = 0) {
       const idx = base + i
       if (idx < 0) continue
       if (p.prefetchDone.has(idx) || p.prefetchInFlight.has(idx)) continue
-      const start = idx * BLOCK_BYTES
-      const end = start + BLOCK_BYTES - 1
+      const start = idx * streamBlockBytes
+      const end = start + streamBlockBytes - 1
       const ctl = new AbortController()
       p.prefetchInFlight.set(idx, ctl)
       const killTimer = setTimeout(() => { try { ctl.abort() } catch {} }, 6000)
@@ -2389,7 +2399,7 @@ function openPlayer (entry, at = 0) {
   function drawSwFrame (f) {
     p.lastDrawWall = performance.now()
     if ($('pStatus').textContent === 'Buffering…') $('pStatus').style.display = 'none'
-    const r = ((f.yuv || f.hwFrame) && !workerCanvasTransferred) ? getYuvGl() : false
+    const r = (f.yuv || f.hwFrame) ? getYuvGl() : false
     if (f.hwFrame) {
       const fw = f.w || f.hwFrame.displayWidth || f.hwFrame.codedWidth || 0
       const fh = f.h || f.hwFrame.displayHeight || f.hwFrame.codedHeight || 0

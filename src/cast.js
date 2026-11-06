@@ -13,7 +13,7 @@ import { createBlobRangeServer } from './blob-server.js'
 import ByteStream from 'hypercore-byte-stream'
 import b4a from 'b4a'
 import { createNode } from './index.js'
-import { BLOB_BLOCK_SIZE, HEX64, cleanName, formatReceiverUri, formatWatchUri, parseUri } from './protocol.js'
+import { API_PORT, BLOB_BLOCK_SIZE, HEX64, RECEIVER_PORT, cleanName, formatReceiverUri, formatWatchUri, parseUri } from './protocol.js'
 import { createLan, interfaceAdapter, selfAddressAdapter } from './lan.js'
 import { receiverPage } from './cast-ui.js'
 import { qrSvg } from './qr.js'
@@ -648,7 +648,7 @@ export async function createReceiver ({
   storage,
   peerStorage = null,
   name = os.hostname?.() || 'PearTube TV',
-  port = 8176,
+  port = RECEIVER_PORT,
   bindHost = '0.0.0.0',
   lanHost = null,
   node = null,
@@ -1421,13 +1421,6 @@ export async function createReceiver ({
       return next
     },
     command: applyCommand,
-    rotateCode () {
-      identity.pairCode = generatePairCode()
-      identity.pairToken = randomHex(16)
-      writeJsonAtomic(idFile, identity)
-      notifyLocalHost(true)
-      return detailedInfo()
-    },
     async setHost (nextHost) {
       if (nextHost === currentHost) return
       currentHost = nextHost
@@ -1468,7 +1461,9 @@ export function createCastController ({
   getLanHost = () => null,
   adapter = null,
   onchange = null,
-  worklet = false
+  worklet = false,
+  // The port of the API server this controller's web-receiver routes also answer on (http.js), for links.
+  apiPort = API_PORT
 }) {
   mkdirSync(storage, { recursive: true, mode: 0o700 })
   const savedFile = join(storage, 'cast-receivers.json')
@@ -1591,7 +1586,7 @@ export function createCastController ({
       if (s) { s.name = rec.name; persistSaved() }
     }
     emitChange()
-    const hubPort = castHubPort || Number(process.env.PEARTUBE_API_PORT || 8174)
+    const hubPort = castHubPort || apiPort
     const uri = formatReceiverUri({
       deviceId: rec.id,
       name: rec.name,
@@ -1626,7 +1621,7 @@ export function createCastController ({
 
   async function handleHubCastJson (req, url) {
     const p = url.pathname
-    const hubPort = castHubPort || Number(process.env.PEARTUBE_API_PORT || 8174)
+    const hubPort = castHubPort || apiPort
     if (req.method === 'GET' && p === '/cast/v1/info') {
       const id = url.searchParams.get('id') || ''
       const rec = (id && webReceivers.get(id)) || [...webReceivers.values()].find(r => r.clients.size > 0) || webReceivers.values().next().value
@@ -2190,7 +2185,7 @@ export function createCastController ({
     return status()
   }
 
-  async function startLocalReceiver ({ name = 'PearTube TV', port = 8176, openAuth = true, peerStorage = null, onCommand = null } = {}) {
+  async function startLocalReceiver ({ name = 'PearTube TV', port = RECEIVER_PORT, openAuth = true, peerStorage = null, onCommand = null } = {}) {
     if (localReceiver) await localReceiver.close().catch(() => {})
     const node = getNode() || (ensureNode ? await ensureNode() : null)
     localReceiver = await createReceiver({
@@ -2209,14 +2204,6 @@ export function createCastController ({
     })
     emitChange()
     return localReceiver.info()
-  }
-
-  async function stopLocalReceiver () {
-    if (!localReceiver) return
-    const prev = localReceiver
-    localReceiver = null
-    await prev.close().catch(() => {})
-    emitChange()
   }
 
   function status () {
@@ -2254,8 +2241,6 @@ export function createCastController ({
     handleHubCastJson,
     webSetupQrSvg: url => url ? qrSvg(url) : '',
     startLocalReceiver,
-    stopLocalReceiver,
-    rotateLocalReceiverCode: () => localReceiver ? localReceiver.rotateCode() : null,
     reportLocalReceiverState: patch => localReceiver ? localReceiver.reportState(patch) : null,
     status,
     async close () {

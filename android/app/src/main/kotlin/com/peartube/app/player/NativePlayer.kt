@@ -9,8 +9,6 @@ object NativePlayer {
         System.loadLibrary("peartube")
     }
 
-    /** Opens [url] and starts playing; [soundfont] is the user's SF2 bank for MIDI. */
-    @JvmStatic external fun open(url: String, soundfont: String?): Long
     @JvmStatic external fun openWithOptions(
         url: String,
         soundfont: String?,

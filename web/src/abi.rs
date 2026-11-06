@@ -29,6 +29,32 @@ pub extern "C" fn pt_json_len() -> usize {
     STATE.with(|c| c.borrow().json_buf.len())
 }
 
+pub const STEP_EOF: i32 = 0;
+pub const STEP_MSE_INIT: i32 = 1;
+pub const STEP_MSE_SEGMENT: i32 = 2;
+pub const STEP_VIDEO_RGBA: i32 = 3;
+pub const STEP_AUDIO_PLANAR_F32: i32 = 4;
+pub const STEP_SUB_TEXT: i32 = 5;
+pub const STEP_SUB_BITMAP: i32 = 6;
+pub const STEP_VIDEO_YUV420: i32 = 7;
+pub const STEP_VIDEO_PACKET: i32 = 8;
+pub const STEP_YIELD: i32 = 9;
+
+pub const MODE_SOFTWARE: i32 = 0;
+pub const MODE_MSE: i32 = 1;
+pub const MODE_WEBCODECS: i32 = 2;
+
+#[unsafe(no_mangle)]
+pub extern "C" fn pt_abi_json() -> usize {
+    STATE.with(|c| {
+        let mut st = c.borrow_mut();
+        st.json_buf = format!(
+            r#"{{"step":{{"eof":{STEP_EOF},"mseInit":{STEP_MSE_INIT},"mseSegment":{STEP_MSE_SEGMENT},"videoRgba":{STEP_VIDEO_RGBA},"audioPlanarF32":{STEP_AUDIO_PLANAR_F32},"subText":{STEP_SUB_TEXT},"subBitmap":{STEP_SUB_BITMAP},"videoYuv420":{STEP_VIDEO_YUV420},"videoPacket":{STEP_VIDEO_PACKET},"yield":{STEP_YIELD}}},"mode":{{"software":{MODE_SOFTWARE},"mse":{MODE_MSE},"webcodecs":{MODE_WEBCODECS}}},"limits":{{"maxHiddenGops":{MAX_HIDDEN_GOPS},"maxGopPkts":{MAX_GOP_PKTS}}}}}"#
+        ).into_bytes();
+        st.json_buf.len()
+    })
+}
+
 #[unsafe(no_mangle)]
 pub extern "C" fn pt_out_ptr() -> *const u8 {
     STATE.with(|c| c.borrow().out_buf.as_ptr())
@@ -141,14 +167,13 @@ pub unsafe extern "C" fn pt_open(ext_ptr: *const u8, ext_len: usize) -> i32 {
         // A file that stores decode times (no `ctts`) hands the decoder
         // backward display stamps; the browser then throws half its pictures
         // away as late. Repair presentation times before anything reads them.
-        let mut demuxer = match catch_unwind(AssertUnwindSafe(|| {
-            ctx.containers
-                .open_demuxer(&container, Box::new(src), &ctx.codecs)
-                .map(decode_order::wrap)
-        })) {
-            Ok(Ok(d)) => d,
-            Ok(Err(e)) => return set_json_error(&mut st, &format!("Demuxer error ({container}): {e}")),
-            Err(_) => return set_json_error(&mut st, &format!("Demuxer panicked opening {container}")),
+        let mut demuxer = match ctx
+            .containers
+            .open_demuxer(&container, Box::new(src), &ctx.codecs)
+            .map(decode_order::wrap)
+        {
+            Ok(d) => d,
+            Err(e) => return set_json_error(&mut st, &format!("Demuxer error ({container}): {e}")),
         };
 
         let streams: Vec<StreamInfo> = demuxer.streams().iter().take(64).cloned().collect();
@@ -214,7 +239,7 @@ pub unsafe extern "C" fn pt_open(ext_ptr: *const u8, ext_len: usize) -> i32 {
             && matches!(vs.params.codec_id.as_str(), "h264" | "h265" | "hevc" | "av1" | "vp9")
         {
             for _ in 0..128 {
-                let Ok(Ok(pkt)) = catch_unwind(AssertUnwindSafe(|| demuxer.next_packet())) else {
+                let Ok(pkt) = demuxer.next_packet() else {
                     break;
                 };
                 let is_vkf = pkt.stream_index == vi && pkt.flags.keyframe;
@@ -306,8 +331,8 @@ pub extern "C" fn pt_configure(video_stream: i32, audio_stream: i32, sub_stream:
         sess.audio_idx = (audio_stream >= 0).then_some(audio_stream as u32);
         sess.sub_idx = (sub_stream >= 0).then_some(sub_stream as u32);
         sess.video_mode = match use_mse {
-            1 if sess.mse_cfg.is_some() => VideoOutputMode::Mse,
-            2 => VideoOutputMode::WebCodecs,
+            MODE_MSE if sess.mse_cfg.is_some() => VideoOutputMode::Mse,
+            MODE_WEBCODECS => VideoOutputMode::WebCodecs,
             _ => VideoOutputMode::Software,
         };
         sess.out_queue.clear();
@@ -357,9 +382,8 @@ pub extern "C" fn pt_seek(target_secs: f64) -> i32 {
         sess.flushed_eof = false;
         sess.seek_target = Some(clamped);
 
-        let res = catch_unwind(AssertUnwindSafe(|| sess.demuxer.seek_to(seek_stream, ticks)));
-        if let Err(_) | Ok(Err(_)) = res {
-            let _ = catch_unwind(AssertUnwindSafe(|| sess.demuxer.seek_to(seek_stream, 0)));
+        if sess.demuxer.seek_to(seek_stream, ticks).is_err() {
+            let _ = sess.demuxer.seek_to(seek_stream, 0);
         }
         sess.rebuild_decoders();
         if sess.video_mode == VideoOutputMode::Mse
@@ -410,10 +434,7 @@ pub extern "C" fn pt_step() -> i32 {
                 let next_pkt = if let Some(p) = sess.peek_packets.pop_front() {
                     Ok(p)
                 } else {
-                    match catch_unwind(AssertUnwindSafe(|| sess.demuxer.next_packet())) {
-                        Ok(r) => r,
-                        Err(_) => Err(AvError::Other("demuxer panicked".into())),
-                    }
+                    sess.demuxer.next_packet()
                 };
                 match next_pkt {
                     Ok(pkt) => {
@@ -437,52 +458,52 @@ pub extern "C" fn pt_step() -> i32 {
             }
             match sess.out_queue.pop_front() {
                 // A 4,096-packet slice that skipped pre-seek TrueHD or hidden video is not EOF; yield 9 so the Worker pumps again.
-                None => return if sess.demux_eof { 0 } else { 9 },
+                None => return if sess.demux_eof { STEP_EOF } else { STEP_YIELD },
                 Some(OutItem::MseInit(data)) => {
                     st.out_buf = data;
                     st.out_pts = 0.0;
                     st.out_dur = 0.0;
-                    1
+                    STEP_MSE_INIT
                 }
                 Some(OutItem::MseSegment { data, start, end }) => {
                     st.out_buf = data;
                     st.out_pts = start;
                     st.out_dur = end;
-                    2
+                    STEP_MSE_SEGMENT
                 }
                 Some(OutItem::VideoRgba { data, pts, w, h }) => {
                     st.out_buf = data;
                     st.out_pts = pts;
                     st.out_w = w;
                     st.out_h = h;
-                    3
+                    STEP_VIDEO_RGBA
                 }
                 Some(OutItem::VideoYuv420 { data, pts, w, h }) => {
                     st.out_buf = data;
                     st.out_pts = pts;
                     st.out_w = w;
                     st.out_h = h;
-                    7
+                    STEP_VIDEO_YUV420
                 }
                 Some(OutItem::VideoPacket { data, pts, dur, keyframe }) => {
                     st.out_buf = data;
                     st.out_pts = pts;
                     st.out_dur = dur;
                     st.out_w = u32::from(keyframe);
-                    8
+                    STEP_VIDEO_PACKET
                 }
                 Some(OutItem::AudioPlanarF32 { data, pts, rate, frames }) => {
                     st.out_buf = data;
                     st.out_pts = pts;
                     st.out_rate = rate;
                     st.out_samples = frames;
-                    4
+                    STEP_AUDIO_PLANAR_F32
                 }
                 Some(OutItem::SubText { text, start, end }) => {
                     st.out_buf = text;
                     st.out_pts = start;
                     st.out_dur = end;
-                    5
+                    STEP_SUB_TEXT
                 }
                 Some(OutItem::SubBitmap { rgba, start, end, x, y, w, h, cw, ch }) => {
                     st.out_buf = rgba;
@@ -494,7 +515,7 @@ pub extern "C" fn pt_step() -> i32 {
                     st.out_h = h;
                     st.out_cw = cw;
                     st.out_ch = ch;
-                    6
+                    STEP_SUB_BITMAP
                 }
             }
         };

@@ -1,5 +1,6 @@
 import { readFileSync, writeFileSync, renameSync } from 'node:fs'
 import { join } from 'node:path'
+import { CINEMETA_URL } from './art.js'
 
 // Relay settings: settings.json (set from the UI) wins, then an env var, then the default. settings.json is a private
 // file beside jobs.json (0600), never in the Corestore. Secrets (HiveRelay API keys, tokens inside URLs) are
@@ -41,7 +42,7 @@ const SPEC = {
   hiverelayReplicas: { env: 'PEARTUBE_HIVERELAY_REPLICAS', type: 'number', def: 3, min: 1, max: 32 },
   hiverelayUploadMbps: { env: 'PEARTUBE_HIVERELAY_UPLOAD_MBPS', type: 'number', def: 50, min: 0, max: 1e5 },
   rechunk: { env: 'PEARTUBE_RECHUNK', type: 'bool', def: false, live: true, fromEnv: flag },
-  cinemetaUrl: { env: 'PEARTUBE_CINEMETA_URL', type: 'url', def: 'https://v3-cinemeta.strem.io', live: true, empty: true }
+  cinemetaUrl: { env: 'PEARTUBE_CINEMETA_URL', type: 'url', def: CINEMETA_URL, live: true, empty: true }
 }
 
 function parseEnv (spec, raw) {

@@ -76,10 +76,11 @@ import androidx.compose.ui.unit.sp
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
-import com.google.zxing.BarcodeFormat
-import com.google.zxing.EncodeHintType
-import com.google.zxing.qrcode.QRCodeWriter
-import com.google.zxing.qrcode.decoder.ErrorCorrectionLevel
+import com.peartube.shared.QrCodeView
+import com.peartube.shared.clock
+import com.peartube.shared.formatBytes
+import com.peartube.shared.prettyCodec
+import com.peartube.shared.setImmersive
 import com.peartube.app.player.NativePlayer
 import com.peartube.app.player.PlayerHost
 import com.peartube.app.player.PlayerState
@@ -151,80 +152,10 @@ class ReceiverActivity : ComponentActivity() {
     }
 }
 
-@Composable
-private fun TvQrCode(data: String, modifier: Modifier = Modifier) {
-    val matrix = remember(data) {
-        QRCodeWriter().encode(
-            data,
-            BarcodeFormat.QR_CODE,
-            1,
-            1,
-            mapOf(
-                EncodeHintType.ERROR_CORRECTION to ErrorCorrectionLevel.M,
-                EncodeHintType.MARGIN to 3,
-            ),
-        )
-    }
-    Canvas(modifier.aspectRatio(1f).clip(RoundedCornerShape(18.dp)).background(Color.White)) {
-        val module = (min(size.width, size.height) / matrix.width).toInt()
-        if (module > 0) {
-            val left = ((size.width - matrix.width * module) / 2).toInt()
-            val top = ((size.height - matrix.height * module) / 2).toInt()
-            for (y in 0 until matrix.height) {
-                for (x in 0 until matrix.width) {
-                    if (matrix[x, y]) {
-                        drawRect(
-                            Color.Black,
-                            Offset((left + x * module).toFloat(), (top + y * module).toFloat()),
-                            Size(module.toFloat(), module.toFloat()),
-                        )
-                    }
-                }
-            }
-        }
-    }
-}
-
-private fun formatClock(ms: Long): String {
-    val s = ms.coerceAtLeast(0L) / 1000
-    return if (s >= 3600) "%d:%02d:%02d".format(Locale.ROOT, s / 3600, s / 60 % 60, s % 60)
-    else "%d:%02d".format(Locale.ROOT, s / 60, s % 60)
-}
-
 private fun formatStorageFree(bytes: Long, external: Boolean): String? {
     if (bytes <= 0L) return null
-    val gb = bytes.toDouble() / (1024.0 * 1024.0 * 1024.0)
-    val sizeTxt = if (gb >= 950.0) String.format(Locale.US, "%.2f TB", gb / 1024.0)
-    else String.format(Locale.US, "%.1f GB", gb)
+    val sizeTxt = formatBytes(bytes)
     return if (external) "$sizeTxt external seed drive ready" else "$sizeTxt internal seed storage · external drive not in use"
-}
-
-private fun prettyCodec(raw: String): String = when (raw.lowercase(Locale.ROOT)) {
-    "h264", "avc", "avc1" -> "H.264"
-    "h265", "hevc", "hev1", "hvc1" -> "HEVC"
-    "av1", "av01" -> "AV1"
-    "vp9" -> "VP9"
-    "truehd", "mlp" -> "TrueHD"
-    "eac3" -> "E-AC-3"
-    "ac3" -> "AC-3"
-    "dts", "dca" -> "DTS-HD"
-    "flac" -> "FLAC"
-    "alac" -> "ALAC"
-    "wavpack" -> "WavPack"
-    "als" -> "ALS"
-    "ape" -> "APE"
-    "tak" -> "TAK"
-    "tta" -> "TTA"
-    "dsd_lsbf", "dsd_msbf", "dsd_lsbf_planar", "dsd_msbf_planar" -> "DSD"
-    "aac" -> "AAC"
-    "opus" -> "Opus"
-    "vorbis" -> "Vorbis"
-    "mp3" -> "MP3"
-    "subrip", "srt" -> "SRT"
-    "ass", "ssa" -> "ASS"
-    "hdmv_pgs_subtitle", "pgs" -> "PGS"
-    "dvd_subtitle", "vobsub" -> "VobSub"
-    else -> raw.uppercase(Locale.ROOT)
 }
 
 private fun shortTrackBadge(track: Track?): String {
@@ -240,17 +171,6 @@ private fun fullTrackTitle(track: Track): String {
         add(prettyCodec(track.codec))
     }
     return parts.distinct().joinToString(" · ")
-}
-
-private fun Activity.setImmersive(on: Boolean, view: View) {
-    WindowCompat.setDecorFitsSystemWindows(window, !on)
-    val bars = WindowCompat.getInsetsController(window, view)
-    if (on) {
-        bars.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
-        bars.hide(WindowInsetsCompat.Type.systemBars())
-    } else {
-        bars.show(WindowInsetsCompat.Type.systemBars())
-    }
 }
 
 private fun tracksSignature(st: PlayerState): String =
@@ -416,7 +336,7 @@ private fun TvSeekBar(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Text(
-                "${formatClock(positionMs)} / ${durationMs?.let(::formatClock) ?: "--:--"}",
+                "${clock(positionMs)} / ${durationMs?.let(::clock) ?: "--:--"}",
                 color = Color.White,
                 fontSize = 14.sp,
                 fontWeight = FontWeight.Medium,
@@ -702,7 +622,7 @@ private fun DumbTvReceiverScreen(activity: Activity, worker: ReceiverWorker, hos
             ) {
                 Box(Modifier.size(230.dp), contentAlignment = Alignment.Center) {
                     val uri = info?.pairingUri.orEmpty()
-                    if (uri.isNotEmpty()) TvQrCode(uri, Modifier.fillMaxSize())
+                    if (uri.isNotEmpty()) QrCodeView(uri, Modifier.fillMaxSize())
                     else CircularProgressIndicator(color = TvAccent)
                 }
                 Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -1092,7 +1012,7 @@ private fun DumbTvReceiverScreen(activity: Activity, worker: ReceiverWorker, hos
                                 itemsIndexed(state.chapters, key = { idx, _ -> idx }) { idx, chap ->
                                     val active = state.positionMs >= chap.startMs && (chap.endMs == null || state.positionMs < chap.endMs)
                                     TvControlButton(
-                                        label = "${if (active) "✓  " else ""}${formatClock(chap.startMs)} · ${chap.title}",
+                                        label = "${if (active) "✓  " else ""}${clock(chap.startMs)} · ${chap.title}",
                                         primary = active,
                                         onInteraction = ::touchHud,
                                         onClick = {

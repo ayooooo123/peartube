@@ -5,6 +5,7 @@ import android.content.Intent
 import android.os.PowerManager
 import android.os.Environment
 import android.os.StatFs
+import com.peartube.shared.WorkletBridge
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -16,13 +17,9 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import org.json.JSONObject
-import to.holepunch.bare.kit.BareKitException
 import to.holepunch.bare.kit.Ipc
 import to.holepunch.bare.kit.Worklet
-import java.io.ByteArrayOutputStream
 import java.io.File
-import java.util.concurrent.ConcurrentHashMap
-import java.util.concurrent.atomic.AtomicLong
 
 data class TvReceiverInfo(
     val deviceId: String = "",
@@ -90,8 +87,6 @@ data class TvCommand(
 
 class ReceiverWorker(private val appContext: Context) {
     private val castDir = File(appContext.noBackupFilesDir, "cast").path
-    private val pending = ConcurrentHashMap<Long, CompletableDeferred<Any?>>()
-    private val nextId = AtomicLong(1)
 
     val info = MutableStateFlow<TvReceiverInfo?>(null)
     val error = MutableStateFlow<String?>(null)
@@ -103,29 +98,32 @@ class ReceiverWorker(private val appContext: Context) {
     @Volatile var lastHandledSeq: Long = 0L
     private val startLock = Mutex()
     private var activePeerDir: String = ""
-    // Guards failure and the registration of replies (see Worker.kt).
-    private val lock = Any()
-    private var failure: String? = null
-    // Worklet.start() blocks until the worklet thread has set Bare up, so it runs off the UI
-    // thread; calls wait for the ipc, which is null if the engine did not start.
+
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private val ready = CompletableDeferred<Ipc?>()
     private var worklet: Worklet? = null
+
+    private val bridge = WorkletBridge(
+        ready = ready,
+        scope = scope,
+        onEvent = ::dispatchEvent,
+        onFatal = { error.value = it },
+        stoppedMessage = "Receiver engine stopped",
+    )
 
     init {
         scope.launch(Dispatchers.IO) {
             try {
                 val bundle = appContext.assets.open("worker.bundle").use { it.readBytes() }
                 val w = Worklet(appContext)
-                // The ipc exists before the worker runs, so nothing it writes at start is missed.
                 val pipe = Ipc(w)
                 w.start("/worker.bundle", bundle)
                 worklet = w
                 ready.complete(pipe)
-                scope.launch { read(pipe) }
+                scope.launch { bridge.read(pipe) }
             } catch (e: Throwable) {
                 ready.complete(null)
-                fail("Receiver engine failed to start: ${e.message ?: e}")
+                bridge.fail("Receiver engine failed to start: ${e.message ?: e}")
             }
         }
     }
@@ -160,8 +158,8 @@ class ReceiverWorker(private val appContext: Context) {
             return@withLock existing
         }
         activePeerDir = chosenPeer
+        call("init", JSONObject().put("castStorage", castDir))
         val params = JSONObject()
-            .put("storage", castDir)
             .put("peerStorage", chosenPeer)
             .put("name", name)
             .put("openAuth", openAuth)
@@ -171,58 +169,14 @@ class ReceiverWorker(private val appContext: Context) {
     }
 
     suspend fun reportState(state: JSONObject) {
-        call("receiverReportState", JSONObject().put("storage", castDir).put("state", state))
+        call("receiverReportState", JSONObject().put("state", state))
     }
 
-    private suspend fun call(method: String, params: JSONObject = JSONObject()): Any? {
-        val id = nextId.getAndIncrement()
-        val reply = CompletableDeferred<Any?>()
-        val line = JSONObject().put("id", id).put("method", method).put("params", params).toString() + "\n"
-        synchronized(lock) {
-            failure?.let { throw IllegalStateException(it) }
-            pending[id] = reply
-        }
-        try {
-            val pipe = ready.await() ?: throw IllegalStateException(failure ?: "Receiver engine failed to start")
-            try {
-                pipe.write(line.toByteArray())
-            } catch (e: BareKitException.Closed) {
-                throw IllegalStateException(failure ?: "Receiver engine stopped")
-            }
-            return reply.await()
-        } finally {
-            pending.remove(id)
-        }
-    }
+    private suspend fun call(method: String, params: JSONObject = JSONObject()): Any? =
+        bridge.call(method, params)
 
-    private suspend fun read(pipe: Ipc) {
-        val incoming = ByteArrayOutputStream()
-        pipe.data.collect { bytes ->
-            var start = 0
-            for (i in bytes.indices) {
-                if (bytes[i] == '\n'.code.toByte()) {
-                    incoming.write(bytes, start, i - start)
-                    dispatch(incoming.toString(Charsets.UTF_8.name()))
-                    incoming.reset()
-                    start = i + 1
-                }
-            }
-            incoming.write(bytes, start, bytes.size - start)
-        }
-        fail("Receiver engine stopped")
-    }
-
-    private fun dispatch(line: String) {
-        val msg = runCatching { JSONObject(line) }.getOrNull() ?: return
-        if (msg.has("id")) {
-            val reply = pending.remove(msg.getLong("id")) ?: return
-            if (msg.has("error")) {
-                android.util.Log.w("PearTubeTV", "RPC #${msg.optLong("id")} failed: ${msg.optString("error")}")
-                reply.completeExceptionally(IllegalStateException(msg.optString("error")))
-            } else reply.complete(msg.opt("result"))
-            return
-        }
-        when (msg.optString("event")) {
+    private fun dispatchEvent(event: String, msg: JSONObject) {
+        when (event) {
             "cast" -> {
                 msg.optJSONObject("cast")?.optJSONObject("receiverMode")?.let {
                     info.value = TvReceiverInfo.from(it)
@@ -248,15 +202,5 @@ class ReceiverWorker(private val appContext: Context) {
             }
             "fatal" -> error.value = msg.optString("error")
         }
-    }
-
-    private fun fail(message: String) {
-        synchronized(lock) {
-            if (failure != null) return
-            failure = message
-        }
-        error.value = message
-        pending.values.forEach { it.completeExceptionally(IllegalStateException(message)) }
-        pending.clear()
     }
 }

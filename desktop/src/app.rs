@@ -16,13 +16,12 @@ use gpui_kit::component::input::{InputEvent, InputState};
 use gpui_kit::component::{IconName, Sizable as _, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
-use peartube::settings::{Settings, SourceSpec, is_key, parse_source_token};
+use peartube::settings::{Settings, SourceSpec};
 use peartube::soundfont;
 use peartube::worker::{CastStatus, DATA_DIR, DiscoveredSource, Entry, Event, SourceInfo, Status, worker};
 use serde::{Deserialize, Serialize};
 
 use crate::cast_screen::CastSheetForm;
-use crate::list::{is_episode_id, series_group_key};
 use crate::play::{PlayEvent, PlayScreen};
 use crate::settings_screen::SettingsForm;
 use crate::theme::{BG, INK};
@@ -118,32 +117,6 @@ fn save_watch_history(map: &HashMap<String, WatchProgress>) {
     }
 }
 
-pub fn detect_smart_action(raw: &str) -> Option<(&'static str, String)> {
-    let trimmed = raw.trim();
-    if trimmed.is_empty() {
-        return None;
-    }
-    let lower = trimmed.to_lowercase();
-    if is_key(&lower) {
-        return Some(("Add Channel", trimmed.to_string()));
-    }
-    if lower.starts_with("peartube://channel/") || lower.starts_with("peartube:channel/") {
-        return Some(("Add Channel", trimmed.to_string()));
-    }
-    if lower.starts_with("peartube://tracker/") || lower.starts_with("peartube:tracker/") || lower.starts_with("peartube://add/") || lower.starts_with("peartube://source/") {
-        return Some(("Add Channel", trimmed.to_string()));
-    }
-    if lower.starts_with("peartube://access/") || lower.starts_with("peartube:access/") {
-        return Some(("Unlock Channel", trimmed.to_string()));
-    }
-    if lower.starts_with("peartube://watch/") || lower.starts_with("peartube:watch/") {
-        return Some(("Play Stream", trimmed.to_string()));
-    }
-    if lower.starts_with("peartube://receiver/") || lower.starts_with("peartube://cast/") || lower.starts_with("peartube:receiver/") {
-        return Some(("Connect TV", trimmed.to_string()));
-    }
-    None
-}
 
 impl PearTube {
     pub fn new(url_rx: UnboundedReceiver<String>, window: &mut Window, cx: &mut Context<Self>) -> Self {
@@ -157,7 +130,11 @@ impl PearTube {
             }
             InputEvent::PressEnter { .. } => {
                 let raw = state.read(cx).value().to_string();
-                if let Some((_, uri)) = detect_smart_action(&raw) {
+                let trimmed = raw.trim();
+                // Links and keys open; any other text is a search, already filtering as it is typed.
+                let is_key = trimmed.len() == 64 && trimmed.bytes().all(|b| b.is_ascii_hexdigit());
+                if trimmed.to_ascii_lowercase().starts_with("peartube:") || is_key {
+                    let uri = trimmed.to_string();
                     state.update(cx, |inp, cx| inp.set_value("", window, cx));
                     this.open_uri_or_key(uri, cx);
                 }
@@ -240,13 +217,6 @@ impl PearTube {
         save_watch_history(&self.watch_history);
     }
 
-    pub fn submit_smart_bar_action(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let raw = self.search.read(cx).value().to_string();
-        if let Some((_, uri)) = detect_smart_action(&raw) {
-            self.search.update(cx, |inp, cx| inp.set_value("", window, cx));
-            self.open_uri_or_key(uri, cx);
-        }
-    }
 
     pub fn subscribe_discovered(&mut self, disc: DiscoveredSource, cx: &mut Context<Self>) {
         let uri = format!("peartube://{}/{}?name={}", disc.kind, disc.key, disc.title);
@@ -289,19 +259,7 @@ impl PearTube {
         if trimmed.is_empty() {
             return;
         }
-        let lower = trimmed.to_lowercase();
-        let is_receiver_uri = lower.starts_with("peartube://receiver/") || lower.starts_with("peartube://cast/") || lower.starts_with("peartube:receiver/");
-        if !self.settings.has_sources() && !is_receiver_uri {
-            let uri_candidate = if trimmed.starts_with("peartube:") { trimmed.clone() } else { format!("peartube://channel/{trimmed}") };
-            if let Ok(spec) = parse_source_token(&uri_candidate, "channel") {
-                self.settings.add_or_update_source(spec);
-                let _ = self.settings.save();
-                self.show_list(cx);
-                let next = self.settings.clone();
-                self.start(next, cx);
-                return;
-            }
-        }
+        let had_sources = self.settings.has_sources();
         let pending_cast = self.pending_cast_target.clone();
         cx.spawn(async move |this, cx| {
             let Ok(w) = worker() else { return };
@@ -309,12 +267,16 @@ impl PearTube {
                 Ok(res) => {
                     let receiver_id = res.receiver.as_ref().and_then(|v| v.get("id")).and_then(|v| v.as_str()).map(String::from);
                     let is_rec = res.action == "receiver";
+                    let mut needs_start = false;
                     let _ = this.update(cx, |this, cx| {
                         if let Some(src) = res.source {
                             this.settings.add_or_update_source(SourceSpec { key: src.key, kind: src.kind, alias: src.alias });
                             let _ = this.settings.save();
                             this.hood_open = false;
                             this.show_list(cx);
+                            if !had_sources {
+                                needs_start = true;
+                            }
                         }
                         if let Some(entry) = res.entry {
                             let resume = this.resume_position_for(&entry);
@@ -322,6 +284,12 @@ impl PearTube {
                         }
                         cx.notify();
                     });
+                    if needs_start {
+                        let _ = this.update(cx, |this, cx| {
+                            let next = this.settings.clone();
+                            this.start(next, cx);
+                        });
+                    }
                     if is_rec {
                         if let (Some(rec_id), Some((key, _, start_pos))) = (receiver_id, pending_cast) {
                             if let Ok(st) = w.cast_play(&rec_id, &key, "auto", start_pos).await {
@@ -641,15 +609,15 @@ impl PearTube {
             })
             .detach();
         let formats: Vec<Entry> = self.entries.iter().filter(|e| e.id == entry.id).cloned().collect();
-        let episodes: Vec<Entry> = if is_episode_id(&entry.id) {
-            let grp = series_group_key(&entry);
+        let episodes: Vec<Entry> = if entry.season.is_some() {
+            let grp = &entry.series_key;
             let mut eps: Vec<Entry> = self
                 .entries
                 .iter()
-                .filter(|e| is_episode_id(&e.id) && series_group_key(e) == grp)
+                .filter(|e| e.season.is_some() && &e.series_key == grp)
                 .cloned()
                 .collect();
-            eps.sort_by_key(|e| (e.id.clone(), std::cmp::Reverse(e.size)));
+            eps.sort_by_key(|e| (e.season, e.episode, e.id.clone(), std::cmp::Reverse(e.size)));
             eps.dedup_by(|a, b| e_same_id(a, b));
             eps
         } else {
@@ -748,12 +716,12 @@ impl PearTube {
 
         let warm_key = entry.key.clone();
         let dl_key = entry.key.clone();
-        let stream_url = entry.stream_url.clone();
+        let download_url = entry.download_url.as_deref().unwrap_or(&entry.stream_url).to_string();
         let expected_size = entry.size;
         let (done_tx, mut done_rx) = futures_channel::mpsc::unbounded::<Result<PathBuf, String>>();
 
         std::thread::spawn(move || {
-            let res = stream_entry_to_downloads(&stream_url, &title, expected_size, &downloaded, &cancel);
+            let res = stream_entry_to_downloads(&download_url, &title, expected_size, &downloaded, &cancel);
             let _ = done_tx.unbounded_send(res);
         });
 
@@ -928,33 +896,23 @@ async fn refresh(this: &WeakEntity<PearTube>, cx: &mut AsyncApp) {
     }
 }
 
-fn sniff_container_ext(head: &[u8]) -> &'static str {
-    if head.len() >= 4 && head[..4] == [0x1a, 0x45, 0xdf, 0xa3] {
-        let probe = &head[..head.len().min(128)];
-        if probe.windows(4).any(|w| w.eq_ignore_ascii_case(b"webm")) {
-            return ".webm";
+fn percent_decode_filename(input: &str) -> Result<String, ()> {
+    let bytes = input.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' && i + 2 < bytes.len()
+            && let Ok(hex) = std::str::from_utf8(&bytes[i + 1..i + 3])
+            && let Ok(val) = u8::from_str_radix(hex, 16)
+        {
+            out.push(val);
+            i += 3;
+        } else {
+            out.push(bytes[i]);
+            i += 1;
         }
-        return ".mkv";
     }
-    if head.len() >= 12 && matches!(&head[4..8], b"ftyp" | b"moov" | b"mdat" | b"free" | b"wide" | b"skip") {
-        return if &head[8..12] == b"qt  " { ".mov" } else { ".mp4" };
-    }
-    if head.len() >= 12 && &head[0..4] == b"RIFF" && &head[8..12] == b"AVI " {
-        return ".avi";
-    }
-    if head.len() >= 4 && &head[0..4] == b"OggS" {
-        return ".ogv";
-    }
-    if head.len() >= 4 && &head[0..4] == b"fLaC" {
-        return ".flac";
-    }
-    if head.len() >= 3 && &head[0..3] == b"ID3" {
-        return ".mp3";
-    }
-    if !head.is_empty() && head[0] == 0x47 && (head.len() < 189 || head[188] == 0x47) {
-        return ".ts";
-    }
-    ".mkv"
+    String::from_utf8(out).map_err(|_| ())
 }
 
 fn sanitize_download_stem(raw: &str) -> String {
@@ -988,13 +946,13 @@ fn unique_download_path(dir: &Path, stem: &str, ext: &str) -> PathBuf {
 }
 
 fn stream_entry_to_downloads(
-    stream_url: &str,
+    download_url: &str,
     title: &str,
     expected_size: u64,
     downloaded: &AtomicU64,
     cancel: &AtomicBool,
 ) -> Result<PathBuf, String> {
-    let rest = stream_url.strip_prefix("http://").ok_or_else(|| "Unsupported stream URL scheme".to_string())?;
+    let rest = download_url.strip_prefix("http://").ok_or_else(|| "Unsupported stream URL scheme".to_string())?;
     let (authority, path_q) = match rest.find('/') {
         Some(idx) => (&rest[..idx], &rest[idx..]),
         None => (rest, "/"),
@@ -1025,40 +983,51 @@ fn stream_entry_to_downloads(
         return Err(format!("Stream server answered {status_line}"));
     }
 
-    let mut head_buf = Vec::with_capacity(256);
-    let mut chunk = vec![0u8; 256 * 1024];
-    while head_buf.len() < 256 {
-        if cancel.load(Ordering::SeqCst) {
-            return Err("cancelled".into());
+    let mut cd_filename = None;
+    for line in header_str.lines() {
+        if let Some((k, v)) = line.split_once(':') {
+            if k.trim().eq_ignore_ascii_case("content-disposition") {
+                if let Some(idx) = v.find("filename*=") {
+                    let rest = &v[idx + 10..];
+                    let rest = rest.split(';').next().unwrap_or(rest).trim();
+                    if let Some(encoded) = rest.strip_prefix("UTF-8''").or_else(|| rest.strip_prefix("utf-8''")) {
+                        if let Ok(decoded) = percent_decode_filename(encoded) {
+                            cd_filename = Some(decoded);
+                        }
+                    }
+                }
+                if cd_filename.is_none() {
+                    if let Some(idx) = v.find("filename=") {
+                        let rest = &v[idx + 9..];
+                        let val = rest.split(';').next().unwrap_or(rest).trim().trim_matches('"');
+                        if !val.is_empty() {
+                            cd_filename = Some(val.to_string());
+                        }
+                    }
+                }
+            }
         }
-        let want = (256 - head_buf.len()).min(chunk.len());
-        let n = sock.read(&mut chunk[..want]).map_err(|e| format!("Read stream header: {e}"))?;
-        if n == 0 {
-            break;
-        }
-        head_buf.extend_from_slice(&chunk[..n]);
     }
 
     let home = std::env::var_os("HOME").map(PathBuf::from).ok_or_else(|| "HOME directory unavailable".to_string())?;
     let downloads_dir = home.join("Downloads");
     std::fs::create_dir_all(&downloads_dir).map_err(|e| format!("Create Downloads folder: {e}"))?;
-    let ext = sniff_container_ext(&head_buf);
     let stem = sanitize_download_stem(title);
-    let final_path = unique_download_path(&downloads_dir, &stem, ext);
+    let final_path = if let Some(name) = cd_filename {
+        unique_download_path(&downloads_dir, &name, "")
+    } else {
+        unique_download_path(&downloads_dir, &stem, ".mkv")
+    };
     let part_path = downloads_dir.join(format!(
         "{}.part",
         final_path.file_name().and_then(|s| s.to_str()).unwrap_or("video.mkv")
     ));
 
+    let mut chunk = vec![0u8; 256 * 1024];
     let write_res = (|| -> Result<u64, String> {
         let file = std::fs::File::create(&part_path).map_err(|e| format!("Create {}: {e}", part_path.display()))?;
         let mut out = BufWriter::with_capacity(512 * 1024, file);
         let mut total_written = 0u64;
-        if !head_buf.is_empty() {
-            out.write_all(&head_buf).map_err(|e| format!("Write file: {e}"))?;
-            total_written += head_buf.len() as u64;
-            downloaded.store(total_written, Ordering::Relaxed);
-        }
         loop {
             if cancel.load(Ordering::SeqCst) {
                 return Err("cancelled".into());

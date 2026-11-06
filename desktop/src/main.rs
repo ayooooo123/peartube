@@ -13,7 +13,6 @@ mod settings_screen;
 mod theme;
 mod video;
 
-use std::sync::Arc;
 use std::borrow::Cow;
 use std::path::{Path, PathBuf};
 

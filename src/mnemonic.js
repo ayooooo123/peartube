@@ -15,7 +15,7 @@ function sha256 (...parts) {
   return h.digest()
 }
 
-export function entropyToMnemonic (entropy) {
+function entropyToMnemonic (entropy) {
   if (entropy.byteLength !== 16 && entropy.byteLength !== 32) throw new Error('Entropy must be 16 or 32 bytes')
   const csBits = entropy.byteLength >> 2
   const sum = sha256(entropy)[0]
@@ -93,7 +93,7 @@ export function verifyClaim (channelHex, writerHex, ownerPubHex, sigHex) {
   }
 }
 
-export function deriveEpochKey (vaultKey, channelHex, epoch) {
+function deriveEpochKey (vaultKey, channelHex, epoch) {
   return sha256('peartube:epoch:v1:', vaultKey, ':', String(channelHex).toLowerCase(), ':', String(epoch))
 }
 

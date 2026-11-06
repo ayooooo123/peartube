@@ -1,7 +1,7 @@
 //! Fullscreen-first cinema player with an unobtrusive translucent Info, Formats & Episodes HUD overlay.
 
 use std::collections::BTreeSet;
-use std::sync::{Arc, LazyLock};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use futures_channel::mpsc::unbounded;
@@ -16,21 +16,18 @@ use gpui_kit::component::spinner::Spinner;
 use gpui_kit::component::{Icon, IconName, Sizable as _, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
-use oxideav_core::RuntimeContext;
+pub(crate) use peartube::playback::clock;
+use peartube::playback::{track_label, CODECS, FULLSCREEN_COOLDOWN, SKIP};
 use peartube::soundfont;
 use peartube::worker::Entry;
 use player::{AudioOutputMode, Event, FrameRateMode, Player, PlayerOptions, State, Track, TrackKind};
 
-use crate::list::{format_bytes, label, origin, parse_season_episode, split_title_year};
+use crate::list::{format_bytes, label, origin};
 use crate::theme::{ACCENT, BG, BRAND, CARD, CARD_ELEVATED, DANGER, DIM, INK, LINE};
 use crate::video::VideoView;
 
 const CONTEXT: &str = "Player";
-const SKIP: Duration = Duration::from_secs(10);
 const SHOW_FOR: Duration = Duration::from_secs(3);
-const FULLSCREEN_COOLDOWN: Duration = Duration::from_millis(550);
-
-pub(crate) static CODECS: LazyLock<Arc<RuntimeContext>> = LazyLock::new(|| Arc::new(codecs::context()));
 
 actions!(player, [TogglePlay, SkipBack, SkipForward, ToggleFullscreen, Back]);
 
@@ -99,10 +96,6 @@ impl PlayScreen {
         self.state.video_size.is_some() && (!self.state.buffering || !self.state.position.is_zero())
     }
 
-    #[allow(dead_code)]
-    pub(crate) fn is_playing(&self) -> bool {
-        self.player.as_ref().is_some_and(|p| p.state().playing)
-    }
 
     pub fn current_position_ms(&self) -> u64 {
         self.player
@@ -125,10 +118,6 @@ impl PlayScreen {
         }
     }
 
-    #[allow(dead_code)]
-    pub(crate) fn video_metrics(&self) -> Option<player::WindowSlotMetrics> {
-        self.video.as_ref().and_then(|v| v.metrics())
-    }
     pub fn new(entry: Entry, start_pos_ms: u64, episodes: Vec<Entry>, formats: Vec<Entry>, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let (tx, mut events) = unbounded::<Event>();
         let (player, video, open_error) = match VideoView::open(window) {
@@ -163,7 +152,7 @@ impl PlayScreen {
         });
         let focus = cx.focus_handle();
         window.focus(&focus, cx);
-        let selected_season = parse_season_episode(&entry.id).map(|(s, _)| s).unwrap_or(1);
+        let selected_season = entry.season.unwrap_or(1);
         PlayScreen {
             entry,
             episodes,
@@ -435,11 +424,12 @@ impl PlayScreen {
     }
 
     fn render_info_drawer(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let (clean_title, year) = split_title_year(&self.entry.title);
+        let clean_title = self.entry.base_title.clone();
+        let year = &self.entry.year;
         let seasons: Vec<u32> = self
             .episodes
             .iter()
-            .filter_map(|e| parse_season_episode(&e.id).map(|(s, _)| s))
+            .filter_map(|e| e.season)
             .collect::<BTreeSet<_>>()
             .into_iter()
             .collect();
@@ -451,7 +441,7 @@ impl PlayScreen {
         let visible_eps: Vec<Entry> = self
             .episodes
             .iter()
-            .filter(|e| seasons.len() <= 1 || parse_season_episode(&e.id).is_none_or(|(s, _)| s == active_season))
+            .filter(|e| seasons.len() <= 1 || e.season.is_none_or(|s| s == active_season))
             .cloned()
             .collect();
 
@@ -575,8 +565,8 @@ impl PlayScreen {
                             .child(div().text_lg().font_weight(FontWeight::BOLD).child(clean_title))
                             .child(
                                 div().text_xs().text_color(rgb(DIM)).child(match year {
-                                    Some(y) => format!("{} · {y}", label(&self.entry.id)),
-                                    None => label(&self.entry.id),
+                                    Some(y) => format!("{} · {y}", label(&self.entry)),
+                                    None => label(&self.entry),
                                 }),
                             ),
                     )
@@ -821,7 +811,7 @@ impl PlayScreen {
                                                     h_flex()
                                                         .items_center()
                                                         .gap_2p5()
-                                                        .child(div().text_xs().font_weight(FontWeight::BOLD).child(label(&ep.id)))
+                                                        .child(div().text_xs().font_weight(FontWeight::BOLD).child(label(&ep)))
                                                         .child(div().text_xs().text_color(rgb(DIM)).child(format_bytes(ep.size))),
                                                 )
                                                 .when(is_current, |r| r.child(div().text_xs().font_weight(FontWeight::SEMIBOLD).text_color(rgb(BRAND)).child("Playing")))
@@ -839,7 +829,7 @@ impl PlayScreen {
 
         let subtitles = self.track_menu(TrackKind::Subtitle, overlay_button("cc", Lucide::Captions.into(), "Subtitles"), Anchor::TopRight, cx);
         let audio = self.track_menu(TrackKind::Audio, overlay_button("audio", Lucide::Volume2.into(), "Audio"), Anchor::TopRight, cx);
-        let ep_tag = parse_season_episode(&self.entry.id).map(|_| format!(" · {}", label(&self.entry.id))).unwrap_or_default();
+        let ep_tag = self.entry.season.map(|_| format!(" · {}", label(&self.entry))).unwrap_or_default();
 
         v_flex()
             .absolute()
@@ -995,20 +985,6 @@ fn fenced(element: Div) -> Div {
     element.on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
 }
 
-pub(crate) fn clock(d: Duration) -> String {
-    let s = d.as_secs();
-    if s >= 3600 { format!("{}:{:02}:{:02}", s / 3600, s / 60 % 60, s % 60) } else { format!("{}:{:02}", s / 60, s % 60) }
-}
-
-fn track_label(t: &Track) -> String {
-    let mut label = t.title.clone().or_else(|| t.language.clone()).unwrap_or_else(|| format!("Track {}", t.stream));
-    if t.title.is_some()
-        && let Some(lang) = &t.language
-    {
-        label = format!("{label} ({lang})");
-    }
-    format!("{label} · {}", t.codec)
-}
 
 fn spec_row(k: &'static str, v: String) -> Div {
     h_flex()

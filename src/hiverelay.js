@@ -50,11 +50,11 @@ function pbBytes (field, data) {
   return b4a.concat([pbVarint((field << 3) | 2), pbVarint(buf.byteLength), buf])
 }
 
-export function encodeHyperdriveHeader (contentFeedKey) {
+function encodeHyperdriveHeader (contentFeedKey) {
   return b4a.concat([pbBytes(1, 'hyperbee'), pbBytes(2, pbBytes(1, contentFeedKey))])
 }
 
-export function encodeHyperdriveSingleRootNode (seq, path, blobId) {
+function encodeHyperdriveSingleRootNode (seq, path, blobId) {
   const index = pbBytes(1, pbBytes(1, pbVarint(seq)))
   const key = b4a.from(`files\0${path.startsWith('/') ? path : '/' + path}`)
   const value = b4a.from(JSON.stringify({ executable: false, linkname: null, blob: blobId, metadata: null }))
@@ -187,7 +187,7 @@ const seedDenyEncoding = {
   }
 }
 
-export function signSeedRequest (msg, keyPair) {
+function signSeedRequest (msg, keyPair) {
   const dkHash = b4a.alloc(32)
   if (msg.discoveryKeys.length > 0) {
     sodium.crypto_generichash(dkHash, b4a.concat(msg.discoveryKeys))
@@ -221,7 +221,7 @@ function computeBoundBytes (byteLength) {
 }
 
 // Parses `http://host:9100=APIKEY,https://relay.example.com,dht` into clean HTTP targets + DHT flag.
-export function parseHiverelayConfig (rawRelays = [], defaultApiKey = null, defaultDiscover = false) {
+function parseHiverelayConfig (rawRelays = [], defaultApiKey = null, defaultDiscover = false) {
   const items = Array.isArray(rawRelays)
     ? rawRelays
     : (typeof rawRelays === 'string' ? rawRelays.split(',') : [])

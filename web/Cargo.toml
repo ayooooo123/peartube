@@ -19,8 +19,8 @@ oxideav-pixfmt = "*"
 # bitstream, so the browser muxes display times instead of decode times.
 oxideav-h264 = "*"
 oxideav-h265 = "*"
-codecs = { git = "https://github.com/ayooooo123/peartube-media", rev = "153affa91eb1f5c6cad27602626b1d3735875971" }
-audio-trim = { git = "https://github.com/ayooooo123/peartube-media", rev = "153affa91eb1f5c6cad27602626b1d3735875971" }
+codecs = { git = "https://github.com/ayooooo123/peartube-media", rev = "dce240d970416a9a89c68800d468dc9e0d4f1423" }
+audio-trim = { git = "https://github.com/ayooooo123/peartube-media", rev = "dce240d970416a9a89c68800d468dc9e0d4f1423" }
 
 [profile.release]
 lto = "fat"

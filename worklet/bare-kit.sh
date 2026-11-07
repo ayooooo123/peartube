@@ -45,8 +45,8 @@ set -eu
 # CMake from here.
 BARE_KIT_KOTLIN=c3760e36630c5f5edf841f638b63a17fddb8534a
 BARE_KIT_SWIFT=07327df3bdb49b2bfa2c0872756e876129ebcda0
-LIBQJS=348141095737bed3a7da01c5b5756e84904ffb5f
-LIBJS=a2249688df3c36b928477539c6e2bf3e08c711bc
+LIBQJS=b27dcb6a8914a8f210bdb73d8fcaffa06172c74e
+LIBJS=4c084212d3e5709f3ddfe08d2f535b1b2eb85355
 QUICKJS=19d6bd865e709e2b5717fb4f2290c0cecc57ee4b
 # bare-kit's minSdk, and the Android app's (android/app/build.gradle.kts).
 API=29
@@ -111,9 +111,7 @@ sources() {
     git -C "$work/src/quickjs" apply "$patch"
   done
   git -C "$work/src/quickjs" apply "$here/patches/quickjs-weakmap-ephemeron.patch"
-  for patch in function-source deferred-release weak-reference-delete; do
-    git -C "$work/src/libqjs" apply "$here/patches/libqjs-$patch.patch"
-  done
+  git -C "$work/src/libqjs" apply "$here/patches/libqjs-deferred-release.patch"
   touch "$work/src/ready"
 }
 

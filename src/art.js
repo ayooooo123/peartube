@@ -1,6 +1,5 @@
-// Cinemeta artwork without a subprocess: posters, backdrops and the shared metadata lookup.
-// Split out of identify.js so the apps' Bare worklet serves /v1/poster and /v1/backdrop on its
-// own loopback hole without dragging `bare-subprocess` (`ubit`) into the app bundle.
+// Cinemeta artwork without a subprocess: posters, backdrops and the shared metadata lookup, plus the small http(s)
+// client identify.js and mirror.js use. Relay-only: the apps' worklet points at metahub directly and bundles no TLS.
 import { request as httpRequest } from 'node:http'
 import { request as httpsRequest } from 'node:https'
 import b4a from 'b4a'

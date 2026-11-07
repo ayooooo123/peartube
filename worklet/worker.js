@@ -17,11 +17,12 @@ import { createNode, followedSources, idleStatus } from '../src/index.js'
 import { API_PORT, parseUri } from '../src/protocol.js'
 import { nodeOptions, normalizeAppSettings } from '../src/app-settings.js'
 import { createApi } from '../src/http.js'
-// Artwork lookups without `ubit`: the app's own loopback API serves /v1/poster and /v1/backdrop.
-import { CINEMETA_URL, posterUrl, backdropUrl } from '../src/art.js'
 import { createLan, interfaceAdapter, lanAddress } from '../src/lan.js'
 import { createCastController, reclaimLowDiskReceiverStorage, resolvePeerStorage } from '../src/cast.js'
 
+// Cinemeta's artwork is metahub's, addressed by IMDb id: the app's loopback API redirects /v1/poster and /v1/backdrop
+// there with no lookup, so the worklet needs no TLS (the host fetches the image).
+const metahub = (kind, size) => async imdb => `https://images.metahub.space/${kind}/${size}/${imdb}/img`
 const ipc = Bare.IPC
 let node = null
 // The settings the last start was given: a form saved while no node runs still keeps channel names.
@@ -252,8 +253,8 @@ const methods = {
     const srv = createApi({
       node,
       acquirer: null,
-      posterUrl: imdb => posterUrl(CINEMETA_URL, imdb),
-      backdropUrl: imdb => backdropUrl(CINEMETA_URL, imdb),
+      posterUrl: metahub('poster', 'small'),
+      backdropUrl: metahub('background', 'medium'),
       get cast () { return cast },
       extraStatus: () => ({ lan: lanNote, apiUrl, lanStats: node?.lanStats?.() ?? null }),
       onSourcesChanged: list => send({ event: 'sources', sources: followedSources(list) })

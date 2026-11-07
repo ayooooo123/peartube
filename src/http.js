@@ -1,5 +1,4 @@
 import { createServer, request as httpRequest } from 'node:http'
-import { createServer as createHttpsServer } from 'node:https'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import b4a from 'b4a'
@@ -523,14 +522,12 @@ export function createApi (state) {
     res.end(JSON.stringify(payload))
   }
   const srv = createServer(handle)
-  srv.https = state.tls?.cert && state.tls?.key ? createHttpsServer({ cert: state.tls.cert, key: state.tls.key }, handle) : null
 
   srv.notify = (event = 'update') => {
     const frame = `data: ${JSON.stringify({ event })}\n\n`
     for (const res of sse) res.write(frame)
   }
   srv.once('close', () => {
-    srv.https?.close()
     for (const res of sse) res.end()
     sse.clear()
   })

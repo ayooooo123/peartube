@@ -1,6 +1,7 @@
 #!/usr/bin/env bare
 import 'bare-process/global'
 import { spawn } from 'node:child_process'
+import { createServer as createHttpsServer } from 'node:https'
 import { mkdirSync, readFileSync, writeFileSync, renameSync } from 'node:fs'
 import { join } from 'node:path'
 import os from 'node:os'
@@ -111,11 +112,14 @@ const state = {
   }
 }
 const api = createApi(state)
+// The HTTPS listener lives here, not in http.js: the apps' worklet imports http.js and must not bundle TLS.
+const apiHttps = state.tls?.cert && state.tls?.key ? createHttpsServer({ cert: state.tls.cert, key: state.tls.key }, (req, res) => api.emit('request', req, res)) : null
+api.once('close', () => apiHttps?.close())
 const apiPort = Number(env.PEARTUBE_API_PORT || API_PORT)
 const httpsPort = Number(env.PEARTUBE_HTTPS_PORT ?? 8443)
 const apiHost = env.PEARTUBE_API_HOST || '0.0.0.0'
 api.listen(apiPort, apiHost)
-if (api.https && httpsPort > 0) api.https.listen(httpsPort, apiHost)
+if (apiHttps && httpsPort > 0) apiHttps.listen(httpsPort, apiHost)
 let shuttingDown = false
 let guard = null
 let guardConfig = ''
@@ -390,5 +394,5 @@ state.restart = () => serial(async () => {
 await serial(start)
 await mirrorStarting
 await serial(applyGuard).catch(err => console.error(JSON.stringify({ msg: 'private guard failed to start', error: err.message })))
-console.log(JSON.stringify({ msg: 'relay ready', api: apiPort, ...(api.https && httpsPort > 0 ? { https: httpsPort } : {}), ...state.node.status() }))
+console.log(JSON.stringify({ msg: 'relay ready', api: apiPort, ...(apiHttps && httpsPort > 0 ? { https: httpsPort } : {}), ...state.node.status() }))
 setInterval(() => { if (state.node) console.log(JSON.stringify({ msg: 'heartbeat', ...state.node.status() })) }, 60_000).unref()

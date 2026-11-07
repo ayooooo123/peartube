@@ -260,8 +260,46 @@ test('AVI catches up to the audio clock without relabeling later pictures', asyn
     }
     assert.ok(frame, 'AVI seek emits a picture')
     assert.ok(sound !== null && Math.abs(sound - 5.3) < 0.1, `MP3 stays at the sought time: ${sound}`)
+    assert.equal(wasm.pt_seek(1.3), 0)
+    wasm.pt_set_clock(1.3)
+    let warmed = false
+    for (let n = 0; n < 100000 && !warmed; n++) {
+      const step = wasm.pt_step()
+      if (step === ABI.step.videoYuv420 && wasm.pt_out_pts() >= 1.4) warmed = true
+      if (step === ABI.step.eof || step < 0) break
+    }
+    assert.ok(warmed, 'AVI decoder starts before the tab is hidden')
+    wasm.pt_set_hidden(1)
+    let hiddenSound = 1.3
+    let hiddenPictures = 0
+    for (let n = 0; n < 100000 && hiddenSound < 7.3; n++) {
+      const step = wasm.pt_step()
+      if (step === ABI.step.audioPlanarF32) {
+        hiddenSound = Math.max(hiddenSound, wasm.pt_out_pts())
+        wasm.pt_set_clock(hiddenSound)
+      }
+      if (step === ABI.step.videoYuv420) hiddenPictures++
+      if (step === ABI.step.eof || step < 0) break
+    }
+    assert.ok(hiddenSound >= 7.3, 'MP3 keeps playing while the window is hidden')
+    assert.equal(hiddenPictures, 0, 'hidden video sends no pictures to the page')
+    wasm.pt_set_hidden(0)
+    let returned = null
+    for (let n = 0; n < 100000 && returned === null; n++) {
+      const step = wasm.pt_step()
+      if (step === ABI.step.videoYuv420 && wasm.pt_out_pts() >= hiddenSound - 0.1) {
+        const pts = wasm.pt_out_pts()
+        const size = wasm.pt_out_w() * wasm.pt_out_h()
+        const index = Math.round(pts * 25)
+        const actual = Buffer.from(new Uint8Array(wasm.memory.buffer, wasm.pt_out_ptr(), size))
+        assert.ok(actual.equals(expected.subarray(index * size * 3 / 2, index * size * 3 / 2 + size)),
+          `AVI picture after hiding at ${pts.toFixed(2)} must show its real source frame`)
+        returned = { pts, index, digest: createHash('sha256').update(actual).digest('hex') }
+      } else if (step === ABI.step.eof || step < 0) break
+    }
+    assert.ok(returned && returned.pts < 8.2, 'AVI picture returns near the continuing MP3 soundtrack')
     mkdirSync(outDir, { recursive: true })
-    writeFileSync(join(outDir, 'avi-audio-sync-result.json'), JSON.stringify({ frame, sound }, null, 2))
+    writeFileSync(join(outDir, 'avi-audio-sync-result.json'), JSON.stringify({ frame, sound, returned, hiddenSound }, null, 2))
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }

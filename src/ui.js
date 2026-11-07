@@ -2569,8 +2569,7 @@ function openPlayer (entry, at = 0) {
     p.lastTickWall = pf
     // macOS throttles covered windows to ~0.5 Hz rAF (~1.8 s gap); only clear occlusion on real 60 Hz cadence or focus.
     if (p.windowOccluded && (document.hasFocus() || (prevTickGap > 0 && prevTickGap < 250))) {
-      p.windowOccluded = false
-      resyncOnReturn()
+      resyncOnReturn(true)
     }
     if (p.primed && !p.paused && !p.seeking && !p.useMse && !p.eof && p.swFrames.length === 0 &&
         document.visibilityState === 'visible' && !p.windowOccluded &&
@@ -2816,9 +2815,12 @@ addEventListener('keydown', ev => {
 // A hidden tab has no picture to show, but the player keeps its timeline (the Worker owns decode and
 // the clock). On return, make the browser's video element play again if it paused it in the
 // background; the GL path restarts its render loop from the first clock message of the next frame.
-function resyncOnReturn () {
-  if (!player || player.paused || !player.primed || player.seeking) return
+function resyncOnReturn (fromHidden = false) {
+  if (!player) return
   const p = player
+  const wasHidden = fromHidden || p.windowOccluded
+  p.windowOccluded = false
+  if (p.paused || !p.primed || p.seeking) return
   const audio = p.currentMediaTime ? p.currentMediaTime() : (p.freeBaseMedia || 0)
   // The first click that brings the window back is a focus click, not a play/pause command.
   p.suppressStageClickUntil = performance.now() + 900
@@ -2848,6 +2850,13 @@ function resyncOnReturn () {
     p.lastMseTime = audio
     p.lastHardSync = performance.now()
   } else {
+    // AVI decodes ahead with hidden audio; restart at the clock instead of showing a stale picture for seconds.
+    if (wasHidden && p.manifest?.container === 'avi' &&
+        (p.lastSwPts === null || audio - p.lastSwPts > 2)) {
+      p.syncWorkerClock?.(audio, true)
+      seekTo(audio)
+      return
+    }
     // Reset the stall timer so returning from a hidden tab never flashes Buffering… before the replayed GOP frame draws.
     p.lastDrawWall = performance.now()
     p.lastSwPts = null
@@ -2860,7 +2869,7 @@ addEventListener('visibilitychange', () => {
   const hidden = document.visibilityState !== 'visible'
   const liveNow = player.currentMediaTime ? player.currentMediaTime() : (player.freeBaseMedia || 0)
   player.syncWorkerClock?.(liveNow, !player.paused)
-  if (!hidden) resyncOnReturn()
+  if (!hidden) resyncOnReturn(true)
 })
 addEventListener('focus', () => {
   if (document.visibilityState === 'visible') resyncOnReturn()

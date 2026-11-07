@@ -89,10 +89,22 @@ function buildFixtures (dir) {
     swPath
   ])
 
+  const aviPath = join(dir, 'episode_avi.avi')
+  execFileSync(FFMPEG, [
+    '-loglevel', 'error', '-y',
+    '-f', 'lavfi', '-i', 'testsrc2=size=320x240:rate=25',
+    '-f', 'lavfi', '-i', 'sine=frequency=440:sample_rate=44100',
+    '-t', '40', '-c:v', 'mpeg4', '-q:v', '3', '-g', '50', '-bf', '2',
+    '-c:a', 'libmp3lame', '-q:a', '4', aviPath
+  ])
+  execFileSync(FFMPEG, ['-loglevel', 'error', '-y', '-i', aviPath,
+    '-an', '-pix_fmt', 'yuv420p', '-f', 'rawvideo', join(dir, 'episode_avi.yuv')])
+
   return {
     h264: readFileSync(h264Path),
     uhd: readFileSync(uhdPath),
-    sw: readFileSync(swPath)
+    sw: readFileSync(swPath),
+    avi: readFileSync(aviPath)
   }
 }
 
@@ -200,6 +212,19 @@ test('web player survives long-GOP seeks, rapid scrub storms, TrueHD slices, Web
   mkdirSync(outDir, { recursive: true })
   const tmp = mkdtempSync(join(tmpdir(), 'peartube-web-stress-'))
   const files = buildFixtures(tmp)
+  const aviReference = readFileSync(join(tmp, 'episode_avi.yuv'))
+  const aviFrameBytes = 320 * 240 * 3 / 2
+  const aviSignatures = []
+  for (let off = 0; off + aviFrameBytes <= aviReference.length; off += aviFrameBytes) {
+    const tiles = Array(64).fill(2166136261)
+    for (let row = 0; row < 240; row += 4) {
+      for (let col = 0; col < 320; col += 4) {
+        const tile = Math.floor(row / 30) * 8 + Math.floor(col / 40)
+        tiles[tile] = Math.imul(tiles[tile] ^ aviReference[off + row * 320 + col], 16777619) >>> 0
+      }
+    }
+    aviSignatures.push(tiles)
+  }
   const net = { delayMs: 0 }
 
   const blobSrv = createServer(async (req, res) => {
@@ -274,6 +299,16 @@ test('web player survives long-GOP seeks, rapid scrub storms, TrueHD slices, Web
       source: 'b'.repeat(64),
       sourceKind: 'channel',
       streamUrl: `http://127.0.0.1:${blobPort}/?key=${'d'.repeat(64)}&blob=1&f=sw`
+    },
+    {
+      id: 'clip:avi-stress',
+      sha256: 'e'.repeat(64),
+      title: 'AVI MP3 Stress',
+      size: files.avi.length,
+      local: true,
+      source: 'b'.repeat(64),
+      sourceKind: 'channel',
+      streamUrl: `http://127.0.0.1:${blobPort}/?key=${'e'.repeat(64)}&blob=1&f=avi`
     }
   ]
 
@@ -317,7 +352,7 @@ test('web player survives long-GOP seeks, rapid scrub storms, TrueHD slices, Web
   try {
     await send('Emulation.setDeviceMetricsOverride', { width: 1440, height: 900, deviceScaleFactor: 1, mobile: false })
     await send('Page.navigate', { url: baseUrl + '/' })
-    await waitFor(`document.readyState === 'complete' && S.entries.length === 3`, 'library entries')
+    await waitFor(`document.readyState === 'complete' && S.entries.length === 4`, 'library entries')
     await waitFor(`[...document.querySelectorAll('img.poster')].some(i => i.complete && i.naturalWidth > 0)`, 'cross-origin poster under COEP')
 
     // 1. COOP/COEP cross-origin isolation + SharedArrayBuffer + cross-origin posters.
@@ -414,22 +449,34 @@ test('web player survives long-GOP seeks, rapid scrub storms, TrueHD slices, Web
       await new Promise(r => setTimeout(r, 1600));
       const occludedFlag = Boolean(player.windowOccluded);
 
-      // Phase C: uncover/return to browser window (restore rAF + focus)
+      // Phase C: focus arrives before rAF resumes; decode must wake without waiting for the compositor.
+      window.dispatchEvent(new Event('focus'));
+      const workerUnhiddenOnFocus = await new Promise(resolve => {
+        const onMem = ev => {
+          if (ev.data?.type !== 'mem') return;
+          clearTimeout(timer);
+          player.worker.removeEventListener('message', onMem);
+          resolve(ev.data.pageHidden === false);
+        };
+        player.worker.addEventListener('message', onMem);
+        const timer = setTimeout(() => { player.worker.removeEventListener('message', onMem); resolve(false); }, 1000);
+        player.worker.postMessage({ cmd: 'mem' });
+      });
       pausedRaf = false;
       window.requestAnimationFrame = origRaf;
       const drawnAtUncover = player.drawnFrames;
       if (heldCb) player.raf = origRaf.call(window, heldCb);
-      window.dispatchEvent(new Event('focus'));
       await new Promise(r => setTimeout(r, 700));
       const drawnAfterUncover = player.drawnFrames - drawnAtUncover;
       const occludedAfterUncover = Boolean(player.windowOccluded);
       const driftAfterUncover = Math.abs(player.lastSwPts - player.currentMediaTime());
       clearInterval(obs);
-      return { sawBuffering, drawnDuringDrag, occludedFlag, occludedAfterUncover, drawnAfterUncover, driftAfterUncover };
+      return { sawBuffering, drawnDuringDrag, occludedFlag, workerUnhiddenOnFocus, occludedAfterUncover, drawnAfterUncover, driftAfterUncover };
     })()`)
     assert.equal(dragAndOcclude.sawBuffering, false, 'moving or leaving window never shows Buffering: ' + dragAndOcclude.sawBuffering)
     assert.ok(dragAndOcclude.drawnDuringDrag >= 8, `backup 50 ms frame stepper kept drawing during 900 ms window drag: ${dragAndOcclude.drawnDuringDrag}`)
     assert.equal(dragAndOcclude.occludedFlag, true, 'occluded unfocused window detected and paused invisible GPU decode')
+    assert.equal(dragAndOcclude.workerUnhiddenOnFocus, true, 'focus wakes hidden decoding before the first resumed animation frame')
     assert.equal(dragAndOcclude.occludedAfterUncover, false, 'uncovering window clears occlusion flag')
     assert.ok(dragAndOcclude.drawnAfterUncover >= 8, `WebCodecs resumed drawing immediately on uncover: ${dragAndOcclude.drawnAfterUncover}`)
     assert.ok(dragAndOcclude.driftAfterUncover < 0.35, `post-uncover A/V sync tight: ${dragAndOcclude.driftAfterUncover}`)
@@ -551,12 +598,16 @@ test('web player survives long-GOP seeks, rapid scrub storms, TrueHD slices, Web
     assert.ok(Math.abs(mseBg.v - mseBg.a) < 0.35, `MSE post-return A/V sync tight: v=${mseBg.v} a=${mseBg.a}`)
     assert.equal(mseBg.statusHidden, true)
     result.checks.mseBackground = { minLead: Math.min(...mseBg.leads), v: mseBg.v, a: mseBg.a, bufStart: mseBg.bufStart }
-    // 4. Pure WASM+GPU software video mode (`mpeg4video`): 0 frames decoded while hidden + instant live GOP replay on return.
+    // 4. Pure WASM+GPU software video: only in-flight pictures may arrive just after hide; the live GOP replays on return.
     await evaluate(`(() => {
-      window.__hiddenSwFrames = 0;
+      window.__hiddenSwFrames = [];
+      window.__swHiddenAt = 0;
+      document.addEventListener('visibilitychange', () => { if (document.hidden) window.__swHiddenAt = performance.now(); }, { once: true });
       openPlayer(S.entries.find(e => e.id === 'clip:swcinema'));
       player.worker.addEventListener('message', ev => {
-        if (ev.data?.type === 'videoFrame' && document.visibilityState !== 'visible') window.__hiddenSwFrames++;
+        if (ev.data?.type === 'videoFrame' && document.visibilityState !== 'visible') {
+          window.__hiddenSwFrames.push(performance.now() - window.__swHiddenAt);
+        }
       });
       return true;
     })()`)
@@ -571,15 +622,80 @@ test('web player survives long-GOP seeks, rapid scrub storms, TrueHD slices, Web
     await waitFor(`player.drawnFrames >= ${drawnBeforeReturn + 8}`, 'software frames drawing immediately on return', 8000)
     const swBg = await evaluate(`({
       hiddenFrames: window.__hiddenSwFrames,
+      hiddenAt: window.__swHiddenAt,
       drawn: player.drawnFrames,
       drift: Math.abs(player.lastSwPts - player.currentMediaTime()),
       statusHidden: $('pStatus').style.display === 'none'
     })`)
     assert.equal(statusImmediate, true, 'no false Buffering… flash on return')
-    assert.ok(swBg.hiddenFrames <= 2, `software decoder paused while hidden: ${swBg.hiddenFrames} frames`)
+    assert.ok(swBg.hiddenAt > 0 && swBg.hiddenFrames.length <= 8 && swBg.hiddenFrames.every(t => t < 500),
+      `software decode stops after the in-flight frames: ${JSON.stringify(swBg.hiddenFrames)}`)
     assert.ok(swBg.drift < 0.35, `software hidden-GOP replay resumed in sync: drift=${swBg.drift}`)
     assert.equal(swBg.statusHidden, true)
     result.checks.swBackground = swBg
+
+    // AVI/MP3: rapid seek storms and repeated background returns keep each decoded picture on its real source frame.
+    net.delayMs = 80
+    await evaluate(`(() => {
+      openPlayer(S.entries.find(e => e.id === 'clip:avi-stress'), 5.3);
+      window.__aviSamples = [];
+      const wanted = ${JSON.stringify(aviSignatures)};
+      const deliver = player.worker.onmessage;
+      player.worker.onmessage = ev => {
+        const m = ev.data;
+        if (m?.type === 'videoFrame' && m.seq === player.seq && m.yuv && m.w === 320 && m.h === 240) {
+          const y = new Uint8Array(m.buf, 0, 320 * 240);
+          const tiles = Array(64).fill(2166136261);
+          for (let row = 0; row < 240; row += 4) {
+            for (let col = 0; col < 320; col += 4) {
+              const tile = Math.floor(row / 30) * 8 + Math.floor(col / 40);
+              tiles[tile] = Math.imul(tiles[tile] ^ y[row * 320 + col], 16777619) >>> 0;
+            }
+          }
+          const ref = wanted[Math.round(m.pts * 25)];
+          let matchingTiles = 0;
+          if (ref) for (let i = 0; i < 64; i++) if (tiles[i] === ref[i]) matchingTiles++;
+          window.__aviSamples.push({ seq: m.seq, pts: m.pts, matchingTiles });
+        }
+        deliver(ev);
+      };
+      return true;
+    })()`)
+    await waitFor(`player.primed && player.drawnFrames >= 5 && window.__aviSamples.length >= 5`, 'AVI/MP3 playing real decoded pictures')
+    await evaluate(`(async () => {
+      for (const t of [11.3, 2.3, 17.4, 8.5, 5.3]) {
+        seekTo(t);
+        await new Promise(r => setTimeout(r, 45));
+      }
+      return true;
+    })()`)
+    await waitFor(`player.primed && player.drawnFrames >= 6 && window.__aviSamples.filter(x => x.seq === player.seq).length >= 6`, 'AVI seek storm picture and audio settled')
+    const seekContent = await evaluate(`window.__aviSamples.filter(x => x.seq === player.seq).slice(-8)`)
+    assert.ok(seekContent.length >= 6 && seekContent.every(x => x.matchingTiles >= 50),
+      `AVI pictures survive the rapid seek storm: ${JSON.stringify(seekContent)}`)
+    const aviCycles = []
+    for (const hiddenFor of [8300, 3100, 4300, 2100]) {
+      await browser.activateHeavyOtherTab()
+      await sleep(hiddenFor)
+      await browser.returnToPlayerTab()
+      await evaluate(`window.dispatchEvent(new Event('focus')); true`)
+      const returnedAt = Date.now()
+      await waitFor(`player.drawnFrames >= 6 && player.lastSwPts !== null && Math.abs(player.lastSwPts - player.currentMediaTime()) < 0.35`, 'AVI picture resumed after hidden tab', 8000)
+      const recoveryMs = Date.now() - returnedAt
+      const sample = await evaluate(`({
+        v: player.lastSwPts, a: player.currentMediaTime(),
+        wrong: window.__aviSamples.filter(x => x.seq === player.seq && x.pts >= player.lastSwPts - 0.4).find(x => x.matchingTiles < 50),
+        matched: window.__aviSamples.filter(x => x.seq === player.seq && x.pts >= player.lastSwPts - 0.4 && x.matchingTiles >= 50).length,
+        statusHidden: $('pStatus').style.display === 'none'
+      })`)
+      assert.equal(sample.wrong, undefined, `AVI pixels drifted from their labelled time: ${JSON.stringify(sample.wrong)}`)
+      assert.ok(sample.matched >= 4, `AVI decoded source frames reach the screen after return: ${JSON.stringify(sample)}`)
+      assert.ok(Math.abs(sample.v - sample.a) < 0.35, `AVI picture and MP3 clock remain together: ${JSON.stringify(sample)}`)
+      assert.equal(sample.statusHidden, true, 'AVI return does not remain buffering')
+      if (hiddenFor >= 8000) assert.ok(recoveryMs < 2500, `AVI took ${recoveryMs} ms to show current pictures after a long absence`)
+      aviCycles.push({ video: sample.v, audio: sample.a, matched: sample.matched, recoveryMs })
+    }
+    result.checks.aviBackground = aviCycles
 
     assert.deepEqual(issues, [], 'no console errors or uncaught exceptions')
     result.pass = true

@@ -1867,6 +1867,10 @@ impl WebSession {
             return;
         }
         self.video_hidden = hidden;
+        // AVI picture times need uninterrupted decode, even when there is nothing to draw.
+        if self.container == "avi" {
+            return;
+        }
         if hidden {
             self.hidden_gops.clear();
             self.hidden_gop_bytes = 0;
@@ -1984,7 +1988,7 @@ impl WebSession {
             }
             self.seek_target = None;
         }
-        if self.client_clock > 0.25 && pts + 0.085 < self.client_clock {
+        if self.video_hidden || (self.client_clock > 0.25 && pts + 0.085 < self.client_clock) {
             return;
         }
         let wu = w as usize;
@@ -2098,7 +2102,7 @@ impl WebSession {
             return;
         }
 
-        if self.video_hidden {
+        if self.video_hidden && self.container != "avi" {
             self.stash_hidden_gop_packet(pkt);
             return;
         }

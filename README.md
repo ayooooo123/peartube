@@ -428,6 +428,7 @@ shows it); LAN discovery is on by default on fresh installs and follows the devi
 The relay's browser player uses the same full-screen cinema layout and 10-second seek
 controls as the Mac app; its Mini player button keeps the stream playing in a corner
 while you browse, with its own pause, seek, and Expand controls. Close ends playback.
+AVI playback keeps decoded pictures at their source time while catching up after a seek, instead of running ahead of the soundtrack.
 WebCodecs playback can trim persistent black rows baked into a movie's encoded frame;
 it never trims picture columns, and restores the full frame when the picture expands.
 Codec and browser support still determine whether playback uses WebCodecs, MSE, or

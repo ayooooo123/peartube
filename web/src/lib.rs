@@ -2147,7 +2147,8 @@ impl WebSession {
                 let _ = dec.flush();
             }
         } else if let Some(est) = pkt_pts_secs {
-            if !self.replaying_hidden_gop && self.client_clock > 0.5 && est + 1.50 < self.client_clock && !pkt.flags.keyframe {
+            // AVI picture times rely on uninterrupted decode; dropping a GOP labels later pictures with earlier times.
+            if self.container != "avi" && !self.replaying_hidden_gop && self.client_clock > 0.5 && est + 1.50 < self.client_clock && !pkt.flags.keyframe {
                 self.drop_until_keyframe = true;
                 return;
             }

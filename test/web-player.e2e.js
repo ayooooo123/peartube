@@ -210,3 +210,59 @@ test('the browser engine remuxes variable-rate VP8 to WebM for MSE', async () =>
     rmSync(dir, { recursive: true, force: true })
   }
 })
+
+test('AVI catches up to the audio clock without relabeling later pictures', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'peartube-avi-sync-'))
+  try {
+    const file = join(dir, 'episode.avi')
+    const reference = join(dir, 'reference.yuv')
+    execFileSync('ffmpeg', ['-nostdin', '-v', 'error', '-y',
+      '-f', 'lavfi', '-i', 'testsrc2=size=160x120:rate=25',
+      '-f', 'lavfi', '-i', 'sine=frequency=440:sample_rate=44100',
+      '-t', '10', '-map', '0:v', '-map', '1:a', '-c:v', 'mpeg4', '-g', '50', '-bf', '2', '-q:v', '3',
+      '-c:a', 'libmp3lame', '-q:a', '4', file])
+    execFileSync('ffmpeg', ['-nostdin', '-v', 'error', '-y', '-i', file, '-an', '-pix_fmt', 'yuv420p', '-f', 'rawvideo', reference])
+    const bytes = readFileSync(file)
+    let wasm
+    const { instance } = await WebAssembly.instantiate(readFileSync(wasmPath), { env: {
+      host_stream_len: () => BigInt(bytes.length),
+      host_read_at: (pos, dst, len) => {
+        const offset = Number(pos)
+        if (offset >= bytes.length) return 0
+        const n = Math.min(len, bytes.length - offset)
+        new Uint8Array(wasm.memory.buffer, dst, n).set(bytes.subarray(offset, offset + n))
+        return n
+      }
+    } })
+    wasm = instance.exports
+    const json = () => JSON.parse(new TextDecoder().decode(new Uint8Array(wasm.memory.buffer, wasm.pt_json_ptr(), wasm.pt_json_len())))
+    assert.equal(wasm.pt_open(0, 0), 0)
+    const manifest = json()
+    assert.equal(wasm.pt_configure(manifest.defaultVideo, manifest.defaultAudio, -1, MODE.software), 0)
+    assert.equal(wasm.pt_seek(5.3), 0)
+    wasm.pt_set_clock(5.8)
+    const expected = readFileSync(reference)
+    let frame = null
+    let sound = null
+    for (let n = 0; n < 100000 && frame === null; n++) {
+      const step = wasm.pt_step()
+      if (step === ABI.step.audioPlanarF32 && sound === null) sound = wasm.pt_out_pts()
+      if (step === ABI.step.videoYuv420) {
+        const pts = wasm.pt_out_pts()
+        const w = wasm.pt_out_w(), h = wasm.pt_out_h()
+        const size = w * h
+        const index = Math.round(pts * 25)
+        const actual = Buffer.from(new Uint8Array(wasm.memory.buffer, wasm.pt_out_ptr(), size))
+        const wanted = expected.subarray(index * size * 3 / 2, index * size * 3 / 2 + size)
+        assert.ok(actual.equals(wanted), `AVI picture labelled ${pts.toFixed(2)} must show that frame, not the next keyframe`)
+        frame = { pts, index, digest: createHash('sha256').update(actual).digest('hex') }
+      } else if (step === ABI.step.eof || step < 0) break
+    }
+    assert.ok(frame, 'AVI seek emits a picture')
+    assert.ok(sound !== null && Math.abs(sound - 5.3) < 0.1, `MP3 stays at the sought time: ${sound}`)
+    mkdirSync(outDir, { recursive: true })
+    writeFileSync(join(outDir, 'avi-audio-sync-result.json'), JSON.stringify({ frame, sound }, null, 2))
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})

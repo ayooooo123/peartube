@@ -3,6 +3,7 @@ import { randomUUID, randomBytes } from 'node:crypto'
 import { request as httpRequest } from 'node:http'
 import { request as httpsRequest } from 'node:https'
 import { dirname, join } from 'node:path'
+import b4a from 'b4a'
 import { Readable } from 'streamx'
 import { downloadPage } from './identify.js'
 
@@ -29,7 +30,7 @@ function waitAbortable (ms, controller) {
 // Jobs hold private source URLs and auth headers, so they stay collared inside a 0600 file and
 // never leak into Corestore where replication would serve them to any stranger who names the core.
 // What anyone may see of a job: no source secrets, no internal announce payload, no per-video key.
-export const publicJob = ({ source, announce, storeKey, etag, lastModified, ...job }) => job
+export const publicJob = ({ source, announce, storeKey, etag, lastModified, hashState, hashBytes, ...job }) => job
 
 export function createAcquirer (node, file, {
   concurrency = 4,
@@ -223,6 +224,14 @@ export function createAcquirer (node, file, {
             expectedSize: job.total,
             private: Boolean(job.private),
             store: job.store,
+            hashState: job.hashState || null,
+            hashBytes: job.hashBytes || 0,
+            // The running sha256 state rides in the job: a restart folds a small gap in instead of re-reading the film.
+            onHashState (state, bytes) {
+              job.hashState = b4a.toString(state, 'base64')
+              job.hashBytes = bytes
+              save()
+            },
             ...(job.private && job.storeKey ? { storeKey: job.storeKey } : {})
           }
           op = await node.put(meta, async start => {
@@ -256,7 +265,7 @@ export function createAcquirer (node, file, {
         save()
       }
       await node.append(job.announce)
-      Object.assign(job, { status: 'done', size: job.announce.size, sha256: job.announce.sha256 })
+      Object.assign(job, { status: 'done', size: job.announce.size, sha256: job.announce.sha256, hashState: null, hashBytes: 0 })
       onDone?.(publicJob(job), job.announce)
     } catch (err) {
       if (job.status !== 'cancelled') job.status = job.announce ? 'announcing' : 'failed'

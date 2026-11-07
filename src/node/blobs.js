@@ -12,6 +12,17 @@ import { BLOB_BLOCK_SIZE, HEX64, ID, cleanText, decodeOp, formatWatchUri, isSyst
 
 const coreByteLen = c => c.byteLength || 0
 
+// libsodium's sha256 state is 104 bytes and exportable, so a resumed import can carry the hash an earlier process
+// started instead of reading the whole film back. Runtimes without the addon fall back to a read-back.
+let hashApi
+async function sha256StateApi () {
+  if (hashApi !== undefined) return hashApi
+  try { hashApi = (await import('sodium-native')).default } catch { hashApi = null }
+  return hashApi
+}
+// How often the running state is checkpointed to the job: the gap re-read on resume is at most this plus one write batch.
+const HASH_CHECKPOINT = 64 * 1024 * 1024
+
 export async function createBlobs (ctx) {
   const { storage, worklet: isWorklet } = ctx.opts
 
@@ -753,13 +764,36 @@ export async function createBlobs (ctx) {
       // shortcut: hyperblobs commits 16-block batches, so a restart can lose the unflushed tail (at most 8 MiB).
       const start = storeName ? core.byteLength : 0
       const resumed = start > 0
-      const hash = createHash('sha256')
+      // Checkpointed hashing. The state covers `hashed` bytes and is only trusted when it is not ahead of the committed
+      // core, so a crash mid-batch costs a short fold-in rather than a full re-read of the film.
+      const sodium = meta.onHashState ? await sha256StateApi() : null
+      const hstate = sodium ? b4a.alloc(sodium.crypto_hash_sha256_STATEBYTES) : null
+      const hdigest = sodium ? b4a.alloc(sodium.crypto_hash_sha256_BYTES) : null
+      const hash = sodium ? null : createHash('sha256')
+      let hashed = 0
+      let checkpoint = 0
+      if (sodium) {
+        const saved = meta.hashState ? b4a.from(meta.hashState, 'base64') : null
+        if (saved && saved.byteLength === hstate.byteLength && meta.hashBytes > 0 && meta.hashBytes <= start) {
+          hstate.set(saved)
+          hashed = checkpoint = meta.hashBytes
+        } else {
+          sodium.crypto_hash_sha256_init(hstate)
+        }
+      }
       let size = start
       let buf = []
       let bufLen = 0
       const hasher = new Transform({
         transform (chunk, cb) {
-          if (!resumed) hash.update(chunk)
+          if (sodium) {
+            sodium.crypto_hash_sha256_update(hstate, chunk)
+            hashed += chunk.byteLength
+            if (hashed - checkpoint >= HASH_CHECKPOINT) {
+              checkpoint = hashed
+              meta.onHashState(b4a.from(hstate), hashed)
+            }
+          } else if (!resumed) hash.update(chunk)
           size += chunk.length
           if (onData) onData(size)
           buf.push(chunk)
@@ -778,6 +812,24 @@ export async function createBlobs (ctx) {
           cb(null)
         }
       })
+      // Fold committed bytes the checkpoint does not cover BEFORE the tail streams in, so the state stays in byte
+      // order. The fold checkpoints as it goes, so a restart during it continues from there.
+      if (sodium && hashed < start) {
+        let skip = hashed % BLOB_BLOCK_SIZE
+        let remaining = start - hashed
+        for await (const block of core.createReadStream({ start: Math.floor(hashed / BLOB_BLOCK_SIZE) })) {
+          const take = Math.max(0, Math.min(block.byteLength - skip, remaining))
+          if (take > 0) sodium.crypto_hash_sha256_update(hstate, block.subarray(skip, skip + take))
+          hashed += take
+          remaining -= take
+          skip = 0
+          if (hashed - checkpoint >= HASH_CHECKPOINT) {
+            checkpoint = hashed
+            meta.onHashState(b4a.from(hstate), hashed)
+          }
+          if (remaining <= 0) break
+        }
+      }
       const complete = resumed && Number.isSafeInteger(meta.expectedSize) && start === meta.expectedSize
       const blobs = new Hyperblobs(core, { blockSize: BLOB_BLOCK_SIZE })
       // A crash between the last block and the announce leaves a complete core: finish it instead of asking the
@@ -787,10 +839,18 @@ export async function createBlobs (ctx) {
         writer = blobs.createWriteStream()
         await pipelinePromise(typeof source === 'function' ? await source(start) : source, hasher, writer)
       }
-      // Blocks from the earlier attempt never crossed the hasher, so hash the finished core in one local pass.
-      if (resumed) for await (const block of core.createReadStream({ start: 0 })) hash.update(block)
+      // Without an exportable state the earlier prefix never crossed a hasher here, so hash the finished core once.
+      if (!sodium && resumed) for await (const block of core.createReadStream({ start: 0 })) hash.update(block)
       if (Number.isSafeInteger(meta.expectedSize) && meta.expectedSize >= 0 && size !== meta.expectedSize) {
         throw new Error(`Truncated transfer for ${id}: expected ${meta.expectedSize} bytes, got ${size}`)
+      }
+      let sha256
+      if (sodium) {
+        if (hashed !== size) throw new Error(`Hash is out of step for ${id}: ${hashed} of ${size} bytes`)
+        sodium.crypto_hash_sha256_final(hstate, hdigest)
+        sha256 = b4a.toString(hdigest, 'hex')
+      } else {
+        sha256 = hash.digest('hex')
       }
       const keyHex = b4a.toString(core.key, 'hex')
       // A resumed stream only reports its tail; one video per core always starts at block 0.
@@ -809,7 +869,7 @@ export async function createBlobs (ctx) {
         id,
         title: cleanText(title, id),
         size,
-        sha256: hash.digest('hex'),
+        sha256,
         blobs: keyHex,
         blob,
         ...(videoKey ? { epoch: ep, wrappedKey } : {})

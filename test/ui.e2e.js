@@ -277,18 +277,24 @@ test('relay web UI: settings, plugins as intents, identification, and taste gate
     clicks++
     await sleep(150)
   }
-  // Marks the visible control whose text is `text` (inside `scope`) and clicks it.
+  // Marks the visible control whose text is `text` (inside `scope`) and clicks it. A card redraws after its Save, so
+  // a control can appear late or be replaced between marking and clicking: look again for up to 5 s.
   async function clickText (text, scope = 'body') {
-    const mark = 'e2e-' + Math.random().toString(36).slice(2)
-    const found = await evaluate(`(() => {
-      const els = [...document.querySelectorAll(${JSON.stringify(scope)} + ' button, ' + ${JSON.stringify(scope)} + ' a, ' + ${JSON.stringify(scope)} + ' label.switch')]
-      const e = els.find(x => x.offsetParent !== null && x.textContent.trim().replace(/\\s+/g, ' ').startsWith(${JSON.stringify(text)}))
-      if (!e) return false
-      e.setAttribute('data-e2e', ${JSON.stringify(mark)})
-      return true
-    })()`)
-    assert.ok(found, 'control "' + text + '" in ' + scope)
-    await click(`[data-e2e="${mark}"]`)
+    const end = Date.now() + 5000
+    for (;;) {
+      const mark = 'e2e-' + Math.random().toString(36).slice(2)
+      const found = await evaluate(`(() => {
+        const els = [...document.querySelectorAll(${JSON.stringify(scope)} + ' button, ' + ${JSON.stringify(scope)} + ' a, ' + ${JSON.stringify(scope)} + ' label.switch')]
+        const e = els.find(x => x.offsetParent !== null && x.textContent.trim().replace(/\\s+/g, ' ').startsWith(${JSON.stringify(text)}))
+        if (!e) return false
+        e.setAttribute('data-e2e', ${JSON.stringify(mark)})
+        e.scrollIntoView({ block: 'center' })
+        return e.getBoundingClientRect().width > 0
+      })()`)
+      if (found) return click(`[data-e2e="${mark}"]`)
+      assert.ok(Date.now() < end, 'control "' + text + '" in ' + scope)
+      await sleep(100)
+    }
   }
   async function type (selector, text) {
     await evaluate(`(() => { const e = document.querySelector(${JSON.stringify(selector)}); e.scrollIntoView({ block: 'center' }); e.focus(); e.select?.() })()`)
@@ -476,7 +482,11 @@ test('relay web UI: settings, plugins as intents, identification, and taste gate
     await clickText('Copy link', '#detail')
     const modalCopied = await evaluate(`window.__modalCopied`)
     assert.match(modalCopied, /^peartube:\/\/watch\//, 'Copy link inside open <dialog> must populate clipboardData over plain HTTP')
-    assert.equal(modalCopied.includes((await getJson('/v1/status')).tracker) || modalCopied.includes('kind=tracker'), false, 'copied watch link never leaks the tracker key')
+    // A watch link names its public channel, so whoever opens it joins that channel's swarm and finds the peers
+    // that cached the video (only publishers and relays announce a video itself).
+    const linkStatus = await getJson('/v1/status')
+    assert.match(modalCopied, new RegExp(`[?&]source=${linkStatus.channel}&kind=channel(&|$)`), 'the watch link names its channel: ' + modalCopied)
+    assert.equal(modalCopied.includes('kind=tracker'), false, 'a watch link never names a tracker')
     await click('#detail [data-play]')
     const clockSecs = `Number($('pClock').textContent.split(' / ')[0].split(':').pop())`
     await waitFor(`!!player && player.primed && ${clockSecs} >= 1`, 'clip playing', 30_000)
@@ -647,6 +657,9 @@ test('relay web UI: settings, plugins as intents, identification, and taste gate
     result.interactions.keepCopies = clicks
     await waitApi(async () => (await settingsNow()).settings.replicate.value === false, 'replication off')
 
+    // The settings round-trip saved a documentation address (192.0.2.10) no interface holds; put the detected one
+    // back, or LAN discovery has nothing to bind.
+    await fetch(base + '/v1/settings', { method: 'PUT', headers: { ...auth, 'content-type': 'application/json' }, body: JSON.stringify({ lanHost: null }) })
     await clickText('Find peers on this network', '#netCard')
     await waitApi(async () => (await getJson('/v1/status')).lan, 'LAN discovery running without a restart', 15_000)
     result.checks.lanLive = (await getJson('/v1/status')).lan

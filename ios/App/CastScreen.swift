@@ -25,10 +25,10 @@ struct CastScreen: View {
                             } label: {
                                 HStack {
                                     Image(systemName: "tv").font(.title2)
-                                    VStack(alignment: .leading) { Text(receiver.name).font(.headline); Text("\(receiver.online ? "Online" : "Saved") · \(receiver.paired ? "Paired" : "Needs pairing") · \(receiver.json.string("transport"))").font(.caption).foregroundStyle(.secondary) }
+                                    VStack(alignment: .leading) { Text(receiver.name).font(.headline); Text(receiver.json.flag("current") ? "\(receiver.online ? "Online" : "Saved") · \(receiver.paired ? "Paired" : "Needs pairing") · \(receiver.json.string("transport"))" : "Needs update").font(.caption).foregroundStyle(.secondary) }
                                     Spacer(); Image(systemName: "chevron.right")
                                 }
-                            }.buttonStyle(.plain).accessibilityIdentifier("cast.receiver.\(receiver.id)")
+                            }.buttonStyle(.plain).disabled(!receiver.json.flag("current")).accessibilityIdentifier("cast.receiver.\(receiver.id)")
                             HStack {
                                 if !receiver.paired { Button("Enter TV Code") { pairTarget = receiver.id }.accessibilityIdentifier("cast.code.\(receiver.id)") }
                                 if receiver.paired && model.pendingCast != nil {
@@ -52,14 +52,13 @@ struct CastScreen: View {
                     }.disabled((pairTarget.isEmpty && input.isEmpty) || pairing).accessibilityIdentifier("cast.pair")
                 }
                 Section("Pair by Link / Address") {
-                    TextField("Receiver URI, public key, or host:port", text: $input, axis: .vertical).textInputAutocapitalization(.never).autocorrectionDisabled().accessibilityIdentifier("cast.pairInput")
+                    TextField("Receiver link, or its 64-character key", text: $input, axis: .vertical).textInputAutocapitalization(.never).autocorrectionDisabled().accessibilityIdentifier("cast.pairInput")
                     Button("Connect Receiver") {
                         pairing = true
                         Task { await model.pairURI(input); pairing = false }
                     }.disabled(input.isEmpty || pairing).accessibilityIdentifier("cast.pairURI")
                     Button { scanner = true } label: { Label("Scan TV QR Code", systemImage: "qrcode.viewfinder") }.accessibilityIdentifier("cast.scan")
                 }
-                if !model.cast.string("webReceiverUrl").isEmpty { Section("Smart TV Browser") { Text("On your TV, open:\n\(model.cast.string("webReceiverUrl"))").font(.callout).textSelection(.enabled) } }
                 if !model.session.isEmpty { Section { Button("Open Remote") { dismiss(); model.showRemote = true }.accessibilityIdentifier("cast.remote") } }
             }.navigationTitle("Cast to a Screen").toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("Refresh") { Task { await model.refreshCast() } }.accessibilityIdentifier("cast.refresh") }

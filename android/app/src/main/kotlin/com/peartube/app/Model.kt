@@ -370,6 +370,7 @@ data class CastReceiver(
     val p2p: Boolean = false,
     val transport: String = "",
     val auth: String = "code",
+    val current: Boolean = true,
 ) {
     companion object {
         fun from(json: JSONObject) = CastReceiver(
@@ -383,6 +384,7 @@ data class CastReceiver(
             p2p = json.optBoolean("p2p"),
             transport = json.optString("transport"),
             auth = json.optString("auth", "code"),
+            current = json.optBoolean("current", true),
         )
     }
 }
@@ -454,7 +456,6 @@ data class CastSession(
 }
 
 data class CastStatus(
-    val webReceiverUrl: String? = null,
     val receivers: List<CastReceiver> = emptyList(),
     val session: CastSession? = null,
 ) {
@@ -463,7 +464,6 @@ data class CastStatus(
             if (json == null) return CastStatus()
             val arr = json.optJSONArray("receivers")
             return CastStatus(
-                webReceiverUrl = json.optString("webReceiverUrl").takeUnless { json.isNull("webReceiverUrl") || it.isEmpty() },
                 receivers = if (arr == null) emptyList() else List(arr.length()) { CastReceiver.from(arr.getJSONObject(it)) },
                 session = json.optJSONObject("session")?.let(CastSession::from),
             )

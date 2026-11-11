@@ -197,9 +197,8 @@ async function openNode ({
         if (localHex === ctx.channel.primaryKey || ctx.identity.idVault?.channelKey === ctx.channel.primaryKey) {
           for (const v of ch.views().slice(0, 2)) {
             if (!v?.key || v.length <= 0) continue
-            const vHex = b4a.toString(v.key, 'hex')
-            const open = ctx.storage.store.cores.get(ctx.blobs.blobDisc(vHex).buf)
-            pushCore(vHex, 'channel', v.length, open?.byteLength || v.length * 4096)
+            // Only the length is known without opening the core; Hypercore's default block size estimates the bytes.
+            pushCore(b4a.toString(v.key, 'hex'), 'channel', v.length, v.length * 4096)
           }
         }
         for (const [hex, lc] of ctx.channel.landedCores) {

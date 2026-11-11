@@ -220,8 +220,9 @@ pub struct CastReceiver {
     pub paired: bool,
     #[serde(default)]
     pub p2p: bool,
+    /// A receiver from before the cast channel: shown, never dialed.
     #[serde(default)]
-    pub transport: String,
+    pub current: Option<bool>,
     #[serde(default)]
     pub auth: String,
 }
@@ -315,15 +316,11 @@ pub struct ReceiverInfo {
     pub pair_code: String,
     #[serde(default)]
     pub pairing_uri: String,
-    #[serde(default)]
-    pub listen_url: String,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CastStatus {
-    #[serde(default)]
-    pub web_receiver_url: Option<String>,
     #[serde(default)]
     pub receivers: Vec<CastReceiver>,
     #[serde(default)]

@@ -693,7 +693,9 @@ export async function createReceiver ({
         failures.push(Date.now())
         throw new Error('Invalid TV pairing code')
       }
-      return { deviceId: identity.deviceId, name: identity.name, publicKey, token: identity.pairToken }
+      // An open receiver takes any LAN link without a code, so it hands that peer no permanent token: a saved one
+      // would keep working from anywhere after the room is left.
+      return { deviceId: identity.deviceId, name: identity.name, publicKey, token: trusted ? '' : identity.pairToken }
     }
     if (!trusted && !safeEqual(token, identity.pairToken)) throw new Error('Unauthorized; pair with this TV first')
     if (type === 'subscribe') {
@@ -930,12 +932,14 @@ export function createCastController ({
         paired: Boolean(pair?.token) || d.auth === 'open',
         p2p: true,
         transport: 'lan+p2p',
-        auth: d.auth
+        auth: d.auth,
+        // A receiver from before this protocol cannot be cast to until it updates.
+        current: d.current
       })
     }
     for (const [id, s] of saved) {
       if (merged.has(id) || !s.publicKey) continue
-      merged.set(id, { id, name: s.name || 'Paired TV', host: null, publicKey: s.publicKey, online: true, paired: Boolean(s.token), p2p: true, transport: 'p2p', auth: 'code' })
+      merged.set(id, { id, name: s.name || 'Paired TV', host: null, publicKey: s.publicKey, online: true, paired: Boolean(s.token), p2p: true, transport: 'p2p', auth: 'code', current: true })
     }
     return [...merged.values()]
   }
@@ -1056,17 +1060,22 @@ export function createCastController ({
     }
     closeActiveTransport()
     const mine = attempt
-    const session = await openSession(receiverId, target)
-    try {
-      await session.control.call('subscribe', { token: target.token })
-      const res = await session.control.call('cmd', { token: target.token, ...command }, timeoutMs)
-      if (res.state) session.state = res.state
-      claim(mine, session)
-      emitChange()
-      return status()
-    } catch (err) {
-      session.control.close()
-      throw err
+    // A LAN link can replace the DHT link while the channel opens, closing the channel with the old connection. One
+    // retry opens the session again on the link that is left, instead of making the sender wait out the command timeout.
+    for (let tries = 0; ; tries++) {
+      let session = null
+      try {
+        session = await openSession(receiverId, target)
+        await session.control.call('subscribe', { token: target.token })
+        const res = await session.control.call('cmd', { token: target.token, ...command }, timeoutMs)
+        if (res.state) session.state = res.state
+        claim(mine, session)
+        emitChange()
+        return status()
+      } catch (err) {
+        session?.control?.close()
+        if (tries > 0 || closing || err?.message !== 'Receiver connection closed') throw err
+      }
     }
   }
 

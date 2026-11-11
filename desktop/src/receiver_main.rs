@@ -493,7 +493,6 @@ impl Render for DumbTvApp {
         if self.player.is_none() {
             let name = self.info.as_ref().map(|i| i.name.clone()).unwrap_or_else(|| "PearTube Receiver".into());
             let uri = self.info.as_ref().map(|i| i.pairing_uri.clone()).unwrap_or_default();
-            let listen = self.info.as_ref().map(|i| i.listen_url.clone()).unwrap_or_default();
             return v_flex()
                 .size_full()
                 .bg(rgb(BG))
@@ -527,7 +526,6 @@ impl Render for DumbTvApp {
                                 .child(div().text_xs().font_weight(FontWeight::BOLD).text_color(rgb(ACCENT)).child("READY TO CAST"))
                                 .child(div().text_3xl().font_weight(FontWeight::BOLD).child(name))
                                 .child(div().text_sm().text_color(rgb(DIM)).child("Open PearTube on your phone or Mac, click Cast, and choose this screen — or scan the QR code."))
-                                .when(!listen.is_empty(), |this| this.child(div().text_xs().text_color(rgb(DIM)).child(listen)))
                                 .when_some(self.error.clone(), |this, err| this.child(div().text_xs().text_color(rgb(DANGER)).child(err)))
                                 .child(
                                     h_flex().mt_2().child(

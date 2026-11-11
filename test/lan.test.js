@@ -355,13 +355,57 @@ test('a receiver outlives junk on its cast channel, and an open receiver is open
   channel.open()
   for (const junk of CAST_JUNK) text.send(junk)
   text.send(JSON.stringify({ id: 9, type: 'cmd', action: 'status' }))
+  text.send(JSON.stringify({ id: 10, type: 'pair' }))
+  text.send(JSON.stringify({ id: 11, type: 'cmd', token: '', action: 'status' }))
   const deadline = Date.now() + 5000
-  while (replies.length === 0 && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 50))
+  while (replies.length < 3 && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 50))
 
-  assert.deepEqual(replies.map(r => r.id), [9], 'only the request is answered')
+  assert.deepEqual(replies.map(r => r.id), [9, 10, 11], 'only the requests are answered')
   assert.equal(replies[0].ok, false)
   assert.match(replies[0].error, /Unauthorized/, 'an open receiver still asks a peer from across the DHT for its token')
+  assert.equal(replies[1].ok, false)
+  assert.match(replies[1].error, /Invalid TV pairing code/, 'and still asks it for the TV code')
+  assert.match(replies[2].error, /Unauthorized/, 'an empty token is not the pair token')
   assert.equal(conn.destroyed, false, 'junk does not cost the peer its connection')
+  assert.deepEqual(faults, [], 'no frame from a peer reaches the process as an error')
+})
+
+// An open receiver is open to the room it is in, not to every peer that can find it: a LAN link pairs without a code
+// and gets no permanent token, so only a device on that link can control this TV.
+test('an open receiver hands its LAN link no pair token', async t => {
+  const faults = processFaults(t)
+  const testnet = await createTestnet(3)
+  const bus = mdnsBus()
+  const mkTmp = () => mkdtempSync(join(tmpdir(), 'peartube-cast-open-'))
+  const lan = keyPair => createLan({ host: '127.0.0.1', keyPair, adapter: bus(s => s), dialAfter: 200 })
+  const receiverNode = await createNode({ storage: mkTmp(), bootstrap: testnet.bootstrap, lan })
+  const senderNode = await createNode({ storage: mkTmp(), bootstrap: testnet.bootstrap, lan })
+  const receiver = await createReceiver({ storage: mkTmp(), node: receiverNode, openAuth: true })
+  t.after(async () => {
+    await receiver.close()
+    for (const n of [senderNode, receiverNode]) await n.close()
+    await testnet.destroy()
+  })
+
+  // LAN discovery links two peers that share a topic: the sender's link to the receiver.
+  const topic = b4a.alloc(32, 13)
+  receiverNode.joinLanTopic('test-cast', topic)
+  senderNode.joinLanTopic('test-cast', topic)
+  const deadline = Date.now() + 20_000
+  let conn = null
+  while (!conn && Date.now() < deadline) {
+    conn = [...senderNode.peerConnections()].find(c => c.remotePublicKey && b4a.toString(c.remotePublicKey, 'hex') === receiver.publicKey) || null
+    if (!conn) await new Promise(resolve => setTimeout(resolve, 100))
+  }
+  assert.ok(conn, 'the sender found the receiver on its LAN')
+
+  const control = await openControl(conn)
+  const paired = await control.call('pair', { code: '' })
+  assert.equal(paired.deviceId, receiver.deviceId, 'the LAN link pairs without a code')
+  assert.equal(paired.token, '', 'and is handed no token that would keep working after the room is left')
+  const status = await control.call('cmd', { token: '', action: 'status' })
+  assert.equal(status.state.status, 'idle', 'a LAN link controls the TV with no token')
+  control.close()
   assert.deepEqual(faults, [], 'no frame from a peer reaches the process as an error')
 })
 

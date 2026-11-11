@@ -335,7 +335,7 @@ final class AppModel: ObservableObject {
         let value = code.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
         guard value.count == 6, value.allSatisfy({ $0.isASCII && ($0.isLetter || $0.isNumber) }) else { error = "Enter the six-character pairing code shown on the TV."; return }
         let raw = address.trimmingCharacters(in: .whitespacesAndNewlines)
-        if id.isEmpty && raw.isEmpty { error = "Choose a screen or enter its host:port before pairing."; return }
+        if id.isEmpty && raw.isEmpty { error = "Choose a screen or enter its receiver link or 64-character key before pairing."; return }
         await pair(id.isEmpty ? ["code": value, "address": raw] : ["id": id, "code": value], unpaired: "Paired. Choose the saved screen to connect.")
     }
     func pairURI(_ input: String) async {

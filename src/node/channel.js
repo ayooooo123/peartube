@@ -344,6 +344,8 @@ export async function createChannel (ctx) {
     listWriters,
     grantWriter,
     revokeWriter,
+    // FindingPeers is per Corestore instance: the primary Autobee's cores live on its namespace, not the root store.
+    findingPeers: () => chNs.findingPeers(),
     usePrimary: () => usePrimaryChannel,
     markUsePrimary: () => { usePrimaryChannel = true },
     hasEntries: () => channelHasEntries,

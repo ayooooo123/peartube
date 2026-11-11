@@ -13,12 +13,10 @@ use serde_json::json;
 use crate::app::PearTube;
 use crate::list::column;
 use crate::play::clock;
-use crate::qr::qr_card;
 use crate::theme::{ACCENT, BG, BRAND, CARD, CARD_ELEVATED, DANGER, DIM, INK, LINE};
 
 pub struct CastSheetForm {
     pub pending_entry: Option<(String, String, u64)>,
-    pub show_web_tv: bool,
     pub error: Option<SharedString>,
 }
 
@@ -26,7 +24,6 @@ impl CastSheetForm {
     pub fn new(pending_entry: Option<(String, String, u64)>) -> Self {
         CastSheetForm {
             pending_entry,
-            show_web_tv: false,
             error: None,
         }
     }
@@ -37,8 +34,6 @@ impl PearTube {
     /// directly over a playing video without interrupting playback).
     pub fn render_cast_popup(&self, form: &CastSheetForm, cx: &mut Context<Self>) -> impl IntoElement {
         let receivers = self.cast.receivers.clone();
-        let web_url = self.cast.web_receiver_url.clone();
-        let show_web = form.show_web_tv;
         let headline = match &form.pending_entry {
             Some((_, title, pos)) if *pos > 0 => format!("Play \"{title}\" from {}", clock(Duration::from_millis(*pos))),
             Some((_, title, _)) => format!("Play \"{title}\" on…"),
@@ -74,6 +69,8 @@ impl PearTube {
                                     .child(div().text_sm().font_weight(FontWeight::SEMIBOLD).text_color(rgb(INK)).child(r.name.clone()))
                                     .child(div().text_xs().text_color(rgb(DIM)).child(if active {
                                         "Connected"
+                                    } else if r.current == Some(false) {
+                                        "Needs update"
                                     } else if r.online {
                                         "Ready on Wi-Fi · Click to play"
                                     } else {
@@ -85,7 +82,7 @@ impl PearTube {
                         h_flex()
                             .items_center()
                             .gap_1p5()
-                            .when(!r.online && r.transport != "web", |this| {
+                            .when(!r.online, |this| {
                                 this.child(
                                     div()
                                         .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
@@ -173,50 +170,7 @@ impl PearTube {
                                                 .child(div().text_xs().text_color(rgb(DIM)).child("Launch PearTube Receiver on your TV device, and it will appear right here automatically.")),
                                         )
                                     })
-                                    .children(rows)
-                                    .when_some(web_url, |this, url| {
-                                        this.child(
-                                            v_flex()
-                                                .mt_1()
-                                                .gap_2()
-                                                .child(
-                                                    h_flex().child(
-                                                        Button::new("toggle-web-tv-card")
-                                                            .ghost()
-                                                            .small()
-                                                            .icon(Icon::new(if show_web { Lucide::ChevronDown } else { Lucide::ChevronRight }))
-                                                            .label("Smart TV without the app?")
-                                                            .on_click(cx.listener(|this, _, _, cx| {
-                                                                if let Some(f) = &mut this.cast_modal {
-                                                                    f.show_web_tv = !f.show_web_tv;
-                                                                    cx.notify();
-                                                                }
-                                                            })),
-                                                    ),
-                                                )
-                                                .when(show_web, |this| {
-                                                    this.child(
-                                                        h_flex()
-                                                            .gap_4()
-                                                            .items_center()
-                                                            .p_4()
-                                                            .rounded(px(14.))
-                                                            .bg(rgb(BG))
-                                                            .border_1()
-                                                            .border_color(rgb(LINE))
-                                                            .child(qr_card(&url, 112.))
-                                                            .child(
-                                                                v_flex()
-                                                                    .flex_1()
-                                                                    .min_w_0()
-                                                                    .gap_1()
-                                                                    .child(div().text_sm().font_weight(FontWeight::SEMIBOLD).text_color(rgb(INK)).child("Open in any TV browser"))
-                                                                    .child(div().text_xs().text_color(rgb(DIM)).child(format!("Visit {url} on LG webOS, Samsung Tizen, PlayStation, or Xbox — it appears above automatically."))),
-                                                            ),
-                                                    )
-                                                }),
-                                        )
-                                    }),
+                                    .children(rows),
                             ),
                     ),
             )

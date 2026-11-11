@@ -102,12 +102,9 @@ export async function createSources (ctx) {
       // A channel we already hold is a refresh: let the topic lookups answer first, or `update()`
       // returns at once against whatever peer spoke last. This is throttled across the node —
       // paying it per channel would stall rotating a large library for no extra truth.
-      if (src.hydrated && !ctx.net.dht && Date.now() - lastSwarmFlushAt > 10_000) {
+      if (src.hydrated && Date.now() - lastSwarmFlushAt > 10_000) {
         lastSwarmFlushAt = Date.now()
-        const done = ctx.storage.store.findingPeers()
-        const t = setTimeout(done, 3_000)
-        t.unref?.()
-        ctx.net.swarm.flush().then(done, done).finally(() => clearTimeout(t))
+        await Promise.race([ctx.net.swarm.flush().catch(() => {}), new Promise(r => setTimeout(r, 3_000))])
       }
       // Autobee goes quiet once a writer looks whole against the first hint it heard, and the
       // publisher's coupler skips announcing a core this peer already has open — so a follower
@@ -292,7 +289,7 @@ export async function createSources (ctx) {
         src.touchedAt = touch ? ++touchClock : 0
         activeSources.add(k)
         ctx.net.joinOverlayTopic(`channel:${k}`, bee.key, bee.discoveryKey)
-        const done = !ctx.net.dht ? ctx.storage.store.findingPeers() : null
+        const done = !ctx.net.dht ? beeNs.findingPeers() : null
         if (done) {
           const t = setTimeout(done, 3_000)
           t.unref?.()

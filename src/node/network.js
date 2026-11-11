@@ -216,7 +216,7 @@ export async function createNetwork (ctx) {
   rotateTimer.unref?.()
   ctx.undo.push(() => clearInterval(rotateTimer))
   if (ctx.channel.usePrimary()) {
-    const done = !dht ? ctx.storage.store.findingPeers() : null
+    const done = !dht ? ctx.channel.findingPeers() : null
     if (done) {
       const t = setTimeout(done, 3_000)
       t.unref?.()

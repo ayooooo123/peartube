@@ -76,11 +76,12 @@ publishes; followers have read-only copies and still help seed the catalog and t
    connected through a channel's swarm or the LAN serves any video it stores, with no lookup. The
    title being played is also looked up on its core's own topic. Only a node that published a
    video announces that topic, and a relay announces its complete cached copies too; an app never
-   announces what it watched. The player reads HTTP Ranges from a local Range server on the same
-   device (`src/blob-server.js`, which fetches only a bounded window ahead of the viewer) or the
-   worklet's loopback copy. Backfill (replication, HiveRelay seeding) yields to viewers through
-   `peartube/bulk-busy` instead of pausing connections; a relay honors that signal only from
-   peers that serve it blocks.
+   announces what it watched on the DHT, though a lookup still joins the title's hashed topic in
+   this node's LAN mDNS advertisement, so LAN neighbours can see it. The player reads HTTP
+   Ranges from a local Range server on the same device (`src/blob-server.js`, which fetches only a
+   bounded window ahead of the viewer) or the worklet's loopback copy. Backfill (replication,
+   HiveRelay seeding) yields to viewers through `peartube/bulk-busy` instead of pausing
+   connections; a relay honors that signal only from peers that serve it blocks.
 4. **Acquisition.** Imports are a private job queue (`jobs.json`): fetch, store, announce, append durably.
    Page links download and mux natively on every attempt through `ubit get --json`, so adaptive DASH/HLS streams
    never depend on expiring media URLs. `ubit` is only needed for page links, and only on the relay — the apps never run an HTTP acquirer.

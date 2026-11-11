@@ -491,7 +491,7 @@ export async function createBlobs (ctx) {
         name: `hiverelay-beacon-${entry.blobs.slice(0, 16)}`,
         namespace: ctx.storage.store.ns
       }).catch(() => null)
-      if (beaconDisc) await ctx.storage.store.purge(beaconDisc, { force: true }).catch(() => {})
+      if (beaconDisc) await ctx.storage.store.purge({ discoveryKey: beaconDisc }, { force: true }).catch(() => {})
       await gcStorage({ full: false })
       return
     }

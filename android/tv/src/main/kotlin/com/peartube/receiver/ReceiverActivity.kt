@@ -649,11 +649,8 @@ private fun DumbTvReceiverScreen(activity: Activity, worker: ReceiverWorker, hos
                         fontSize = 15.sp,
                         lineHeight = 22.sp,
                     )
-                    val netAndDisk = listOfNotNull(
-                        info?.listenUrl?.takeIf { it.isNotEmpty() },
-                        info?.let { formatStorageFree(it.storageFreeBytes, it.externalStorage) },
-                    ).joinToString("  ·  ")
-                    if (netAndDisk.isNotEmpty()) {
+                    val netAndDisk = info?.let { formatStorageFree(it.storageFreeBytes, it.externalStorage) }
+                    if (netAndDisk != null) {
                         Text(
                             netAndDisk,
                             color = if (info?.externalStorage == true) TvAccent else TvDim,

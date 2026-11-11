@@ -89,7 +89,10 @@ export function createCatalog (ctx) {
       const infos = await ctx.storage.coreStorage.getInfos(
         batch.map(h => ctx.blobs.blobDisc(h).buf),
         { auth: false, head: true, hints: false }
-      ).catch(() => [])
+      ).catch(() => null)
+      // A failed probe says nothing about its batch: skipping it leaves those keys uncached for the next search,
+      // where an empty answer would have recorded every one of them as absent.
+      if (!infos) continue
       const withData = []
       for (let j = 0; j < batch.length; j++) {
         const h = batch[j]

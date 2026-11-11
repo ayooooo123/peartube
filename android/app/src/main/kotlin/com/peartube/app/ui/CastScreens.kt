@@ -77,14 +77,18 @@ fun CastSheetScreen(model: AppModel) {
                 items(cast.receivers, key = { it.id }) { receiver ->
                     Row(
                         Modifier.fillMaxWidth().clip(RoundedCornerShape(18.dp)).background(CardElevated)
-                            .clickable { model.selectCastReceiver(receiver) }.padding(16.dp),
+                            .clickable(enabled = receiver.current) { model.selectCastReceiver(receiver) }.padding(16.dp),
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(14.dp),
                     ) {
                         Icon(TvIcon, null, tint = Brand, modifier = Modifier.size(28.dp))
                         Column(Modifier.weight(1f)) {
                             Text(receiver.name, color = Ink, fontSize = 17.sp, fontWeight = FontWeight.Medium)
-                            Text(if (receiver.online) "Ready to play" else "Saved screen", color = Dim, fontSize = 12.sp)
+                            Text(
+                                if (!receiver.current) "Needs update" else if (receiver.online) "Ready to play" else "Saved screen",
+                                color = Dim,
+                                fontSize = 12.sp,
+                            )
                         }
                         if (!receiver.online && receiver.paired) {
                             CinemaIcon(CloseIcon, "Forget ${receiver.name}") { model.removeCastReceiver(receiver.id) }
@@ -105,9 +109,6 @@ fun CastSheetScreen(model: AppModel) {
                         }
                     }
                 }
-                cast.webReceiverUrl?.let { webUrl -> item {
-                    Text("Smart TV without the app? Visit $webUrl on your TV.", color = Dim, fontSize = 12.sp)
-                } }
             }
         }
     }

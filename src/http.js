@@ -109,12 +109,16 @@ export function createApi (state) {
   // 10 minutes: its header may not have been reachable yet.
   const resolutions = new Map()
   const downloadFormats = new Map()
-  // The blob server binds the interface it advertises (PEARTUBE_STREAM_HOST), not loopback: a
-  // relay on a LAN address refuses 127.0.0.1, and every same-origin /v1/blob read answered 502.
+  // The blob server binds the interface the node gave it (loopback on a relay), so the /v1/blob proxy dials that.
   const blobHost = () => {
     const h = state.node?.blobServer?.host
     return !h || h === '0.0.0.0' || h === '::' ? '127.0.0.1' : h
   }
+  // Every stream URL the API hands out goes through /v1/blob on the address the client reached: one port for
+  // the relay, and clients that admit private addresses only for their configured add-on (MediaStorm) can play.
+  const viaApi = (req, e) => req.headers.host && state.node?.blobServer && e.streamUrl
+    ? { ...e, streamUrl: `${reqProto(req)}://${req.headers.host}/v1/blob${new URL(e.streamUrl).search}` }
+    : e
   function resolutionOf (entry) {
     const port = state.node?.blobServer?.port
     if (!port) return null
@@ -230,14 +234,14 @@ export function createApi (state) {
       const source = url.searchParams.get('source') || null
       const limit = Number(url.searchParams.get('limit')) || 0
       const offset = Number(url.searchParams.get('offset')) || 0
-      return { results: node ? await node.search(id, { source, limit, offset }) : [] }
+      return { results: node ? (await node.search(id, { source, limit, offset })).map(e => viaApi(req, e)) : [] }
     }
     if (req.method === 'GET' && path === '/v1/entries') {
       const source = url.searchParams.get('source') || null
       const query = url.searchParams.get('q') || null
       const limit = Number(url.searchParams.get('limit')) || 0
       const offset = Number(url.searchParams.get('offset')) || 0
-      return { results: node ? await node.search(null, { source, query, limit, offset }) : [] }
+      return { results: node ? (await node.search(null, { source, query, limit, offset })).map(e => viaApi(req, e)) : [] }
     }
     if (req.method === 'POST' && path === '/v1/entries/remove') {
       const n = requireNode(node)
@@ -356,12 +360,9 @@ export function createApi (state) {
     }
     const streamMatch = req.method === 'GET' && path.match(/^\/stream\/[^/]+\/(.+)\.json$/)
     if (streamMatch) {
-      const entries = node ? await node.search(stremioToPearId(streamMatch[1])) : []
+      const entries = (node ? await node.search(stremioToPearId(streamMatch[1])) : []).map(e => viaApi(req, e))
       // Clients rank by resolution (MediaStorm puts an unknown one below every 480p source); release names say it.
       const resolutions = await Promise.all(entries.map(resolutionOf))
-      // Streams go through /v1/blob on the address the client reached the add-on at. Clients that admit private
-      // addresses only for their configured add-on (MediaStorm refuses the blob server's own port) can then play them.
-      const origin = req.headers.host && node?.blobServer ? `${reqProto(req)}://${req.headers.host}/v1/blob` : null
       return {
         streams: entries.map((e, i) => {
           // Release-name matchers read the episode from the title, as they do from other add-ons' release names.
@@ -371,7 +372,7 @@ export function createApi (state) {
           return {
             name: resolutions[i] ? `${name}\n${resolutions[i]}` : name,
             title: `${label}\n${(e.size / 1048576).toFixed(1)} MB · ${e.source.slice(0, 8)}…`,
-            url: origin ? origin + new URL(e.streamUrl).search : e.streamUrl,
+            url: e.streamUrl,
             // Plain http and mostly MKV: Stremio must route it through its streaming server rather than a web <video>.
             behaviorHints: { bingeGroup: `peartube-${e.source.slice(0, 12)}`, notWebReady: true, videoSize: e.size }
           }
@@ -477,7 +478,7 @@ export function createApi (state) {
       return
     }
     if (req.method === 'GET' && url.pathname === '/v1/playlist.m3u') {
-      const entries = state.node ? await state.node.search() : []
+      const entries = state.node ? (await state.node.search()).map(e => viaApi(req, e)) : []
       const lines = ['#EXTM3U']
       for (const e of entries) {
         const safeTitle = e.title.replace(/[\r\n,]/g, ' ')

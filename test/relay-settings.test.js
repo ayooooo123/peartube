@@ -1,6 +1,6 @@
 // The relay applies settings in its running process, and its opt-in guard helps private peers while it stays direct.
 //   1. A value from an env var can be changed from the API (settings.json wins) and put back to the env value.
-//   2. A setting that shapes the node (the stream port) applies at once: same process, nothing left to restart.
+//   2. A setting that shapes the node (the peer port) applies at once: same process, nothing left to restart.
 //   3. POST /v1/restart reopens the node in place with the same tracker. Turning the env-set directory off unlists the
 //      followed source it listed, keeps one listed by hand, and turning it back on lists the followed source again.
 //      Turning on "Convert at every start" runs the conversion at once.
@@ -21,7 +21,8 @@ import { randomBytes } from 'node:crypto'
 import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { createServer as createHttpServer } from 'node:http'
 import { get as httpsGet } from 'node:https'
-import { connect, createServer } from 'node:net'
+import { createServer } from 'node:net'
+import { createSocket } from 'node:dgram'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createInterface } from 'node:readline'
@@ -53,11 +54,12 @@ function freePort () {
   })
 }
 
-function listening (port) {
+// The relay's DHT holds this UDP port: a second bind on it fails.
+function udpBound (port) {
   return new Promise(resolve => {
-    const sock = connect(port, '127.0.0.1')
-    sock.once('connect', () => { sock.destroy(); resolve(true) })
-    sock.once('error', () => resolve(false))
+    const sock = createSocket('udp4')
+    sock.once('error', () => { sock.close(); resolve(true) })
+    sock.bind(port, () => sock.close(() => resolve(false)))
   })
 }
 
@@ -96,7 +98,6 @@ async function startRelay (testnet, extraEnv = {}) {
       PEARTUBE_STORAGE: storage,
       PEARTUBE_API_PORT: String(apiPort),
       PEARTUBE_API_HOST: '127.0.0.1',
-      PEARTUBE_STREAM_HOST: '127.0.0.1',
       PEARTUBE_BOOTSTRAP: testnet.bootstrap.map(b => `${b.host}:${b.port}`).join(','),
       ...extraEnv
     },
@@ -146,8 +147,8 @@ test('relay settings apply in place; its guard serves private peers while the re
     await testnet.destroy()
   })
 
-  const envStreamPort = await freePort()
-  relay = await startRelay(testnet, { PEARTUBE_STREAM_PORT: String(envStreamPort), PEARTUBE_DIRECTORY: '1' })
+  const envDhtPort = await freePort()
+  relay = await startRelay(testnet, { PEARTUBE_DHT_PORT: String(envDhtPort), PEARTUBE_DIRECTORY: '1' })
   const { get, send, call, storage } = relay
   const pid = relay.proc.pid
   const { tracker, writer } = await get('/v1/status')
@@ -165,24 +166,24 @@ test('relay settings apply in place; its guard serves private peers while the re
   result.checks.envOverride = true
 
   // 2. A node setting applies without restarting the process.
-  assert.ok(await listening(envStreamPort), 'blob server on the env port')
-  let streamPort = await freePort()
-  s = await send('PUT', '/v1/settings', { streamPort })
-  assert.deepEqual([s.settings.streamPort.source, s.settings.streamPort.value], ['file', streamPort])
+  assert.ok(await udpBound(envDhtPort), 'DHT on the env port')
+  let dhtPort = await freePort()
+  s = await send('PUT', '/v1/settings', { dhtPort })
+  assert.deepEqual([s.settings.dhtPort.source, s.settings.dhtPort.value], ['file', dhtPort])
   assert.deepEqual(s.restartNeeded, [], 'nothing waits for a restart')
-  assert.ok(await listening(streamPort), 'blob server moved to the new port')
-  assert.equal(await listening(envStreamPort), false, 'old port closed')
+  assert.ok(await udpBound(dhtPort), 'DHT moved to the new port')
+  assert.equal(await udpBound(envDhtPort), false, 'old port closed')
   assert.equal(relay.proc.exitCode, null)
   assert.equal(relay.proc.pid, pid)
   const reopened = await get('/v1/status')
-  assert.deepEqual([reopened.tracker, reopened.writer], [tracker, writer], 'same tracker and writer after the reopen')
-  result.checks.liveReopen = { streamPort, pid }
+  assert.deepEqual([reopened.tracker, reopened.writer], [tracker, writer], 'same channel and writer after the reopen')
+  result.checks.liveReopen = { dhtPort, pid }
 
   // 3. The restart action reopens in place.
   s = await send('POST', '/v1/restart')
   assert.deepEqual(s.restartNeeded, [])
   assert.equal((await get('/v1/status')).tracker, tracker)
-  assert.ok(await listening(streamPort))
+  assert.ok(await udpBound(dhtPort))
   assert.equal(relay.proc.exitCode, null)
   result.checks.restartAction = true
 
@@ -221,8 +222,8 @@ test('relay settings apply in place; its guard serves private peers while the re
   // 4. A LAN address this machine lacks: the live switch reports it, and the next reopen still opens the node.
   s = await send('PUT', '/v1/settings', { lan: true, lanHost: '203.0.113.5' })
   assert.ok(s.warning, 'the live LAN switch reports the bad address')
-  streamPort = await freePort()
-  s = await send('PUT', '/v1/settings', { streamPort })
+  dhtPort = await freePort()
+  s = await send('PUT', '/v1/settings', { dhtPort })
   assert.equal(s.warning, undefined, 'the reopen opens the node without LAN: ' + s.warning)
   assert.deepEqual(s.restartNeeded, [])
   assert.equal((await get('/v1/status')).writer, writer, 'node open after the reopen')
@@ -231,16 +232,16 @@ test('relay settings apply in place; its guard serves private peers while the re
   const sourcesFile = join(storage, 'sources.json')
   const goodSources = readFileSync(sourcesFile, 'utf8')
   writeFileSync(sourcesFile, JSON.stringify([{ key: 'not-a-key', kind: 'channel' }]))
-  streamPort = await freePort()
-  s = await send('PUT', '/v1/settings', { streamPort })
+  dhtPort = await freePort()
+  s = await send('PUT', '/v1/settings', { dhtPort })
   assert.ok(s.warning, 'the reopen reports the bad source')
-  assert.deepEqual(s.restartNeeded, ['streamPort'], 'the change waits while the node is down')
+  assert.deepEqual(s.restartNeeded, ['dhtPort'], 'the change waits while the node is down')
   assert.equal((await get('/v1/status')).writer, '', 'no node while the source is unreadable')
   writeFileSync(sourcesFile, goodSources)
   s = await send('POST', '/v1/restart')
   assert.deepEqual(s.restartNeeded, [], 'restart applies the waiting change once the source is fixed')
   assert.equal((await get('/v1/status')).writer, writer, 'the same node opens again')
-  assert.ok(await listening(streamPort))
+  assert.ok(await udpBound(dhtPort))
   result.checks.failedReopenRecovers = true
 
   // 5. The guard port and the peer port must differ, whichever is set second.
@@ -248,7 +249,7 @@ test('relay settings apply in place; its guard serves private peers while the re
   await send('PUT', '/v1/settings', { privateGuard: true, privateGuardPort: clashPort })
   let clash = await call('PUT', '/v1/settings', { dhtPort: clashPort })
   assert.equal(clash.status, 400, 'peer port onto the guard port is refused')
-  assert.equal((await get('/v1/settings')).settings.dhtPort.value, 0, 'peer port unchanged')
+  assert.equal((await get('/v1/settings')).settings.dhtPort.value, dhtPort, 'peer port unchanged')
   await send('PUT', '/v1/settings', { privateGuard: false, privateGuardPort: 0 })
   const peerPort = await freePort()
   await send('PUT', '/v1/settings', { dhtPort: peerPort })
@@ -332,10 +333,10 @@ test('a reopen during a folder import waits for one file, and no file is lost or
   for (let i = 0; i < files; i++) writeFileSync(join(watchDir, `Clip.${String(i).padStart(3, '0')}.mp4`), randomBytes(64 * 1024))
   const imported = async () => (await relay.get('/v1/entries')).results.length
   // The import runs while the plugins start, after the first reopen.
-  await relay.send('PUT', '/v1/settings', { streamPort: await freePort() })
+  await relay.send('PUT', '/v1/settings', { dhtPort: await freePort() })
   await until(async () => (await imported()) >= 5, 60_000, 'import under way')
   const started = Date.now()
-  await relay.send('PUT', '/v1/settings', { streamPort: await freePort() })
+  await relay.send('PUT', '/v1/settings', { dhtPort: await freePort() })
   const reopenMs = Date.now() - started
   const atReopen = await imported()
   assert.ok(atReopen < files, 'the import was still running when the reopen finished')

@@ -1405,8 +1405,6 @@ function renderCast () {
 // ---- Settings
 const GROUPS = [
   { title: 'Network', hint: 'How this relay is reached and who it talks to.', items: [
-    { key: 'streamHost', label: 'Stream address for viewers', hint: 'Reachable IP viewers use for playback; never 127.0.0.1.', ph: '192.168.1.20' },
-    { key: 'streamPort', label: 'Stream port', hint: 'HTTP blob port players fetch from; open it if firewalled.', ph: '8175' },
     { key: 'lan', label: 'Find peers on this network', hint: 'mDNS discovery on the LAN; needs both on the same Wi-Fi.' },
     { key: 'lanHost', label: 'Advertised LAN address', hint: 'Interface peers dial; picks Wi-Fi or Ethernet automatically.', ph: '192.168.1.20' },
     { key: 'dhtPort', label: 'Peer port (UDP)', hint: '0 picks a random port; fix it to forward through NAT.', ph: '49737' },
@@ -1418,7 +1416,7 @@ const GROUPS = [
     { key: 'allowedPeers', label: 'Only connect to these peers', hint: 'Allowlist of peer keys; empty means anyone.', ph: '3a8f0c1e5b7d92f4a6c0e8b1d3f5a7c9e2b4d6f8a0c2e4b6d8f0a2c4e6b8d0f2' }
   ] },
   { title: 'Library', hint: 'What it collects and publishes.', items: [
-    { key: 'tracker', label: 'Primary channel key', hint: '64-hex channel key this relay serves.', ph: 'bc7d85ea0eec017d3f6875b4c06c3c16091a50337b4d1709425e3bd35122fbeb' },
+    { key: 'channel', label: 'Primary channel key', hint: '64-hex channel key this relay serves.', ph: 'bc7d85ea0eec017d3f6875b4c06c3c16091a50337b4d1709425e3bd35122fbeb' },
     { key: 'publishChannel', label: 'Publish new videos to my channel', hint: 'Off keeps this relay’s library private to itself.' },
     { key: 'directory', label: 'List followed channels in my directory', hint: 'Lets others discover the channels you follow.' },
     { key: 'acquireConcurrency', label: 'Concurrent downloads', hint: 'Each page download runs a ubit process; higher costs CPU.', ph: '4' },

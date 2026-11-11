@@ -20,8 +20,8 @@ const env = process.env
 
 // Guard-only mode: the standalone Corestore-free forwarder (bin/private-relay.js, same env), never a content relay.
 if (env.PEARTUBE_PRIVATE_RELAY || env.PEARTUBE_PRIVATE_RELAY_PORT) {
-  if (env.PEARTUBE_TRACKER || env.PEARTUBE_SOURCES || env.PEARTUBE_PRIVATE_ROUTING || env.PEARTUBE_REPLICATE || env.PEARTUBE_WATCH_DIR || env.PEARTUBE_MIRROR_FEEDS) {
-    throw new Error('PEARTUBE_PRIVATE_RELAY runs a standalone Corestore-free guard forwarder and cannot be combined with tracker or content flags; run peartube-private-relay separately')
+  if (env.PEARTUBE_CHANNEL || env.PEARTUBE_SOURCES || env.PEARTUBE_PRIVATE_ROUTING || env.PEARTUBE_REPLICATE || env.PEARTUBE_WATCH_DIR || env.PEARTUBE_MIRROR_FEEDS) {
+    throw new Error('PEARTUBE_PRIVATE_RELAY runs a standalone Corestore-free guard forwarder and cannot be combined with channel or content flags; run peartube-private-relay separately')
   }
   await import('./private-relay.js')
   await new Promise(() => {})
@@ -106,7 +106,7 @@ const state = {
   posterUrl: imdb => posterUrl(cfg('cinemetaUrl'), imdb),
   backdropUrl: imdb => backdropUrl(cfg('cinemetaUrl'), imdb),
   onSourcesChanged: saveSources,
-  fallbackStatus: { ...idleStatus(), tracker: cfg('tracker') },
+  fallbackStatus: { ...idleStatus(), tracker: cfg('channel') },
   fallbackJobs () {
     try { return JSON.parse(readFileSync(jobsFile, 'utf8')).map(publicJob) } catch { return [] }
   }
@@ -186,11 +186,10 @@ async function start () {
   const using = settings.snapshot()
   const node = await createNode({
     storage,
-    tracker: cfg('tracker') || null,
+    tracker: cfg('channel') || null,
     sources: loadSavedSources(),
     allowedPeers: list(cfg('allowedPeers')),
-    streamHost: cfg('streamHost'),
-    streamPort: cfg('streamPort'),
+    // The blob server stays on loopback; clients stream through /v1/blob on the API port.
     bootstrap: list(cfg('bootstrap')) || undefined,
     dhtPort: cfg('dhtPort') || undefined,
     privateRouting: cfg('privateRouting'),
@@ -203,13 +202,13 @@ async function start () {
     }
   })
   settings.markApplied(using)
-  // A relay started without a tracker founds its own, keyed by its writer. Saved sources would otherwise replace it as
-  // the primary catalog on the next start (createNode only keeps its own tracker when told the key), hiding its library.
-  if (!cfg('tracker')) {
+  // A relay started without a channel founds its own, keyed by its writer. Saved sources would otherwise replace it as
+  // the primary catalog on the next start (createNode only keeps its own catalog when told the key), hiding its library.
+  if (!cfg('channel')) {
     const { tracker, writer } = node.status()
-    if (tracker === writer) settings.remember('tracker', writer)
-    // Followed something before this fix: the founded tracker comes back on the next reopen, which the UI offers.
-    else settings.update({ tracker: writer })
+    if (tracker === writer) settings.remember('channel', writer)
+    // Followed something before this fix: the founded channel comes back on the next reopen, which the UI offers.
+    else settings.update({ channel: writer })
   }
   state.fallbackStatus.tracker = node.status().tracker
   state.node = node
@@ -378,7 +377,7 @@ state.recoverMnemonic = (mnemonic, alias = '') => serial(async () => {
   if (!state.node) throw new Error('Node still starting')
   const res = await state.node.claimWithMnemonic(mnemonic, { alias })
   if (res.reopenNeeded) {
-    settings.update({ tracker: res.channel })
+    settings.update({ channel: res.channel })
     await reopen()
     if (state.node) await state.node.claimWithMnemonic(mnemonic, { alias })
   }

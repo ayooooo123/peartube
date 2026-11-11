@@ -12,8 +12,6 @@ const csv = s => String(s).split(',').map(x => x.trim()).filter(Boolean)
 const flag = s => s === '1' || s === 'true'
 
 const SPEC = {
-  streamHost: { env: 'PEARTUBE_STREAM_HOST', type: 'host', def: '127.0.0.1' },
-  streamPort: { env: 'PEARTUBE_STREAM_PORT', type: 'port', def: 8175 },
   lan: { env: 'PEARTUBE_LAN_HOST', type: 'bool', def: false, live: true, fromEnv: s => Boolean(s) },
   lanHost: { env: 'PEARTUBE_LAN_HOST', type: 'host', def: '', live: true },
   dhtPort: { env: 'PEARTUBE_DHT_PORT', type: 'port', def: 0 },
@@ -22,7 +20,7 @@ const SPEC = {
   privateRouting: { env: 'PEARTUBE_PRIVATE_ROUTING', type: 'bool', def: false, fromEnv: s => Boolean(s) },
   privateGuard: { env: 'PEARTUBE_PRIVATE_GUARD', type: 'bool', def: false, live: true, fromEnv: flag },
   privateGuardPort: { env: 'PEARTUBE_PRIVATE_GUARD_PORT', type: 'port', def: 0, live: true },
-  tracker: { env: 'PEARTUBE_TRACKER', type: 'key', def: '' },
+  channel: { env: 'PEARTUBE_CHANNEL', type: 'key', def: '' },
   allowedPeers: { env: 'PEARTUBE_ALLOWED_PEERS', type: 'keys', def: [], live: true },
   publishChannel: { env: 'PEARTUBE_PUBLISH_CHANNEL', type: 'bool', def: true, fromEnv: s => s !== '0' },
   directory: { env: 'PEARTUBE_DIRECTORY', type: 'bool', def: false, live: true, fromEnv: s => Boolean(s) },
@@ -110,6 +108,13 @@ export function createSettings (storage, env = {}) {
   const file = join(storage, 'settings.json')
   let saved = {}
   try { saved = JSON.parse(readFileSync(file, 'utf8')) || {} } catch {}
+  // Files from before channels: `tracker` was this key, and the blob server had its own LAN port.
+  if (Object.hasOwn(saved, 'tracker') || Object.hasOwn(saved, 'streamHost') || Object.hasOwn(saved, 'streamPort')) {
+    const { tracker, streamHost: _h, streamPort: _p, ...rest } = saved
+    saved = tracker && !Object.hasOwn(rest, 'channel') ? { ...rest, channel: tracker } : rest
+    writeFileSync(file + '.tmp', JSON.stringify(saved, null, 2), { mode: 0o600 })
+    renameSync(file + '.tmp', file)
+  }
 
   const envSet = key => {
     const raw = env[SPEC[key].env]
@@ -179,7 +184,7 @@ export function createSettings (storage, env = {}) {
     return { changed, ...view() }
   }
 
-  // A value the running relay already uses (the tracker it founded): saved so the next start keeps it, no restart flagged.
+  // A value the running relay already uses (the channel it founded): saved so the next start keeps it, no restart flagged.
   function remember (key, value) {
     if (Object.hasOwn(saved, key)) return
     update({ [key]: value })

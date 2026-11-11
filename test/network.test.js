@@ -61,10 +61,12 @@ test('a relay acquires a source; another relay finds it and streams exact bytes'
   const api = createApi({ node: a, acquirer: null })
   await new Promise(resolve => api.listen(0, '127.0.0.1', resolve))
   t.after(() => api.close())
-  const listed = await (await fetch(`http://127.0.0.1:${api.address().port}/v1/entries`)).json()
-  assert.deepEqual(listed.results, [hit], 'the whole tracker lists the entry')
+  const base = `http://127.0.0.1:${api.address().port}`
+  const listed = await (await fetch(`${base}/v1/entries`)).json()
+  const viaApi = `${base}/v1/blob${new URL(hit.streamUrl).search}`
+  assert.deepEqual(listed.results, [{ ...hit, streamUrl: viaApi }], 'the channel lists the entry, streamed through the API port')
 
-  const res = await fetch(hit.streamUrl, { headers: { Range: 'bytes=1000000-1065535' } })
+  const res = await fetch(viaApi, { headers: { Range: 'bytes=1000000-1065535' } })
   assert.equal(res.status, 206)
   assert.deepEqual(Buffer.from(await res.arrayBuffer()), bytes.subarray(1000000, 1065536))
   const full = Buffer.from(await (await fetch(hit.streamUrl)).arrayBuffer())

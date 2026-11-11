@@ -11,9 +11,8 @@ Hypercore, and shares the pieces with phones, desktops, TVs and other relays ove
 with the relay next door over LAN discovery. The core stays under 1,000 lines; the Holepunch
 modules do the heavy lifting.
 
-Two kinds of catalog: a **shared Tracker**, where anyone with the key can add listings, and a
-**personal Channel**, where only the owner publishes while subscribers still help seed the catalog
-and the pieces.
+Each identity has one **Channel**. Its owner (and the devices and writers the owner grants)
+publishes; followers have read-only copies and still help seed the catalog and the pieces.
 
 > **Status:** 0.4.42 is a working release, not a polished product. Browser playback, the relay
 > UI, LAN discovery and both apps have been exercised on real hardware; everything else is
@@ -28,7 +27,7 @@ and the pieces.
 - [Run from source](#run-from-source)
 - [Settings and environment](#settings-and-environment)
 - [Web UI and API](#web-ui-and-api)
-- [Trackers and Channels](#trackers-and-channels)
+- [Unified Channels, Devices & Subscriber Passes](#unified-channels-devices--subscriber-passes)
 - [Cast and TV receivers](#cast-and-tv-receivers)
 - [Privacy rule](#privacy-rule)
 - [Client apps](#client-apps)
@@ -97,8 +96,7 @@ The image is published for `linux/amd64` and `linux/arm64` from `main`:
 ```sh
 mkdir -p /srv/peartube-data && chmod 700 /srv/peartube-data
 docker run -d --name peartube-relay --restart unless-stopped \
-  -p 8174:8174 -p 8175:8175 \
-  -e PEARTUBE_STREAM_HOST=<lan-or-public-ip> \
+  -p 8174:8174 \
   -e PEARTUBE_LAN_HOST=<lan-ipv4-if-on-lan> \
   -e PEARTUBE_API_TOKEN=$(openssl rand -hex 32) \
   -v /srv/peartube-data:/data \
@@ -114,7 +112,7 @@ shuts the relay down cleanly; keep `--restart unless-stopped` so it comes back a
 Beyond Docker, the [agent quickstart](#install-on-a-system-agent-quickstart) covers `systemd`
 and `launchd`.
 
-A bare `npm start` founds a new tracker and prints its `tracker` and `channel` keys
+A bare `npm start` founds a new channel and prints its `channel` key
 (`{"msg":"relay ready", …}`). Open `http://<relay>:8174/` and finish under **Settings**.
 
 Browsers hide `VideoDecoder` (WebCodecs) and `SharedArrayBuffer` on plain `http://` LAN addresses. To unlock hardware WebCodecs over a LAN IP without a reverse proxy, drop a local P-256 CA and 390-day SAN certificate into `/srv/peartube-data` (and remove `ca.key` after signing):
@@ -150,9 +148,9 @@ When an AI coding/ops agent (Codex CLI, Claude Code, OpenCode, etc.) installs `p
    - **Real Linux/macOS host, NAS or VPS (including self-hosted remote `codex` CLI / SSH sessions):** supported. If the agent runs in a command sandbox (`workspace-write` + `codex-network-proxy`), escalate: `udx-native` needs raw UDP sockets (an HTTP proxy cannot carry HyperDHT), and the relay must be registered under Docker, `systemd` or `launchd` so the agent's process reaper does not kill it when the turn ends.
    - **OpenAI-hosted Codex Cloud VMs (`Work in > Cloud`):** cannot host a live public or LAN relay. Their HTTP/HTTPS-only egress proxy blocks HyperDHT/UDX UDP, no inbound ports exist, and the VM hibernates between turns. Use loopback-only tests against `createTestnet()` (`PEARTUBE_BOOTSTRAP=127.0.0.1:<port>`), call an external relay's HTTPS `/v1/acquire`, or deploy the container to a real VPS.
 2. **Settings before starting.** An unattended install sets these as env vars; each one is the starting value of its setting in the UI.
-   - Detect the reachable LAN, Tailscale or public IPv4 (`HOST_IP`) and set `PEARTUBE_STREAM_HOST=$HOST_IP`. The `127.0.0.1` default breaks playback on every other device. On a LAN host also set `PEARTUBE_LAN_HOST=$HOST_IP`.
+   - On a LAN host set `PEARTUBE_LAN_HOST=$HOST_IP` (the reachable LAN IPv4). Players stream through `/v1/blob` on the API port, so no stream address or second port is needed.
    - Generate `PEARTUBE_API_TOKEN=$(openssl rand -hex 32)` on any non-loopback network (`GET` playback/Stremio/M3U routes stay open; `POST`/`PUT`/`DELETE` `/v1/*` and `/v1/settings` require `Authorization: Bearer <token>`). Keep `PEARTUBE_STORAGE` at mode `0700` and env files at `0600`.
-   - Leave `PEARTUBE_TRACKER` unset to found a new catalog, or pass an existing `PEARTUBE_TRACKER`/`PEARTUBE_SOURCES` (add `PEARTUBE_REPLICATE=1` to mirror and seed remote blobs).
+   - Leave `PEARTUBE_CHANNEL` unset to found a new channel, or pass an existing `PEARTUBE_CHANNEL`/`PEARTUBE_SOURCES` (add `PEARTUBE_REPLICATE=1` to mirror and seed remote blobs). The key is saved in `settings.json` on first start, so later starts need no env var.
 3. **Install and detach as a persistent service.**
 
    **Docker / Podman** (`linux/amd64` + `linux/arm64`). Use `--network host` on a Linux LAN host so mDNS and ephemeral LAN UDP reach the network; use the port form on a WAN VPS or macOS Docker Desktop:
@@ -162,7 +160,6 @@ When an AI coding/ops agent (Codex CLI, Claude Code, OpenCode, etc.) installs `p
    API_TOKEN=$(openssl rand -hex 32)
    docker run -d --name peartube-relay --restart unless-stopped \
      --network host \
-     -e PEARTUBE_STREAM_HOST=<lan-or-public-ip> \
      -e PEARTUBE_LAN_HOST=<lan-ipv4-if-on-lan> \
      -e PEARTUBE_API_TOKEN="$API_TOKEN" \
      -v /srv/peartube-data:/data \
@@ -181,7 +178,6 @@ When an AI coding/ops agent (Codex CLI, Claude Code, OpenCode, etc.) installs `p
    API_TOKEN=$(openssl rand -hex 32)
    sudo tee /etc/peartube/relay.env >/dev/null <<EOF
    PEARTUBE_STORAGE=/var/lib/peartube
-   PEARTUBE_STREAM_HOST=<lan-or-public-ip>
    PEARTUBE_LAN_HOST=<lan-ipv4-if-on-lan>
    PEARTUBE_API_TOKEN=$API_TOKEN
    UV_THREADPOOL_SIZE=16
@@ -228,7 +224,6 @@ When an AI coding/ops agent (Codex CLI, Claude Code, OpenCode, etc.) installs `p
      </array>
      <key>EnvironmentVariables</key><dict>
        <key>PEARTUBE_STORAGE</key><string>$HOME/.local/share/peartube/data</string>
-       <key>PEARTUBE_STREAM_HOST</key><string><lan-ipv4></string>
        <key>PEARTUBE_LAN_HOST</key><string><lan-ipv4></string>
        <key>PEARTUBE_API_TOKEN</key><string>$API_TOKEN</string>
      </dict>
@@ -242,11 +237,11 @@ When an AI coding/ops agent (Codex CLI, Claude Code, OpenCode, etc.) installs `p
    launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.peartube.relay.plist
    ```
 
-4. **Verify and report.** Poll `curl -fsS http://127.0.0.1:8174/v1/status` until `tracker` and
-   `channel` are 64-character hex keys, and confirm `curl -fsS -o /dev/null -w '%{http_code}\n' http://127.0.0.1:8174/manifest.json`
+4. **Verify and report.** Poll `curl -fsS http://127.0.0.1:8174/v1/status` until `channel` is a
+   64-character hex key, and confirm `curl -fsS -o /dev/null -w '%{http_code}\n' http://127.0.0.1:8174/manifest.json`
    prints `200` (a GET: the relay answers `HEAD` only on blob routes). Return the Web UI (`http://<host>:8174/`), Stremio
    addon (`/manifest.json`), M3U playlist (`/v1/playlist.m3u`), public channel URI
-   (`peartube://channel/<status.channel>`), tracker key, and where `PEARTUBE_API_TOKEN` is stored.
+   (`peartube://channel/<status.channel>`), and where `PEARTUBE_API_TOKEN` is stored.
 
 Every variable except `PEARTUBE_STORAGE`, `PEARTUBE_API_HOST`, `PEARTUBE_API_PORT`,
 `PEARTUBE_API_TOKEN`, `PEARTUBE_SOURCES`, `PEARTUBE_PLUGINS_DIR` and the `PEARTUBE_PRIVATE_RELAY*`
@@ -259,7 +254,7 @@ Node 22 or newer (22.21+/24.9+ for `worklet/bare-kit.sh`), plus `git`.
 
 ```sh
 npm install
-npm start                     # founds a tracker, serves http://127.0.0.1:8174/
+npm start                     # founds a channel, serves http://127.0.0.1:8174/
 npm test                      # core and network tests on a local HyperDHT testnet
 npm run test:cast             # Cast & TV receiver E2E (writes desktop/target/e2e/cast-result.json)
 node test/ui.e2e.js           # web UI E2E in headless Brave
@@ -274,8 +269,8 @@ Settings are saved in `settings.json` (`0600`) in the data directory and are nev
 Corestore. On the Settings tab nothing changes until you press a card's **Save changes**: text
 fields, switches, list entries and the button that goes back to an env value all wait for it, and
 saving one card keeps the unsaved edits in the others. A saved change applies in the running
-relay: most in place (**Applies on save**), and those that shape the node (addresses, ports,
-tracker, bootstrap, private routing, HiveRelays, channel publishing) by reopening the node, jobs,
+relay: most in place (**Applies on save**), and those that shape the node (the peer port, the
+channel, bootstrap, private routing, HiveRelays, channel publishing) by reopening the node, jobs,
 plugins and cast stack in the same process, which drops peers for a few seconds (**Applies on save,
 reconnects peers**). The one-click switches on the Sharing tab apply at once. Precedence is
 `settings.json`, then the env var, then the default. A value that still comes from its env var shows
@@ -289,30 +284,29 @@ whole import, which carries on afterwards. The peer port and the guard port can'
 same fixed port. Settings are accepted only from the relay's own page, never cross-origin.
 
 A relay without `PEARTUBE_API_TOKEN` already trusts its local network: devices on private
-addresses may change settings, while public clients get `403`. Its founded tracker key is
-remembered as the **Join a tracker** setting on first start, so following a channel cannot
-silently replace the relay's own library.
+addresses may change settings, while public clients get `403`. Its founded channel key is
+remembered as the **Primary channel key** setting on first start, so following a channel cannot
+silently replace the relay's own library. A `settings.json` from before channels has its
+`tracker` value moved to `channel`, and its `streamHost`/`streamPort` dropped, when the relay starts.
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `PEARTUBE_TRACKER` | none (found new) | Tracker key to join |
+| `PEARTUBE_CHANNEL` | none (found new) | Channel key this relay serves |
 | `PEARTUBE_STORAGE` | `./peartube-data` | Data directory |
 | `PEARTUBE_API_HOST` | `0.0.0.0` | Interface bound by the UI and `/v1` API server |
-| `PEARTUBE_API_PORT` | `8174` | UI, `/v1` API, Stremio addon and M3U port |
-| `PEARTUBE_STREAM_HOST` | `127.0.0.1` | Host put in stream URLs; set a LAN or reachable address to serve other machines |
-| `PEARTUBE_STREAM_PORT` | `8175` | Port players stream video from |
+| `PEARTUBE_API_PORT` | `8174` | UI, `/v1` API, `/v1/blob` streams, Stremio addon and M3U port |
 | `PEARTUBE_DHT_PORT` | random | Fixed UDP port, only needed when forwarding a port behind a double-randomized NAT |
 | `PEARTUBE_BOOTSTRAP` | mainnet | Peer-discovery network; comma-separated `host:port` servers |
-| `PEARTUBE_PRIVATE_ROUTING` | off | `1`: two-hop encrypted guard circuits on stock HyperDHT; endpoint addresses and tracker keys are never announced publicly |
-| `PEARTUBE_PRIVATE_RELAY` | off | `1`: standalone Corestore-free guard forwarder (`bin/private-relay.js`); cannot combine with tracker or content flags |
+| `PEARTUBE_PRIVATE_ROUTING` | off | `1`: two-hop encrypted guard circuits on stock HyperDHT; endpoint addresses and channel keys are never announced publicly |
+| `PEARTUBE_PRIVATE_RELAY` | off | `1`: standalone Corestore-free guard forwarder (`bin/private-relay.js`); cannot combine with channel or content flags |
 | `PEARTUBE_PRIVATE_RELAY_PORT` | `PEARTUBE_DHT_PORT` | UDP port for the standalone guard forwarder |
 | `PEARTUBE_PRIVATE_GUARD` | off | `1`: also run a guard forwarder beside this relay so others can route privately; the relay's own connections stay direct |
 | `PEARTUBE_PRIVATE_GUARD_PORT` | random | UDP port for that guard; must differ from `PEARTUBE_DHT_PORT` |
 | `PEARTUBE_RELAY_THROUGH` | none | Comma-separated blind relay keys |
 | `PEARTUBE_LAN_HOST` | off | This machine's LAN IPv4; turns on mDNS discovery |
-| `PEARTUBE_SOURCES` | none | Extra channel/tracker keys or `peartube://` URIs to follow |
+| `PEARTUBE_SOURCES` | none | Extra channel keys or `peartube://` URIs to follow |
 | `PEARTUBE_PUBLISH_CHANNEL` | `1` on relays | List this relay's saved videos in its own channel without duplicating media (`0` disables) |
-| `PEARTUBE_DIRECTORY` | off | `1`: publish a list of subscribed channels and trackers so peers can discover them. Turning it off unlists the ones it listed (kept in private `directory.json`); sources added with **Add to directory** stay |
+| `PEARTUBE_DIRECTORY` | off | `1`: publish a list of subscribed channels so peers can discover them. Turning it off unlists the ones it listed (kept in private `directory.json`); sources added with **Add to directory** stay |
 | `PEARTUBE_WATCH_DIR` | none | Folder (e.g. `/data/import`) imported once per file |
 | `PEARTUBE_MIRROR_FEEDS` | none | Comma-separated JSON feed or peer `/v1/entries` URLs to import |
 | `PEARTUBE_REPLICATE` | off | `1` (or keys) to P2P-replicate remote blobs without duplicating catalog entries |
@@ -338,9 +332,9 @@ direct over ephemeral UDP ports. Across networks, forward a UDP port and set
 
 Private routing connects peers over two-hop encrypted UDX-spliced guard circuits on unmodified
 `hyperdht`. It needs at least two reachable, `/24`-diverse guards (run `node bin/private-relay.js`,
-`PEARTUBE_PRIVATE_RELAY=1` with no tracker/content flags, or turn on **Help others route privately**
+`PEARTUBE_PRIVATE_RELAY=1` with no channel/content flags, or turn on **Help others route privately**
 on any relay), which open zero disk state and are auto-discovered on each boot. Endpoints never
-announce IPs or tracker keys, disable LAN mDNS, and fail closed with fewer than two diverse guards.
+announce IPs or channel keys, disable LAN mDNS, and fail closed with fewer than two diverse guards.
 
 A relay's guard is `bin/private-relay.js` started as a child process, so it never shares the
 relay's Corestore process. It uses its own HyperDHT node, port and fresh key on every start, and
@@ -349,11 +343,12 @@ routing** instead moves the relay's own traffic onto guards and drops them.
 
 ## Web UI and API
 
-One port serves the UI at `/`, the `/v1` API, the Stremio addon and the M3U playlist.
+One port serves the UI at `/`, the `/v1` API, video at `/v1/blob`, the Stremio addon and the M3U
+playlist. The node's blob server stays on loopback behind `/v1/blob`.
 Without `PEARTUBE_API_TOKEN` there is no auth, so run an open relay only on a network you trust:
 anyone who can reach it can queue a download of any URL.
 
-The UI has five tabs: **Library** (add and play), **Channels** (your tracker and the ones you
+The UI has five tabs: **Library** (add and play), **Channels** (your channel and the ones you
 follow), **Sharing** (peers, kept copies, HiveRelays, Stremio and M3U addresses), **TV** (pair
 and control) and **Settings**. Plugins appear only as user intents.
 
@@ -364,7 +359,7 @@ and control) and **Settings**. Plugins appear only as user intents.
 | `GET /v1/identity`, `POST /v1/identity/{writers,epoch,recover}`, `DELETE /v1/identity/writers/:key` | Channel writer ACL, 12-word recovery phrase (`?reveal=1` / `recover`), and paid subscriber epoch pass rotation; same token and origin gate as `/v1/settings` |
 | `POST /v1/restart` | Reopens the node, jobs, plugins and cast stack in the running process; same auth and origin rules as settings |
 | `POST /v1/identify` `{url}` | Link contents: parsed name, Cinemeta `candidates` and `match`, or a plain `clip:` fallback |
-| `GET /v1/search?id=imdb:tt…`, `GET /v1/entries`, `POST /v1/entries/remove` | Channel entries with `streamUrl`; one result per file (`id` + `sha256`), or owner/mod entry removal + unreferenced core purge |
+| `GET /v1/search?id=imdb:tt…`, `GET /v1/entries`, `POST /v1/entries/remove` | Channel entries with `streamUrl` (on this port's `/v1/blob`); one result per file (`id` + `sha256`), or owner/mod entry removal + unreferenced core purge |
 | `POST /v1/acquire` `{id, title, private, source}` | Fetch, store (optionally epoch-encrypted) and announce; `page: true` downloads and muxes a page through `ubit` on every attempt |
 | `GET/DELETE /v1/jobs[/:id]` | Acquire jobs; sources are never returned. `DELETE` cancels or removes |
 | `GET /v1/status` | Keys, stored bytes, peers and per-transport traffic, `lan`, `privateRouting`, `privateGuard` (`publicKey`, `port`, circuit counts, or `null`), `tokenRequired`, `settingsOpen` |
@@ -421,7 +416,7 @@ Once a cast starts, the receiver keeps playing and serving after the sender disc
 ## Privacy rule
 
 Replication serves any stored core a peer can name, so the Corestore holds only public data:
-the tracker and the blobs. `jobs.json` keeps source URLs and headers; `settings.json` keeps
+the channel and the blobs. `jobs.json` keeps source URLs and headers; `settings.json` keeps
 feed URLs, HiveRelay keys and tokens. Neither is replicated. A page thumbnail is shown only
 while you confirm the add and is never announced; an identified entry carries only its
 `imdb:…` id and title.
@@ -438,7 +433,7 @@ controls.
 Apps connect to peers directly rather than routing everything through a relay: they follow
 catalogs, open `peartube://` links, cast, fetch the pieces playback needs, and seed cached
 pieces while online. They never run the HTTP acquirer, and cached data can be cleared in the
-app without removing subscriptions. On first launch, enter a relay's tracker key (`/v1/status`
+app without removing subscriptions. On first launch, enter a relay's channel key (`/v1/status`
 shows it); LAN discovery is on by default on fresh installs and follows the device's address.
 
 The relay's browser player uses the same full-screen cinema layout and 10-second seek
@@ -479,8 +474,8 @@ no bank is bundled. Subtitles use platform fonts and fonts attached to the media
 
 ## Known limitations
 
-- **Trackers have no moderation.** Anyone with a tracker key can add duplicate or unwanted
-  listings. Share `peartube://channel/…` links publicly and keep tracker keys to trusted relays.
+- **Moderation is per channel.** Only the owner and the writers it grants publish; `owner` and
+  `mod` writers can remove entries. There is no shared, open catalog.
 - **Private routing is early alpha and not anonymity.** It needs testing across real
   connections, at least two diverse guards, adds delay, and still exposes bootstrap traffic.
 - **Format coverage is narrower than VLC's.** `peartube-media` plays common video, audio and
@@ -495,7 +490,7 @@ no bank is bundled. Subtitles use platform fonts and fonts attached to the media
 
 | Path | What it is |
 |---|---|
-| `src/index.js` | `createNode`: Corestore, Autobee tracker, per-video Hypercores, Hyperswarm, `search`/`put`/`append`/`publish`/`remove`, `setLan`, LAN discovery |
+| `src/index.js` | `createNode`: Corestore, Autobee channel, per-video Hypercores, Hyperswarm, `search`/`put`/`append`/`publish`/`remove`, `setLan`, LAN discovery |
 | `src/http.js`, `src/ui.js` | The one-port server and the relay web UI |
 | `src/acquire.js`, `src/settings.js`, `src/identify.js` | Private job queue, settings store, link identification and Cinemeta matching |
 | `src/lan.js`, `src/cast.js`, `src/cast-control.js` | LAN discovery, Cast & TV receiver stack, its control channel |

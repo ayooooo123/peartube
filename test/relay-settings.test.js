@@ -357,8 +357,9 @@ test('a closed acquirer never announces a download that finished after it closed
   const appended = []
   const node = {
     closing: false,
-    async put (meta, stream) {
-      for await (const chunk of stream) void chunk
+    // the acquirer hands put() a factory that opens the source at the byte offset the core already holds
+    async put (meta, source) {
+      for await (const chunk of await source(0)) void chunk
       await new Promise(resolve => { finishPut = resolve })
       return { type: 'announce', id: meta.id, title: meta.title, blobs: 'a'.repeat(64), size: body.length, sha256: 'b'.repeat(64) }
     },

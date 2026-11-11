@@ -66,3 +66,6 @@ export async function backdropUrl (base, imdb) {
   const meta = await metaFor(base, imdb)
   return artOf(meta, 'background') || artOf(meta, 'poster')
 }
+
+// The Rust port generates its fixtures from this.
+export { metaFor }

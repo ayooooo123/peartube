@@ -273,3 +273,6 @@ export async function identify (url, { cinemetaUrl = '', configDir = '' } = {}) 
   }
 }
 
+
+// The Rust port generates its fixtures from these.
+export { fileName, probe, ubitInfo, norm, strong }

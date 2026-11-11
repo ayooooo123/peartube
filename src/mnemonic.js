@@ -116,3 +116,6 @@ export function unwrapVideoKey (wrappedHex, epochKey) {
 export function formatAccessUri (channelHex, epoch, epochKeyHex) {
   return `peartube://access/${String(channelHex).toLowerCase()}:${Number(epoch)}:${String(epochKeyHex).toLowerCase()}`
 }
+
+// The Rust port generates its fixtures from this.
+export { entropyToMnemonic }

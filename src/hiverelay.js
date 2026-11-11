@@ -778,3 +778,6 @@ export function createHiverelaySeeder ({
     info
   }
 }
+
+// Wire formats: the Rust port generates its fixtures from these.
+export { SEED_HANDSHAKE, seedRequestEncoding, seedAcceptEncoding, unseedRequestEncoding, seedDenyEncoding, signSeedRequest, computeBoundBytes, blake2bTopic, encodeHyperdriveHeader, encodeHyperdriveSingleRootNode }

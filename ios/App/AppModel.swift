@@ -33,6 +33,8 @@ final class AppModel: ObservableObject {
     let player = NativePlayer()
     private(set) var storage: AppStorage?
     private var worker: Worker?
+    /// The worklet's one-time `init`; `runStart` awaits it so it reaches the worklet first.
+    private var workerInit: Task<Void, Never>?
     /// The node's lifecycle. A second start while one runs waits for it instead of reopening the node.
     private enum NodePhase { case idle, starting(Task<Void, Never>), running }
     private var node = NodePhase.idle {
@@ -58,6 +60,10 @@ final class AppModel: ObservableObject {
             soundfontPresent = FileManager.default.fileExists(atPath: storage.soundfont.path)
             let worker = try Worker(); self.worker = worker
             worker.onEvent = { [weak self] event in self?.receive(event) }
+            // The worklet takes its cast storage once, before any other method reaches it (the Mac and the
+            // phone send it the moment their worker exists). `runStart` waits for this before `start`.
+            let castStorage = self.castStorage
+            workerInit = Task { _ = try? await worker.request("init", ["castStorage": castStorage]) }
             let hasLaunchArgs = ["-peartube-tracker", "-peartube-bootstrap", "-peartube-lan", "-peartube-relays", "-peartube-private"].contains(where: { name in
                 guard let i = args.firstIndex(of: name), args.indices.contains(i + 1) else { return false }
                 return true
@@ -115,8 +121,8 @@ final class AppModel: ObservableObject {
         defer { writeEvidence(force: true) }
         guard let worker, let storage else { node = .idle; return }
         do {
+            _ = await workerInit?.value
             try await applyLaunchArguments()
-            _ = try await worker.request("init", ["castStorage": castStorage])
             let params: [String: Any] = [
                 "trackersDir": storage.trackers.path,
                 "defaultFolder": "default",

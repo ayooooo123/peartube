@@ -2839,8 +2839,7 @@ function resyncOnReturn (fromHidden = false) {
     p.lastHardSync = performance.now()
   } else {
     // AVI decodes ahead with hidden audio; restart at the clock instead of showing a stale picture for seconds.
-    if (wasHidden && p.manifest?.container === 'avi' &&
-        (p.lastSwPts === null || audio - p.lastSwPts > 2)) {
+    if (wasHidden && p.manifest?.container === 'avi') {
       p.syncWorkerClock?.(audio, true)
       seekTo(audio)
       return

@@ -257,7 +257,6 @@ impl PearTube {
         if trimmed.is_empty() {
             return;
         }
-        let had_sources = self.settings.has_sources();
         let pending_cast = self.cast_modal.as_ref().and_then(|f| f.pending_entry.clone());
         cx.spawn(async move |this, cx| {
             let Ok(w) = worker() else { return };
@@ -272,7 +271,8 @@ impl PearTube {
                             let _ = this.settings.save();
                             this.hood_open = false;
                             this.show_list(cx);
-                            if !had_sources {
+                            // The worklet only parsed the link: with no node running there is nothing to list yet.
+                            if this.status.is_none() {
                                 needs_start = true;
                             }
                         }

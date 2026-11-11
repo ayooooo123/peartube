@@ -262,15 +262,14 @@ class AppModel(private val app: Application) {
         if (trimmed.isEmpty()) return
         scope.launch {
             try {
-                val hadSources = settings.value.hasSources
                 val res = worker.openUri(trimmed)
                 res.source?.let { src ->
                     val next = settings.value.withSource(SourceSpec(src.key, src.kind, src.alias))
                     next.save(dataDir)
                     settings.value = next
                     screen.value = Screen.List
-                    // Before the first channel the node never started; the worklet only parsed the link.
-                    if (!hadSources) starts.trySend(next)
+                    // The worklet only parsed the link: no node is running, so start one, whatever was followed before.
+                    if (status.value == null) starts.trySend(next)
                 }
                 res.entry?.let { entry ->
                     screen.value = Screen.Play(entry)

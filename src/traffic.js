@@ -18,13 +18,14 @@ export function createTrafficGate ({ node, uploadMbps = 0 }) {
   const bulkConns = new Map() // conn -> raw bytes written at the last tick
   let bulkTokens = bulkBytesPerTick
   let bulkPaused = false
-  // While viewers stream, paused HiveRelays get turns one at a time. A paused connection still has a window of
+  // While viewers stream, paused HiveRelays get turns. A paused connection still has a window of
   // requests queued, so resuming all of them in the same tick served every backlog at once: 8 MB/s bursts of
   // random reads that stalled the viewer on spinning disks. Each connection still gets a turn within TURN_MS,
-  // inside Protomux's 10 s timeout.
+  // inside Protomux's 10 s timeout: the due ones are spread over the ticks that fit in TURN_MS.
+  const TICK_MS = 250
   const TURN_MS = 6000
   const lastTurn = new WeakMap() // bulk conn -> time it was last resumed
-  let turnConn = null
+  let turnConns = []
   const rawWritten = conn => conn.rawBytesWritten || conn.rawStream?.bytesTransmitted || 0
   // Viewing: more than 1 Mbps going to non-bulk peers, held 3 s. Each relay tells its peers over `peartube/bulk-busy`;
   // p2p-replicate stops its backfill while any connected peer is busy (peersBusy()).
@@ -67,10 +68,13 @@ export function createTrafficGate ({ node, uploadMbps = 0 }) {
     const nextTokens = Math.min(tickBudget * 2, bulkTokens + tickBudget - sent)
     bulkTokens = viewing ? Math.max(-tickBudget * 24, nextTokens) : nextTokens
     const pause = bulkTokens < 0
-    if (turnConn) {
-      // a turn lasts one tick: the backlog it releases is already being served
-      if (!turnConn.destroyed && bulkConns.has(turnConn) && bulkPaused) turnConn.pause()
-      turnConn = null
+    if (turnConns.length > 0) {
+      // a turn lasts one tick: the backlog it released is already being served. A connection that became a
+      // bulk-busy peer during its turn is never resumed again by this gate, so pausing it would strand its backfill.
+      for (const conn of turnConns) {
+        if (!conn.destroyed && bulkConns.has(conn) && bulkPaused && !busyChannels.has(conn)) conn.pause()
+      }
+      turnConns = []
     }
     if (viewing && pause) {
       const held = [...bulkConns.keys()].filter(conn => !busyChannels.has(conn))
@@ -80,12 +84,17 @@ export function createTrafficGate ({ node, uploadMbps = 0 }) {
         // spread the first turns over TURN_MS instead of all coming due together
         held.forEach((conn, i) => { conn.pause(); lastTurn.set(conn, now - Math.floor(i * TURN_MS / held.length)) })
       }
-      let next = null
-      for (const conn of held) if (!next || (lastTurn.get(conn) || 0) < (lastTurn.get(next) || 0)) next = conn
-      if (next && now - (lastTurn.get(next) || 0) >= TURN_MS) {
-        next.resume()
-        lastTurn.set(next, now)
-        turnConn = next
+      // Every held connection must get a turn within TURN_MS, or it trips Protomux's 10 s timeout: resume
+      // ceil(held * TICK_MS / TURN_MS) due connections per tick, oldest turn first, and the whole set cycles
+      // within TURN_MS.
+      let due = Math.ceil(held.length * TICK_MS / TURN_MS)
+      for (const conn of [...held].sort((a, b) => (lastTurn.get(a) || 0) - (lastTurn.get(b) || 0))) {
+        if (due <= 0) break
+        if (now - (lastTurn.get(conn) || 0) < TURN_MS) continue
+        conn.resume()
+        lastTurn.set(conn, now)
+        turnConns.push(conn)
+        due--
       }
       return
     }
@@ -150,7 +159,7 @@ export function createTrafficGate ({ node, uploadMbps = 0 }) {
   if (!node.privateRouting) {
     detachConnections = node.onConnection(attachConnection)
     for (const conn of node.peerConnections()) attachConnection(conn)
-    tickTimer = setInterval(tick, 250)
+    tickTimer = setInterval(tick, TICK_MS)
     tickTimer.unref?.()
   }
 
@@ -167,6 +176,7 @@ export function createTrafficGate ({ node, uploadMbps = 0 }) {
       for (const conn of bulkConns.keys()) conn.resume()
       bulkConns.clear()
       bulkPaused = false
+      turnConns = []
       busyChannels.clear()
       viewing = false
     }

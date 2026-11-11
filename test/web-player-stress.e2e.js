@@ -692,7 +692,7 @@ test('web player survives long-GOP seeks, rapid scrub storms, TrueHD slices, Web
       assert.ok(sample.matched >= 4, `AVI decoded source frames reach the screen after return: ${JSON.stringify(sample)}`)
       assert.ok(Math.abs(sample.v - sample.a) < 0.35, `AVI picture and MP3 clock remain together: ${JSON.stringify(sample)}`)
       assert.equal(sample.statusHidden, true, 'AVI return does not remain buffering')
-      if (hiddenFor >= 8000) assert.ok(recoveryMs < 2500, `AVI took ${recoveryMs} ms to show current pictures after a long absence`)
+      assert.ok(recoveryMs < 1500, `AVI took ${recoveryMs} ms to show current pictures after a hidden tab`)
       aviCycles.push({ video: sample.v, audio: sample.a, matched: sample.matched, recoveryMs })
     }
     result.checks.aviBackground = aviCycles

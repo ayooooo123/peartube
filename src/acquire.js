@@ -159,10 +159,10 @@ export function createAcquirer (node, file, {
             yield chunk
             arm(stallTimeout)
           }
-          if (total === null || offset >= total) return
+          if (total == null || offset >= total) return
         } catch (err) {
           if (controller.aborted || closed) throw new Error('Cancelled')
-          if (total === null || offset === 0) throw err
+          if (total == null || offset === 0) throw err
           lastErr = err
         } finally {
           clearTimeout(timer)
@@ -182,7 +182,10 @@ export function createAcquirer (node, file, {
   // without triggering foreign-cache GC so a restart re-announces instead of orphaning the core and re-fetching.
   async function run (job) {
     // Older jobs (and every job on its first attempt) get a durable core name, so the next restart resumes this attempt.
-    if (!job.source.page && !job.store) { job.store = newStore(); save() }
+    // A job left `announcing` has no source until its announce is durable; reading through it spun `next()` on itself.
+    if (job.source && !job.source.page && !job.store) job.store = newStore()
+    // A private job from before per-job keys existed gets one now, or a restart reopens its core under a second key.
+    if (job.private && job.store && !job.storeKey) job.storeKey = randomBytes(32).toString('hex')
     job.status = job.announce ? 'announcing' : 'running'
     job.error = null
     save()
@@ -253,6 +256,8 @@ export function createAcquirer (node, file, {
               // Strong validators only: a weak ETag (`W/`) cannot prove two halves are the same bytes.
               job.etag = typeof first.headers.etag === 'string' && !first.headers.etag.startsWith('W/') ? first.headers.etag : null
               job.lastModified = typeof first.headers['last-modified'] === 'string' ? first.headers['last-modified'] : null
+              // Durable at once: a crash before the first hash checkpoint resumes with the size and validator it saw.
+              save()
             }
             meta.expectedSize = job.total
             return readResumable(job, job.source.url, baseHeaders, first, job.total, controller, start)
@@ -318,15 +323,20 @@ export function createAcquirer (node, file, {
   function cancel (jobId) {
     const job = jobs.find(j => j.jobId === jobId)
     if (!job) return null
+    // A job that will never run again drops its half-written core here; a running one does it in `run()`'s catch.
+    const drop = () => { if (job.store && !job.announce) node.dropStore?.(job.store)?.catch?.(() => {}) }
     if (job.status === 'queued' || job.status === 'running') {
+      const controller = running.get(job)
       job.status = 'cancelled'
       job.source = null
-      running.get(job)?.abort()
+      controller?.abort()
       save()
+      if (!controller) drop()
     } else if (job.status !== 'announcing') {
       jobs = jobs.filter(j => j !== job)
       job.status = 'removed'
       save()
+      drop()
     }
     return publicJob(job)
   }

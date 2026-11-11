@@ -173,8 +173,12 @@ function fileName (raw, headers = {}) {
   const star = cd.match(/filename\*=UTF-8''([^;]+)/i)
   let named = null
   try { named = star ? decodeURIComponent(star[1]) : null } catch {}
-  const names = [u.searchParams.get('filename'), named, (cd.match(/filename="([^"]+)"/i) || [])[1]]
-  const fromPath = decodeURIComponent(u.pathname.split('/').pop() || '')
+  // Debrid edges send the release name unquoted (`filename=Dune.mkv`) about as often as quoted.
+  const plain = cd.match(/filename=(?:"([^"]*)"|([^;\s]+))/i)
+  const names = [u.searchParams.get('filename'), named, plain ? (plain[1] || plain[2]) : null]
+  let fromPath = u.pathname.split('/').pop() || ''
+  // A path with a stray `%` (`/dl/100%`) is not percent-encoded text; decode the rest, keep it as it came.
+  try { fromPath = decodeURIComponent(fromPath) } catch {}
   return names.find(n => n && MEDIA_FILE.test(n)) || fromPath
 }
 

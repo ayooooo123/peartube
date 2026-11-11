@@ -770,6 +770,9 @@ export async function createBlobs (ctx) {
       // shortcut: hyperblobs commits 16-block batches, so a restart can lose the unflushed tail (at most 8 MiB).
       const start = storeName ? core.byteLength : 0
       const resumed = start > 0
+      // The half on disk was written under the key the job carried; another key reads it as garbage, and two halves
+      // under two keys never stitch. Only a full purge (restart) is safe here.
+      if (wantPrivate && start > 0 && !meta.storeKey) throw Object.assign(new Error(`Cannot resume private ${id} without its key`), { restart: true })
       // Checkpointed hashing. The state covers `hashed` bytes and is only trusted when it is not ahead of the committed
       // core, so a crash mid-batch costs a short fold-in rather than a full re-read of the film.
       const sodium = meta.onHashState ? await sha256StateApi() : null
@@ -790,6 +793,16 @@ export async function createBlobs (ctx) {
       let size = start
       let buf = []
       let bufLen = 0
+      // hyperblobs acks a batch it has not committed yet, so a snapshot taken at the hasher can sit ahead of
+      // `core.byteLength`; a resume discards such a state and re-reads the film. Hold the newest snapshot until the
+      // core has committed past it, so every state handed out covers bytes the core really holds.
+      let pending = null
+      const emitCheckpoint = () => {
+        if (!pending || pending.bytes > core.byteLength) return
+        const { state, bytes } = pending
+        pending = null
+        meta.onHashState(state, bytes)
+      }
       const hasher = new Transform({
         transform (chunk, cb) {
           if (sodium) {
@@ -797,8 +810,9 @@ export async function createBlobs (ctx) {
             hashed += chunk.byteLength
             if (hashed - checkpoint >= HASH_CHECKPOINT) {
               checkpoint = hashed
-              meta.onHashState(b4a.from(hstate), hashed)
+              pending = { state: b4a.from(hstate), bytes: hashed }
             }
+            emitCheckpoint()
           } else if (!resumed) hash.update(chunk)
           size += chunk.length
           if (onData) onData(size)
@@ -821,9 +835,12 @@ export async function createBlobs (ctx) {
       // Fold committed bytes the checkpoint does not cover BEFORE the tail streams in, so the state stays in byte
       // order. The fold checkpoints as it goes, so a restart during it continues from there.
       if (sodium && hashed < start) {
-        let skip = hashed % BLOB_BLOCK_SIZE
+        // `seek` maps a byte offset to (block, offset) the way the core itself lays out its blocks; legacy cores
+        // are not uniformly 512 KiB, so dividing by BLOB_BLOCK_SIZE can land in the wrong block.
+        const [from, at] = await core.seek(hashed)
+        let skip = at
         let remaining = start - hashed
-        for await (const block of core.createReadStream({ start: Math.floor(hashed / BLOB_BLOCK_SIZE) })) {
+        for await (const block of core.createReadStream({ start: from })) {
           const take = Math.max(0, Math.min(block.byteLength - skip, remaining))
           if (take > 0) sodium.crypto_hash_sha256_update(hstate, block.subarray(skip, skip + take))
           hashed += take
@@ -845,6 +862,8 @@ export async function createBlobs (ctx) {
         writer = blobs.createWriteStream()
         await pipelinePromise(typeof source === 'function' ? await source(start) : source, hasher, writer)
       }
+      // The writer committed its last batch after the last chunk the hasher saw, so release the final checkpoint now.
+      if (sodium) emitCheckpoint()
       // Without an exportable state the earlier prefix never crossed a hasher here, so hash the finished core once.
       if (!sodium && resumed) for await (const block of core.createReadStream({ start: 0 })) hash.update(block)
       if (Number.isSafeInteger(meta.expectedSize) && meta.expectedSize >= 0 && size !== meta.expectedSize) {

@@ -49,3 +49,39 @@ test('an opaque debrid path is a file when the name is in the query or headers',
     assert.notEqual(page, 'file')
   })
 })
+
+// Debrid edges write the release name unquoted about as often as quoted, and some
+// paths carry a stray `%` that is not percent-encoded text at all. Neither may
+// stop a link whose reply is plainly the film from being read as one.
+test('an unquoted disposition name and a stray percent in the path are still files', { timeout: 30_000 }, async () => {
+  const handler = (req, res) => {
+    if (req.url.startsWith('/unquoted')) {
+      res.writeHead(200, {
+        'content-type': 'application/octet-stream',
+        'content-length': '1234567',
+        'content-disposition': 'attachment; filename=Dune.Part.Two.2024.2160p.mkv'
+      })
+      return res.end()
+    }
+    res.writeHead(200, { 'content-type': 'video/x-matroska', 'content-length': '1234567' })
+    res.end()
+  }
+
+  await withServer(handler, async base => {
+    const unquoted = await identify(`${base}/unquoted/uuid`, { cinemetaUrl: '' })
+    assert.equal(unquoted.link.kind, 'file')
+    assert.equal(unquoted.link.name, 'Dune.Part.Two.2024.2160p.mkv')
+    assert.equal(unquoted.parsed.title, 'Dune Part Two')
+    assert.equal(unquoted.parsed.year, 2024)
+
+    // `decodeURIComponent('100%')` throws; the link itself is fine.
+    const stray = await identify(`${base}/dl/100%`, { cinemetaUrl: '' })
+    assert.equal(stray.link.kind, 'file')
+    assert.equal(stray.link.name, '100%')
+
+    // The same path with the release name in the query: the stray escape must not shadow it.
+    const queried = await identify(`${base}/dl/100%?filename=${ENCODED}`, { cinemetaUrl: '' })
+    assert.equal(queried.link.kind, 'file')
+    assert.equal(queried.link.name, NAME)
+  })
+})

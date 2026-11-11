@@ -323,3 +323,264 @@ test('a checkpoint behind the core folds the gap in byte order', { timeout: 120_
     await testnet.destroy()
   }
 })
+
+// A throttled fixture that answers Range requests and records what the acquirer asked for.
+async function serveFilm (body, etag, { chunk = 64 * 1024, delay = 4 } = {}) {
+  const seen = { bytes: 0, ranges: [], ifRanges: [] }
+  const server = createServer((req, res) => {
+    const range = /^bytes=(\d+)-(\d*)$/i.exec(req.headers.range || '')
+    const start = range ? Number(range[1]) : 0
+    const end = range && range[2] ? Math.min(Number(range[2]), body.length - 1) : body.length - 1
+    seen.ranges.push(start)
+    seen.ifRanges.push(req.headers['if-range'] || null)
+    res.writeHead(range ? 206 : 200, {
+      'content-type': 'application/octet-stream',
+      'content-length': String(Math.max(0, end - start + 1)),
+      'accept-ranges': 'bytes',
+      etag,
+      ...(range ? { 'content-range': `bytes ${start}-${end}/${body.length}` } : {})
+    })
+    let at = start
+    const pump = () => {
+      if (res.destroyed || at > end) return res.end()
+      const next = Math.min(at + chunk, end + 1)
+      seen.bytes += next - at
+      res.write(body.subarray(at, next))
+      at = next
+      setTimeout(pump, delay)
+    }
+    pump()
+    req.on('close', () => { res.destroyed = true })
+  })
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve))
+  return { server, seen, url: `http://127.0.0.1:${server.address().port}/dld/fixture?filename=Fixture%20(2026).mkv` }
+}
+
+async function closeServer (server) {
+  server.closeAllConnections?.()
+  await new Promise(resolve => server.close(resolve))
+}
+
+// A job sits in `announcing` when the process dies between `put()` and `append()`: `source` is null then. `run()`
+// still read `job.source.page`, threw before taking the job off `next()`'s list, and re-ran it forever — the relay
+// came up wedged, announcing nothing and starting nothing else.
+test('a job left announcing is announced instead of wedging the acquirer', { timeout: 120_000 }, async () => {
+  const storage = mkdtempSync(join(tmpdir(), 'peartube-announcing-'))
+  const jobsFile = join(storage, 'jobs.json')
+  const testnet = await createTestnet(2)
+  const store = 'video:aaaabbbbccccddddaaaabbbbccccdddd'
+  let pub = await createNode({ storage, bootstrap: testnet.bootstrap })
+
+  try {
+    // The previous run wrote the whole film and died before the announce was appended.
+    const announce = await pub.put({ id: 'imdb:tt9900006', title: 'Announcing 2026', store, expectedSize: FILE.length }, Readable.from([FILE]))
+    await pub.close()
+    writeFileSync(jobsFile, JSON.stringify([{
+      jobId: 'announcing-job',
+      id: 'imdb:tt9900006',
+      title: 'Announcing 2026',
+      plugin: 'http-acquire',
+      channel: true,
+      private: false,
+      status: 'announcing',
+      created: Date.now(),
+      store,
+      total: FILE.length,
+      bytes: FILE.length,
+      announce,
+      source: null
+    }]))
+
+    pub = await createNode({ storage, bootstrap: testnet.bootstrap })
+    const acq = createAcquirer(pub, jobsFile, { concurrency: 1, defaultChannel: true, retryDelay: 20 })
+    // Returning at all is half the fix: the old `next()` spun here and no timer in the process ever ran again.
+    await new Promise(resolve => setTimeout(resolve, 200))
+    const done = await until(() => {
+      const job = acq.list()[0]
+      if (job?.status === 'failed') throw new Error(`announcing job failed: ${job.error}`)
+      return job?.status === 'done' ? job : null
+    }, 60_000, 'the announcing job to be appended')
+
+    assert.equal(done.sha256, WANT)
+    assert.equal(done.size, FILE.length)
+    acq.close()
+  } finally {
+    await pub.close().catch(() => {})
+    await testnet.destroy()
+  }
+})
+
+// hyperblobs commits 8 MiB at a time, but the job's size and validator used to stay in memory until the first 64 MiB
+// hash checkpoint. A crash in between left jobs.json with no `total`, so the reader could not tell where the film ended:
+// it asked for the remainder forever and the resume died on "Truncated transfer".
+test('a crash after the first batch resumes with the size the source gave', { timeout: 180_000 }, async () => {
+  const body = BIG
+  const film = await serveFilm(body, '"early-fixture"')
+  const testnet = await createTestnet(2)
+  const storage = mkdtempSync(join(tmpdir(), 'peartube-early-'))
+  const jobsFile = join(storage, 'jobs.json')
+  let pub = await createNode({ storage, bootstrap: testnet.bootstrap })
+  let acq = null
+
+  try {
+    acq = createAcquirer(pub, jobsFile, { concurrency: 1, defaultChannel: true, retryDelay: 0 })
+    acq.add({ id: 'imdb:tt9900007', title: 'Early 2026', source: { url: film.url } })
+    const killedAt = await until(() => {
+      const job = acq.list()[0]
+      return job?.bytes >= 3 * BATCH ? job.bytes : 0
+    }, 60_000, 'the first batches to be written')
+
+    // What a crash (no close, no final save) would leave on disk, read while the transfer is still running.
+    const crashing = JSON.parse(readFileSync(jobsFile, 'utf8'))[0]
+    acq.close()
+    await until(() => acq.list()[0]?.status === 'failed', 30_000, 'the interrupted attempt to settle')
+
+    assert.ok(killedAt < CHECKPOINT, `killed at ${killedAt}, before the first hash checkpoint`)
+    assert.equal(crashing.total, body.length, 'the size the source announced is durable')
+    assert.equal(crashing.etag, '"early-fixture"', 'so is the validator a resume must offer')
+    assert.ok(!crashing.hashState, 'no hash checkpoint had been taken yet')
+
+    await pub.close()
+    pub = await createNode({ storage, bootstrap: testnet.bootstrap })
+    acq = createAcquirer(pub, jobsFile, { concurrency: 1, defaultChannel: true, retryDelay: 0 })
+    const done = await until(() => {
+      const job = acq.list()[0]
+      if (job?.status === 'failed') throw new Error(`early resume failed: ${job.error}`)
+      return job?.status === 'done' ? job : null
+    }, 120_000, 'the film to finish after the early crash')
+
+    assert.equal(done.size, body.length)
+    assert.equal(done.sha256, WANT_BIG, 'the resumed film hashes whole')
+    const resumedAt = film.seen.ranges.find(start => start > 0)
+    assert.ok(resumedAt > 0 && resumedAt < body.length, `resumed at ${resumedAt}`)
+    assert.equal(film.seen.ranges.filter(start => start === body.length).length, 0, 'never asked for bytes past the end')
+    assert.equal(film.seen.ifRanges.find(Boolean), '"early-fixture"')
+  } finally {
+    acq?.close()
+    await pub.close().catch(() => {})
+    await closeServer(film.server)
+    await testnet.destroy()
+  }
+})
+
+// A queued job never reaches `run()`, so nothing dropped the half-written core an earlier attempt left under its name:
+// cancelling it left the bytes on the disk for good.
+test('cancelling a queued job purges the core it had already written', { timeout: 120_000 }, async () => {
+  const storage = mkdtempSync(join(tmpdir(), 'peartube-cancel-'))
+  const jobsFile = join(storage, 'jobs.json')
+  const testnet = await createTestnet(2)
+  const store = 'video:ccccddddeeeeffffccccddddeeeeffff'
+  const HALF = 32 * BLOCK // two full hyperblobs batches, so they are committed
+  const stall = createServer(() => {}) // answers nothing: the first job holds the only slot
+  await new Promise(resolve => stall.listen(0, '127.0.0.1', resolve))
+  const url = `http://127.0.0.1:${stall.address().port}/dld/stall?filename=Stall%20(2026).mkv`
+  let pub = await createNode({ storage, bootstrap: testnet.bootstrap })
+  let acq = null
+
+  try {
+    // An earlier attempt wrote half the film, then the relay died.
+    await assert.rejects(pub.put({ id: 'imdb:tt9900008', title: 'Cancelled 2026', store, expectedSize: BIG.length }, Readable.from([BIG.subarray(0, HALF)])))
+    await pub.close()
+    writeFileSync(jobsFile, JSON.stringify([
+      {
+        jobId: 'blocker', id: 'imdb:tt9900009', title: 'Blocker 2026', plugin: 'http-acquire', channel: true,
+        private: false, status: 'queued', created: Date.now(), store: 'video:99998888777766669999888877776666',
+        total: BIG.length, bytes: 0, source: { url, headers: {}, page: false }
+      },
+      {
+        jobId: 'queued-cancel', id: 'imdb:tt9900008', title: 'Cancelled 2026', plugin: 'http-acquire', channel: true,
+        private: false, status: 'queued', created: Date.now(), store,
+        total: BIG.length, bytes: HALF, source: { url, headers: {}, page: false }
+      }
+    ]))
+
+    pub = await createNode({ storage, bootstrap: testnet.bootstrap })
+    const dropped = []
+    const realDrop = pub.dropStore
+    pub.dropStore = name => { dropped.push(name); return realDrop(name) }
+    acq = createAcquirer(pub, jobsFile, { concurrency: 1, defaultChannel: true, retryDelay: 0 })
+    await until(() => acq.list().find(job => job.jobId === 'blocker')?.status === 'running', 15_000, 'the blocker to take the slot')
+    assert.equal(acq.get('queued-cancel').status, 'queued')
+
+    const core = pub.store.get({ name: store, active: false })
+    await core.ready()
+    assert.equal(core.byteLength, HALF, 'the half from the earlier attempt is on disk')
+
+    acq.cancel('queued-cancel')
+    assert.deepEqual(dropped, [store], 'the cancelled job dropped its core')
+    await until(() => core.byteLength === 0, 15_000, 'the half-written core to be purged')
+  } finally {
+    acq?.close()
+    await pub.close().catch(() => {})
+    await closeServer(stall)
+    await testnet.destroy()
+  }
+})
+
+// A checkpoint taken while the hasher runs is up to one hyperblobs batch ahead of what the core committed, and a
+// resume throws an ahead state away: the whole prefix was read back into the hash. Every state handed out must cover
+// bytes the core really holds.
+test('a checkpoint never covers bytes the core has not committed', { timeout: 180_000 }, async () => {
+  const body = BIG
+  const film = await serveFilm(body, '"checkpoint-fixture"')
+  const testnet = await createTestnet(2)
+  const storage = mkdtempSync(join(tmpdir(), 'peartube-checkpoint-'))
+  const jobsFile = join(storage, 'jobs.json')
+  let pub = await createNode({ storage, bootstrap: testnet.bootstrap })
+  let acq = null
+
+  const probes = new Map()
+  const committed = name => {
+    if (!probes.has(name)) probes.set(name, pub.store.get({ name, active: false }))
+    return probes.get(name).byteLength
+  }
+  const observed = []
+  const realPut = pub.put
+  // Watch every state the acquirer is handed, beside what the core had committed at that moment.
+  pub.put = (meta, source, onData) => {
+    const inner = meta.onHashState
+    return realPut({
+      ...meta,
+      onHashState: (state, bytes) => {
+        observed.push({ bytes, committed: committed(meta.store) })
+        inner?.(state, bytes)
+      }
+    }, source, onData)
+  }
+
+  try {
+    acq = createAcquirer(pub, jobsFile, { concurrency: 1, defaultChannel: true, retryDelay: 0 })
+    acq.add({ id: 'imdb:tt9900010', title: 'Checkpoint 2026', source: { url: film.url } })
+    const store = acq.list()[0].store
+    await until(() => committed(store) >= CHECKPOINT + 4 * BLOCK, 90_000, 'the core to commit past the first checkpoint')
+    acq.close()
+    await until(() => acq.list()[0]?.status === 'failed', 30_000, 'the interrupted attempt to settle')
+
+    const crashing = JSON.parse(readFileSync(jobsFile, 'utf8'))[0]
+    const committedAtKill = committed(store)
+    assert.ok(observed.length >= 1, 'the run checkpointed its hash at all')
+    for (const seen of observed) {
+      assert.ok(seen.bytes <= seen.committed, `a checkpoint at ${seen.bytes} ran ahead of the ${seen.committed} bytes the core held`)
+    }
+    assert.ok(crashing.hashState, 'the checkpoint survives the crash')
+    assert.ok(crashing.hashBytes <= committedAtKill, `checkpoint ${crashing.hashBytes} is behind the core's ${committedAtKill}`)
+    assert.ok(committedAtKill - crashing.hashBytes <= BATCH + 2 * BLOCK, `the resume folds ${committedAtKill - crashing.hashBytes} bytes, not one batch`)
+
+    await pub.close()
+    pub = await createNode({ storage, bootstrap: testnet.bootstrap })
+    acq = createAcquirer(pub, jobsFile, { concurrency: 1, defaultChannel: true, retryDelay: 0 })
+    const done = await until(() => {
+      const job = acq.list()[0]
+      if (job?.status === 'failed') throw new Error(`checkpoint resume failed: ${job.error}`)
+      return job?.status === 'done' ? job : null
+    }, 120_000, 'the film to finish from the committed checkpoint')
+
+    assert.equal(done.size, body.length)
+    assert.equal(done.sha256, WANT_BIG, 'the folded prefix and tail hash whole')
+  } finally {
+    acq?.close()
+    await pub.close().catch(() => {})
+    await closeServer(film.server)
+    await testnet.destroy()
+  }
+})

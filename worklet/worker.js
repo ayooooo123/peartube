@@ -18,7 +18,7 @@ import { API_PORT, parseUri } from '../src/protocol.js'
 import { nodeOptions, normalizeAppSettings } from '../src/app-settings.js'
 import { createApi } from '../src/http.js'
 import { createLan, interfaceAdapter, lanAddress } from '../src/lan.js'
-import { createCastController, reclaimLowDiskReceiverStorage, resolvePeerStorage } from '../src/cast.js'
+import { createCastController, receiverKeyPair, reclaimLowDiskReceiverStorage, resolvePeerStorage } from '../src/cast.js'
 
 // Cinemeta's artwork is metahub's, addressed by IMDb id: the app's loopback API redirects /v1/poster and /v1/backdrop
 // there with no lookup, so the worklet needs no TLS (the host fetches the image).
@@ -143,7 +143,7 @@ function attachNode (next, owner) {
   node = next
   nodeOwner = owner
   node.swarm.on('update', update)
-  if (suspended) node.swarm.suspend().catch(fatal)
+  if (suspended) node.suspend().catch(fatal)
 }
 
 // A receiver's own node, when no start opened one. Runs inside serial, so it never races a start.
@@ -151,7 +151,8 @@ async function openReceiverNode () {
   if (node) return node
   const peerDir = await resolvePeerStorage(castPeerStorage, castStorage)
   reclaimLowDiskReceiverStorage(peerDir)
-  attachNode(await createNode({ storage: peerDir, onchange: update, worklet: true }), 'receiver')
+  // Under the receiver's saved key, so the senders that paired with this TV find it again after a restart.
+  attachNode(await createNode({ storage: peerDir, onchange: update, worklet: true, keyPair: receiverKeyPair(castStorage) }), 'receiver')
   // A TV box has little storage to spare: keep a small rolling window of
   // whatever it is playing instead of the whole film.
   node.setCacheMaxBytes(2 * 1e9)
@@ -168,13 +169,23 @@ async function ensureCast () {
     getNode: () => node,
     ensureNode: () => serial(openReceiverNode),
     getLanHost: currentDeviceIp,
-    onchange: sendCast,
-    worklet: true
+    onchange: sendCast
   })
-  await c.initHub().catch(() => {})
   await c.setLanHost(currentDeviceIp()).catch(() => {})
   // A close (a start, or a receiver moving its storage) during those awaits retired this controller.
   return cast === c ? c : ensureCast()
+}
+
+// A sender reaches a TV on the LAN first, so pairing, casting and attaching turn LAN discovery on.
+async function castOnLan () {
+  const c = await ensureCast()
+  if (node && !node.privateRouting && !lanWanted) {
+    lanWanted = true
+    await serial(moveLan).catch(() => {})
+  } else {
+    await c.setLanHost(currentDeviceIp()).catch(() => {})
+  }
+  return c
 }
 
 function noteFor (seen) {
@@ -317,19 +328,10 @@ const methods = {
   setCacheMax: async ({ maxBytes = 0 } = {}) => { const cacheMaxBytes = (await current()).setCacheMaxBytes(maxBytes); update(); return { cacheMaxBytes } },
   castStatus: async () => (await ensureCast()).status(),
   // The cast status plus `pairedId`, the saved receiver the pairing produced.
-  castPair: async params => { const c = await ensureCast(); const rec = await c.pairReceiver(params); return { ...c.status(), pairedId: rec?.id || '' } },
+  castPair: async params => { const c = await castOnLan(); const rec = await c.pairReceiver(params); return { ...c.status(), pairedId: rec?.id || '' } },
   castRemove: async ({ id }) => { const c = await ensureCast(); c.removeReceiver(id); return c.status() },
-  castPlay: async params => {
-    const c = await ensureCast()
-    if (node && !node.privateRouting && !lanWanted) {
-      lanWanted = true
-      await serial(moveLan).catch(() => {})
-    } else {
-      await c.setLanHost(currentDeviceIp()).catch(() => {})
-    }
-    return c.castPlay(params)
-  },
-  castAttach: async params => (await ensureCast()).castAttach(params),
+  castPlay: async params => (await castOnLan()).castPlay(params),
+  castAttach: async params => (await castOnLan()).castAttach(params),
   castControl: async params => (await ensureCast()).castControl(params),
   castStop: async params => (await ensureCast()).castStop(params),
   // The TV receiver's start: `peerStorage` (or a folder beside the cast storage) holds the films it plays.
@@ -397,15 +399,19 @@ Bare.on('suspend', linger => {
   clearTimeout(suspending)
   suspending = setTimeout(() => {
     suspended = true
-    node?.swarm.suspend().catch(fatal)
-    serial(moveLan).catch(fatal)
+    serial(async () => {
+      await moveLan()
+      await node?.suspend()
+    }).catch(fatal)
   }, Math.min(linger, 5000))
 })
 Bare.on('resume', () => {
   clearTimeout(suspending)
   suspended = false
-  node?.swarm.resume().catch(fatal)
-  serial(moveLan).catch(fatal)
+  serial(async () => {
+    await node?.resume()
+    await moveLan()
+  }).catch(fatal)
 })
 
 // Joining or leaving a network does not suspend the app.

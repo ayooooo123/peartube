@@ -372,7 +372,7 @@ test('1-Hypercore-per-video ingests, lazy wakeup, shared-ref purge guard, and le
     const cp = await pub.publishChannel({ id, title: `Paginated Clip ${i}` }, Readable.from([clipBuf]))
     extraClips.push({ id, raw: clipBuf, blobs: cp.blobs })
   }
-  assert.equal(pub.seedableCores().length, 72, 'catalog exposes all 72 cores (1 channel + 71 per-video cores > 64)')
+  assert.equal(pub.seedableCores().length, 74, 'catalog exposes all 74 cores (1 channel + 2 fast-forward views + 71 per-video cores > 64)')
   const lastClip = extraClips[extraClips.length - 1]
 
   // Paginated `hiverelay-seed` passes push all 72 cores across pages without exceeding the 20-msg burst cap!

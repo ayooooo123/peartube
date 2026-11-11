@@ -39,15 +39,9 @@ export async function createStorage (ctx) {
     await store.ready()
   }
   ctx.undo.push(() => store.close())
-  const storedDisc = new Set()
-  for await (const raw of coreStorage.createCoreStream()) {
-    if (raw?.discoveryKey) storedDisc.add(b4a.toString(raw.discoveryKey, 'hex'))
-  }
-
   return {
     coreStorage,
     store,
-    storedDisc,
     isMobileWorklet
   }
 }

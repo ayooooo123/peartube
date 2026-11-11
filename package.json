@@ -73,13 +73,11 @@
   },
   "bin": {
     "peartube-relay": "bin/relay.js",
-    "peartube-private-relay": "bin/private-relay.js",
-    "peartube-receiver": "bin/receiver.js"
+    "peartube-private-relay": "bin/private-relay.js"
   },
   "scripts": {
     "postinstall": "node -e \"const fs=require('fs'),p=require('path');if(fs.existsSync('node_modules')){for(const[k,v]of[['events','bare-events'],['dgram','bare-dgram'],['os','bare-os'],['net','bare-net'],['crypto','peartube-crypto'],['buffer','bare-buffer']])if(fs.existsSync(p.join('node_modules',v))){const t=p.join('node_modules',k);fs.rmSync(t,{recursive:true,force:true});fs.symlinkSync(v,t)}try{const b=require('bare-runtime')();fs.chmodSync(b,0o755);fs.mkdirSync('node_modules/.bin',{recursive:true});fs.rmSync('node_modules/.bin/bare',{force:true});fs.symlinkSync(p.relative('node_modules/.bin',b),'node_modules/.bin/bare')}catch{}}\"",
     "start": "./node_modules/.bin/bare bin/relay.js",
-    "receiver": "node bin/receiver.js",
     "test": "node --test --test-force-exit test/*.test.js",
     "test:desktop": "node --test --test-force-exit test/desktop.e2e.js",
     "test:cast": "node --test test/cast.e2e.js",
@@ -90,8 +88,9 @@
     "node": ">=22"
   },
   "dependencies": {
+    "@hyperswarm/secret-stream": "^6.9.2",
     "autobee": "2.12.1",
-    "b4a": "^1.8.0",
+    "b4a": "^1.9.0",
     "bare": "1.36.0",
     "bare-buffer": "^3.7.1",
     "bare-dgram": "1.1.1",
@@ -105,17 +104,20 @@
     "bare-process": "4.5.1",
     "bare-subprocess": "^6.2.2",
     "bonjour-service": "^1.4.4",
+    "compact-encoding": "^3.6.0",
     "corestore": "github:ayooooo123/corestore#2edcbbefe23bd55bc711488b94a9f41e48632b5f",
-    "hyperblobs": "^2.12.1",
+    "hyperblobs": "^2.13.0",
     "hypercore": "github:ayooooo123/hypercore#ca652cae7aca0430a1e9d86c1acd4f783243a265",
     "hypercore-byte-stream": "2.0.4",
     "hypercore-crypto": "^3.7.0",
     "hypercore-storage": "^3.4.0",
-    "hyperdht": "^6.34.1",
+    "hyperdht": "^6.36.0",
     "hyperswarm": "^4.17.2",
     "peartube-crypto": "file:worklet/crypto",
+    "protomux": "^3.13.0",
+    "protomux-wakeup": "^2.9.0",
     "sodium-native": "5.1.0",
-    "streamx": "^2.28.0",
+    "streamx": "^2.28.1",
     "udx-native": "^1.22.1"
   },
   "devDependencies": {

@@ -128,7 +128,15 @@ export function createTrafficGate ({ node, uploadMbps = 0 }) {
     rec.msg = channel.addMessage({ encoding: c.uint, onmessage (v) { rec.remote = v === 1 } })
     try { channel.open() } catch {}
   }
-  const peersBusy = () => [...busyChannels.values()].some(rec => rec.remote)
+  // A busy claim counts only from a peer that has sent this node verified blocks: any stranger can open the channel,
+  // and a peer that serves this node nothing has no viewers its backfill could disturb.
+  // shortcut: a peer that does serve blocks can still hold backfill with a false claim; sign the claim with a relay identity if that is abused.
+  function peersBusy () {
+    for (const [conn, rec] of busyChannels) {
+      if (rec.remote && conn.remotePublicKey && node.isSourcePeer(b4a.toString(conn.remotePublicKey, 'hex'))) return true
+    }
+    return false
+  }
 
   function attachConnection (conn) {
     if (closed || node.privateRouting || conn.destroyed) return

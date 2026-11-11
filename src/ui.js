@@ -446,8 +446,6 @@ export const page = `<!doctype html>
     </form>
     <h2>Your TVs</h2>
     <div class="list" id="tvs"></div>
-    <h2>Use a browser as a TV</h2>
-    <div class="card" id="webTv"></div>
   </section>
 
   <section id="tab-settings" data-panel="settings" hidden>
@@ -1401,14 +1399,6 @@ function renderCast () {
   $('tvs').replaceChildren(...(tvs.length ? tvs.map(tv => h('div', { class: 'item' },
     h('div', { class: 'info' }, h('div', { class: 'name' }, tv.name || 'TV'), h('div', { class: 'meta' }, h('span', { class: tv.online ? 'tag ok' : 'tag' }, tv.online ? 'Online' : 'Offline'), ' ', tv.paired ? 'Paired' : 'Not paired', tv.host ? ' · ' + tv.host : '')),
     h('div', { class: 'acts' }, h('button', { class: 'btn quiet', onclick: e => act(e.currentTarget, async () => { await api('/v1/cast/receivers/' + encodeURIComponent(tv.id), { method: 'DELETE' }); loadCast() }) }, 'Forget')))) : [h('div', { class: 'empty' }, c ? 'No TVs yet. Pair one with its code.' : 'Casting is not available on this relay.')]))
-  // A relay serves the TV page on its own address; apps run a separate hub.
-  const lanHost = S.status.lan && S.status.lan.host
-  const web = (location.protocol === 'https:' ? '' : (c && c.webReceiverUrl)) || (c ? location.protocol + '//' + (lanHost && /^(127[.]|localhost)/.test(location.hostname) ? lanHost + ':' + location.port : location.host) + '/tv' : '')
-  $('webTv').replaceChildren(...(web ? [
-    h('div', { class: 'row', style: 'align-items:flex-start;gap:16px' },
-      c.webReceiverQrSvg ? h('img', { class: 'qr', alt: 'QR code for ' + web, src: 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(c.webReceiverQrSvg) }) : null,
-      h('div', { class: 'grow' }, h('div', { class: 'hint' }, 'Open this on a smart TV or console browser.'), h('div', { class: 'label', style: 'margin:8px 0;overflow-wrap:anywhere' }, web), copyBtn('Copy address', web)))
-  ] : [h('div', { class: 'hint' }, 'Needs a network address. Set one in Settings.')]))
   renderCastBar()
 }
 

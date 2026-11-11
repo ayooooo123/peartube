@@ -53,15 +53,10 @@ export async function createChannel (ctx) {
     ctx.identity.ensureVault()
   }
 
-  const secondaryWriters = new Set()
   const writerCores = new Map()
   let channel = null
-  const onWriterChange = (wHex, added) => {
-    if (!channel || wHex === b4a.toString(channel.key, 'hex')) return
-    if (added) secondaryWriters.add(wHex)
-    else secondaryWriters.delete(wHex)
-  }
-  const primaryApply = makeApply(() => b4a.toString(channel.key, 'hex'), onWriterChange)
+  let writerSync = Promise.resolve()
+  const primaryApply = makeApply(() => b4a.toString(channel.key, 'hex'))
   // Fast-forward lands only on views stamped by the channel owner (makeIsTrusted); every other writer's
   // nodes still go through apply here. A landing needs a connected peer that holds the owner's own
   // system and view cores: the owner itself, or a node that landed on them before. A landing leaves
@@ -83,7 +78,7 @@ export async function createChannel (ctx) {
   channel = new Autobee(chNs, targetKey ? b4a.from(targetKey, 'hex') : null, {
     ...(founderKeyPair ? { keyPair: founderKeyPair } : {}),
     apply: primaryApply,
-    update: (view, changes) => { mirrorLanding(changes); ctx.update() },
+    update: (view, changes) => { mirrorLanding(changes); syncWriterCores().catch(() => {}); ctx.update() },
     optimistic: true,
     isTrusted: makeIsTrusted(() => b4a.toString(channel.key, 'hex')),
     wakeup
@@ -102,19 +97,32 @@ export async function createChannel (ctx) {
     await channel.updated()
   }
 
-  async function syncWriterCores () {
-    for (const [hex, c] of writerCores) {
-      if (!secondaryWriters.has(hex)) {
-        writerCores.delete(hex)
-        await c.close().catch(() => {})
+  // Reconciles secondary writer cores straight from the authoritative `writer/*` view prefix so `apply` stays pure.
+  function syncWriterCores () {
+    const run = async () => {
+      if (ctx.life.closing || !channel) return
+      const wanted = new Set()
+      for await (const n of channel.view.createReadStream({ gte: b4a.from('writer/'), lt: b4a.from('writer/\xff') })) {
+        const wHex = b4a.toString(n.key).slice(7)
+        if (HEX64.test(wHex) && wHex !== primaryKey) wanted.add(wHex)
+      }
+      if (ctx.life.closing) return
+      for (const [hex, c] of [...writerCores]) {
+        if (!wanted.has(hex)) {
+          writerCores.delete(hex)
+          await c.close().catch(() => {})
+        }
+      }
+      for (const hex of wanted) {
+        if (writerCores.has(hex) || ctx.life.closing) continue
+        const c = ctx.storage.store.get({ key: b4a.from(hex, 'hex'), active: false })
+        writerCores.set(hex, c)
+        await c.ready().catch(() => {})
       }
     }
-    for (const hex of secondaryWriters) {
-      if (writerCores.has(hex)) continue
-      const c = ctx.storage.store.get({ key: b4a.from(hex, 'hex'), active: false })
-      writerCores.set(hex, c)
-      await c.ready().catch(() => {})
-    }
+    const next = writerSync.then(run, run)
+    writerSync = next.catch(() => {})
+    return next
   }
 
   if (usePrimaryChannel) await (isWorklet ? applied(channel) : channel.update())
@@ -262,7 +270,6 @@ export async function createChannel (ctx) {
     channel,
     primaryKey,
     wakeup,
-    secondaryWriters,
     writerCores,
     landedCores,
     primaryCache,

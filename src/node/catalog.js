@@ -66,36 +66,55 @@ export function createCatalog (ctx) {
       if ((!id || item.entry.id === id) && (!filterSource || filterSource === 'direct')) raw.push({ key, ...item })
     }
 
-    // Only probe cores whose discoveryKey actually exists in `storedDisc` (`O(stored_cores)` instead of `O(catalog)`).
-    const toProbe = []
+    // Batch-probe unindexed candidate discovery keys straight out of RocksDB in one `getInfos` pass,
+    // negative-caching absent keys in `absentDisc` so repeat catalog searches touch zero disk.
+    const openToProbe = []
+    const diskToProbe = []
     const seenBlobs = new Set()
     for (const r of raw) {
       const h = r.entry.blobs
       if (seenBlobs.has(h) || ctx.blobs.ownedBlobs.has(h)) continue
       seenBlobs.add(h)
-      if (ctx.blobs.slotSet.has(h) || ctx.blobs.blobCores.has(h)) { toProbe.push(h); continue }
+      if (ctx.blobs.slotSet.has(h) || ctx.blobs.blobCores.has(h)) { openToProbe.push(h); continue }
       if (ctx.blobs.cachedBlobs.has(h)) continue
       const d = ctx.blobs.blobDisc(h)
-      if (!ctx.storage.storedDisc.has(d.hex) || ctx.blobs.absentDisc.has(d.hex)) continue
-      toProbe.push(h)
+      if (ctx.blobs.absentDisc.has(d.hex)) continue
+      diskToProbe.push(h)
     }
-    for (let i = 0; i < toProbe.length; i += 16) {
-      await Promise.all(toProbe.slice(i, i + 16).map(async h => {
-        if (ctx.blobs.slotSet.has(h) || ctx.blobs.blobCores.has(h)) return ctx.blobs.blobCore(h)
-        if (ctx.blobs.cachedBlobs.has(h)) return null
-        const d = ctx.blobs.blobDisc(h)
-        const exists = await ctx.storage.coreStorage.hasCore(d.buf).catch(() => false)
-        if (!exists) { ctx.blobs.absentDisc.add(d.hex); ctx.storage.storedDisc.delete(d.hex); return null }
-        const tmp = ctx.storage.store.get({ key: b4a.from(h, 'hex'), active: false })
-        try {
-          await tmp.ready()
-          const blocks = tmp.length > 0 ? await tmp.count(0, tmp.length) : 0
-          ctx.blobs.recordCached(h, tmp.length, tmp.byteLength, blocks)
-        } finally {
-          await tmp.close().catch(() => {})
+    for (let i = 0; i < openToProbe.length; i += 16) {
+      await Promise.all(openToProbe.slice(i, i + 16).map(h => ctx.blobs.blobCore(h)))
+    }
+    for (let i = 0; i < diskToProbe.length; i += 256) {
+      const batch = diskToProbe.slice(i, i + 256)
+      const infos = await ctx.storage.coreStorage.getInfos(
+        batch.map(h => ctx.blobs.blobDisc(h).buf),
+        { auth: false, head: true, hints: false }
+      ).catch(() => [])
+      const withData = []
+      for (let j = 0; j < batch.length; j++) {
+        const h = batch[j]
+        const info = infos[j]
+        if (!info) {
+          ctx.blobs.absentDisc.add(ctx.blobs.blobDisc(h).hex)
+        } else if (!info.head || info.head.length === 0) {
+          ctx.blobs.recordCached(h, 0, 0, 0)
+        } else {
+          withData.push(h)
         }
-        return null
-      }))
+      }
+      for (let k = 0; k < withData.length; k += 16) {
+        await Promise.all(withData.slice(k, k + 16).map(async h => {
+          if (ctx.blobs.cachedBlobs.has(h)) return
+          const tmp = ctx.storage.store.get({ key: b4a.from(h, 'hex'), active: false })
+          try {
+            await tmp.ready()
+            const blocks = tmp.length > 0 ? await tmp.count(0, tmp.length) : 0
+            ctx.blobs.recordCached(h, tmp.length, tmp.byteLength, blocks)
+          } finally {
+            await tmp.close().catch(() => {})
+          }
+        }))
+      }
     }
 
     // Deduplicate across channels/writers synchronously for the 99.9% uncached/per-video fast path,
@@ -126,7 +145,7 @@ export function createCatalog (ctx) {
           cached = await ctx.blobs.entryCachedBytes(core, entry)
         }
       }
-      if (cached > 0 && !owned) ctx.net.joinContentSwarm(entry.blobs, false)
+      if (!owned && cached > 0 && cached >= entry.size) ctx.net.offerCopy(entry.blobs)
       const rec = {
         key,
         entry,
@@ -160,9 +179,14 @@ export function createCatalog (ctx) {
   }
 
   // A catalog record as every view shows it: its fields, what the title/id say it is, and how to play or share it.
+  // The watch link names the channel it was found in: whoever opens it joins that channel's swarm, where the peers
+  // that cached the video serve it, since only its publisher and relays announce the video itself.
   function entryView ({ entry, ...rest }) {
-    return { ...rest, ...describeEntry(rest.id, rest.title), streamUrl: ctx.blobs.streamUrl(entry), magnetUrl: formatWatchUri(entry) }
+    return { ...rest, ...describeEntry(rest.id, rest.title), streamUrl: ctx.blobs.streamUrl(entry), magnetUrl: formatWatchUri(entry, rest.source, 'channel') }
   }
+
+  // Channels whose swarm a watch link joined without following them, oldest first.
+  const linkSwarms = []
 
   let discoveredCache = null
   let discoveredAtEpoch = 0
@@ -219,7 +243,7 @@ export function createCatalog (ctx) {
     return op
   }
 
-  async function openUri (uri, { joinSource = true } = {}) {
+  async function openUri (uri) {
     const parsed = parseUri(uri)
     if (parsed.action === 'receiver') throw new Error('A TV receiver link pairs through casting, not the catalog')
     if (parsed.action === 'access') {
@@ -227,10 +251,15 @@ export function createCatalog (ctx) {
       return { action: 'access', channel: parsed.channel, epoch: parsed.epoch, source }
     }
     if (parsed.action === 'source') return { action: 'source', source: await ctx.sources.addSource(parsed) }
-    if (joinSource && parsed.sourceKey) await ctx.sources.addSource({ key: parsed.sourceKey, kind: 'channel' }).catch(() => {})
-    else if (parsed.sourceKey && !ctx.net.dht) {
+    // A watch link's channel is where the video's peers are. Private routing only reaches the channels it follows;
+    // otherwise joining the channel's swarm is enough, and the link does not add the channel to the library.
+    if (parsed.sourceKey && ctx.net.dht) {
+      await ctx.sources.addSource({ key: parsed.sourceKey, kind: 'channel' }).catch(() => {})
+    } else if (parsed.sourceKey && !linkSwarms.includes(parsed.sourceKey)) {
       const sk = b4a.from(parsed.sourceKey, 'hex')
       ctx.net.joinOverlayTopic(`source-swarm:${parsed.sourceKey}`, sk, hypercoreCrypto.discoveryKey(sk))
+      linkSwarms.push(parsed.sourceKey)
+      if (linkSwarms.length > 4) ctx.net.leaveOverlayTopic(`source-swarm:${linkSwarms.shift()}`).catch(() => {})
     }
     const { entry } = parsed
     const key = `watch/${entry.blobs}:${entry.blob.blockOffset}`

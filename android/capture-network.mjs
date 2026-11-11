@@ -25,7 +25,8 @@ for (let i = 0; i < flags.length; i++) {
 }
 if (!serials.length || new Set(serials).size !== serials.length || !out || (!command.length && !seconds) ||
     (seconds !== undefined && (!Number.isInteger(seconds) || seconds < 1 || seconds > 86400))) {
-  throw new Error('Usage: node android/capture-network.mjs --serial <rooted-adb-serial> [--serial ...] --out <new-directory> [--receiver http://<tv>:8176] [--seconds 60] [-- command args...]')
+  // The receiver answers its telemetry on loopback only: `adb -s <tv> forward tcp:8176 tcp:8176`, then --receiver http://127.0.0.1:8176.
+  throw new Error('Usage: node android/capture-network.mjs --serial <rooted-adb-serial> [--serial ...] --out <new-directory> [--receiver http://127.0.0.1:8176] [--seconds 60] [-- command args...]')
 }
 if (existsSync(out)) throw new Error(`Capture directory already exists: ${out}`)
 const adb = (serial, ...cmd) => execFileSync('adb', ['-s', serial, ...cmd], { encoding: 'utf8', timeout: 8000 }).trim()

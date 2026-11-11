@@ -12,6 +12,10 @@ import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import createTestnet from 'hyperdht/testnet.js'
+import Hyperswarm from 'hyperswarm'
+import Protomux from 'protomux'
+import c from 'compact-encoding'
+import { createTrafficGate } from '../src/traffic.js'
 import { createNode } from '../src/index.js'
 import { createMirrorHost } from '../src/mirror.js'
 import { createLan } from '../src/lan.js'
@@ -129,4 +133,48 @@ test('replica backfill over LAN stops while a viewer streams, then resumes', { t
   assert.ok(idleMbps >= BULK_MBPS, `backfill runs above the HiveRelay cap with no viewer (${idleMbps} Mbps)`)
   assert.ok(viewingMbps <= 2, `backfill stops while the viewer streams (${viewingMbps} Mbps)`)
   assert.ok(resumedMbps >= BULK_MBPS, `backfill resumes after viewing stops (${resumedMbps} Mbps)`)
+})
+
+test('a busy claim holds backfill only when it comes from a peer that serves this node', { timeout: 60_000 }, async t => {
+  const testnet = await createTestnet(3)
+  const relay = new Hyperswarm({ bootstrap: testnet.bootstrap })
+  const peer = new Hyperswarm({ bootstrap: testnet.bootstrap })
+  const conns = new Set()
+  const listeners = new Set()
+  const sources = new Set()
+  relay.on('connection', conn => {
+    conn.on('error', () => {})
+    conns.add(conn)
+    conn.once('close', () => conns.delete(conn))
+    for (const fn of listeners) fn(conn)
+  })
+  const gate = createTrafficGate({
+    node: {
+      privateRouting: false,
+      peerConnections: () => conns,
+      onConnection: fn => { listeners.add(fn); return () => listeners.delete(fn) },
+      isSourcePeer: hex => sources.has(hex)
+    }
+  })
+  t.after(async () => {
+    gate.stop()
+    await peer.destroy({ force: true })
+    await relay.destroy({ force: true })
+    await testnet.destroy()
+  })
+  peer.on('connection', conn => {
+    conn.on('error', () => {})
+    const channel = Protomux.from(conn).createChannel({ protocol: 'peartube/bulk-busy', id: null })
+    const busy = channel.addMessage({ encoding: c.uint })
+    channel.open()
+    busy.send(1)
+  })
+  await relay.listen()
+  peer.joinPeer(relay.keyPair.publicKey)
+
+  const peerKey = peer.keyPair.publicKey.toString('hex')
+  sources.add(peerKey)
+  await until(() => gate.peersBusy(), 20_000, 'the claim of a peer that serves this node holds backfill')
+  sources.delete(peerKey)
+  assert.equal(gate.peersBusy(), false, 'the same claim from a peer that serves nothing is ignored')
 })

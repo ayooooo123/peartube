@@ -1,26 +1,27 @@
-// PearTube Cast & TV Receiver stack (peartube-cast/v1): mDNS LAN discovery, Noise P2P keypair
-// pairing, token-gated LAN HTTP Range streaming, and Hybrid P2P swarm handoff — kept wet and tight
-// outside Corestore so private pairing tokens never leak to replicating strangers.
-import { createServer, request as httpRequest } from 'node:http'
+// PearTube Cast & TV Receiver stack (peartube-cast/v1). A receiver is a node with a player: senders find it by mDNS or
+// by its key, connect to it as to any peer, and pair with and control it on a channel of that one connection
+// (src/cast-control.js). The film reaches it over the same connection and the swarm. Pairing secrets stay outside
+// Corestore, so they never reach replicating strangers.
+import { createServer } from 'node:http'
 import { mkdirSync, readFileSync, writeFileSync, renameSync, readdirSync, rmSync, statfsSync } from 'node:fs'
 import { join } from 'node:path'
 import { isIPv4 } from 'node:net'
 import os from 'node:os'
-import { randomBytes } from 'node:crypto'
+import hypercoreCrypto from 'hypercore-crypto'
 import Corestore from 'corestore'
 import HyperDHT from 'hyperdht'
-import { createBlobRangeServer } from './blob-server.js'
 import ByteStream from 'hypercore-byte-stream'
 import b4a from 'b4a'
-import { createNode } from './index.js'
-import { API_PORT, BLOB_BLOCK_SIZE, HEX64, RECEIVER_PORT, cleanName, formatReceiverUri, formatWatchUri, parseUri } from './protocol.js'
-import { createLan, interfaceAdapter, selfAddressAdapter } from './lan.js'
-import { receiverPage } from './cast-ui.js'
+import { HEX64, RECEIVER_PORT, cleanName, formatReceiverUri, formatWatchUri, parseUri } from './protocol.js'
+import { interfaceAdapter, selfAddressAdapter } from './lan.js'
 import { qrSvg } from './qr.js'
+import { openControl, serveControl } from './cast-control.js'
 
 const CODE_ALPHABET = '23456789ABCDEFGHJKLMNPQRSTUVWXYZ'
 const CAST_SERVICE_TYPE = 'peartube-cast'
-const MAX_JSON_BODY = 64 * 1024
+// Senders and receivers on one LAN join this LAN-only topic, so LAN discovery links their nodes (src/lan.js connects
+// only peers that share a topic) before a cast needs the link.
+const CAST_LAN_TOPIC = hypercoreCrypto.hash(b4a.from('peartube-cast/v1'))
 const CORS = {
   'access-control-allow-origin': '*',
   'access-control-allow-methods': 'GET, HEAD, POST, DELETE, OPTIONS',
@@ -112,17 +113,17 @@ export function normalizePairCode (raw) {
 }
 
 function generatePairCode () {
-  const bytes = randomBytes(6)
+  const bytes = hypercoreCrypto.randomBytes(6)
   let out = ''
   for (let i = 0; i < 6; i++) out += CODE_ALPHABET[bytes[i] % CODE_ALPHABET.length]
   return out
 }
 
 function randomHex (bytes = 16) {
-  return b4a.toString(randomBytes(bytes), 'hex')
+  return b4a.toString(hypercoreCrypto.randomBytes(bytes), 'hex')
 }
 
-// Safari/WebKit TV browsers demand video/* on 206 Range slices while native OxideAV/mpv probes raw bytes.
+// The content type of the loopback stream. PearTube's player probes the bytes, so this is only a hint.
 function guessMediaMime (entry) {
   const s = `${entry?.title || ''} ${entry?.id || ''}`.toLowerCase()
   if (s.includes('.webm')) return 'video/webm'
@@ -152,18 +153,6 @@ export function idleCastState () {
     error: null,
     updatedAt: Date.now()
   }
-}
-
-async function readJsonBody (req) {
-  let size = 0
-  const chunks = []
-  for await (const chunk of req) {
-    size += chunk.length
-    if (size > MAX_JSON_BODY) throw Object.assign(new Error('Body too large'), { status: 413 })
-    chunks.push(chunk)
-  }
-  if (size === 0) return {}
-  try { return JSON.parse(b4a.toString(b4a.concat(chunks))) } catch { throw Object.assign(new Error('Body must be JSON'), { status: 400 }) }
 }
 
 // Tracks live sockets on an HTTP server so shutting down never hangs waiting on open SSE leashes.
@@ -201,61 +190,38 @@ function listenHttp (srv, port, host = '0.0.0.0', anyPort = true) {
   })
 }
 
-function httpJson (url, { method = 'GET', headers = {}, body = null, timeoutMs = 5000 } = {}) {
-  return new Promise((resolve, reject) => {
-    const payload = body !== null ? b4a.from(JSON.stringify(body)) : null
-    const reqHeaders = { ...headers }
-    if (payload) {
-      reqHeaders['content-type'] = 'application/json'
-      reqHeaders['content-length'] = String(payload.length)
-    }
-    const req = httpRequest(url, { method, headers: reqHeaders }, res => {
-      const chunks = []
-      res.on('data', c => chunks.push(b4a.isBuffer(c) ? c : b4a.from(c)))
-      res.on('end', () => {
-        clearTimeout(timer)
-        const text = b4a.toString(b4a.concat(chunks))
-        let parsed = null
-        try { parsed = text ? JSON.parse(text) : {} } catch { parsed = { error: text || `HTTP ${res.statusCode}` } }
-        if (res.statusCode >= 200 && res.statusCode < 300) resolve(parsed)
-        else reject(new Error(parsed?.error || `Receiver answered ${res.statusCode}`))
-      })
-    })
-    const timer = setTimeout(() => { req.destroy(new Error('Receiver HTTP request timed out')) }, timeoutMs)
-    timer.unref?.()
-    req.once('error', err => { clearTimeout(timer); reject(err) })
-    if (payload) req.write(payload)
-    req.end()
-  })
-}
-
 function writeJsonAtomic (file, data) {
   const tmp = `${file}.tmp`
   writeFileSync(tmp, JSON.stringify(data, null, 2), { mode: 0o600 })
   renameSync(tmp, file)
 }
 
+// A receiver's saved identity: its name, the seed of the key senders pair with, and its pairing secrets.
+function loadIdentity (storage, name = '') {
+  mkdirSync(storage, { recursive: true, mode: 0o700 })
+  const file = join(storage, 'receiver.json')
+  let identity = null
+  try { identity = JSON.parse(readFileSync(file, 'utf8')) } catch {}
+  if (!identity || !HEX64.test(String(identity.seed || ''))) {
+    identity = { deviceId: randomHex(16), name: cleanName(name), seed: randomHex(32), pairToken: randomHex(16), pairCode: generatePairCode() }
+    writeJsonAtomic(file, identity)
+  } else if (name && identity.name !== cleanName(name)) {
+    identity.name = cleanName(name)
+    writeJsonAtomic(file, identity)
+  }
+  return identity
+}
+
+// The key a receiver's node runs under. A host opens that node with it, so the key senders paired with stays the
+// same after a restart.
+export function receiverKeyPair (storage) {
+  return HyperDHT.keyPair(b4a.from(loadIdentity(storage).seed, 'hex'))
+}
+
 function adapterForHost (host, customAdapter) {
   if (customAdapter) return typeof customAdapter === 'function' ? customAdapter(host) : customAdapter
   if (!host || host === '127.0.0.1') return selfAddressAdapter(host || '127.0.0.1')
   return interfaceAdapter(host)
-}
-
-function estimateBlobBlock (blob, byteStart) {
-  const avgBs = Math.max(4096, Math.round((blob.byteLength || BLOB_BLOCK_SIZE) / Math.max(1, blob.blockLength)))
-  return blob.blockOffset + Math.min(blob.blockLength - 1, Math.floor(Math.max(0, byteStart) / avgBs))
-}
-
-async function hasBlockCached (core, blob, byteStart) {
-  if (!core?.opened || !blob || blob.blockLength <= 0) return false
-  const blockIdx = estimateBlobBlock(blob, byteStart)
-  return core.length > blockIdx && core.has(blockIdx)
-}
-
-// A remote holding the whole video (per-video cores start at block 0) makes P2P the right plane.
-function hasActiveReplicationPeer (core, blob) {
-  if (!core?.opened || !blob) return false
-  return core.remoteContiguousLength >= blob.blockOffset + blob.blockLength
 }
 
 // Cached for 3 s per core so the 1 s status loop doesn't recount a 150k-block video every tick.
@@ -270,13 +236,6 @@ async function countCachedBlobBytes (core, blob, totalSize) {
   const val = blocks <= 0 ? 0 : (blocks >= blob.blockLength ? totalSize : Math.min(totalSize, Math.round((blocks / blob.blockLength) * totalSize)))
   cachedCounts.set(core, { at: Date.now(), key, val })
   return val
-}
-
-function sameBootstrap (a, b) {
-  const norm = list => Array.isArray(list) && list.length
-    ? list.map(n => typeof n === 'string' ? n : `${n.host}:${n.port}`).sort().join(',')
-    : ''
-  return norm(a) === norm(b)
 }
 
 function parseHttpRange (rangeHeader, totalSize) {
@@ -302,150 +261,6 @@ function parseHttpRange (rangeHeader, totalSize) {
     return { invalid: true }
   }
   return { partial: true, start, end }
-}
-
-function pipeRangeSlice (targetUrl, start, end, res, { stallTimeoutMs = 0, clientClosed = () => false } = {}) {
-  return new Promise((resolve, reject) => {
-    let written = 0
-    let settled = false
-    const expected = end - start + 1
-    let stallTimer = null
-    const armStall = () => {
-      if (stallTimeoutMs <= 0) return
-      clearTimeout(stallTimer)
-      stallTimer = setTimeout(() => {
-        if (!settled) {
-          settled = true
-          upstream.destroy(new Error('Upstream slice stalled'))
-          reject(Object.assign(new Error('Upstream slice stalled'), { written }))
-        }
-      }, stallTimeoutMs)
-      stallTimer.unref?.()
-    }
-    const upstream = httpRequest(targetUrl, { method: 'GET', headers: { range: `bytes=${start}-${end}` } }, upRes => {
-      if (upRes.statusCode !== 200 && upRes.statusCode !== 206) {
-        clearTimeout(stallTimer)
-        settled = true
-        upRes.resume?.()
-        reject(Object.assign(new Error(`Upstream answered ${upRes.statusCode}`), { written }))
-        return
-      }
-      armStall()
-      const onResClose = () => { try { upstream.destroy() } catch {} }
-      res.once('close', onResClose)
-      upRes.on('data', chunk => {
-        if (settled || clientClosed()) { try { upstream.destroy() } catch {} return }
-        armStall()
-        const buf = b4a.isBuffer(chunk) ? chunk : b4a.from(chunk)
-        const rem = expected - written
-        if (rem <= 0) return
-        const slice = buf.byteLength > rem ? buf.subarray(0, rem) : buf
-        written += slice.byteLength
-        if (!res.write(slice)) {
-          upRes.pause?.()
-          res.once('drain', () => upRes.resume?.())
-        }
-      })
-      upRes.once('end', () => {
-        clearTimeout(stallTimer)
-        res.removeListener('close', onResClose)
-        if (settled) return
-        settled = true
-        if (written >= expected || clientClosed()) resolve(written)
-        else reject(Object.assign(new Error('Upstream closed before slice finished'), { written }))
-      })
-      upRes.once('error', err => {
-        clearTimeout(stallTimer)
-        res.removeListener('close', onResClose)
-        if (!settled) { settled = true; reject(Object.assign(err, { written })) }
-      })
-    })
-    armStall()
-    upstream.once('error', err => {
-      clearTimeout(stallTimer)
-      if (!settled) { settled = true; reject(Object.assign(err, { written })) }
-    })
-    upstream.end()
-  })
-}
-
-// Byte-exact mid-stream HTTP->P2P splice: starts in 2ms over HTTP if cold, proactively cuts over to
-// local P2P BlobServer once peers/blocks arrive, and seamlessly splices mid-response if initiator dies.
-async function serveSpliceStream (media, req, res, onModeUpgrade) {
-  const totalSize = Number(media.blob?.byteLength || media.entry?.size || 0)
-  if (!totalSize) {
-    const fallback = media.localP2PUrl || media.httpStreamUrl
-    if (!fallback) { res.writeHead(404, CORS); res.end(); return }
-    const r = httpRequest(fallback, { method: req.method, headers: req.headers.range ? { range: req.headers.range } : {} }, up => {
-      res.writeHead(up.statusCode || 200, { ...CORS, ...(up.headers['content-type'] ? { 'content-type': up.headers['content-type'] } : {}) })
-      up.on('data', c => res.write(c))
-      up.once('end', () => res.end())
-    })
-    r.once('error', () => { if (!res.headersSent) res.writeHead(502, CORS); res.end() })
-    r.end()
-    return
-  }
-  const parsed = parseHttpRange(req.headers.range, totalSize)
-  if (parsed.invalid) {
-    res.writeHead(416, { ...CORS, 'content-range': `bytes */${totalSize}` })
-    res.end()
-    return
-  }
-  const { partial, start, end } = parsed
-  const headers = {
-    ...CORS,
-    'accept-ranges': 'bytes',
-    'content-type': media.mime || 'video/mp4',
-    'content-length': String(end - start + 1)
-  }
-  if (partial) headers['content-range'] = `bytes ${start}-${end}/${totalSize}`
-  res.writeHead(partial ? 206 : 200, headers)
-  if (req.method === 'HEAD') {
-    res.end()
-    return
-  }
-  let clientClosed = false
-  res.once('close', () => { clientClosed = true })
-  res.once('error', () => { clientClosed = true })
-
-  let cursor = start
-  const COLD_HTTP_WINDOW = 1024 * 1024 // 1 MiB max before re-checking P2P peer/cache cutover
-  let forceHttpFallback = false
-  while (cursor <= end && !clientClosed) {
-    const canHttp = Boolean(media.senderHttpAlive && media.httpStreamUrl)
-    const spanEnd = Math.min(end, cursor + 4 * 1048576)
-    const spanCached = await hasBlockCached(media.core, media.blob, cursor) && await hasBlockCached(media.core, media.blob, spanEnd)
-    const useP2P = Boolean(media.localP2PUrl) && !forceHttpFallback && (
-      !canHttp ||
-      spanCached ||
-      hasActiveReplicationPeer(media.core, media.blob)
-    )
-    if (useP2P) {
-      onModeUpgrade?.(media.p2pMode)
-      try {
-        const n = await pipeRangeSlice(media.localP2PUrl, cursor, end, res, { stallTimeoutMs: canHttp ? 3500 : 0, clientClosed: () => clientClosed })
-        cursor += n
-        break
-      } catch (err) {
-        cursor += Number(err?.written) || 0
-        if (!canHttp) break
-        forceHttpFallback = true
-      }
-    }
-    const sliceEnd = media.localP2PUrl ? Math.min(end, cursor + COLD_HTTP_WINDOW - 1) : end
-    try {
-      const n = await pipeRangeSlice(media.httpStreamUrl, cursor, sliceEnd, res, { stallTimeoutMs: 8000, clientClosed: () => clientClosed })
-      cursor += n
-    } catch (err) {
-      cursor += Number(err?.written) || 0
-      media.senderHttpAlive = false
-      if (!media.localP2PUrl) break
-      onModeUpgrade?.(media.p2pMode)
-    }
-  }
-  if (!clientClosed) {
-    try { res.end() } catch {}
-  }
 }
 
 // A reader past its first HOLD_AFTER_BYTES is the player streaming, not probing a header or an index. It gets no more
@@ -536,155 +351,28 @@ function serveWindowedStream (media, req, res, onReader) {
   onReader()
 }
 
-// Persistent Noise P2P RPC client over HyperDHT: keeps one encrypted pipe throbbing per cast session.
-function connectNoiseOnce (dht, publicKeyHex, { relayThrough = null, onState = null, onClose = null, attemptTimeoutMs = 15_000 } = {}) {
-  return new Promise((resolve, reject) => {
-    const conn = dht.connect(b4a.from(publicKeyHex, 'hex'), relayThrough ? { relayThrough } : undefined)
-    let opened = false
-    let closed = false
-    let seq = 1
-    let buf = b4a.alloc(0)
-    const pending = new Map()
-
-    const failAll = err => {
-      for (const [, p] of pending) p.reject(err)
-      pending.clear()
-    }
-
-    const openTimer = setTimeout(() => {
-      if (!opened) {
-        closed = true
-        const err = Object.assign(new Error('Timed out connecting to receiver over P2P Noise'), { code: 'ETIMEDOUT' })
-        conn.destroy(err)
-        reject(err)
-      }
-    }, attemptTimeoutMs)
-    openTimer.unref?.()
-
-    conn.on('error', err => {
-      clearTimeout(openTimer)
-      if (!opened) reject(err)
-      failAll(err)
-    })
-
-    conn.once('close', () => {
-      clearTimeout(openTimer)
-      closed = true
-      failAll(new Error('Receiver P2P Noise connection closed'))
-      if (opened) onClose?.()
-    })
-
-    conn.once('connect', () => {
-      clearTimeout(openTimer)
-      conn.on('data', chunk => {
-        buf = b4a.concat([buf, b4a.isBuffer(chunk) ? chunk : b4a.from(chunk)])
-        for (let i = b4a.indexOf(buf, 10); i !== -1; i = b4a.indexOf(buf, 10)) {
-          const line = b4a.toString(buf.subarray(0, i))
-          buf = buf.subarray(i + 1)
-          if (!line) continue
-          let msg
-          try { msg = JSON.parse(line) } catch { continue }
-          if (msg.id && pending.has(msg.id)) {
-            const p = pending.get(msg.id)
-            pending.delete(msg.id)
-            clearTimeout(p.timer)
-            if (msg.ok) p.resolve(msg.result)
-            else p.reject(new Error(msg.error || 'Receiver P2P error'))
-          } else if (msg.event === 'state' && msg.state) {
-            onState?.(msg.state)
-          }
-        }
-      })
-      const rpc = {
-        get closed () { return closed },
-        call (type, payload = {}, callTimeout = 10_000) {
-          if (closed) return Promise.reject(new Error('P2P connection closed'))
-          const id = seq++
-          return new Promise((resCall, rejCall) => {
-            const timer = setTimeout(() => {
-              pending.delete(id)
-              rejCall(Object.assign(new Error(`Receiver P2P ${type} timed out`), { code: 'ETIMEDOUT' }))
-            }, callTimeout)
-            timer.unref?.()
-            pending.set(id, { resolve: resCall, reject: rejCall, timer })
-            conn.write(b4a.from(JSON.stringify({ id, type, ...payload }) + '\n'))
-          })
-        },
-        close () {
-          closed = true
-          failAll(new Error('Closed'))
-          try { conn.destroy() } catch {}
-        }
-      }
-      rpc.call('info', {}, 2500).then(
-        () => { opened = true; resolve(rpc) },
-        err => { rpc.close(); reject(err) }
-      )
-    })
-  })
-}
-
-// Retries transient HyperDHT holepunch aborts while dht-rpc finishes its NAT check ( ~20-25s on 127.0.0.1 testnets).
-async function connectNoiseRpc (dht, publicKeyHex, { relayThrough = null, onState = null, onClose = null, timeoutMs = 90_000 } = {}) {
-  const deadline = Date.now() + timeoutMs
-  let lastErr = null
-  while (Date.now() < deadline) {
-    const rem = deadline - Date.now()
-    try {
-      return await connectNoiseOnce(dht, publicKeyHex, { relayThrough, onState, onClose, attemptTimeoutMs: Math.min(30_000, rem) })
-    } catch (err) {
-      lastErr = err
-      const retryable = err?.code === 'HOLEPUNCH_ABORTED' || err?.code === 'PEER_CONNECTION_FAILED' || err?.code === 'TRY_LATER' || err?.code === 'ERR_PRIVACY_UNAVAILABLE' || err?.code === 'ETIMEDOUT'
-      if (!retryable || Date.now() + 1000 >= deadline) throw err
-      await new Promise(resolve => setTimeout(resolve, 1000))
-    }
-  }
-  throw lastErr || new Error('Timed out connecting to receiver over P2P Noise')
-}
-
-// Standalone or embedded TV Receiver: advertises over mDNS, listens on Noise P2P when given a node,
-// serves the 10-foot Smart TV Web Receiver at /tv, and upgrades HTTP Range streams to P2P swarm blocks.
+// A TV receiver on `node`, the node the host opened for it (with `receiverKeyPair`, so pairings last). It advertises
+// itself over mDNS, answers senders on the cast channel of their connection to that node, downloads what they cast
+// over the swarm, and serves it to its own player on a loopback port.
 export async function createReceiver ({
   storage,
+  // Where the node keeps the films it plays, when that is another disk than `storage`.
   peerStorage = null,
   name = os.hostname?.() || 'PearTube TV',
   port = RECEIVER_PORT,
-  bindHost = '0.0.0.0',
   lanHost = null,
-  node = null,
-  allowPeerNode = Boolean(node),
+  node,
   adapter = null,
+  // No pairing for senders in the same room: any sender on a LAN link may cast.
   openAuth = false,
-  anyPort = true,
   onCommand = null,
-  onChange = null,
-  // Inside the apps' worklet: managed peer nodes get the worklet's small request windows, like the app's own node.
-  worklet = false
+  onChange = null
 }) {
-  mkdirSync(storage, { recursive: true, mode: 0o700 })
+  if (!node) throw new Error('A receiver needs a node')
+  const identity = loadIdentity(storage, name)
   const peerRoot = await resolvePeerStorage(peerStorage, storage)
-  if (!node && allowPeerNode) reclaimLowDiskReceiverStorage(peerRoot)
-  const idFile = join(storage, 'receiver.json')
-  let identity = null
-  try { identity = JSON.parse(readFileSync(idFile, 'utf8')) } catch {}
-  if (!identity || !HEX64.test(String(identity.seed || ''))) {
-    identity = {
-      deviceId: randomHex(16),
-      name: cleanName(name),
-      seed: randomHex(32),
-      pairToken: randomHex(16),
-      pairCode: generatePairCode()
-    }
-    writeJsonAtomic(idFile, identity)
-  } else if (name && identity.name !== cleanName(name)) {
-    identity.name = cleanName(name)
-    writeJsonAtomic(idFile, identity)
-  }
-
-  const webToken = randomHex(16)
-  const p2pCapable = Boolean(node || allowPeerNode)
-  const keyPair = p2pCapable ? HyperDHT.keyPair(b4a.from(identity.seed, 'hex')) : null
-  const publicKey = keyPair ? b4a.toString(keyPair.publicKey, 'hex') : ''
+  const publicKey = node.peerKey
+  node.joinLanTopic('cast', CAST_LAN_TOPIC)
 
   let currentHost = lanHost
   let actualPort = 0
@@ -693,9 +381,9 @@ export async function createReceiver ({
   let state = idleCastState()
   let activeMedia = null
   let adHandle = null
-  let managedPeerNode = null
-  let managedPeerSig = ''
-  let pairFailures = []
+  // Wrong pairing codes, counted apart for LAN links and all others: a stranger across the internet cannot lock out
+  // pairing in the room.
+  const pairFailures = { lan: [], far: [] }
   let lastLoadedBlobs = ''
   let evicting = false
   let lastEvictAt = 0
@@ -758,7 +446,7 @@ export async function createReceiver ({
       const playheadByte = Math.min(leadByte, ...readers.map(r => r.pos))
       const keepBehindBytes = tight ? 64 * 1024 * 1024 : Math.max(64 * 1024 * 1024, Math.ceil(rate * BEHIND_SECONDS))
       const maxBytes = Math.max(128 * 1024 * 1024, Math.ceil(rate * (EVICT_EVERY_MS / 1000) * 2))
-      media.peerNode.evictBehind?.(media.coreKeyHex, blob, { playheadByte, keepBehindBytes, maxBytes }).catch(() => {}).finally(() => { evicting = false })
+      node.evictBehind?.(media.coreKeyHex, blob, { playheadByte, keepBehindBytes, maxBytes }).catch(() => {}).finally(() => { evicting = false })
     }
   }
 
@@ -787,35 +475,13 @@ export async function createReceiver ({
   const readAheadTimer = setInterval(steerStreams, 1000)
   readAheadTimer.unref?.()
 
-  const sseClients = new Set()
-  const webSseClients = new Set()
-  const noiseSubscribers = new Set()
-  const activeNoiseConns = new Set()
-
-  function checkPairRateLimit () {
-    const now = Date.now()
-    pairFailures = pairFailures.filter(t => now - t < 15_000)
-    if (pairFailures.length >= 6) throw Object.assign(new Error('Too many pairing attempts; wait 15 seconds'), { status: 429 })
-  }
-
-  function currentPeerNode () {
-    return activeMedia?.peerNode || managedPeerNode || node
-  }
-
-  function capabilities () {
-    return { http: true, p2p: p2pCapable, privateP2P: p2pCapable, tracks: true }
-  }
+  // Cast channels senders have open, those sent each state change, and those with a write pending.
+  const controls = new Set()
+  const subscribers = new Set()
+  const backpressured = new WeakSet()
 
   function pairingUri () {
-    return formatReceiverUri({
-      publicKey,
-      deviceId: identity.deviceId,
-      name: identity.name,
-      token: identity.pairToken,
-      host: currentHost || '',
-      port: actualPort,
-      p2p: p2pCapable
-    })
+    return formatReceiverUri({ publicKey, deviceId: identity.deviceId, name: identity.name, token: identity.pairToken, p2p: true })
   }
 
   let cachedQrUri = ''
@@ -834,27 +500,8 @@ export async function createReceiver ({
     return cachedFreeBytes
   }
 
-  function publicInfo () {
-    const pNode = currentPeerNode()
-    const pStatus = pNode ? pNode.status() : null
-    return {
-      protocol: 'peartube-cast/v1',
-      deviceId: identity.deviceId,
-      name: identity.name,
-      publicKey,
-      swarmKey: pNode ? pNode.peerKey : '',
-      host: currentHost || null,
-      port: actualPort,
-      capabilities: capabilities(),
-      authRequired: !openAuth,
-      routes: pStatus?.routes || null,
-      storageFreeBytes: currentFreeBytes(),
-      externalStorage: Boolean(String(peerRoot).startsWith('/mnt/expand/') || (peerStorage && peerRoot === peerStorage && peerRoot !== storage)),
-      state
-    }
-  }
-
-  function detailedInfo () {
+  // What this device's own screen shows: who the receiver is, how to pair with it, and what it plays.
+  function info () {
     const uri = pairingUri()
     // Hold the rendered QR SVG hot in memory so playback state ticks never re-run Reed-Solomon math on QuickJS.
     if (uri !== cachedQrUri) {
@@ -862,11 +509,20 @@ export async function createReceiver ({
       cachedQrSvg = qrSvg(uri)
     }
     return {
-      ...publicInfo(),
+      protocol: 'peartube-cast/v1',
+      deviceId: identity.deviceId,
+      name: identity.name,
+      publicKey,
+      host: currentHost || null,
+      port: actualPort,
+      authRequired: !openAuth,
+      routes: node.status().routes,
+      storageFreeBytes: currentFreeBytes(),
+      externalStorage: Boolean(String(peerRoot).startsWith('/mnt/expand/') || (peerStorage && peerRoot === peerStorage && peerRoot !== storage)),
+      state,
       pairCode: openAuth ? 'OPEN' : identity.pairCode,
       pairingUri: uri,
-      qrSvg: cachedQrSvg,
-      listenUrl: `http://${currentHost || '127.0.0.1'}:${actualPort}`
+      qrSvg: cachedQrSvg
     }
   }
 
@@ -879,16 +535,13 @@ export async function createReceiver ({
   }
 
   function broadcastState () {
-    if (sseClients.size > 0) {
-      const sseFrame = b4a.from(`data: ${JSON.stringify({ event: 'state', state })}\n\n`)
-      for (const res of sseClients) { try { res.write(sseFrame) } catch { sseClients.delete(res) } }
-    }
-    if (noiseSubscribers.size > 0) {
-      const noiseFrame = b4a.from(JSON.stringify({ event: 'state', state }) + '\n')
-      for (const conn of noiseSubscribers) {
-        if (conn.destroyed) noiseSubscribers.delete(conn)
-        else { try { conn.write(noiseFrame) } catch { noiseSubscribers.delete(conn) } }
-      }
+    for (const control of subscribers) {
+      if (backpressured.has(control) || control.push({ event: 'state', state }) !== false) continue
+      backpressured.add(control)
+      control.conn.once('drain', () => {
+        backpressured.delete(control)
+        if (!closing && subscribers.has(control)) control.push({ event: 'state', state })
+      })
     }
     notifyLocalHost(false)
   }
@@ -897,59 +550,6 @@ export async function createReceiver ({
     state = { ...state, ...patch, updatedAt: Date.now() }
     broadcastState()
     return state
-  }
-
-  function sendWebCommand (command) {
-    const frame = b4a.from(`data: ${JSON.stringify({ event: 'command', command })}\n\n`)
-    for (const res of webSseClients) { try { res.write(frame) } catch { webSseClients.delete(res) } }
-  }
-
-
-  async function ensurePeerNode (network = {}) {
-    const wantPrivate = Boolean(network?.privateRouting)
-    const wantBootstrap = Array.isArray(network?.bootstrap) && network.bootstrap.length ? network.bootstrap : null
-    const wantRelayThrough = Array.isArray(network?.relayThrough) && network.relayThrough.length ? network.relayThrough : null
-    const wantLan = wantPrivate ? Boolean(network?.lan) : true
-    const sourceKey = HEX64.test(String(network?.sourceKey || '').toLowerCase()) ? String(network.sourceKey).toLowerCase() : ''
-    const sourceKind = network?.sourceKind === 'channel' ? 'channel' : 'tracker'
-
-    let peerNode = null
-    if (
-      node &&
-      !node.closing &&
-      Boolean(node.privateRouting) === wantPrivate &&
-      (!wantBootstrap || sameBootstrap(node.bootstrap, wantBootstrap)) &&
-      sameBootstrap(node.relayThrough || [], wantRelayThrough || []) &&
-      (!wantPrivate || Boolean(node.hasLan?.()) === wantLan)
-    ) {
-      peerNode = node
-    } else if (p2pCapable) {
-      const trackerForPrivate = wantPrivate && sourceKind === 'tracker' && sourceKey ? sourceKey : ''
-      const sig = JSON.stringify({ wantPrivate, wantBootstrap, wantRelayThrough, wantLan, trackerForPrivate })
-      if (!managedPeerNode || managedPeerNode.closing || managedPeerSig !== sig) {
-        const prev = managedPeerNode
-        managedPeerNode = null
-        managedPeerSig = ''
-        if (prev) await prev.close().catch(() => {})
-        const subDir = wantPrivate
-          ? `peer-private-${(trackerForPrivate || sourceKey || 'default').slice(0, 12)}`
-          : 'peer-public'
-        managedPeerNode = await createNode({
-          storage: join(peerRoot, subDir),
-          tracker: trackerForPrivate || null,
-          bootstrap: wantBootstrap || undefined,
-          relayThrough: wantRelayThrough,
-          privateRouting: wantPrivate,
-          worklet,
-          lan: wantLan && currentHost
-            ? kp => createLan({ host: currentHost, keyPair: kp, adapter: adapterForHost(currentHost, adapter) })
-            : null
-        })
-        managedPeerSig = sig
-      }
-      peerNode = managedPeerNode
-    }
-    return peerNode
   }
 
   async function prepareMediaLoad (cmd) {
@@ -962,85 +562,25 @@ export async function createReceiver ({
       sha256: String(cmd.entry.sha256 || '')
     } : { key: '', id: 'stream', title: 'PearTube Stream', size: 0, sha256: '' }
 
-    const preferMode = cmd.preferMode === 'http' || cmd.preferMode === 'p2p' ? cmd.preferMode : 'auto'
-    const httpStreamUrl = typeof cmd.httpStreamUrl === 'string' && /^https?:\/\//.test(cmd.httpStreamUrl) ? cmd.httpStreamUrl : null
-    const magnetUrl = typeof cmd.magnetUrl === 'string' && cmd.magnetUrl.startsWith('peartube://watch/') ? cmd.magnetUrl : null
-    const parsedWatch = magnetUrl ? (() => { try { return parseUri(magnetUrl) } catch { return null } })() : null
-    const netCfg = {
-      privateRouting: Boolean(cmd.network?.privateRouting ?? cmd.senderPrivateRouting),
-      bootstrap: cmd.network?.bootstrap || null,
-      relayThrough: cmd.network?.relayThrough || null,
-      lan: cmd.network?.lan !== undefined ? Boolean(cmd.network.lan) : !Boolean(cmd.network?.privateRouting ?? cmd.senderPrivateRouting),
-      sourceKey: cmd.network?.sourceKey || parsedWatch?.sourceKey || '',
-      sourceKind: cmd.network?.sourceKind || parsedWatch?.sourceKind || 'tracker'
+    // The film comes over the swarm this node is on, public or private as the node is set: a cast never switches it.
+    const watch = typeof cmd.magnetUrl === 'string' && cmd.magnetUrl.startsWith('peartube://watch/') ? parseUri(cmd.magnetUrl) : null
+    if (watch?.action !== 'watch') throw new Error('A cast load needs a peartube://watch link')
+    const { blobs, blob } = watch.entry
+    const freeNow = freeDiskBytes(peerRoot)
+    if (freeNow < LOW_DISK_BOOT_BYTES || (lastLoadedBlobs && lastLoadedBlobs !== blobs && freeNow < Math.max(3 * 1024 * 1024 * 1024, (entry.size || 0) + LOW_DISK_STREAM_BYTES))) {
+      await node.clearCache?.(null, { keepBlobsHex: freeNow < LOW_DISK_STREAM_BYTES ? null : blobs }).catch(() => {})
     }
-
-    const wantP2P = Boolean(p2pCapable && magnetUrl && preferMode !== 'http')
-    const p2pMode = netCfg.privateRouting ? 'private-p2p' : 'p2p'
-    // Strict private-only casts (LAN disabled on initiator) never pull cleartext HTTP unless explicitly forced (`preferMode === 'http'`).
-    const allowColdHttp = Boolean(httpStreamUrl && (preferMode === 'http' || (preferMode !== 'p2p' && (!netCfg.privateRouting || netCfg.lan))))
-
-    let peerNode = null
-    let localP2PUrl = null
-    let core = null
-    let blob = null
-
-    if (wantP2P) {
-      try {
-        peerNode = await ensurePeerNode(netCfg)
-        if (peerNode) {
-          const targetBlobs = parsedWatch?.action === 'watch' ? parsedWatch.entry.blobs : ''
-          const freeNow = freeDiskBytes(peerRoot)
-          if (freeNow < LOW_DISK_BOOT_BYTES || (lastLoadedBlobs && targetBlobs && lastLoadedBlobs !== targetBlobs && freeNow < Math.max(3 * 1024 * 1024 * 1024, (entry.size || 0) + LOW_DISK_STREAM_BYTES))) {
-            await peerNode.clearCache?.(null, { keepBlobsHex: freeNow < LOW_DISK_STREAM_BYTES ? null : targetBlobs }).catch(() => {})
-          }
-          if (targetBlobs) lastLoadedBlobs = targetBlobs
-          if (!netCfg.privateRouting && cmd.senderLan) peerNode.dialLanPeer?.(cmd.senderLan)
-          peerNode.joinPeer(String(cmd.senderPeerKey || '').toLowerCase(), { lanFirst: true })
-          // Older senders name the channel only in `network.sourceKey`; put it in the link so openUri joins it.
-          const link = parsedWatch?.action === 'watch' && !parsedWatch.sourceKey && HEX64.test(netCfg.sourceKey)
-            ? formatWatchUri(parsedWatch.entry, netCfg.sourceKey, 'channel')
-            : magnetUrl
-          const opened = await peerNode.openUri(link, { joinSource: netCfg.privateRouting })
-          localP2PUrl = opened?.entry?.streamUrl || null
-          if (parsedWatch?.action === 'watch') {
-            blob = parsedWatch.entry.blob
-            core = await peerNode.blobCore(parsedWatch.entry.blobs)
-          }
-        }
-      } catch (err) {
-        if (!allowColdHttp) throw err
-      }
-    }
-
-    const effectiveHttpUrl = allowColdHttp ? httpStreamUrl : null
-    if (!localP2PUrl && !effectiveHttpUrl) {
-      throw new Error('Cast load requires an allowed HTTP Range URL or a reachable P2P peartube://watch URI')
-    }
-
-    const loadToken = randomHex(16)
-    // Native P2P receivers (Android TV / Pi 4 / Mac HTPC / daemon) hand OxideAV/mpv a direct loopback URL, and the
-    // hybrid splice reads the same one. For a known blob that is the windowed route (bounded read-ahead), not the
-    // node's blob server, which would download to the end of the film. External Smart TV Web browsers (!onCommand)
-    // use the LAN-reachable /cast/v1/hybrid/<token> proxy.
-    if (core && blob && localP2PUrl) localP2PUrl = `http://127.0.0.1:${actualPort}/cast/v1/p2p/${loadToken}`
-    const directLocalP2P = Boolean(onCommand && localP2PUrl)
-    const startOnP2P = Boolean(localP2PUrl && (directLocalP2P || !allowColdHttp || await hasBlockCached(core, blob, 0) || hasActiveReplicationPeer(core, blob)))
-    const initialMode = startOnP2P ? p2pMode : 'http'
+    lastLoadedBlobs = blobs
+    await node.openUri(cmd.magnetUrl)
+    const core = await node.blobCore(blobs)
+    const token = randomHex(16)
     activeMedia = {
-      token: loadToken,
+      token,
       entry,
       mime: guessMediaMime(entry),
-      preferMode,
-      privateRouting: netCfg.privateRouting,
-      p2pMode,
-      peerNode,
-      httpStreamUrl: effectiveHttpUrl,
-      localP2PUrl,
       core,
-      coreKeyHex: parsedWatch?.action === 'watch' ? parsedWatch.entry.blobs : '',
+      coreKeyHex: blobs,
       blob,
-      senderHttpAlive: allowColdHttp,
       readers: new Set(),
       servedBytes: 0,
       readRate: 0,
@@ -1049,23 +589,10 @@ export async function createReceiver ({
       avgRate: 0,
       window: null
     }
-    if (core && blob) rememberStream(activeMedia)
-
-    const hostForPlayer = onCommand ? '127.0.0.1' : (currentHost || '127.0.0.1')
-    const streamUrl = directLocalP2P
-      ? localP2PUrl
-      : (localP2PUrl && allowColdHttp)
-          ? `http://${hostForPlayer}:${actualPort}/cast/v1/hybrid/${loadToken}`
-          : (localP2PUrl || effectiveHttpUrl)
-    return {
-      entry,
-      mode: initialMode,
-      streamUrl,
-      httpFallbackUrl: effectiveHttpUrl,
-      localP2PUrl,
-      peerSwarmKey: peerNode ? peerNode.peerKey : '',
-      peerLan: !netCfg.privateRouting ? (peerNode?.lanEndpoint?.() || null) : null
-    }
+    rememberStream(activeMedia)
+    // The player reads the windowed route (bounded read-ahead), not the node's blob server, which would download to
+    // the end of the film.
+    return { entry, mode: node.privateRouting ? 'private-p2p' : 'p2p', streamUrl: `http://127.0.0.1:${actualPort}/cast/v1/p2p/${token}` }
   }
 
   async function applyCommand (cmd) {
@@ -1077,8 +604,8 @@ export async function createReceiver ({
       const prepared = await prepareMediaLoad(cmd)
       const startPositionMs = Math.max(0, Number(cmd.startPositionMs) || 0)
       const cachedBytes = await countCachedBlobBytes(activeMedia?.core, activeMedia?.blob, prepared.entry.size)
-      const stNode = activeMedia?.peerNode?.status()
-      const p2pPeers = stNode ? (stNode.peers + stNode.lanPeers) : 0
+      const stNode = node.status()
+      const p2pPeers = stNode.peers + stNode.lanPeers
       updateState({
         status: 'loading',
         mode: prepared.mode,
@@ -1096,25 +623,15 @@ export async function createReceiver ({
         subtitle: null,
         error: null
       })
-      const fullCmd = {
-        seq: ++commandSeq,
-        action: 'load',
-        entry: prepared.entry,
-        mode: prepared.mode,
-        streamUrl: prepared.streamUrl,
-        httpStreamUrl: prepared.httpFallbackUrl,
-        startPositionMs
-      }
-      sendWebCommand(fullCmd)
+      const fullCmd = { seq: ++commandSeq, action: 'load', entry: prepared.entry, mode: prepared.mode, streamUrl: prepared.streamUrl, startPositionMs }
       if (onCommand) await onCommand(fullCmd, { updateState, getState: () => state })
-      return { ...state, peerSwarmKey: prepared.peerSwarmKey, peerLan: prepared.peerLan }
+      return state
     }
 
     if (action === 'stop') {
       // Keep seededBlobs downloading & seeding in Corestore so this TV remains a normal swarm peer!
       activeMedia = null
       const fullCmd = { seq: ++commandSeq, action: 'stop' }
-      sendWebCommand(fullCmd)
       if (onCommand) await onCommand(fullCmd, { updateState, getState: () => state })
       return updateState(idleCastState())
     }
@@ -1135,191 +652,79 @@ export async function createReceiver ({
     }
 
     const fullCmd = { seq: ++commandSeq, ...cmd, action, ...(nextPatch.positionMs !== undefined ? { positionMs: nextPatch.positionMs } : {}) }
-    sendWebCommand(fullCmd)
     if (onCommand) await onCommand(fullCmd, { updateState, getState: () => state })
     return updateState(nextPatch)
   }
 
-  function authorized (req, url) {
-    if (openAuth) return true
-    const header = String(req.headers.authorization || '')
-    const bearer = header.startsWith('Bearer ') ? header.slice(7).trim() : ''
-    const queryTok = url.searchParams.get('token') || ''
-    return safeEqual(bearer || queryTok, identity.pairToken)
-  }
-
-  const httpSrv = attachSocketTracker(createServer(async (req, res) => {
-    if (req.method === 'OPTIONS') {
-      res.writeHead(204, CORS)
-      res.end()
-      return
-    }
-    const url = new URL(req.url || '/', 'http://127.0.0.1')
-    const p = url.pathname
-
-    if (req.method === 'GET' && (p === '/' || p === '/tv' || p === '/cast/receiver')) {
-      res.writeHead(200, { ...CORS, 'content-type': 'text/html; charset=utf-8' })
-      res.end(receiverPage({ mode: 'standalone', defaultName: identity.name }))
-      return
-    }
-
+  // The receiver's own player reads the film here. The port answers this device only.
+  const httpSrv = attachSocketTracker(createServer((req, res) => {
+    const p = new URL(req.url || '/', 'http://127.0.0.1').pathname
     const streamMatch = (req.method === 'GET' || req.method === 'HEAD') && p.match(/^\/cast\/v1\/p2p\/([0-9a-f]{32})$/)
-    if (streamMatch) {
-      const media = streams.get(streamMatch[1])
-      if (!media) {
-        res.writeHead(404, CORS)
-        res.end()
-        return
-      }
-      serveWindowedStream(media, req, res, steerStreams)
+    const media = streamMatch && streams.get(streamMatch[1])
+    if (media) return serveWindowedStream(media, req, res, steerStreams)
+    // Playback telemetry for a tool on this device (android/capture-network.mjs through `adb forward`).
+    if (req.method === 'GET' && p === '/cast/v1/info') {
+      res.writeHead(200, { 'content-type': 'application/json' })
+      res.end(JSON.stringify({ deviceId: identity.deviceId, name: identity.name, routes: node.status().routes, state }))
       return
     }
-
-    const hybridMatch = (req.method === 'GET' || req.method === 'HEAD') && p.match(/^\/cast\/v1\/hybrid\/([0-9a-f]{32})$/)
-    if (hybridMatch) {
-      if (!activeMedia || !safeEqual(hybridMatch[1], activeMedia.token)) {
-        res.writeHead(404, CORS)
-        res.end()
-        return
-      }
-      await serveSpliceStream(activeMedia, req, res, upgradedMode => {
-        if (state.mode !== upgradedMode) updateState({ mode: upgradedMode })
-      })
-      return
-    }
-
-    if (req.method === 'GET' && p === '/cast/v1/events') {
-      if (!authorized(req, url)) {
-        res.writeHead(401, { ...CORS, 'content-type': 'application/json' })
-        res.end(JSON.stringify({ error: 'Unauthorized' }))
-        return
-      }
-      res.writeHead(200, { ...CORS, 'content-type': 'text/event-stream', 'cache-control': 'no-cache', connection: 'keep-alive' })
-      res.write(b4a.from(`data: ${JSON.stringify({ event: 'state', state })}\n\n`))
-      sseClients.add(res)
-      req.once('close', () => sseClients.delete(res))
-      return
-    }
-
-    if (req.method === 'GET' && p === '/cast/v1/web-events') {
-      if (!safeEqual(url.searchParams.get('token') || '', webToken)) {
-        res.writeHead(401, { ...CORS, 'content-type': 'application/json' })
-        res.end(JSON.stringify({ error: 'Unauthorized' }))
-        return
-      }
-      res.writeHead(200, { ...CORS, 'content-type': 'text/event-stream', 'cache-control': 'no-cache', connection: 'keep-alive' })
-      res.write(b4a.from(': connected\n\n'))
-      webSseClients.add(res)
-      req.once('close', () => webSseClients.delete(res))
-      return
-    }
-
-    let status = 200
-    let payload
-    try {
-      if (req.method === 'GET' && p === '/cast/v1/info') {
-        payload = publicInfo()
-      } else if (req.method === 'GET' && p === '/cast/v1/web-info') {
-        const remote = req.socket?.remoteAddress || ''
-        const isLocal = remote === '127.0.0.1' || remote === '::1' || remote === '::ffff:127.0.0.1' || (currentHost && remote.endsWith(currentHost))
-        const uri = pairingUri()
-        payload = isLocal ? { ...detailedInfo(), webToken } : { ...publicInfo(), pairCode: openAuth ? 'OPEN' : identity.pairCode, pairingUri: uri, qrSvg: qrSvg(uri), webToken }
-      } else if (req.method === 'POST' && p === '/cast/v1/web-state') {
-        const body = await readJsonBody(req)
-        if (!safeEqual(body.token || '', webToken)) throw Object.assign(new Error('Unauthorized'), { status: 401 })
-        if (body.state && typeof body.state === 'object' && !onCommand) {
-          const { mode: _ignoreMode, ...rest } = body.state
-          updateState({ ...rest, mode: state.mode || body.state.mode || 'http' })
-        }
-        payload = { ok: true }
-      } else if (req.method === 'POST' && p === '/cast/v1/pair') {
-        checkPairRateLimit()
-        const body = await readJsonBody(req)
-        if (!openAuth && !safeEqual(normalizePairCode(body.code), identity.pairCode)) {
-          pairFailures.push(Date.now())
-          throw Object.assign(new Error('Invalid TV pairing code'), { status: 403 })
-        }
-        payload = {
-          deviceId: identity.deviceId,
-          name: identity.name,
-          publicKey,
-          swarmKey: node ? node.peerKey : '',
-          port: actualPort,
-          token: identity.pairToken,
-          capabilities: capabilities()
-        }
-      } else if (req.method === 'POST' && p === '/cast/v1/command') {
-        if (!authorized(req, url)) throw Object.assign(new Error('Unauthorized; pair with this TV first'), { status: 401 })
-        const body = await readJsonBody(req)
-        payload = { ok: true, state: await applyCommand(body) }
-      } else {
-        status = 404
-        payload = { error: 'Not found' }
-      }
-    } catch (err) {
-      status = err.status || 400
-      payload = { error: err.message }
-    }
-    res.writeHead(status, { ...CORS, 'content-type': 'application/json' })
-    res.end(JSON.stringify(payload))
+    res.writeHead(404, CORS)
+    res.end()
   }))
 
-  actualPort = await listenHttp(httpSrv, port, bindHost, anyPort)
+  actualPort = await listenHttp(httpSrv, port, '127.0.0.1')
 
-  let noiseServer = null
-  if (node?.dht && keyPair) {
-    noiseServer = node.dht.createServer(conn => {
-      activeNoiseConns.add(conn)
-      conn.on('error', () => {})
-      conn.once('close', () => {
-        activeNoiseConns.delete(conn)
-        noiseSubscribers.delete(conn)
-      })
-      let buf = b4a.alloc(0)
-      conn.on('data', chunk => {
-        buf = b4a.concat([buf, b4a.isBuffer(chunk) ? chunk : b4a.from(chunk)])
-        for (let i = b4a.indexOf(buf, 10); i !== -1; i = b4a.indexOf(buf, 10)) {
-          const line = b4a.toString(buf.subarray(0, i))
-          buf = buf.subarray(i + 1)
-          if (!line) continue
-          handleNoiseLine(conn, line)
-        }
-      })
-    })
-    await noiseServer.listen(keyPair)
+  function failedPairings (onLan) {
+    const now = Date.now()
+    const kind = onLan ? 'lan' : 'far'
+    pairFailures[kind] = pairFailures[kind].filter(t => now - t < 15_000)
+    if (pairFailures[kind].length >= 6) throw new Error('Too many pairing attempts; wait 15 seconds')
+    return pairFailures[kind]
   }
-
-  async function handleNoiseLine (conn, line) {
-    let msg
-    try { msg = JSON.parse(line) } catch { return }
-    const reply = obj => { if (!conn.destroyed) try { conn.write(b4a.from(JSON.stringify({ id: msg.id, ...obj }) + '\n')) } catch {} }
-    try {
-      if (msg.type === 'info') {
-        reply({ ok: true, result: publicInfo() })
-      } else if (msg.type === 'pair') {
-        checkPairRateLimit()
-        if (!openAuth && !safeEqual(normalizePairCode(msg.code), identity.pairCode)) {
-          pairFailures.push(Date.now())
-          throw new Error('Invalid TV pairing code')
-        }
-        reply({ ok: true, result: { deviceId: identity.deviceId, name: identity.name, publicKey, port: actualPort, token: identity.pairToken, capabilities: capabilities() } })
-      } else if (msg.type === 'subscribe') {
-        if (!openAuth && !safeEqual(msg.token, identity.pairToken)) throw new Error('Unauthorized')
-        noiseSubscribers.add(conn)
-        reply({ ok: true, result: { state } })
-      } else if (msg.type === 'cmd') {
-        if (!openAuth && !safeEqual(msg.token, identity.pairToken)) throw new Error('Unauthorized')
-        const next = await applyCommand(msg)
-        reply({ ok: true, result: { ok: true, state: next } })
-      } else {
-        throw new Error(`Unknown Noise cast message: ${msg.type}`)
+  // Pairing and remote control: the only way in besides this device's own screen. Any peer that connects to the node
+  // can send these, so each request is checked. An open receiver is open to the room it is in (LAN links), not to
+  // every peer on the internet.
+  async function onControl ({ id: _id, type, token, ...msg }, control) {
+    const onLan = node.isLanConnection(control.conn)
+    const trusted = openAuth && onLan
+    if (type === 'pair') {
+      const failures = failedPairings(onLan)
+      if (!trusted && !safeEqual(normalizePairCode(msg.code), identity.pairCode)) {
+        failures.push(Date.now())
+        throw new Error('Invalid TV pairing code')
       }
-    } catch (err) {
-      reply({ ok: false, error: err.message })
+      return { deviceId: identity.deviceId, name: identity.name, publicKey, token: identity.pairToken }
     }
+    if (!trusted && !safeEqual(token, identity.pairToken)) throw new Error('Unauthorized; pair with this TV first')
+    if (type === 'subscribe') {
+      subscribers.add(control)
+      return { state }
+    }
+    if (type === 'cmd') return { ok: true, state: await applyCommand(msg) }
+    throw new Error(`Unknown cast message: ${type}`)
   }
+  const unserve = new Map() // connection -> stops answering on it
+  function serve (conn) {
+    unserve.set(conn, serveControl(conn, {
+      onRequest: onControl,
+      onOpen: control => controls.add(control),
+      onClose: control => {
+        controls.delete(control)
+        subscribers.delete(control)
+      }
+    }))
+    conn.once('close', () => unserve.delete(conn))
+  }
+  const stopServing = node.onConnection(serve)
+  for (const conn of node.peerConnections()) serve(conn)
+
+  // The advertisement names the node's LAN endpoint, the address a sender dials. It is renewed when that changes.
+  let adSig = ''
 
   async function refreshMdns () {
+    const lan = node.lanEndpoint()
+    const sig = `${currentHost}|${lan?.port || 0}`
+    if (adHandle && sig === adSig) return
     const prev = adHandle
     adHandle = null
     if (prev) await Promise.resolve(prev.stop?.()).catch(() => {})
@@ -1330,37 +735,37 @@ export async function createReceiver ({
         name: `${identity.name} (${identity.deviceId.slice(0, 6)})`,
         type: CAST_SERVICE_TYPE,
         protocol: 'tcp',
-        port: actualPort,
+        port: lan?.port || RECEIVER_PORT,
         txt: {
           proto: CAST_SERVICE_TYPE,
-          v: '1',
+          v: '2',
           id: identity.deviceId,
           name: identity.name,
           h: currentHost || '127.0.0.1',
           pk: publicKey,
-          p2p: p2pCapable ? '1' : '0',
+          lp: String(lan?.port || 0),
           auth: openAuth ? 'open' : 'code'
         }
       }, { onError: () => {} })
+      adSig = sig
     } catch {}
   }
 
   await refreshMdns()
   let statsBusy = false
   const peerStatsTimer = setInterval(async () => {
-    if (closing || statsBusy || !activeMedia?.peerNode || !state.entry) return
+    if (closing || statsBusy || !activeMedia || !state.entry) return
     statsBusy = true
     try {
       const media = activeMedia
-      const st = media.peerNode.status()
+      const st = node.status()
       const p2pPeers = (st.peers || 0) + (st.lanPeers || 0)
       const size = state.entry.size || media.blob?.byteLength || 0
       const cachedBytes = await countCachedBlobBytes(media.core, media.blob, size)
       if (media !== activeMedia) return
       const seeding = cachedBytes > 0
-      const nextMode = (cachedBytes > 0 || hasActiveReplicationPeer(media.core, media.blob)) ? media.p2pMode : state.mode
-      if (p2pPeers !== state.p2pPeers || cachedBytes !== state.cachedBytes || seeding !== state.seeding || nextMode !== state.mode) {
-        updateState({ p2pPeers, cachedBytes, seeding, mode: nextMode })
+      if (p2pPeers !== state.p2pPeers || cachedBytes !== state.cachedBytes || seeding !== state.seeding) {
+        updateState({ p2pPeers, cachedBytes, seeding })
       }
     } catch {} finally {
       statsBusy = false
@@ -1373,8 +778,8 @@ export async function createReceiver ({
     get port () { return actualPort },
     get publicKey () { return publicKey },
     get deviceId () { return identity.deviceId },
-    peerStatus: () => currentPeerNode()?.status() || null,
-    info: detailedInfo,
+    peerStatus: () => node.status(),
+    info,
     state: () => state,
     reportState (patch) {
       if (!patch || typeof patch !== 'object') return state
@@ -1407,10 +812,10 @@ export async function createReceiver ({
     },
     command: applyCommand,
     async setHost (nextHost) {
-      if (nextHost === currentHost) return
+      const moved = nextHost !== currentHost
       currentHost = nextHost
       await refreshMdns()
-      notifyLocalHost(true)
+      if (moved) notifyLocalHost(true)
     },
     async close () {
       if (closing) return
@@ -1423,36 +828,28 @@ export async function createReceiver ({
       const prevAd = adHandle
       adHandle = null
       if (prevAd) await Promise.resolve(prevAd.stop?.()).catch(() => {})
-      for (const c of activeNoiseConns) { try { c.destroy() } catch {} }
-      activeNoiseConns.clear()
-      noiseSubscribers.clear()
-      if (noiseServer) await noiseServer.close().catch(() => {})
-      if (managedPeerNode) {
-        const m = managedPeerNode
-        managedPeerNode = null
-        await m.close().catch(() => {})
-      }
+      stopServing()
+      for (const stop of unserve.values()) stop()
+      unserve.clear()
+      for (const control of [...controls]) control.close()
       await httpSrv.closeAllAndStop()
     }
 }
 }
 
-// Sender & Hub Cast Controller: discovers LAN mDNS receivers, dials Noise P2P keypairs across subnets,
-// hosts zero-install Smart TV Web Receivers, and pumps token-gated HTTP Range bytes from Corestore.
+// The sender's side: finds receivers by mDNS, keeps the ones it paired with, and casts to one over this device's
+// node. It also runs this device's own receiver, when the device is a TV.
 export function createCastController ({
   storage,
   getNode,
   ensureNode = null,
   getLanHost = () => null,
   adapter = null,
-  onchange = null,
-  worklet = false,
-  // The port of the API server this controller's web-receiver routes also answer on (http.js), for links.
-  apiPort = API_PORT
+  onchange = null
 }) {
   mkdirSync(storage, { recursive: true, mode: 0o700 })
   const savedFile = join(storage, 'cast-receivers.json')
-  const saved = new Map()
+  const saved = new Map() // receiver id -> { id, name, publicKey, token }
   try {
     for (const item of JSON.parse(readFileSync(savedFile, 'utf8'))) {
       if (item?.id) saved.set(item.id, item)
@@ -1460,14 +857,8 @@ export function createCastController ({
   } catch {}
 
   const discovered = new Map()
-  const webReceivers = new Map()
-  const allowedCastBlobs = new Set()
-
   let browseHandle = null
   let browseHost = undefined
-  let castBlobServer = null
-  let castHubServer = null
-  let castHubPort = 0
   let localReceiver = null
   let active = null
   let closing = false
@@ -1478,205 +869,6 @@ export function createCastController ({
 
   function persistSaved () {
     writeJsonAtomic(savedFile, [...saved.values()])
-  }
-
-  async function ensureLanBlobServer () {
-    if (castBlobServer) return castBlobServer
-    const node = getNode()
-    if (!node) throw new Error('Node not started')
-    // Token-guarded LAN Range server over ByteStream; kills active download ranges the instant a receiver drops the socket.
-    const srv = createBlobRangeServer(node.store.session(), {
-      host: getLanHost() || '127.0.0.1',
-      address: '0.0.0.0',
-      port: 0,
-      anyPort: true,
-      resolve: key => allowedCastBlobs.has(b4a.toString(key, 'hex')) ? { key } : null
-    })
-    await srv.listen()
-    castBlobServer = srv
-    return srv
-  }
-
-  async function ensureWebHubServer () {
-    if (castHubServer) return castHubPort
-    const srv = attachSocketTracker(createServer(async (req, res) => {
-      if (req.method === 'OPTIONS') {
-        res.writeHead(204, CORS)
-        res.end()
-        return
-      }
-      const url = new URL(req.url || '/', 'http://127.0.0.1')
-      const p = url.pathname
-      if (req.method === 'GET' && (p === '/' || p === '/tv')) {
-        res.writeHead(200, { ...CORS, 'content-type': 'text/html; charset=utf-8' })
-        res.end(receiverPage({ mode: 'hub', defaultName: 'Smart TV Browser' }))
-        return
-      }
-      if (req.method === 'GET' && p === '/v1/cast/web-events') {
-        handleWebEvents(req, res, url)
-        return
-      }
-      if (req.method === 'GET' && p === '/cast/v1/events') {
-        handleHubSenderEvents(req, res, url)
-        return
-      }
-      let status = 200
-      let payload
-      try {
-        if (req.method === 'POST' && p === '/v1/cast/web-register') {
-          payload = await registerWebReceiver(await readJsonBody(req))
-        } else if (req.method === 'POST' && p === '/v1/cast/web-state') {
-          payload = updateWebReceiverState(await readJsonBody(req))
-        } else if (p.startsWith('/cast/v1/')) {
-          payload = await handleHubCastJson(req, url)
-        } else {
-          status = 404
-          payload = { error: 'Not found' }
-        }
-      } catch (err) {
-        status = err.status || 400
-        payload = { error: err.message }
-      }
-      res.writeHead(status, { ...CORS, 'content-type': 'application/json' })
-      res.end(JSON.stringify(payload))
-    }))
-    castHubPort = await listenHttp(srv, 8177, '0.0.0.0', true).catch(() => 0)
-    // Closed while it was binding: release the port rather than keep a hub nobody owns.
-    if (closing) { await srv.closeAllAndStop().catch(() => {}); castHubPort = 0; return 0 }
-    castHubServer = castHubPort ? srv : null
-    return castHubPort
-  }
-
-  async function registerWebReceiver ({ id, token, name }) {
-    const cleanId = (id && webReceivers.has(id) && safeEqual(token, webReceivers.get(id).webToken))
-      ? id
-      : `web-${randomHex(8)}`
-    let rec = webReceivers.get(cleanId)
-    if (!rec) {
-      rec = {
-        id: cleanId,
-        name: cleanName(name, 'Smart TV Browser'),
-        webToken: randomHex(16),
-        pairToken: randomHex(16),
-        pairCode: generatePairCode(),
-        clients: new Set(),
-        senderSse: new Set(),
-        seq: 0,
-        state: idleCastState()
-      }
-      webReceivers.set(cleanId, rec)
-      saved.set(cleanId, { id: cleanId, name: rec.name, host: '127.0.0.1', port: 0, publicKey: '', token: rec.pairToken, p2p: false, webHosted: true })
-      persistSaved()
-    } else if (name) {
-      rec.name = cleanName(name, rec.name)
-      const s = saved.get(cleanId)
-      if (s) { s.name = rec.name; persistSaved() }
-    }
-    emitChange()
-    const hubPort = castHubPort || apiPort
-    const uri = formatReceiverUri({
-      deviceId: rec.id,
-      name: rec.name,
-      token: rec.pairToken,
-      host: getLanHost() || '127.0.0.1',
-      port: hubPort,
-      p2p: false
-    })
-    return {
-      id: rec.id,
-      name: rec.name,
-      webToken: rec.webToken,
-      pairCode: 'OPEN',
-      pairingUri: uri,
-      qrSvg: qrSvg(uri)
-    }
-  }
-
-  function handleHubSenderEvents (req, res, url) {
-    const tok = url.searchParams.get('token') || ''
-    const rec = [...webReceivers.values()].find(r => safeEqual(tok, r.pairToken)) || [...webReceivers.values()].find(r => r.clients.size > 0)
-    if (!rec) {
-      res.writeHead(401, { ...CORS, 'content-type': 'application/json' })
-      res.end(JSON.stringify({ error: 'Unauthorized' }))
-      return
-    }
-    res.writeHead(200, { ...CORS, 'content-type': 'text/event-stream', 'cache-control': 'no-cache', connection: 'keep-alive' })
-    res.write(b4a.from(`data: ${JSON.stringify({ event: 'state', state: rec.state })}\n\n`))
-    rec.senderSse.add(res)
-    req.once('close', () => rec.senderSse.delete(res))
-  }
-
-  async function handleHubCastJson (req, url) {
-    const p = url.pathname
-    const hubPort = castHubPort || apiPort
-    if (req.method === 'GET' && p === '/cast/v1/info') {
-      const id = url.searchParams.get('id') || ''
-      const rec = (id && webReceivers.get(id)) || [...webReceivers.values()].find(r => r.clients.size > 0) || webReceivers.values().next().value
-      if (!rec) throw Object.assign(new Error('No active Smart TV browser receiver'), { status: 404 })
-      return { protocol: 'peartube-cast/v1', deviceId: rec.id, name: rec.name, publicKey: '', swarmKey: '', host: getLanHost() || '127.0.0.1', port: hubPort, capabilities: { p2p: false, httpRange: true }, authRequired: false, state: rec.state }
-    }
-    if (req.method === 'POST' && p === '/cast/v1/pair') {
-      const body = await readJsonBody(req)
-      const cleanCode = normalizePairCode(body.code)
-      const rec = (cleanCode && [...webReceivers.values()].find(r => safeEqual(cleanCode, r.pairCode))) || [...webReceivers.values()].find(r => r.clients.size > 0) || webReceivers.values().next().value
-      if (!rec) throw Object.assign(new Error('No active Smart TV browser receiver'), { status: 404 })
-      return { deviceId: rec.id, name: rec.name, publicKey: '', port: hubPort, token: rec.pairToken, capabilities: { p2p: false, httpRange: true } }
-    }
-    if (req.method === 'POST' && p === '/cast/v1/command') {
-      const auth = String(req.headers.authorization || '').replace(/^Bearer\s+/i, '').trim()
-      const rec = (auth && [...webReceivers.values()].find(r => safeEqual(auth, r.pairToken))) || [...webReceivers.values()].find(r => r.clients.size > 0)
-      if (!rec) throw Object.assign(new Error('No active Smart TV browser receiver'), { status: 404 })
-      const cmd = await readJsonBody(req)
-      const streamUrl = cmd.streamUrl || cmd.httpStreamUrl
-      const nextCmd = cmd.action === 'load'
-        ? { seq: ++rec.seq, action: 'load', entry: cmd.entry, mode: 'http', streamUrl, httpStreamUrl: streamUrl, startPositionMs: Math.max(0, Number(cmd.startPositionMs) || 0) }
-        : { seq: ++rec.seq, ...cmd }
-      const frame = b4a.from(`data: ${JSON.stringify({ event: 'command', command: nextCmd })}\n\n`)
-      for (const client of rec.clients) { try { client.write(frame) } catch { rec.clients.delete(client) } }
-      if (cmd.action === 'load') {
-        rec.state = { ...idleCastState(), status: 'loading', mode: 'http', entry: cmd.entry || null, positionMs: nextCmd.startPositionMs || 0, playing: true, buffering: true }
-      } else if (cmd.action === 'stop') {
-        rec.state = idleCastState()
-      }
-      const stFrame = b4a.from(`data: ${JSON.stringify({ event: 'state', state: rec.state })}\n\n`)
-      for (const s of rec.senderSse) { try { s.write(stFrame) } catch { rec.senderSse.delete(s) } }
-      return { ok: true, state: rec.state }
-    }
-    return undefined
-  }
-
-  function handleWebEvents (req, res, url) {
-    const id = url.searchParams.get('id') || ''
-    const tok = url.searchParams.get('token') || ''
-    const rec = webReceivers.get(id)
-    if (!rec || !safeEqual(tok, rec.webToken)) {
-      res.writeHead(401, { ...CORS, 'content-type': 'application/json' })
-      res.end(JSON.stringify({ error: 'Unauthorized' }))
-      return
-    }
-    res.writeHead(200, { ...CORS, 'content-type': 'text/event-stream', 'cache-control': 'no-cache', connection: 'keep-alive' })
-    res.write(b4a.from(': connected\n\n'))
-    rec.clients.add(res)
-    emitChange()
-    req.once('close', () => {
-      rec.clients.delete(res)
-      emitChange()
-    })
-  }
-
-  function updateWebReceiverState ({ id, token, state: next }) {
-    const rec = webReceivers.get(id)
-    if (!rec || !safeEqual(token, rec.webToken)) throw Object.assign(new Error('Unauthorized'), { status: 401 })
-    if (next && typeof next === 'object') {
-      rec.state = { ...rec.state, ...next, updatedAt: Date.now() }
-      const stFrame = b4a.from(`data: ${JSON.stringify({ event: 'state', state: rec.state })}\n\n`)
-      for (const s of rec.senderSse || []) { try { s.write(stFrame) } catch { rec.senderSse.delete(s) } }
-      if (active?.receiverId === id) {
-        active.state = rec.state
-        emitChange()
-      }
-    }
-    return { ok: true }
   }
 
   async function refreshBrowse (host) {
@@ -1699,25 +891,19 @@ export function createCastController ({
           const id = String(txt.id || txt.pk || '').trim()
           if (!id || (localReceiver && id === localReceiver.deviceId)) return
           const addr = isIPv4(String(txt.h || '')) ? String(txt.h) : (Array.isArray(svc.addresses) ? svc.addresses.find(isIPv4) : null)
-          if (!addr || !svc.port) return
+          if (!addr) return
+          const lanPort = Number(txt.lp) || 0
           discovered.set(id, {
             id,
             name: cleanName(txt.name || svc.name, 'PearTube TV'),
             host: addr,
-            port: Number(svc.port),
             publicKey: HEX64.test(String(txt.pk || '').toLowerCase()) ? String(txt.pk).toLowerCase() : '',
-            p2p: txt.p2p === '1',
+            // Where the receiver's node answers on this LAN.
+            lan: lanPort > 0 ? { host: addr, port: lanPort } : null,
             auth: txt.auth === 'open' ? 'open' : 'code',
-            seenAt: Date.now()
+            // Receivers from before the cast channel advertise v1 and cannot be reached.
+            current: txt.v === '2'
           })
-          const existing = saved.get(id) || (txt.pk && [...saved.values()].find(s => s.publicKey && s.publicKey === String(txt.pk).toLowerCase()))
-          if (existing) {
-            existing.host = addr
-            existing.port = Number(svc.port)
-            if (txt.pk && HEX64.test(String(txt.pk).toLowerCase())) existing.publicKey = String(txt.pk).toLowerCase()
-            existing.p2p = existing.p2p || txt.p2p === '1'
-            persistSaved()
-          }
           emitChange()
         },
         onServiceDown (svc) {
@@ -1729,157 +915,88 @@ export function createCastController ({
     } catch {}
   }
 
+  const pairedWith = disc => saved.get(disc.id) || [...saved.values()].find(s => s.publicKey && s.publicKey === disc.publicKey) || null
+
   function listReceivers () {
     const merged = new Map()
-    for (const [id, rec] of webReceivers) {
-      if (rec.clients.size === 0 && active?.receiverId !== id) continue
-      merged.set(id, {
-        id,
-        name: rec.name,
-        host: getLanHost() || '127.0.0.1',
-        port: castHubPort,
-        publicKey: '',
-        online: rec.clients.size > 0,
-        paired: true,
-        p2p: false,
-        transport: 'web',
-        auth: 'open'
-      })
-    }
-    for (const [id, d] of discovered) {
-      const pair = saved.get(id) || (d.publicKey ? [...saved.values()].find(s => s.publicKey === d.publicKey) : null)
-      merged.set(pair?.id || id, {
-        id: pair?.id || id,
+    for (const d of discovered.values()) {
+      const pair = pairedWith(d)
+      merged.set(pair?.id || d.id, {
+        id: pair?.id || d.id,
         name: d.name || pair?.name || 'PearTube TV',
         host: d.host,
-        port: d.port,
-        publicKey: d.publicKey || pair?.publicKey || '',
+        publicKey: pair?.publicKey || d.publicKey,
         online: true,
         paired: Boolean(pair?.token) || d.auth === 'open',
-        p2p: Boolean(d.p2p || pair?.p2p),
-        transport: (d.publicKey || pair?.publicKey) ? 'lan+p2p' : 'lan',
+        p2p: true,
+        transport: 'lan+p2p',
         auth: d.auth
       })
     }
     for (const [id, s] of saved) {
-      if (s.webHosted || merged.has(id)) continue
-      if (s.host && s.port && [...discovered.values()].some(d => d.host === s.host && d.port === s.port)) continue
-      merged.set(id, {
-        id,
-        name: s.name || 'Paired TV',
-        host: s.host || null,
-        port: s.port || 0,
-        publicKey: s.publicKey || '',
-        online: Boolean(s.publicKey) || active?.receiverId === id,
-        paired: Boolean(s.token),
-        p2p: Boolean(s.p2p || s.publicKey),
-        transport: s.publicKey ? (s.host ? 'lan+p2p' : 'p2p') : 'lan',
-        auth: 'code'
-      })
+      if (merged.has(id) || !s.publicKey) continue
+      merged.set(id, { id, name: s.name || 'Paired TV', host: null, publicKey: s.publicKey, online: true, paired: Boolean(s.token), p2p: true, transport: 'p2p', auth: 'code' })
     }
     return [...merged.values()]
   }
 
-  // `address`: what a user typed for a screen, its 64-hex key or host[:port] (the port defaults to RECEIVER_PORT).
-  async function pairReceiver ({ id = '', code = '', uri = '', address = '', host = '', port = 0, publicKey = '', name = '' } = {}) {
-    if (address) ({ host = '', port = 0, publicKey = '' } = receiverAddress(address))
+  // What is known about a receiver: what pairing saved and what mDNS shows now. The saved key wins: mDNS is unsigned.
+  function receiverTarget (receiverId) {
+    const disc = discovered.get(receiverId) || null
+    const pair = saved.get(receiverId) || (disc && pairedWith(disc))
+    return {
+      publicKey: pair?.publicKey || disc?.publicKey || '',
+      lan: disc?.lan || null,
+      current: disc ? disc.current : true,
+      token: pair?.token || '',
+      name: disc?.name || pair?.name || 'PearTube TV',
+      auth: disc?.auth || 'code'
+    }
+  }
+
+  // Connects this device's node to the receiver's node, on the LAN when mDNS showed its address, and opens the cast
+  // channel on that connection (src/cast-control.js).
+  async function connectReceiver ({ publicKey, lan = null, current = true }, handlers = {}) {
+    if (!HEX64.test(publicKey)) throw new Error('This receiver has no key: pair it again with its link or code')
+    if (!current) throw new Error('This receiver runs an older PearTube: update it')
+    const node = getNode() || (ensureNode ? await ensureNode() : null)
+    if (!node) throw new Error('P2P node is not started')
+    node.joinLanTopic('cast', CAST_LAN_TOPIC)
+    const conn = await node.connectPeer(publicKey, { lan })
+    const control = await openControl(conn, handlers)
+    control.transport = node.isLanConnection(conn) ? 'lan' : 'p2p'
+    return control
+  }
+
+  // Pairs with a receiver: by its link, which carries the token, or by the 6-character code on its screen. `address`
+  // is a receiver's 64-hex key as a user typed it.
+  async function pairReceiver ({ id = '', code = '', uri = '', address = '', publicKey = '', name = '' } = {}) {
+    let token = ''
     if (uri) {
       const parsed = parseUri(uri)
       if (parsed.action !== 'receiver') throw new Error('Expected a peartube://receiver/... URI')
-      const recId = parsed.deviceId || parsed.publicKey || `${parsed.host}:${parsed.port}`
-      const record = {
-        id: recId,
-        name: cleanName(parsed.name, 'Paired TV'),
-        host: parsed.host || '',
-        port: Number(parsed.port) || 0,
-        publicKey: parsed.publicKey || '',
-        token: parsed.token || '',
-        p2p: Boolean(parsed.p2p || parsed.publicKey)
-      }
-      if (!record.token && code) {
-        return pairReceiver({ id: recId, code, host: record.host, port: record.port, publicKey: record.publicKey, name: record.name })
-      }
-      if (record.host && record.port > 0) {
-        try {
-          const info = await httpJson(`http://${record.host}:${record.port}/cast/v1/info`, { timeoutMs: 2500 })
-          if (info.deviceId) record.id = info.deviceId
-          if (info.name) record.name = cleanName(info.name)
-          if (info.publicKey) record.publicKey = info.publicKey
-          record.p2p = Boolean(info.capabilities?.p2p || record.publicKey)
-        } catch {}
-      }
-      saved.set(record.id, record)
-      persistSaved()
-      emitChange()
-      return record
+      ;({ publicKey, token } = parsed)
+      id = id || parsed.deviceId
+      name = name || parsed.name
     }
-
-    const disc = discovered.get(id) || [...discovered.values()].find(d => d.publicKey && d.publicKey === publicKey)
-    const targetHost = host || disc?.host || ''
-    const targetPort = Number(port || disc?.port || 0)
-    const targetPk = (publicKey || disc?.publicKey || (HEX64.test(id.toLowerCase()) ? id.toLowerCase() : '')).toLowerCase()
-    const cleanCode = normalizePairCode(code)
-
-    if (targetHost && targetPort > 0) {
+    if (address) publicKey = String(address).trim()
+    const disc = discovered.get(id) || [...discovered.values()].find(d => d.publicKey && d.publicKey === publicKey.toLowerCase()) || null
+    const key = (publicKey || disc?.publicKey || id).toLowerCase()
+    if (!HEX64.test(key)) throw new Error('Enter a receiver link or its 64-hex key')
+    let record = { id: disc?.id || id || key, name: cleanName(name || disc?.name, 'PearTube TV'), publicKey: key, token }
+    if (!token) {
+      const control = await connectReceiver({ publicKey: key, lan: disc?.lan, current: disc ? disc.current : true })
       try {
-        const res = await httpJson(`http://${targetHost}:${targetPort}/cast/v1/pair`, {
-          method: 'POST',
-          body: { code: cleanCode, clientName: 'PearTube' },
-          timeoutMs: 5000
-        })
-        const recId = res.deviceId || id || targetPk || `${targetHost}:${targetPort}`
-        const record = {
-          id: recId,
-          name: cleanName(res.name || name || disc?.name, 'PearTube TV'),
-          host: targetHost,
-          port: res.port || targetPort,
-          publicKey: res.publicKey || targetPk,
-          token: res.token || '',
-          p2p: Boolean(res.capabilities?.p2p || res.publicKey || targetPk)
-        }
-        saved.set(recId, record)
-        persistSaved()
-        emitChange()
-        return record
-      } catch (err) {
-        if (!targetPk || /pairing code/i.test(err.message)) throw err
-      }
-    }
-
-    if (targetPk) {
-      const node = getNode() || (ensureNode ? await ensureNode() : null)
-      if (!node?.dht) throw new Error('Start PearTube P2P node before pairing over Noise public key')
-      const rpc = await connectNoiseRpc(node.dht, targetPk, { relayThrough: node.swarm.relayThrough })
-      try {
-        const res = await rpc.call('pair', { code: cleanCode, clientName: 'PearTube' })
-        const recId = res.deviceId || targetPk
-        const record = {
-          id: recId,
-          name: cleanName(res.name || name, 'PearTube TV'),
-          host: targetHost,
-          port: targetPort,
-          publicKey: res.publicKey || targetPk,
-          token: res.token || '',
-          p2p: true
-        }
-        saved.set(recId, record)
-        persistSaved()
-        emitChange()
-        return record
+        const res = await control.call('pair', { code: normalizePairCode(code) })
+        record = { id: res.deviceId || record.id, name: cleanName(res.name || record.name, 'PearTube TV'), publicKey: key, token: res.token || '' }
       } finally {
-        rpc.close()
+        control.close()
       }
     }
-
-    throw new Error('Receiver not reachable on LAN or P2P public key')
-  }
-
-  function receiverAddress (address) {
-    const a = String(address).trim().toLowerCase().replace(/^https?:\/\//, '').replace(/\/.*$/, '')
-    if (HEX64.test(a)) return { publicKey: a }
-    const i = a.lastIndexOf(':')
-    if (!a || i === 0) throw new Error('Enter a receiver link, host:port or 64-hex key')
-    return i > 0 ? { host: a.slice(0, i), port: Number(a.slice(i + 1)) || RECEIVER_PORT } : { host: a, port: RECEIVER_PORT }
+    saved.set(record.id, record)
+    persistSaved()
+    emitChange()
+    return record
   }
 
   function removeReceiver (id) {
@@ -1896,62 +1013,61 @@ export function createCastController ({
   let attempt = 0
   function closeActiveTransport () {
     attempt++
-    if (!active) return
-    clearInterval(active.pollTimer)
-    try { active.sseReq?.destroy() } catch {}
-    try { active.noiseRpc?.close() } catch {}
+    const session = active
     active = null
+    session?.control?.close()
   }
   function claim (mine, session) {
     if (mine !== attempt) {
-      try { session.noiseRpc?.close() } catch {}
+      session.control?.close()
       throw new Error('A newer cast or stop replaced this one')
     }
     active = session
     return session
   }
 
-  function subscribeHttpSse (baseUrl, token, sessionRef) {
-    let lastSseAt = 0
-    const url = `${baseUrl}/cast/v1/events${token ? `?token=${encodeURIComponent(token)}` : ''}`
-    const req = httpRequest(url, res => {
-      if (res.statusCode !== 200) { res.resume?.(); return }
-      let buf = ''
-      res.on('data', chunk => {
-        if (active !== sessionRef) return
-        lastSseAt = Date.now()
-        buf += b4a.toString(b4a.isBuffer(chunk) ? chunk : b4a.from(chunk))
-        let idx
-        while ((idx = buf.indexOf('\n\n')) !== -1) {
-          const block = buf.slice(0, idx)
-          buf = buf.slice(idx + 2)
-          for (const line of block.split('\n')) {
-            if (!line.startsWith('data:')) continue
-            try {
-              const ev = JSON.parse(line.slice(5).trim())
-              if (ev.event === 'state' && ev.state && active === sessionRef) {
-                sessionRef.state = ev.state
-                emitChange()
-              }
-            } catch {}
-          }
-        }
-      })
+  // Opens the control channel for a cast or an attach. The session shows state pushes once `claim` makes it active.
+  async function openSession (receiverId, target) {
+    const session = { receiverId, receiverName: target.name, transport: '', token: target.token, state: idleCastState(), control: null }
+    session.control = await connectReceiver(target, {
+      onEvent: msg => {
+        if (active !== session || msg.event !== 'state' || !msg.state) return
+        session.state = msg.state
+        emitChange()
+      },
+      // The channel closes with its connection, and a LAN link can replace a DHT link under a session. Take the
+      // remote back on the link that is left; if the TV is gone, the session ends.
+      onClose: () => {
+        if (active !== session) return
+        active = null
+        emitChange()
+        if (!closing) castAttach({ receiverId }).catch(() => {})
+      }
     })
-    req.on('error', () => {})
-    req.end()
-    sessionRef.sseReq = req
-    sessionRef.pollTimer = setInterval(async () => {
-      if (active !== sessionRef || Date.now() - lastSseAt < 1200) return
-      try {
-        const info = await httpJson(`${baseUrl}/cast/v1/info`, { timeoutMs: 1500 })
-        if (active === sessionRef && info?.state) {
-          sessionRef.state = info.state
-          emitChange()
-        }
-      } catch {}
-    }, 1000)
-    sessionRef.pollTimer.unref?.()
+    session.transport = session.control.transport
+    return session
+  }
+
+  // Opens a session with a receiver and sends it `command`: a load, or a status read to take over a TV that plays.
+  async function startSession (receiverId, command, timeoutMs) {
+    const target = receiverTarget(receiverId)
+    if (!target.token && target.auth !== 'open') {
+      throw new Error(`Pair with ${target.name} using its 6-character TV code before casting`)
+    }
+    closeActiveTransport()
+    const mine = attempt
+    const session = await openSession(receiverId, target)
+    try {
+      await session.control.call('subscribe', { token: target.token })
+      const res = await session.control.call('cmd', { token: target.token, ...command }, timeoutMs)
+      if (res.state) session.state = res.state
+      claim(mine, session)
+      emitChange()
+      return status()
+    } catch (err) {
+      session.control.close()
+      throw err
+    }
   }
 
   async function resolveEntryToCast (node, { key, uri }) {
@@ -1976,200 +1092,41 @@ export function createCastController ({
     return { item, raw }
   }
 
-  async function castPlay ({ receiverId, key = null, uri = null, preferMode = 'auto', startPositionMs = 0 }) {
+  async function castPlay ({ receiverId, key = null, uri = null, startPositionMs = 0 }) {
     const node = getNode() || (ensureNode ? await ensureNode() : null)
     if (!node) throw new Error('P2P node is not started')
     const { item, raw } = await resolveEntryToCast(node, { key, uri })
-    const discTarget = discovered.get(receiverId)
-    const pairTarget = saved.get(receiverId)
-    const targetP2PCapable = Boolean(discTarget?.p2p || pairTarget?.p2p)
-    // Don't pull a second uncached 4K stream onto the phone's Wi-Fi radio when a P2P TV receiver will stream directly from the swarm.
-    if (!targetP2PCapable || item.local || (item.cachedBytes || 0) > 0) {
-      await node.warm(raw)
-    }
-    allowedCastBlobs.add(raw.blobs)
-    const lanHost = getLanHost()
-    const blobSrv = await ensureLanBlobServer()
-    const hostForReceiver = webReceivers.has(receiverId)
-      ? (lanHost || '127.0.0.1')
-      : (lanHost || (discovered.get(receiverId)?.host === '127.0.0.1' || saved.get(receiverId)?.host === '127.0.0.1' ? '127.0.0.1' : null))
-    const httpStreamUrl = hostForReceiver
-      ? blobSrv.getLink(b4a.from(raw.blobs, 'hex'), { host: hostForReceiver, blob: raw.blob, type: guessMediaMime(raw) })
-      : null
-
-    const loadPayload = {
+    // A sender that holds the film opens it, so the TV fetches it from this device over their connection. One that
+    // does not leaves the download to the TV: no second 4K stream onto a phone's Wi-Fi.
+    if (item.local || (item.cachedBytes || 0) > 0) await node.warm(raw)
+    return startSession(receiverId, {
       action: 'load',
       entry: { key: item.key, id: item.id, title: item.title, size: item.size, sha256: item.sha256 },
-      httpStreamUrl,
-      // With its source, so the TV's openUri follows (private) or joins the source swarm (public) of the channel.
+      // With its channel, so the TV joins that channel's swarm.
       magnetUrl: formatWatchUri(raw, item.source || '', 'channel'),
-      senderPeerKey: node.peerKey,
-      senderPrivateRouting: Boolean(node.privateRouting),
-      senderLan: !node.privateRouting ? (node.lanEndpoint?.() || null) : null,
-      network: {
-        privateRouting: Boolean(node.privateRouting),
-        bootstrap: node.bootstrap || null,
-        relayThrough: node.relayThrough || null,
-        lan: Boolean(node.hasLan?.()),
-        sourceKey: item.source && HEX64.test(item.source) ? item.source : '',
-        sourceKind: item.sourceKind === 'channel' ? 'channel' : 'tracker'
-      },
-      preferMode,
       startPositionMs: Math.max(0, Number(startPositionMs) || 0)
-    }
-    if (webReceivers.has(receiverId)) {
-      const rec = webReceivers.get(receiverId)
-      if (!httpStreamUrl) throw new Error('Smart TV Web Receiver needs a LAN IPv4 address for HTTP streaming')
-      closeActiveTransport()
-      const cmd = { seq: ++rec.seq, action: 'load', entry: loadPayload.entry, mode: 'http', streamUrl: httpStreamUrl, httpStreamUrl, startPositionMs: loadPayload.startPositionMs }
-      const frame = b4a.from(`data: ${JSON.stringify({ event: 'command', command: cmd })}\n\n`)
-      for (const res of rec.clients) { try { res.write(frame) } catch { rec.clients.delete(res) } }
-      rec.state = { ...idleCastState(), status: 'loading', mode: 'http', entry: loadPayload.entry, positionMs: loadPayload.startPositionMs, playing: true, buffering: true }
-      active = { receiverId, receiverName: rec.name, transport: 'web', token: rec.pairToken, state: rec.state }
-      emitChange()
-      return status()
-    }
-
-    const disc = discovered.get(receiverId)
-    const pair = saved.get(receiverId) || (disc?.publicKey ? [...saved.values()].find(s => s.publicKey === disc.publicKey) : null)
-    const targetHost = disc?.host || pair?.host || ''
-    const targetPort = Number(disc?.port || pair?.port || 0)
-    const targetPk = (disc?.publicKey || pair?.publicKey || '').toLowerCase()
-    const token = pair?.token || ''
-    const receiverName = disc?.name || pair?.name || 'PearTube TV'
-
-    if (!token && disc?.auth !== 'open') {
-      throw new Error(`Pair with ${receiverName} using its 6-character TV code before casting`)
-    }
-
-    closeActiveTransport()
-    const mine = attempt
-
-    if (targetHost && targetPort > 0) {
-      const localLoad = (!httpStreamUrl && targetHost === '127.0.0.1')
-        ? { ...loadPayload, httpStreamUrl: blobSrv.getLink(b4a.from(raw.blobs, 'hex'), { host: '127.0.0.1', blob: raw.blob, type: guessMediaMime(raw) }) }
-        : loadPayload
-      try {
-        const baseUrl = `http://${targetHost}:${targetPort}`
-        const info = await httpJson(`${baseUrl}/cast/v1/info`, { timeoutMs: 2500 }).catch(() => null)
-        node.joinPeer(String(info?.swarmKey || ''))
-        const headers = token ? { authorization: `Bearer ${token}` } : {}
-        const res = await httpJson(`${baseUrl}/cast/v1/command`, { method: 'POST', headers, body: localLoad, timeoutMs: 12_000 })
-        if (!node.privateRouting && res.state?.peerLan) node.dialLanPeer?.(res.state.peerLan)
-        node.joinPeer(String(res.state?.peerSwarmKey || ''), { lanFirst: targetHost !== '127.0.0.1' })
-        const sessionRef = claim(mine, { receiverId, receiverName, transport: 'lan', baseUrl, token, publicKey: targetPk, state: res.state || idleCastState(), sseReq: null, noiseRpc: null })
-        subscribeHttpSse(baseUrl, token, sessionRef)
-        emitChange()
-        return status()
-      } catch (err) {
-        if (!targetPk || mine !== attempt || /unauthorized|pair/i.test(err.message)) throw err
-      }
-    }
-
-    if (targetPk) {
-      const rpc = await connectNoiseRpc(node.dht, targetPk, {
-        relayThrough: node.swarm.relayThrough,
-        onState: nextState => {
-          if (active?.noiseRpc === rpc) {
-            active.state = nextState
-            emitChange()
-          }
-        },
-        onClose: () => {
-          if (active?.noiseRpc === rpc) emitChange()
-        }
-      })
-      try {
-        await rpc.call('subscribe', { token })
-        const res = await rpc.call('cmd', { token, ...loadPayload }, 20_000)
-        node.joinPeer(String(res.state?.peerSwarmKey || ''))
-        claim(mine, { receiverId, receiverName, transport: 'p2p', baseUrl: null, token, publicKey: targetPk, state: res.state || idleCastState(), sseReq: null, noiseRpc: rpc })
-        return status()
-      } catch (err) {
-        rpc.close()
-        throw err
-      }
-    }
-
-    throw new Error(`Cannot reach receiver ${receiverName}`)
+    }, 20_000)
   }
 
-  // Reconnects as a remote control to a TV receiver that is already playing autonomously P2P.
-  async function castAttach ({ receiverId }) {
-    const disc = discovered.get(receiverId)
-    const pair = saved.get(receiverId) || (disc?.publicKey ? [...saved.values()].find(s => s.publicKey === disc.publicKey) : null)
-    const targetHost = disc?.host || pair?.host || ''
-    const targetPort = Number(disc?.port || pair?.port || 0)
-    const targetPk = (disc?.publicKey || pair?.publicKey || '').toLowerCase()
-    const token = pair?.token || ''
-    const receiverName = disc?.name || pair?.name || 'PearTube TV'
-    closeActiveTransport()
-    const mine = attempt
-    if (targetHost && targetPort > 0) {
-      const baseUrl = `http://${targetHost}:${targetPort}`
-      const headers = token ? { authorization: `Bearer ${token}` } : {}
-      const res = await httpJson(`${baseUrl}/cast/v1/command`, { method: 'POST', headers, body: { action: 'status' }, timeoutMs: 5000 })
-      const sessionRef = claim(mine, { receiverId, receiverName, transport: 'lan', baseUrl, token, publicKey: targetPk, state: res.state || idleCastState(), sseReq: null, noiseRpc: null })
-      subscribeHttpSse(baseUrl, token, sessionRef)
-      emitChange()
-      return status()
-    }
-    if (targetPk) {
-      const node = getNode() || (ensureNode ? await ensureNode() : null)
-      if (!node?.dht) throw new Error('Start PearTube P2P node before attaching over Noise public key')
-      const rpc = await connectNoiseRpc(node.dht, targetPk, {
-        relayThrough: node.swarm.relayThrough,
-        onState: nextState => { if (active?.noiseRpc === rpc) { active.state = nextState; emitChange() } },
-        onClose: () => { if (active?.noiseRpc === rpc) emitChange() }
-      })
-      await rpc.call('subscribe', { token })
-      const res = await rpc.call('cmd', { token, action: 'status' })
-      claim(mine, { receiverId, receiverName, transport: 'p2p', baseUrl: null, token, publicKey: targetPk, state: res.state || idleCastState(), sseReq: null, noiseRpc: rpc })
-      emitChange()
-      return status()
-    }
-    throw new Error(`Cannot reach receiver ${receiverName}`)
+  // Reconnects as a remote control to a TV receiver that is already playing on its own.
+  function castAttach ({ receiverId }) {
+    return startSession(receiverId, { action: 'status' }, 10_000)
   }
 
   async function castControl (cmd) {
-    if (!active) throw new Error('No active cast session')
-    if (active.transport === 'web') {
-      const rec = webReceivers.get(active.receiverId)
-      if (!rec) throw new Error('Web TV disconnected')
-      const fullCmd = { seq: ++rec.seq, ...cmd }
-      const frame = b4a.from(`data: ${JSON.stringify({ event: 'command', command: fullCmd })}\n\n`)
-      for (const res of rec.clients) { try { res.write(frame) } catch { rec.clients.delete(res) } }
-      if (cmd.action === 'stop') {
-        rec.state = idleCastState()
-        closeActiveTransport()
-      }
-      emitChange()
-      return status()
-    }
-    if (active.transport === 'lan' && active.baseUrl) {
-      const headers = active.token ? { authorization: `Bearer ${active.token}` } : {}
-      const res = await httpJson(`${active.baseUrl}/cast/v1/command`, { method: 'POST', headers, body: cmd, timeoutMs: 5000 })
-      if (res.state) active.state = res.state
-      if (cmd.action === 'stop') closeActiveTransport()
-      emitChange()
-      return status()
-    }
-    if (active.transport === 'p2p' && active.noiseRpc && !active.noiseRpc.closed) {
-      const res = await active.noiseRpc.call('cmd', { token: active.token, ...cmd })
-      if (res.state) active.state = res.state
-      if (cmd.action === 'stop') closeActiveTransport()
-      emitChange()
-      return status()
-    }
-    throw new Error('Cast session transport disconnected')
+    const session = active
+    if (!session) throw new Error('No active cast session')
+    const res = await session.control.call('cmd', { token: session.token, ...cmd })
+    if (res.state) session.state = res.state
+    if (cmd.action === 'stop' && active === session) closeActiveTransport()
+    emitChange()
+    return status()
   }
 
   async function castStop ({ stopPlayback = true } = {}) {
     // Also retires a cast still negotiating, so it can't take over after this stop.
-    if (!active) { closeActiveTransport(); return status() }
-    if (stopPlayback) await castControl({ action: 'stop' }).catch(() => {})
+    if (active && stopPlayback) await castControl({ action: 'stop' }).catch(() => {})
     closeActiveTransport()
-    allowedCastBlobs.clear()
     emitChange()
     return status()
   }
@@ -2185,20 +1142,16 @@ export function createCastController ({
       lanHost: getLanHost(),
       node,
       adapter,
-      allowPeerNode: true,
       openAuth,
       onCommand,
-      onChange: () => emitChange(),
-      worklet
+      onChange: () => emitChange()
     })
     emitChange()
     return localReceiver.info()
   }
 
   function status () {
-    const lanHost = getLanHost()
     return {
-      webReceiverUrl: castHubPort && lanHost ? `http://${lanHost}:${castHubPort}/tv` : (castHubPort ? `http://127.0.0.1:${castHubPort}/tv` : null),
       receivers: localReceiver ? [] : listReceivers(),
       session: active ? {
         receiverId: active.receiverId,
@@ -2211,8 +1164,9 @@ export function createCastController ({
   }
 
   return {
-    initHub: ensureWebHubServer,
     setLanHost: async host => {
+      // Looking for TVs on this LAN is when this device's node should become reachable to them.
+      getNode()?.joinLanTopic('cast', CAST_LAN_TOPIC)
       await refreshBrowse(host)
       await localReceiver?.setHost(host)
     },
@@ -2223,19 +1177,12 @@ export function createCastController ({
     castAttach,
     castControl,
     castStop,
-    registerWebReceiver,
-    handleWebEvents,
-    updateWebReceiverState,
-    handleHubSenderEvents,
-    handleHubCastJson,
-    webSetupQrSvg: url => url ? qrSvg(url) : '',
     startLocalReceiver,
     reportLocalReceiverState: patch => localReceiver ? localReceiver.reportState(patch) : null,
     status,
     async close () {
       closing = true
       closeActiveTransport()
-      allowedCastBlobs.clear()
       const prevBrowse = browseHandle
       browseHandle = null
       if (prevBrowse) await Promise.resolve(prevBrowse.stop?.()).catch(() => {})
@@ -2243,16 +1190,6 @@ export function createCastController ({
         const r = localReceiver
         localReceiver = null
         await r.close().catch(() => {})
-      }
-      if (castBlobServer) {
-        const b = castBlobServer
-        castBlobServer = null
-        await b.close().catch(() => {})
-      }
-      if (castHubServer) {
-        const h = castHubServer
-        castHubServer = null
-        await h.closeAllAndStop().catch(() => {})
       }
     }
   }

@@ -319,7 +319,7 @@ export function createHiverelaySeeder ({
   // Dedicated domain-separated Ed25519 publisher keypair so Blindspark allowlists never touch raw channel keys.
   const seedMaterial = createHash('sha256')
     .update('peartube/hiverelay-publisher/v1')
-    .update(node.channel.local.keyPair.secretKey)
+    .update(node.channel.local.keyPair?.secretKey || node.store.primaryKey)
     .digest()
   const publisherPubkey = b4a.alloc(32)
   const publisherSecret = b4a.alloc(64)
@@ -477,8 +477,7 @@ export function createHiverelaySeeder ({
         await db.append(encodeHyperdriveHeader(beaconBlobs.key))
       }
       if (!entry) {
-        node.swarm.join(db.discoveryKey, { server: true, client: true })
-        entry = { key: b4a.from(db.key), discKey: b4a.from(db.discoveryKey), byteLength: db.byteLength, lastLen: -1 }
+        entry = { key: b4a.from(db.key), discKey: b4a.from(db.discoveryKey), byteLength: db.byteLength, lastLen: -1, session: null }
         beaconDbs.set(core.key, entry)
         beaconAppToCore.set(b4a.toString(entry.key, 'hex'), core.key)
       }
@@ -629,9 +628,19 @@ export function createHiverelaySeeder ({
         for (let i = 0; i < take; i++) page.push(activePool[(start + i) % activePool.length])
         p2pCursor = (start + take) % activePool.length
       }
+      // Only the beacons of the page on offer stay on the DHT. Every beacon ever offered used to keep its topic: one
+      // announce per stored core for as long as the relay ran. A HiveRelay that accepts a core is already connected,
+      // and Corestore serves it the beacon over that connection.
+      const offered = new Set(page.map(core => core.key))
+      for (const [coreKey, entry] of beaconDbs) {
+        if (offered.has(coreKey) || !entry.session) continue
+        entry.session.destroy().catch(() => {})
+        entry.session = null
+      }
       const reqs = []
       for (const core of page) {
         const drive = await ensureCoreBeacon(core)
+        if (!drive.session) drive.session = node.swarm.join(drive.discKey, { server: true, client: true })
         const req = {
           appKey: drive.key,
           discoveryKeys: [b4a.from(core.key, 'hex')],
@@ -745,7 +754,7 @@ export function createHiverelaySeeder ({
       try { peer.channel.close() } catch {}
     }
     seedChannels.clear()
-    for (const { discKey } of beaconDbs.values()) node.swarm.leave(discKey).catch(() => {})
+    for (const { session } of beaconDbs.values()) session?.destroy().catch(() => {})
     beaconDbs.clear()
     beaconAppToCore.clear()
     if (beaconBlobs) {

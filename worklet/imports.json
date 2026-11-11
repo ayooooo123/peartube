@@ -4,5 +4,11 @@
   "dgram": "bare-dgram",
   "events": "bare-events",
   "net": "bare-net",
-  "os": "bare-os"
+  "os": "bare-os",
+  "node:buffer": "bare-buffer",
+  "node:crypto": "peartube-crypto",
+  "node:dgram": "bare-dgram",
+  "node:events": "bare-events",
+  "node:net": "bare-net",
+  "node:os": "bare-os"
 }

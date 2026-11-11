@@ -100,9 +100,12 @@ export async function createSources (ctx) {
       // A channel we already hold is a refresh: let the topic lookups answer first, or `update()`
       // returns at once against whatever peer spoke last. This is throttled across the node —
       // paying it per channel would stall rotating a large library for no extra truth.
-      if (src.hydrated && Date.now() - lastSwarmFlushAt > 10_000) {
+      if (src.hydrated && !ctx.net.dht && Date.now() - lastSwarmFlushAt > 10_000) {
         lastSwarmFlushAt = Date.now()
-        await Promise.race([ctx.net.swarm.flush().catch(() => {}), new Promise(r => setTimeout(r, 3_000))])
+        const done = ctx.storage.store.findingPeers()
+        const t = setTimeout(done, 3_000)
+        t.unref?.()
+        ctx.net.swarm.flush().then(done, done).finally(() => clearTimeout(t))
       }
       // Autobee goes quiet once a writer looks whole against the first hint it heard, and the
       // publisher's coupler skips announcing a core this peer already has open — so a follower
@@ -265,12 +268,16 @@ export async function createSources (ctx) {
           return null
         }
         src.bee = bee
-        src.conns = new WeakSet()
         src.cachedRev = -1
         src.touchedAt = touch ? ++touchClock : 0
         activeSources.add(k)
         ctx.net.joinOverlayTopic(`channel:${k}`, bee.key, bee.discoveryKey)
-        for (const conn of ctx.net.peerConns) ctx.net.attachSource(src, conn)
+        const done = !ctx.net.dht ? ctx.storage.store.findingPeers() : null
+        if (done) {
+          const t = setTimeout(done, 3_000)
+          t.unref?.()
+          ctx.net.swarm.flush().then(done, done).finally(() => clearTimeout(t))
+        }
         bee.update().then(() => {
           if (!ctx.life.closing && src.bee === bee) {
             src.cachedRev = -1
@@ -366,7 +373,7 @@ export async function createSources (ctx) {
     sourceRotateTimer = setTimeout(async () => {
       sourceRotateTimer = null
       if (ctx.life.closing) return
-      if (!rotatingSources) {
+      if (!rotatingSources && !ctx.life.suspended) {
         rotatingSources = true
         try {
           const prevEpoch = ctx.channel.viewEpoch()

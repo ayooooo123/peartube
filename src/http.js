@@ -3,7 +3,6 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import b4a from 'b4a'
 import { page } from './ui.js'
-import { receiverPage } from './cast-ui.js'
 import { videoSize, resolutionLabel } from './resolution.js'
 import { MEDIA_FILE, parseUri } from './protocol.js'
 
@@ -150,8 +149,6 @@ export function createApi (state) {
   async function route (req, url) {
     const { node, acquirer } = state
     const path = url.pathname
-    if (state.cast && req.method === 'POST' && path === '/v1/cast/web-register') return state.cast.registerWebReceiver(await body(req))
-    if (state.cast && req.method === 'POST' && path === '/v1/cast/web-state') return state.cast.updateWebReceiverState(await body(req))
     // Writes, and the settings themselves, need the token; reads of public state do not.
     if (state.apiToken && (req.method === 'POST' || req.method === 'PUT' || req.method === 'DELETE' || path === '/v1/settings' || path.startsWith('/v1/identity'))) {
       if (req.headers.authorization !== `Bearer ${state.apiToken}`) {
@@ -319,14 +316,8 @@ export function createApi (state) {
       return state.mirror.run(plugin, payload)
     }
 
-    if (state.cast && path.startsWith('/cast/v1/')) {
-      return state.cast.handleHubCastJson(req, url)
-    }
     if (state.cast && path.startsWith('/v1/cast/')) {
-      if (req.method === 'GET' && path === '/v1/cast/status') {
-        const st = state.cast.status()
-        return { ...st, webReceiverQrSvg: st.webReceiverUrl ? state.cast.webSetupQrSvg(st.webReceiverUrl) : '' }
-      }
+      if (req.method === 'GET' && path === '/v1/cast/status') return state.cast.status()
       if (req.method === 'POST' && path === '/v1/cast/pair') return state.cast.pairReceiver(await body(req))
       const recDel = req.method === 'DELETE' && path.match(/^\/v1\/cast\/receivers\/([^/]+)$/)
       if (recDel) return state.cast.removeReceiver(decodeURIComponent(recDel[1]))
@@ -467,19 +458,6 @@ export function createApi (state) {
       })
       res.once('close', () => up.destroy())
       up.end()
-      return
-    }
-    if (req.method === 'GET' && (url.pathname === '/tv' || url.pathname === '/cast/receiver') && state.cast) {
-      res.writeHead(200, { ...CORS, ...ISOLATION, 'cache-control': 'no-cache', 'content-type': 'text/html; charset=utf-8' })
-      res.end(receiverPage({ mode: 'hub', defaultName: 'PearTube Smart TV' }))
-      return
-    }
-    if (req.method === 'GET' && url.pathname === '/v1/cast/web-events' && state.cast) {
-      state.cast.handleWebEvents(req, res, url)
-      return
-    }
-    if (req.method === 'GET' && url.pathname === '/cast/v1/events' && state.cast) {
-      state.cast.handleHubSenderEvents(req, res, url)
       return
     }
     if (req.method === 'GET' && url.pathname === '/v1/events') {

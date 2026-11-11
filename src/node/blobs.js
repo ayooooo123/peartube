@@ -135,11 +135,6 @@ export async function createBlobs (ctx) {
     const writer = b4a.toString(channel.local.key, 'hex')
     for await (const n of channel.view.createReadStream()) {
       const k = b4a.toString(n.key)
-      if (k.startsWith('writer/')) {
-        const wHex = k.slice(7)
-        if (wHex !== primaryKey) ctx.channel.secondaryWriters.add(wHex)
-        continue
-      }
       if (k.startsWith('source/')) {
         ctx.channel.markHasEntries()
         continue
@@ -202,6 +197,9 @@ export async function createBlobs (ctx) {
 
   // Multi-cursor 16 MiB parallel read-ahead across libuv workers for human viewers (skipped for bulkPeers so HiveRelays never thrash array disks).
   const bulkPeers = new Set()
+  // Peers that have sent this node verified blocks. Only their `peartube/bulk-busy` claims count (src/traffic.js).
+  const sourcePeers = new Set() // peer key hex, forgotten with the peer's last connection
+  const servedBy = new WeakSet() // Hypercore peers already recorded
   const warmCursors = new WeakMap()
   function warmAhead (core, index, lookahead = 32) {
     if (ctx.life.closing || !core?.opened || core.length <= 0) return
@@ -270,7 +268,6 @@ export async function createBlobs (ctx) {
   const onCoreWake = raw => {
     if (ctx.life.closing || !raw?.discoveryKey) return
     const discHex = b4a.toString(raw.discoveryKey, 'hex')
-    ctx.storage.storedDisc.add(discHex)
     absentDisc.delete(discHex)
     const hex = ownedByDiscovery.get(discHex) || cachedByDiscovery.get(discHex)
     if (!hex || weakOwned.has(hex) || blobCores.has(hex)) return
@@ -291,7 +288,11 @@ export async function createBlobs (ctx) {
     c.ready = syncBlockCounter(core).then(() => {
       if (hex) recordCached(hex, core.length, core.byteLength, c.blocks, c.slices)
     }).catch(() => {})
-    core.on('download', (index, byteLength) => {
+    core.on('download', (index, byteLength, from) => {
+      if (from?.remotePublicKey && !servedBy.has(from)) {
+        servedBy.add(from)
+        sourcePeers.add(b4a.toString(from.remotePublicKey, 'hex'))
+      }
       c.blocks++
       c.slices.clear()
       if (hex) {
@@ -357,7 +358,7 @@ export async function createBlobs (ctx) {
   const warmRanges = new Map()
   async function warm (entry) {
     if (!entry?.blobs || !entry?.blob) return
-    ctx.net.joinContentSwarm(entry.blobs)
+    ctx.net.wantContent(entry.blobs)
     const core = await blobCore(entry.blobs)
     const tag = `${entry.blobs}:${entry.blob.blockOffset}`
     if (warmRanges.has(tag)) return
@@ -478,7 +479,7 @@ export async function createBlobs (ctx) {
           warmRanges.delete(tag)
         }
       }
-      ctx.net.leaveContentSwarm(entry.blobs)
+      ctx.net.leaveContent(entry.blobs)
       await dropOwned(entry.blobs)
       const openSession = blobCores.get(entry.blobs)
       blobCores.delete(entry.blobs)
@@ -486,6 +487,11 @@ export async function createBlobs (ctx) {
       const victim = ctx.storage.store.get({ key: b4a.from(entry.blobs, 'hex') })
       await victim.ready()
       await victim.purge()
+      const beaconDisc = await ctx.storage.coreStorage.getAlias({
+        name: `hiverelay-beacon-${entry.blobs.slice(0, 16)}`,
+        namespace: ctx.storage.store.ns
+      }).catch(() => null)
+      if (beaconDisc) await ctx.storage.store.purge(beaconDisc, { force: true }).catch(() => {})
       await gcStorage({ full: false })
       return
     }
@@ -634,7 +640,7 @@ export async function createBlobs (ctx) {
         if (freed > 0) {
           evicted += freed
           total = Math.max(0, total - freed)
-          if (!slotSet.has(hex)) ctx.net.leaveContentSwarm(hex)
+          if (!slotSet.has(hex)) ctx.net.leaveContent(hex)
         }
       }
       // One film can be larger than the whole budget. Keep a window around its
@@ -863,7 +869,7 @@ export async function createBlobs (ctx) {
         unlockedVideoKeys.set(keyHex, videoKey)
       }
       await core.close()
-      ctx.net.joinContentSwarm(keyHex)
+      ctx.net.announceContent(keyHex)
       return {
         type: 'announce',
         id,
@@ -912,7 +918,7 @@ export async function createBlobs (ctx) {
     const op = source ? await put(metaOrOp, source) : decodeOp(JSON.stringify({ ...metaOrOp, type: 'announce' }))
     if (!op || op.type !== 'announce') throw new Error('Invalid channel announce payload')
     await ctx.channel.append(op)
-    ctx.net.joinContentSwarm(op.blobs)
+    if (isOwnedBlob(op.blobs)) ctx.net.announceContent(op.blobs)
     const writerHex = b4a.toString(ctx.channel.channel.local.key, 'hex')
     return {
       ...op,
@@ -953,7 +959,7 @@ export async function createBlobs (ctx) {
         const slice = `${op.id}/${op.blobs}:${op.blob.blockOffset}`
         if (!existing.has(slice)) {
           await ctx.channel.append(op)
-          ctx.net.joinContentSwarm(op.blobs)
+          ctx.net.announceContent(op.blobs)
           existing.add(slice)
           backfilled++
         }
@@ -1053,7 +1059,7 @@ export async function createBlobs (ctx) {
         })
         if (newOp.sha256 !== g.sha256 || newOp.size !== g.size) {
           await dropOwned(newOp.blobs)
-          ctx.net.leaveContentSwarm(newOp.blobs)
+          ctx.net.leaveContent(newOp.blobs)
           const bad = ctx.storage.store.get({ key: b4a.from(newOp.blobs, 'hex') })
           await bad.ready().then(() => bad.purge()).catch(() => bad.close().catch(() => {}))
           throw new Error(`SHA-256 mismatch rechunking ${sample.id}: expected ${g.sha256}, got ${newOp.sha256}`)
@@ -1095,7 +1101,7 @@ export async function createBlobs (ctx) {
         const hex = b4a.toString(key, 'hex')
         const encryptionKey = resolveBlobEncryptionKey(hex)
         if (encryptedBlobs.has(hex) && !encryptionKey) return null
-        ctx.net.joinContentSwarm(hex)
+        ctx.net.wantContent(hex)
         if (!isWorklet && !info?.head) lastHttpViewAt = Date.now()
         if (!isOwnedBlob(hex)) {
           await blobCore(hex).catch(() => {})
@@ -1156,6 +1162,7 @@ export async function createBlobs (ctx) {
     localBlocks,
     ensureBlockCounter,
     bulkPeers,
+    sourcePeers,
     absentDisc,
     blobDisc,
     recordCached,

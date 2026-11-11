@@ -59,7 +59,9 @@ try {
   const entries = await relay.search()
   const movie = entries.find(entry => entry.id === 'imdb:tt0111161')
   assert.ok(movie)
-  receiverProcess = spawn(process.execPath, ['bin/receiver.js', '--thin', '--player', 'headless', '--port', '0', '--name', `PearTube E2E TV ${privateDir.split('-').at(-1)}`, '--storage', join(privateDir, 'receiver')], {
+  // The receiver is a node: it must be on the same DHT as the relay and the app, or the app cannot reach it by key.
+  const bootstrap = lan ? '127.0.0.1:9' : testnet.bootstrap.map(node => `${host}:${node.port}`).join(',')
+  receiverProcess = spawn(process.execPath, ['test/receiver-fixture.js', '--port', '0', '--name', `PearTube E2E TV ${privateDir.split('-').at(-1)}`, '--storage', join(privateDir, 'receiver'), '--bootstrap', bootstrap], {
     cwd: root, env: { ...process.env, PEARTUBE_LAN_HOST: host || '127.0.0.1' }, stdio: ['ignore', 'pipe', 'inherit']
   })
   const lines = createInterface({ input: receiverProcess.stdout })
@@ -71,10 +73,8 @@ try {
   lines.close()
   pairCode = receiver.pairCode
   const fixture = {
-    storage: `e2e-${Date.now()}`, tracker: relay.status().tracker,
-    bootstrap: lan ? '127.0.0.1:9' : testnet.bootstrap.map(node => `${host}:${node.port}`).join(','),
-    lan, movieKey: movie.key, movieTitle: movie.title, receiverId: receiver.deviceId,
-    receiverAddress: `${host || '127.0.0.1'}:${receiver.port}`, pairCode: receiver.pairCode,
+    storage: `e2e-${Date.now()}`, tracker: relay.status().tracker, bootstrap,
+    lan, movieKey: movie.key, movieTitle: movie.title, receiverId: receiver.deviceId, pairCode: receiver.pairCode,
     entries: entries.map(({ key, id, title }) => ({ key, id, title }))
   }
   const fixturePath = join(privateDir, 'fixture.json')

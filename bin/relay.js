@@ -196,6 +196,7 @@ async function start () {
     privateRouting: cfg('privateRouting'),
     relayThrough: list(cfg('relayThrough')),
     lan: lanFactory(),
+    announceCache: true,
     onchange: () => {
       api.notify('update')
       scheduleReplicate()
@@ -226,8 +227,7 @@ async function start () {
     storage,
     getNode: () => state.node,
     getLanHost: lanHost,
-    onchange: () => api.notify('cast'),
-    apiPort
+    onchange: () => api.notify('cast')
   })
   await state.cast.setLanHost(lanHost()).catch(() => {})
   const hiverelay = hiverelayOpt()

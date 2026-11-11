@@ -1,9 +1,32 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import HyperDHT from 'hyperdht'
+import Hyperswarm from 'hyperswarm'
+import Protomux from 'protomux'
+import c from 'compact-encoding'
 import b4a from 'b4a'
+import { mkdtempSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import createTestnet from 'hyperdht/testnet.js'
+import { createNode } from '../src/index.js'
+import { createReceiver } from '../src/cast.js'
+import { openControl } from '../src/cast-control.js'
 import { selfAddressAdapter, createLan } from '../src/lan.js'
 import { mdnsBus } from './mdns.js'
+
+// Errors that reach the process: a peer's bytes must never cause one.
+function processFaults (t) {
+  const faults = []
+  const onFault = err => faults.push(err)
+  process.on('unhandledRejection', onFault)
+  process.on('uncaughtException', onFault)
+  t.after(() => {
+    process.off('unhandledRejection', onFault)
+    process.off('uncaughtException', onFault)
+  })
+  return faults
+}
 
 // Behind an mDNS reflector the packet's sender is the router. The peer must be
 // dialed at the address it advertised for its own DHT, not at the reflector.
@@ -223,4 +246,155 @@ test('a peer whose topics change back stays visible on the network', async () =>
     await a.destroy()
     await b?.destroy()
   }
+})
+
+// Roaming off Wi-Fi onto cellular must never strand a peer that Hyperswarm saw while LAN was up,
+// live `setAllowedPeers` updates must unban newly admitted keys and sever revoked ones, and `suspend`/`resume`
+// must park and wake both Hyperswarm and Corestore cleanly.
+test('roaming from LAN to public DHT, live setAllowedPeers unban, and node suspend/resume recover cleanly', async t => {
+  const testnet = await createTestnet(3)
+  const bus = mdnsBus()
+  const mkTmp = () => mkdtempSync(join(tmpdir(), 'peartube-lan-roam-'))
+  const until = async (fn, ms = 30_000, msg = 'timed out') => {
+    const end = Date.now() + ms
+    for (;;) {
+      const v = await fn()
+      if (v) return v
+      if (Date.now() > end) throw new Error(msg)
+      await new Promise(resolve => setTimeout(resolve, 150))
+    }
+  }
+  const zero = '0'.repeat(64)
+  const blob = { blockOffset: 0, blockLength: 1, byteOffset: 0, byteLength: 1 }
+  const announce = id => ({ type: 'announce', id, title: id, size: 1, sha256: zero, blobs: zero, blob })
+
+  const a = await createNode({
+    storage: mkTmp(),
+    bootstrap: testnet.bootstrap,
+    lan: kp => createLan({ host: '127.0.0.1', keyPair: kp, adapter: bus(s => s), dialAfter: 200 })
+  })
+  await a.append(announce('imdb:tt9000001'))
+  const channelKey = a.status().channel
+
+  const b = await createNode({
+    storage: mkTmp(),
+    bootstrap: testnet.bootstrap,
+    tracker: channelKey,
+    lan: kp => createLan({ host: '127.0.0.1', keyPair: kp, adapter: bus(s => s), dialAfter: 200 })
+  })
+  t.after(async () => {
+    await b.close()
+    await a.close()
+    await testnet.destroy()
+  })
+
+  await until(() => a.status().lanPeers === 1 && b.status().lanPeers === 1, 20_000, 'LAN link up')
+  // Force Hyperswarm to touch the peer while LAN is active; the old firewall permanently banned it here.
+  a.joinPeer(b.peerKey)
+  await until(() => a.swarm.peers.has(b.peerKey), 10_000, 'Hyperswarm observed LAN peer without banning it')
+  await new Promise(resolve => setTimeout(resolve, 400))
+  assert.equal(a.swarm.peers.get(b.peerKey)?.banned ?? false, false, 'LAN peer was never banned in Hyperswarm')
+
+  // Simulate walking off Wi-Fi onto public DHT only.
+  await b.setLan(null)
+  await a.setLan(null)
+  await until(() => a.status().peers >= 1 && b.status().peers >= 1, 20_000, 'reconnected over public DHT after LAN drop')
+  await a.append(announce('imdb:tt9000002'))
+  await until(async () => (await b.search('imdb:tt9000002')).length === 1, 20_000, 'synced new publish over public DHT')
+
+  // Live allowlist: revoking b drops its live connection and firewall-bans its next knock; re-admitting unbans it.
+  a.setAllowedPeers(['f'.repeat(64)])
+  await until(() => a.status().peers === 0, 10_000, 'revoked peer disconnected immediately')
+  b.joinPeer(a.peerKey)
+  await new Promise(resolve => setTimeout(resolve, 600))
+  assert.equal(a.status().peers, 0, 'unlisted peer kept out')
+  a.setAllowedPeers([b.peerKey])
+  a.joinPeer(b.peerKey)
+  await until(() => a.status().peers >= 1 && b.status().peers >= 1, 20_000, 'newly allowlisted peer unbanned and reconnected')
+
+  // Suspend + resume parks and restores both Hyperswarm and Corestore without corrupting storage.
+  await b.suspend()
+  assert.equal(b.status().peers, 0, 'suspended node dropped swarm connections')
+  await b.resume()
+  b.joinPeer(a.peerKey)
+  await a.append(announce('imdb:tt9000003'))
+  await until(async () => (await b.search('imdb:tt9000003')).length === 1, 20_000, 'resumed node synced new entry')
+})
+
+const CAST_PROTOCOL = 'peartube-cast/v1'
+const CAST_JUNK = ['null', '7', '"x"', '[]', '{broken', 'x'.repeat(80 * 1024)]
+
+// The first connection `swarm` gets after it dials `publicKey`.
+function dial (swarm, publicKey) {
+  return new Promise(resolve => {
+    swarm.once('connection', conn => { conn.on('error', () => {}); resolve(conn) })
+    swarm.joinPeer(publicKey)
+  })
+}
+
+test('a receiver outlives junk on its cast channel, and an open receiver is open to its LAN only', async t => {
+  const faults = processFaults(t)
+  const testnet = await createTestnet(3)
+  const mkTmp = () => mkdtempSync(join(tmpdir(), 'peartube-cast-cap-'))
+  const node = await createNode({ storage: mkTmp(), bootstrap: testnet.bootstrap })
+  const receiver = await createReceiver({ storage: mkTmp(), node, openAuth: true })
+  const stranger = new Hyperswarm({ bootstrap: testnet.bootstrap })
+  t.after(async () => {
+    await stranger.destroy({ force: true })
+    await receiver.close()
+    await node.close()
+    await testnet.destroy()
+  })
+
+  // The channel spoken by hand, to send what a real sender never would: text that is not a JSON object, and a frame
+  // over the size cap.
+  const conn = await dial(stranger, b4a.from(receiver.publicKey, 'hex'))
+  const replies = []
+  const channel = Protomux.from(conn).createChannel({ protocol: CAST_PROTOCOL, id: null })
+  const text = channel.addMessage({ encoding: c.string, onmessage: reply => replies.push(JSON.parse(reply)) })
+  channel.open()
+  for (const junk of CAST_JUNK) text.send(junk)
+  text.send(JSON.stringify({ id: 9, type: 'cmd', action: 'status' }))
+  const deadline = Date.now() + 5000
+  while (replies.length === 0 && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 50))
+
+  assert.deepEqual(replies.map(r => r.id), [9], 'only the request is answered')
+  assert.equal(replies[0].ok, false)
+  assert.match(replies[0].error, /Unauthorized/, 'an open receiver still asks a peer from across the DHT for its token')
+  assert.equal(conn.destroyed, false, 'junk does not cost the peer its connection')
+  assert.deepEqual(faults, [], 'no frame from a peer reaches the process as an error')
+})
+
+test('a cast sender outlives junk from a receiver', async t => {
+  const faults = processFaults(t)
+  const testnet = await createTestnet(3)
+  const receiver = new Hyperswarm({ bootstrap: testnet.bootstrap })
+  const sender = new Hyperswarm({ bootstrap: testnet.bootstrap })
+  t.after(async () => {
+    await sender.destroy({ force: true })
+    await receiver.destroy({ force: true })
+    await testnet.destroy()
+  })
+  // A receiver that answers every request with junk first, then with the reply.
+  receiver.on('connection', conn => {
+    conn.on('error', () => {})
+    const mux = Protomux.from(conn)
+    mux.pair({ protocol: CAST_PROTOCOL }, () => {
+      const channel = mux.createChannel({ protocol: CAST_PROTOCOL, id: null })
+      const text = channel.addMessage({
+        encoding: c.string,
+        onmessage (request) {
+          const msg = JSON.parse(request)
+          for (const junk of CAST_JUNK) text.send(junk)
+          text.send(JSON.stringify({ id: msg.id, ok: true, result: { echo: msg.type } }))
+        }
+      })
+      channel.open()
+    })
+  })
+  await receiver.listen()
+
+  const control = await openControl(await dial(sender, receiver.keyPair.publicKey))
+  assert.deepEqual(await control.call('cmd'), { echo: 'cmd' })
+  assert.deepEqual(faults, [], 'no frame from a receiver reaches the process as an error')
 })

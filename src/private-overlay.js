@@ -161,27 +161,34 @@ function allocRawStream (dht, ctrlConn, framed) {
 function attachRpcChannel (conn, onRequest) {
   const mux = Protomux.from(conn)
   const pending = new Map()
-  let nextId = 1, closed = false
-  const ch = mux.createChannel({
-    protocol: PROTOCOL,
-    onclose () {
-      closed = true
-      for (const [, p] of pending) { clearTimeout(p.timer); p.reject(new Error('Guard channel closed')) }
-      pending.clear()
-    }
-  })
-  const msg = ch.addMessage({
-    encoding: frameEnc,
-    onmessage (f) {
-      const w = pending.get(f.id)
-      if (w && w.replyOp === f.op) { pending.delete(f.id); clearTimeout(w.timer); w.resolve(f.payload); return }
-      Promise.resolve(onRequest?.(f, send)).catch(() => {})
-    }
-  })
-  ch.open()
-  const send = (op, id, payload = b4a.alloc(0)) => { if (!closed && !conn.destroyed) msg.send({ op, id, payload }) }
+  let nextId = 1, closed = false, msg = null
+  const openChannel = () => {
+    if (closed || conn.destroyed || mux.opened({ protocol: PROTOCOL })) return
+    const ch = mux.createChannel({
+      protocol: PROTOCOL,
+      onclose () {
+        closed = true
+        for (const [, p] of pending) { clearTimeout(p.timer); p.reject(new Error('Guard channel closed')) }
+        pending.clear()
+      }
+    })
+    if (!ch) return
+    msg = ch.addMessage({
+      encoding: frameEnc,
+      onmessage (f) {
+        const w = pending.get(f.id)
+        if (w && w.replyOp === f.op) { pending.delete(f.id); clearTimeout(w.timer); w.resolve(f.payload); return }
+        Promise.resolve(onRequest?.(f, send)).catch(() => {})
+      }
+    })
+    ch.open()
+  }
+  // Pair before opening so an eager peer frame arriving mid-handshake never hits an unpaired Protomux slot.
+  mux.pair({ protocol: PROTOCOL }, openChannel)
+  openChannel()
+  const send = (op, id, payload = b4a.alloc(0)) => { if (!closed && !conn.destroyed && msg) msg.send({ op, id, payload }) }
   const request = (op, replyOp, payload = b4a.alloc(0), ms = 10_000) => {
-    if (closed || conn.destroyed) return Promise.reject(new Error('Control channel closed'))
+    if (closed || conn.destroyed || !msg) return Promise.reject(new Error('Control channel closed'))
     const id = nextId++
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => { pending.delete(id); reject(new Error(`RPC ${op} timeout`)) }, ms)
@@ -276,9 +283,9 @@ export async function createPrivateGuard ({
     entry.connecting = (async () => {
       const conn = dht.connect(targetGuardKey, { keyPair })
       conn.on('error', () => {}); conn.setKeepAlive(5000)
+      const rpc = attachRpcChannel(conn, null)
       const ok = await Promise.race([conn.opened, new Promise(r => { const t = setTimeout(() => r(false), 6000); t.unref?.() })])
       if (!ok || conn.destroyed || closing) { conn.destroy(); throw new Error('Guard unreachable') }
-      const rpc = attachRpcChannel(conn, null)
       await rpc.request(OP_HELLO, OP_HELLO, b4a.from('hop'), 4000)
       conn.once('close', () => {
         if (hopPeers.get(hex) === entry) hopPeers.delete(hex)

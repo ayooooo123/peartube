@@ -87,7 +87,7 @@ function parseReceiver (body, q) {
   const port = Number(q.port || (hp ? hp.slice(hp.lastIndexOf(':') + 1) : 0)) || 0
   const deviceId = !publicKey && !hp ? clean.replace(/[^0-9a-z_-]/g, '').slice(0, 64) : String(q.id || '').slice(0, 64)
   if (!publicKey && !deviceId && !(host && port > 0)) throw new Error('Receiver URI needs a 64-hex key, device ID, or host:port')
-  return { action: 'receiver', publicKey, deviceId, host, port, token: String(q.token || ''), name: cleanName(q.name || q.alias || '', 'Paired TV'), p2p: q.p2p === '1' || Boolean(publicKey) }
+  return { action: 'receiver', publicKey, deviceId, host, port, token: String(q.token || ''), name: cleanName(q.name || q.alias || '', 'Paired TV'), p2p: q.p2p === undefined ? Boolean(publicKey) : q.p2p === '1' }
 }
 
 // Any PearTube link or a raw 64-hex key, as the one thing it asks for: follow a channel (`source`), unlock

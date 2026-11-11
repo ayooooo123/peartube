@@ -155,9 +155,11 @@ test('channels, gossip discovery, cross-channel magnet seeding, reciprocity, Str
   await creator.close()
   await directory.close()
 
-  // Brand-new peer C has ZERO trackers and ZERO channels in common with B — it opens ONLY the peartube://watch/... magnet URI
-  // (stripped of sourceKey to prove pure content-swarm discovery over the video core's discoveryKey)!
-  const pureMagnet = bMovie.magnetUrl.replace(/&source=[0-9a-f]{64}(&kind=[a-z]+)?/i, '')
+  // Brand-new peer C follows nothing. It opens ONLY the peartube://watch/... link as B would share it. The link names
+  // the channel, so C joins that channel's swarm and reaches B, which serves its cached copy over that connection:
+  // a viewer never announces the video itself, and C does not start following the channel.
+  const sharedMagnet = bMovie.magnetUrl
+  assert.ok(sharedMagnet.includes(`source=${creatorChannel}`), 'a shared watch link names its channel')
   const viewerC = await createNode({ storage: tmp('viewer-c'), bootstrap: testnet.bootstrap })
   nodes.push(viewerC)
   const apiC = createApi({ node: viewerC, acquirer: null })
@@ -168,11 +170,12 @@ test('channels, gossip discovery, cross-channel magnet seeding, reciprocity, Str
   const openWatch = await (await fetch(`${baseC}/v1/open`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ uri: pureMagnet })
+    body: JSON.stringify({ uri: sharedMagnet })
   })).json()
   assert.equal(openWatch.action, 'watch')
   const fromSwarm = Buffer.from(await (await fetch(openWatch.entry.streamUrl)).arrayBuffer())
   assert.equal(sha256(fromSwarm), sha256(movieBytes), 'Viewer C streamed exact bytes from Viewer B cache while Creator A was offline')
+  assert.equal(viewerC.listSources().some(s => s.key === creatorChannel), false, 'opening a watch link does not follow its channel')
 
   sseAbort.abort()
   await sseTask

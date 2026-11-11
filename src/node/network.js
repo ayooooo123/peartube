@@ -5,9 +5,11 @@ import { tuneUdxSocket } from '../lan.js'
 import { createPrivateSwarm } from '../private-overlay.js'
 import { HEX64, str } from '../protocol.js'
 
-const MAX_CONTENT_TOPICS = 48
-// How often content beyond the announcement cap gets its turn on the DHT.
-const CONTENT_TOPIC_ROTATE_MS = 20_000
+// How many videos a node announces at once, and how often one past that cap gets its turn on the DHT.
+const MAX_ANNOUNCED = 48
+const ANNOUNCE_ROTATE_MS = 20_000
+// Titles looked up at once: the one playing and the last few opened.
+const MAX_LOOKUPS = 4
 
 export async function createNetwork (ctx) {
   const {
@@ -17,7 +19,9 @@ export async function createNetwork (ctx) {
     privateRouting = false,
     relayThrough = null,
     allowedPeers = null,
-    worklet: isWorklet = false
+    worklet: isWorklet = false,
+    announceCache = false,
+    keyPair = null
   } = ctx.opts
 
   const host = privateHost ?? (Array.isArray(bootstrap) && bootstrap.some(b => String(b?.host || b).startsWith('127.')) ? '127.0.0.1' : undefined)
@@ -27,7 +31,9 @@ export async function createNetwork (ctx) {
   let allowedSet = Array.isArray(allowedPeers) && allowedPeers.length ? new Set(allowedPeers.map(k => String(k).toLowerCase())) : null
   const lanPeers = new Set()
   const hasLanPeer = keyBuf => Boolean(keyBuf && [...lanPeers].some(c => !c.destroyed && c.remotePublicKey && b4a.equals(c.remotePublicKey, keyBuf)))
-  const firewall = remotePublicKey => (allowedSet ? !allowedSet.has(b4a.toString(remotePublicKey, 'hex')) : false) || hasLanPeer(remotePublicKey)
+  // Never feed LAN peers into Hyperswarm's firewall: Hyperswarm bans rejected keys for life (`peerInfo.ban(true)`),
+  // blinding cellular handoff once Wi-Fi drops; duplicate public sockets get destroyed cleanly on open instead.
+  const firewall = remotePublicKey => allowedSet ? !allowedSet.has(b4a.toString(remotePublicKey, 'hex')) : false
   const bucket = () => ({ closedRx: 0, closedTx: 0, prevRx: 0, prevTx: 0, downBps: 0, upBps: 0 })
   const traffic = { private: bucket(), public: bucket(), lan: bucket() }
   let prevRx = 0, prevTx = 0, prevAt = Date.now(), downBps = 0, upBps = 0
@@ -35,16 +41,8 @@ export async function createNetwork (ctx) {
   // Every replication connection, public swarm and LAN alike, for plugins that act per peer.
   const peerConns = new Set()
   const connListeners = new Set()
-  // A followed channel is an Autobee of its own, and Autobee's wakeup rides its replication stream:
-  // a peer that never gets one is never told which writer cores to fetch, so a follower stalls at
-  // whatever head it happened to wake with. `Hypercore.createProtocolStream` reuses the connection's
-  // existing Protomux, so sharing a connection here is safe.
-  function attachSource (src, conn) {
-    if (!src?.bee || !src.conns) return
-    if (src.conns.has(conn)) return
-    src.conns.add(conn)
-    try { src.bee.replicate(conn) } catch {}
-  }
+  // One root Corestore replication pipe and one shared ProtomuxWakeup stream serve the primary channel and every
+  // woken namespace together without stacking 25 duplicate close listeners and StreamTracker entries per peer.
   const trackConn = (conn, path) => {
     tuneUdxSocket(conn.rawStream?.socket)
     tuneUdxSocket(conn.rawStream?.rawStream?.socket)
@@ -53,11 +51,11 @@ export async function createNetwork (ctx) {
       peerConns.delete(conn)
       path.closedRx += conn.rawBytesRead || conn.rawStream?.bytesReceived || 0
       path.closedTx += conn.rawBytesWritten || conn.rawStream?.bytesTransmitted || 0
+      const key = conn.remotePublicKey
+      if (key && ![...peerConns].some(c => c.remotePublicKey && b4a.equals(c.remotePublicKey, key))) ctx.blobs.sourcePeers.delete(b4a.toString(key, 'hex'))
     })
-    ctx.channel.channel.replicate(conn)
-    if (ctx.sources) {
-      for (const s of ctx.sources.extraSources.values()) attachSource(s, conn)
-    }
+    const stream = ctx.storage.store.replicate(conn)
+    ctx.channel.wakeup.addStream(stream)
     for (const fn of connListeners) fn(conn)
   }
   const swarm = isPrivate
@@ -67,13 +65,15 @@ export async function createNetwork (ctx) {
         port: dhtPort || [0, 0],
         allowLoopback: privateOpts.allowLoopback,
         resolveAddress: privateOpts.resolveAddress,
-        firewall
+        firewall,
+        keyPair: keyPair || undefined
       })
     : new Hyperswarm({
         maxParallel: 16,
         bootstrap,
         port: dhtPort || [0, 0],
         firewall,
+        keyPair: keyPair || undefined,
         relayThrough: relayThrough && (force => force ? relayThrough.map(k => b4a.from(k, 'hex')) : null)
       })
   const dht = isPrivate ? swarm.dht : null
@@ -105,81 +105,124 @@ export async function createNetwork (ctx) {
     lan?.join(discKey)
   }
 
+  // A topic only this LAN hears: the peers on it connect to each other here, and it is never announced on the DHT.
+  function joinLanTopic (id, topic) {
+    if (dht || lanTopics.has(id)) return
+    lanTopics.set(id, topic)
+    lan?.join(topic)
+  }
+
+  // Two holds can share one topic: a followed channel and a watch link to it. Leaving one ends only that hold, and
+  // the topic leaves the DHT and the LAN with its last hold.
   async function leaveOverlayTopic (id) {
     const disc = discoveries.get(id)
     const discKey = lanTopics.get(id)
     discoveries.delete(id)
     lanTopics.delete(id)
-    if (discKey) lan?.leave?.(discKey)
+    if (discKey && ![...lanTopics.values()].some(held => b4a.equals(held, discKey))) lan?.leave?.(discKey)
     if (dht) await swarm.leaveSource(id).catch(() => {})
-    else if (disc) await swarm.leave(disc.topic).catch(() => {})
+    else if (disc) await disc.destroy().catch(() => {})
   }
 
   if (ctx.channel.usePrimary()) joinOverlayTopic(`channel:${ctx.channel.primaryKey}`, ctx.channel.channel.key, ctx.channel.channel.discoveryKey)
 
-  // Announces each video on its stock Hypercore discoveryKey, the topic HiveRelays and every PearTube since v0.4.32 look up.
-  const contentTopics = new Map()
-  function joinContentSwarm (blobsHex, evict = true) {
-    if (dht || ctx.life.closing || !str(blobsHex, HEX64)) return
-    // Re-joining an announced topic only refreshes its place in line: the eviction order is the
-    // serving order, so a title being played is the last one dropped.
-    if (contentTopics.has(blobsHex)) {
-      const live = contentTopics.get(blobsHex)
-      contentTopics.delete(blobsHex)
-      contentTopics.set(blobsHex, live)
-      return
-    }
-    if (contentTopics.size >= MAX_CONTENT_TOPICS) {
-      // Catalog reads never displace a topic just because a refresh saw a cached copy. Deliberate
+  // A video's DHT topic is its Hypercore discoveryKey, the one HiveRelays and every PearTube since v0.4.32 use.
+  // Announcing it tells the DHT and the LAN that this address holds the video. So a node announces only what it
+  // published, plus its complete cached copies when it is a relay (`announceCache`), and never looks peers up for
+  // those. A title being read is looked up without announcing. A peer that is already connected (the channel's
+  // swarm, the LAN) serves any video it stores over that connection with no topic at all.
+  const announced = new Map() // blobsHex -> { topic, session }, least recently served first
+  const lookups = new Map() // the same, least recently read first
+  const usable = hex => !dht && !ctx.life.closing && str(hex, HEX64)
+  const holdsAll = hex => {
+    const meta = ctx.blobs.cachedBlobs.get(hex)
+    return Boolean(meta && meta.length > 0 && meta.blocks >= meta.length)
+  }
+  function dropTopic (map, hex) {
+    const held = map.get(hex)
+    if (!held) return
+    map.delete(hex)
+    held.session.destroy().catch(() => {})
+    lan?.leave?.(held.topic)
+  }
+  function joinTopic (hex, opts) {
+    const topic = hypercoreCrypto.discoveryKey(b4a.from(hex, 'hex'))
+    lan?.join(topic)
+    return { topic, session: swarm.join(topic, opts) }
+  }
+  // Asking again for a held topic only refreshes its place in line: a title being played is the last one dropped.
+  function touch (map, hex) {
+    const held = map.get(hex)
+    if (!held) return false
+    map.delete(hex)
+    map.set(hex, held)
+    return true
+  }
+  function announceContent (hex, evict = true) {
+    if (!usable(hex) || touch(announced, hex)) return
+    if (announced.size >= MAX_ANNOUNCED) {
+      // Catalog reads never displace a topic just because a refresh saw a complete copy. Deliberate
       // joins still rotate the least recently served title out, owned or not: a finished download
       // walks the same queue, so a large library still gets its turn.
       if (!evict) return
-      const victim = contentTopics.keys().next().value
-      const oldTopic = contentTopics.get(victim)
-      contentTopics.delete(victim)
-      swarm.leave(oldTopic).catch(() => {})
-      lan?.leave?.(oldTopic)
+      dropTopic(announced, announced.keys().next().value)
     }
-    const topic = hypercoreCrypto.discoveryKey(b4a.from(blobsHex, 'hex'))
-    contentTopics.set(blobsHex, topic)
-    swarm.join(topic, { server: true, client: true })
-    lan?.join(topic)
+    const looked = lookups.get(hex)
+    lookups.delete(hex)
+    looked?.session.refresh({ server: true, client: false }).catch(() => {})
+    announced.set(hex, looked || joinTopic(hex, { server: true, client: false }))
   }
+  function lookupContent (hex) {
+    if (!usable(hex) || announced.has(hex) || touch(lookups, hex)) return
+    if (lookups.size >= MAX_LOOKUPS) dropTopic(lookups, lookups.keys().next().value)
+    lookups.set(hex, joinTopic(hex, { server: false, client: true }))
+  }
+  // A title about to be read: find its peers, unless this node holds all of it.
+  function wantContent (hex) {
+    if (ctx.blobs.isOwnedBlob(hex) || (announceCache && holdsAll(hex))) announceContent(hex)
+    else if (!holdsAll(hex)) lookupContent(hex)
+  }
+  function leaveContent (hex) {
+    dropTopic(announced, hex)
+    dropTopic(lookups, hex)
+  }
+  // A complete cached copy seen while the catalog is listed: a relay announces it when a slot is free.
+  const offerCopy = hex => { if (announceCache) announceContent(hex, false) }
   for (const s of ctx.blobs.blobSlots) {
-    if (s.core.length > 0 && await s.core.count(0, s.core.length) > 0) joinContentSwarm(s.key)
+    if (s.core.length > 0 && await s.core.count(0, s.core.length) > 0) announceContent(s.key)
   }
   for (const hex of ctx.blobs.ownedBlobs.keys()) {
-    if (contentTopics.size >= MAX_CONTENT_TOPICS) break
-    joinContentSwarm(hex)
+    if (announced.size >= MAX_ANNOUNCED) break
+    announceContent(hex)
   }
   // Content past the cap gets its turn slowly, one complete copy at a time. The status poll used to
   // join every cached core it walked, which churned the DHT and evicted whatever it happened to see.
   const rotateTimer = setInterval(() => {
-    if (ctx.life.closing) return
+    if (ctx.life.closing || ctx.life.suspended) return
     const candidates = []
-    for (const [hex, core] of ctx.blobs.blobCores) {
-      if (contentTopics.has(hex) || ctx.blobs.isOwnedBlob(hex) || !core.opened || core.length === 0) continue
-      ctx.blobs.ensureBlockCounter(core, hex)
-      if (ctx.blobs.localBlocks(core) >= core.length) candidates.push(hex)
-    }
-    for (const [hex, meta] of ctx.blobs.cachedBlobs) {
-      if (!contentTopics.has(hex) && !ctx.blobs.blobCores.has(hex) && !ctx.blobs.isOwnedBlob(hex) && meta.length > 0 && meta.blocks >= meta.length) {
-        candidates.push(hex)
+    if (announceCache) {
+      for (const [hex, core] of ctx.blobs.blobCores) {
+        if (announced.has(hex) || ctx.blobs.isOwnedBlob(hex) || !core.opened || core.length === 0) continue
+        ctx.blobs.ensureBlockCounter(core, hex)
+        if (ctx.blobs.localBlocks(core) >= core.length) candidates.push(hex)
+      }
+      for (const hex of ctx.blobs.cachedBlobs.keys()) {
+        if (!announced.has(hex) && !ctx.blobs.blobCores.has(hex) && !ctx.blobs.isOwnedBlob(hex) && holdsAll(hex)) candidates.push(hex)
       }
     }
-    for (const hex of ctx.blobs.ownedBlobs.keys()) if (!contentTopics.has(hex)) candidates.push(hex)
-    if (candidates.length > 0) joinContentSwarm(candidates[0])
-  }, CONTENT_TOPIC_ROTATE_MS)
+    for (const hex of ctx.blobs.ownedBlobs.keys()) if (!announced.has(hex)) candidates.push(hex)
+    if (candidates.length > 0) announceContent(candidates[0])
+  }, ANNOUNCE_ROTATE_MS)
   rotateTimer.unref?.()
   ctx.undo.push(() => clearInterval(rotateTimer))
-  if (ctx.channel.usePrimary()) ctx.channel.channel.update().then(() => ctx.life.closing ? null : ctx.blobs.hydrateOwned()).catch(() => {})
-
-  function leaveContentSwarm (blobsHex) {
-    const oldTopic = contentTopics.get(blobsHex)
-    if (!oldTopic) return
-    contentTopics.delete(blobsHex)
-    swarm.leave(oldTopic).catch(() => {})
-    lan?.leave?.(oldTopic)
+  if (ctx.channel.usePrimary()) {
+    const done = !dht ? ctx.storage.store.findingPeers() : null
+    if (done) {
+      const t = setTimeout(done, 3_000)
+      t.unref?.()
+      swarm.flush().then(done, done).finally(() => clearTimeout(t))
+    }
+    ctx.channel.channel.update().then(() => ctx.life.closing ? null : ctx.blobs.hydrateOwned()).catch(() => {})
   }
 
   let refreshTimer = null
@@ -191,6 +234,10 @@ export async function createNetwork (ctx) {
     if (!factory || ctx.life.closing || dht) return
     const next = factory(swarm.keyPair)
     next.on('connection', conn => {
+      if (allowedSet && conn.remotePublicKey && !allowedSet.has(b4a.toString(conn.remotePublicKey, 'hex'))) {
+        conn.destroy()
+        return
+      }
       lanPeers.add(conn)
       conn.once('close', () => lanPeers.delete(conn))
       if (conn.remotePublicKey) {
@@ -211,7 +258,7 @@ export async function createNetwork (ctx) {
       return
     }
     for (const discKey of lanTopics.values()) next.join(discKey)
-    if (!dht) for (const topic of contentTopics.values()) next.join(topic)
+    for (const held of [...announced.values(), ...lookups.values()]) next.join(held.topic)
     lan = next
   }
 
@@ -270,6 +317,16 @@ export async function createNetwork (ctx) {
 
   function setAllowedPeers (keys) {
     allowedSet = Array.isArray(keys) && keys.length ? new Set(keys.map(k => String(k).toLowerCase())) : null
+    if (swarm.peers) {
+      for (const [hex, peerInfo] of swarm.peers) {
+        if (!allowedSet || allowedSet.has(hex)) peerInfo.ban?.(false)
+      }
+    }
+    if (allowedSet) {
+      for (const conn of [...peerConns]) {
+        if (conn.remotePublicKey && !allowedSet.has(b4a.toString(conn.remotePublicKey, 'hex'))) conn.destroy()
+      }
+    }
   }
 
   return {
@@ -284,14 +341,16 @@ export async function createNetwork (ctx) {
     discoveries,
     joinOverlayTopic,
     leaveOverlayTopic,
-    joinContentSwarm,
-    leaveContentSwarm,
+    announceContent,
+    wantContent,
+    leaveContent,
+    offerCopy,
+    joinLanTopic,
     rotateTimer,
     get refreshTimer () { return refreshTimer },
     setLan,
     initLan,
     setAllowedPeers,
-    attachSource,
     inflightRange: () => inflightRange,
     setInflightRange: r => { inflightRange = r },
     get downBps () { return downBps },

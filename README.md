@@ -51,12 +51,13 @@ and the pieces.
   suggestions, and announces a Stremio-shaped id (`imdb:tt…` or `imdb:tt…:s01e02`) only when
   the title and year match exactly.
 - **Share quietly.** Relays and viewers fetch the pieces they need from whichever peers hold
-  them, cache what they watched, and keep seeding while online. No port forwarding is needed on
-  a LAN: `PEARTUBE_LAN_HOST` turns on mDNS discovery and direct dials.
+  them, cache what they watched, and keep serving the peers they are connected to. An app never
+  tells the DHT which videos it holds. No port forwarding is needed on a LAN: `PEARTUBE_LAN_HOST`
+  turns on mDNS discovery and direct dials.
 - **Follow channels and directories.** Keep a personal channel, follow someone else's,
   copy a channel, or publish a directory of catalogs so followers can find them.
-- **Cast to a TV.** Pair a phone, Mac, Android TV, Pi, LG webOS or Samsung Tizen receiver; a
-  dedicated TV APK and a zero-install `/tv` page both run a headless P2P receiver.
+- **Cast to a TV.** Pair a phone or Mac with an Android TV, a Pi or a Mac receiver. Every receiver
+  runs its own P2P node and PearTube's own player: a dedicated TV APK or a desktop receiver.
 - **Use it elsewhere.** Stremio takes `/manifest.json`, VLC/MPV/IINA/Kodi take
   `/v1/playlist.m3u`, and every app exposes the same `/v1` API and SSE stream on loopback.
 
@@ -64,7 +65,7 @@ and the pieces.
 
 1. **Unified Channels.** Every account or relay is a single [Autobee](https://github.com/holepunchto/autobee)
    Channel (`peartube://channel/<key>`) with a deterministic ACL `apply`, fast-forwarding only onto views the owner's own devices stamp:
-   followers replicate and seed read-only (`optimistic: false`), linked devices authenticate via a
+   followers replicate and seed read-only without appending, linked devices authenticate via a
    fork-proof 12-word BIP-39 recovery phrase (`claim`) or explicit writer grants (`owner`/`mod`/`writer`),
    owners and moderators can delete any entry or revoke writers, and optional `peartube://access/…`
    epoch passes encrypt per-video Hypercores so blind relays seed ciphertext while canceled subscribers
@@ -72,11 +73,15 @@ and the pieces.
 2. **Storage.** Every imported video becomes its own Hypercore with `512 KiB` blocks, opened
    lazily and closed at rest, so a viewer can start or seek before the whole file exists. Legacy
    shared-blob slots still read back, and `blob-rechunk` splits them in the background.
-3. **Transport.** Peers join the swarm for the video's core and exchange blocks with anyone who
-   has them. The player reads HTTP Ranges from a local Range server on the same device
-   (`src/blob-server.js`, which fetches only a bounded window ahead of the viewer) or the worklet's
-   loopback copy. Backfill (replication, HiveRelay seeding) yields to viewers through
-   `peartube/bulk-busy` instead of pausing connections.
+3. **Transport.** One connection per peer carries every channel and every video. A peer already
+   connected through a channel's swarm or the LAN serves any video it stores, with no lookup. The
+   title being played is also looked up on its core's own topic. Only a node that published a
+   video announces that topic, and a relay announces its complete cached copies too; an app never
+   announces what it watched. The player reads HTTP Ranges from a local Range server on the same
+   device (`src/blob-server.js`, which fetches only a bounded window ahead of the viewer) or the
+   worklet's loopback copy. Backfill (replication, HiveRelay seeding) yields to viewers through
+   `peartube/bulk-busy` instead of pausing connections; a relay honors that signal only from
+   peers that serve it blocks.
 4. **Acquisition.** Imports are a private job queue (`jobs.json`): fetch, store, announce, append durably.
    Page links download and mux natively on every attempt through `ubit get --json`, so adaptive DASH/HLS streams
    never depend on expiring media URLs. `ubit` is only needed for page links, and only on the relay — the apps never run an HTTP acquirer.
@@ -239,7 +244,7 @@ When an AI coding/ops agent (Codex CLI, Claude Code, OpenCode, etc.) installs `p
 
 4. **Verify and report.** Poll `curl -fsS http://127.0.0.1:8174/v1/status` until `tracker` and
    `channel` are 64-character hex keys, and confirm `curl -fsS -o /dev/null -w '%{http_code}\n' http://127.0.0.1:8174/manifest.json`
-   prints `200` (a GET: the relay answers `HEAD` only on blob routes). Return the Web UI (`http://<host>:8174/`), Smart TV page (`/tv`), Stremio
+   prints `200` (a GET: the relay answers `HEAD` only on blob routes). Return the Web UI (`http://<host>:8174/`), Stremio
    addon (`/manifest.json`), M3U playlist (`/v1/playlist.m3u`), public channel URI
    (`peartube://channel/<status.channel>`), tracker key, and where `PEARTUBE_API_TOKEN` is stored.
 
@@ -258,7 +263,6 @@ npm start                     # founds a tracker, serves http://127.0.0.1:8174/
 npm test                      # core and network tests on a local HyperDHT testnet
 npm run test:cast             # Cast & TV receiver E2E (writes desktop/target/e2e/cast-result.json)
 node test/ui.e2e.js           # web UI E2E in headless Brave
-npm run receiver              # portable TV receiver daemon (--thin, --player web|mpv|vlc|headless)
 ```
 
 The apps need Rust and more; the commands that build them are under
@@ -294,7 +298,7 @@ silently replace the relay's own library.
 | `PEARTUBE_TRACKER` | none (found new) | Tracker key to join |
 | `PEARTUBE_STORAGE` | `./peartube-data` | Data directory |
 | `PEARTUBE_API_HOST` | `0.0.0.0` | Interface bound by the UI and `/v1` API server |
-| `PEARTUBE_API_PORT` | `8174` | UI, `/v1` API, Stremio addon, M3U and `/tv` port |
+| `PEARTUBE_API_PORT` | `8174` | UI, `/v1` API, Stremio addon and M3U port |
 | `PEARTUBE_STREAM_HOST` | `127.0.0.1` | Host put in stream URLs; set a LAN or reachable address to serve other machines |
 | `PEARTUBE_STREAM_PORT` | `8175` | Port players stream video from |
 | `PEARTUBE_DHT_PORT` | random | Fixed UDP port, only needed when forwarding a port behind a double-randomized NAT |
@@ -345,7 +349,7 @@ routing** instead moves the relay's own traffic onto guards and drops them.
 
 ## Web UI and API
 
-One port serves the UI at `/`, the `/v1` API, the Stremio addon, the M3U playlist and `/tv`.
+One port serves the UI at `/`, the `/v1` API, the Stremio addon and the M3U playlist.
 Without `PEARTUBE_API_TOKEN` there is no auth, so run an open relay only on a network you trust:
 anyone who can reach it can queue a download of any URL.
 
@@ -368,7 +372,7 @@ and control) and **Settings**. Plugins appear only as user intents.
 | `POST /v1/open`, `GET /v1/resolve` | Open a `peartube://channel/…`, `peartube://access/…` subscriber pass, receiver pairing or `peartube://watch/…` link |
 | `POST /v1/cache/clear`, `GET /v1/events` | Clear cached pieces; live SSE updates |
 | `GET /manifest.json`, `/catalog/…`, `/stream/…` | Stremio v3 addon |
-| `GET /v1/playlist.m3u`, `GET /tv` | M3U8 playlist; fullscreen TV page for a browser |
+| `GET /v1/playlist.m3u` | M3U8 playlist |
 | `GET /v1/plugins`, `POST /v1/plugins/:name/run`, `POST /v1/mirror` | Import and seeder plugins (`http-acquire`, `channel-backfill`, `blob-rechunk`, `watch-dir`, `feed-mirror`, `p2p-replicate`, `hiverelay-seed`, plus `/data/plugins/*.mjs`) |
 | `/v1/cast/*` | Pair, play, attach, control and stop TVs; start or manage a local receiver |
 
@@ -385,22 +389,34 @@ A job is `done` only once its announce is on disk.
 | **Paid / private epochs** (`peartube://access/<ch>:<epoch>:<key>`) | Private uploads encrypt each per-video `Hypercore` with a random key wrapped under `EpochKey_N`; blind relays seed ciphertext, and rotating to `EpochKey_N+1` locks canceled subscribers out of new uploads without re-encrypting archives |
 ## Cast and TV receivers
 
-Senders stay libraries and players; only the dedicated TV clients receive a cast.
+Senders stay libraries and players; only the dedicated TV clients receive a cast. A receiver is a
+P2P node with a player. Smart TV browsers are not supported: a receiver needs native UDP.
 
 1. **Android TV receiver APK** (`android/tv/`, `com.peartube.receiver`): Leanback launcher, a
    10-foot QR idle screen and native playback through `libpeartube.so` (MKV, AVI, MP4, HEVC,
    XviD, FLAC, TrueHD, ASS, PGS) with full D-pad and media-remote controls synced to the sender.
 2. **Desktop receiver** (`PearTubeReceiver`): the same idea on a Mac or HTPC, with seek,
    play/pause, ±10 s, audio/subtitle menus, fullscreen and stop.
-3. **Smart TV page** (`/tv`): zero install for LG webOS, Samsung Tizen, consoles and TV
-   browsers, with D-pad and pointer controls.
-4. **Portable receiver daemon** (`bin/receiver.js`, `npm run receiver`): Hybrid P2P+HTTP or
-   `--thin`, with `--player web|mpv|vlc|headless|cmd:…`.
 
-Pairing is a 6-character code on mDNS (`_peartube-cast._tcp`) or a
-`peartube://receiver/<pubkey>?token=…` link over HyperDHT Noise. Once a cast starts, a P2P
-receiver keeps playing and seeding after the initiator disconnects. Private senders get a
-strict fail-closed 2-hop `privateRouting` receiver instead.
+A cast uses one connection. The sender's node connects to the receiver's node as to any peer: on
+the LAN when mDNS (`_peartube-cast._tcp`) shows the receiver, else by its key over the swarm.
+Pairing and remote control run on a Protomux channel of that connection (`src/cast-control.js`),
+and the film reaches the TV over the same connection and the swarm. The receiver has no control
+port and no LAN HTTP: its only HTTP port is on loopback, for its own player.
+
+- **Pairing** is the 6-character code on the TV's screen, or a
+  `peartube://receiver/<pubkey>?token=…` link, which needs no code. The receiver's node keeps one
+  key across restarts, so pairings last. A key that pairing saved wins over what mDNS says.
+- **Who may cast.** Any peer that connects to a receiver can open the channel, so every request is
+  checked: a command needs the token. A receiver started open (`--open`) takes casts without
+  pairing from LAN links only. Wrong codes are counted apart for LAN links and all others.
+- **Routing.** A cast uses the routing the receiver's node is set to. With private routing off
+  (the default) the film comes over the public swarm. A TV with private routing on plays over
+  2-hop circuits, and only a sender on private routing reaches it.
+- **Older builds.** A sender and a receiver from before and after this change cannot cast to each
+  other: update both.
+
+Once a cast starts, the receiver keeps playing and serving after the sender disconnects.
 
 ## Privacy rule
 
@@ -482,10 +498,10 @@ no bank is bundled. Subtitles use platform fonts and fonts attached to the media
 | `src/index.js` | `createNode`: Corestore, Autobee tracker, per-video Hypercores, Hyperswarm, `search`/`put`/`append`/`publish`/`remove`, `setLan`, LAN discovery |
 | `src/http.js`, `src/ui.js` | The one-port server and the relay web UI |
 | `src/acquire.js`, `src/settings.js`, `src/identify.js` | Private job queue, settings store, link identification and Cinemeta matching |
-| `src/lan.js`, `src/cast.js`, `src/cast-ui.js` | LAN discovery, Cast & TV receiver stack, TV web page |
+| `src/lan.js`, `src/cast.js`, `src/cast-control.js` | LAN discovery, Cast & TV receiver stack, its control channel |
 | `src/mirror.js`, `src/hiverelay.js` | Plugin host and HiveRelay recruitment/seeding |
 | `src/private-overlay.js`, `bin/private-relay.js` | Stateless 2-hop guard overlay and guard forwarders |
-| `bin/relay.js`, `bin/receiver.js` | Relay daemon and portable TV receiver daemon |
+| `bin/relay.js` | Relay daemon |
 | `worklet/` | The worklet the apps run (`worker.js`), its crypto and the QuickJS bare-kit build |
 | `desktop/`, `android/`, `android/tv/`, `ios/` | The Mac app, the phone app, the TV receiver, the iOS development target |
 | `web/` | The WebAssembly player (`sh web/build.sh` → `web/assets/`, not part of the core line budget) |
@@ -498,7 +514,7 @@ The suite prefers E2E and writes repeatable artifacts under `desktop/target/e2e/
 ```sh
 npm test                         # core + network + cast tests on a local testnet
 npm run test:desktop             # Mac worklet E2E: exact bytes, live publish/remove, LAN-only run
-npm run test:cast                # thin receiver, HTTP→P2P failover, cross-subnet Noise casting
+npm run test:cast                # test receiver in its own process, LAN and DHT casts, initiator loss, private-routing TV
 node test/ui.e2e.js              # web UI in headless Brave at 1440×900 and 390×844, light/dark
 node android/e2e.mjs --serial <adb serial> --relay http://<relay>:8174 [--lan]
 ```

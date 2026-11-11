@@ -55,11 +55,15 @@ async function openNode ({
   relayThrough = null,
   lan: createLan = null,
   maxActiveSources = null,
+  // A relay's job (bin/relay.js): announce the complete copies this node caches, not only what it published.
+  announceCache = false,
+  // This node's peer key. Fresh on every start unless given: a TV receiver keeps one, so its pairings last.
+  keyPair = null,
   // Set by the apps' worklet (worklet/worker.js): small request windows for phones' UDP buffers.
   worklet: isWorklet = false,
   onchange = null
 }, undo) {
-  const life = { closing: false }
+  const life = { closing: false, suspended: false }
   const parsedOpts = {
     storage,
     tracker: trackerOpt,
@@ -76,6 +80,8 @@ async function openNode ({
     relayThrough,
     lan: createLan,
     maxActiveSources,
+    announceCache,
+    keyPair,
     worklet: isWorklet,
     onchange
   }
@@ -116,14 +122,15 @@ async function openNode ({
     // Mobile/TV BareKit worklets share Android's 256 KiB rmem_max UDP socket; never let background cores blast [16,48] retransmits over Wi-Fi.
     // Measured 2026-10-29: widening this to [24,64] made a 5 GHz phone worse (erratic 0.9–15.9 MB/s,
     // decoded fps 15.7 → 11.5). Keep the small window until the socket buffers are tuned with evidence.
-    const next = ctx.net.dht
-      ? (tier === 'seeder' ? [64, 192] : tier === 'peer' ? [48, 128] : [24, 64])
-      : ctx.storage.isMobileWorklet
-        ? [6, 8]
+    const next = ctx.storage.isMobileWorklet
+      ? [6, 8]
+      : ctx.net.dht
+        ? (tier === 'seeder' ? [64, 192] : tier === 'peer' ? [48, 128] : [24, 64])
         : isWorklet
           ? [16, 48]
           : (tier === 'seeder' ? [16, 48] : tier === 'peer' ? [12, 32] : [8, 24])
-    ctx.net.setInflightRange(next)
+    const cur = ctx.net.inflightRange()
+    if (cur[0] !== next[0] || cur[1] !== next[1]) ctx.net.setInflightRange(next)
     const ratio = rxBytes > 0 ? Math.round((txBytes / rxBytes) * 100) / 100 : (txBytes > 0 ? 1 : 0)
     return { tier, seededBytes, contributingPeers, ratio, inflightMax: next[1] }
   }
@@ -175,34 +182,69 @@ async function openNode ({
   // Lays bare every non-empty unified Channel core, linked-device writer core, and 512 KiB video core for supplemental HiveRelays.
   function seedableCores ({ includeCached = false } = {}) {
     const out = []
-    if (ctx.channel.channel.bootstrap.length > 0 && (ctx.channel.hasEntries() || ctx.blobs.ownedBlobs.size > 0)) {
-      out.push({ key: ctx.channel.primaryKey, kind: 'channel', length: ctx.channel.channel.bootstrap.length, byteLength: ctx.channel.channel.bootstrap.byteLength })
+    const seen = new Set()
+    const pushCore = (key, kind, length, byteLength) => {
+      if (!key || length <= 0 || seen.has(key)) return
+      seen.add(key)
+      out.push({ key, kind, length, byteLength })
     }
-    for (const [wHex, wc] of ctx.channel.writerCores) {
-      if (wc.opened && wc.length > 0) {
-        out.push({ key: wHex, kind: 'channel', length: wc.length, byteLength: wc.byteLength })
+    const ch = ctx.channel.channel
+    if (ch.bootstrap.length > 0 && (ctx.channel.hasEntries() || ctx.blobs.ownedBlobs.size > 0)) {
+      pushCore(ctx.channel.primaryKey, 'channel', ch.bootstrap.length, ch.bootstrap.byteLength)
+      // Once past Autobee's 16-flush fast-forward threshold, pin stamped system + view cores so cold followers land offline.
+      if (ch.flushes >= 16) {
+        const localHex = b4a.toString(ch.local.key, 'hex')
+        if (localHex === ctx.channel.primaryKey || ctx.identity.idVault?.channelKey === ctx.channel.primaryKey) {
+          for (const v of ch.views().slice(0, 2)) {
+            if (!v?.key || v.length <= 0) continue
+            const vHex = b4a.toString(v.key, 'hex')
+            const open = ctx.storage.store.cores.get(ctx.blobs.blobDisc(vHex).buf)
+            pushCore(vHex, 'channel', v.length, open?.byteLength || v.length * 4096)
+          }
+        }
+        for (const [hex, lc] of ctx.channel.landedCores) {
+          if (lc.opened && lc.length > 0) pushCore(hex, 'channel', lc.length, lc.byteLength)
+        }
       }
     }
+    for (const [wHex, wc] of ctx.channel.writerCores) {
+      if (wc.opened && wc.length > 0) pushCore(wHex, 'channel', wc.length, wc.byteLength)
+    }
     for (const [key, v] of ctx.blobs.ownedBlobs) {
-      if (v.length > 0) out.push({ key, kind: 'blobs', length: v.length, byteLength: v.byteLength })
+      if (v.length > 0) pushCore(key, 'blobs', v.length, v.byteLength)
     }
     for (const s of ctx.blobs.blobSlots) {
       if (s.core.length > 0 && ctx.blobs.localBlocks(s.core) > 0) {
-        out.push({ key: s.key, kind: 'blobs', length: s.core.length, byteLength: s.core.byteLength })
+        pushCore(s.key, 'blobs', s.core.length, s.core.byteLength)
       }
     }
     if (includeCached) {
       for (const [k, c] of ctx.blobs.blobCores) {
         if (ctx.blobs.isOwnedBlob(k) || !c.opened || c.length === 0 || c.byteLength === 0) continue
         ctx.blobs.ensureBlockCounter(c, k)
-        if (ctx.blobs.localBlocks(c) >= c.length) out.push({ key: k, kind: 'blobs', length: c.length, byteLength: c.byteLength })
+        if (ctx.blobs.localBlocks(c) >= c.length) pushCore(k, 'blobs', c.length, c.byteLength)
       }
       for (const [k, meta] of ctx.blobs.cachedBlobs) {
         if (ctx.blobs.blobCores.has(k) || ctx.blobs.isOwnedBlob(k) || meta.length === 0 || meta.byteLength === 0) continue
-        if (meta.blocks >= meta.length) out.push({ key: k, kind: 'blobs', length: meta.length, byteLength: meta.byteLength })
+        if (meta.blocks >= meta.length) pushCore(k, 'blobs', meta.length, meta.byteLength)
       }
     }
     return out
+  }
+
+  // Suspends swarm sockets before parking RocksDB + CORESTORE flock so iOS never slaughters backgrounded worklets.
+  async function suspend () {
+    if (ctx.life.closing || ctx.life.suspended) return
+    ctx.life.suspended = true
+    await ctx.net.swarm.suspend()
+    await ctx.storage.store.suspend()
+  }
+
+  async function resume () {
+    if (ctx.life.closing || !ctx.life.suspended) return
+    await ctx.storage.store.resume()
+    await ctx.net.swarm.resume()
+    ctx.life.suspended = false
   }
 
   let closingPromise = null
@@ -218,6 +260,11 @@ async function openNode ({
       for (const ranges of ctx.blobs.warmRanges.values()) for (const r of ranges) r.destroy()
       ctx.blobs.warmRanges.clear()
       ctx.storage.store.unwatch(ctx.blobs.onCoreWake)
+      if (ctx.life.suspended) {
+        await ctx.storage.store.resume().catch(() => {})
+        ctx.life.suspended = false
+      }
+      await ctx.blobs.server.close()
       for (const rec of ctx.blobs.httpOwned.values()) { clearTimeout(rec.timer); await rec.core.close().catch(() => {}) }
       ctx.blobs.httpOwned.clear()
       for (const s of ctx.blobs.weakOwned.values()) await s.close().catch(() => {})
@@ -226,6 +273,7 @@ async function openNode ({
       ctx.channel.writerCores.clear()
       for (const c of ctx.channel.landedCores.values()) await c.close().catch(() => {})
       ctx.channel.landedCores.clear()
+      ctx.channel.wakeup.destroy()
       await ctx.net.lan?.destroy()
       if (ctx.net.dht) await ctx.net.swarm.clear()
       await ctx.net.swarm.destroy({ force: true })
@@ -237,11 +285,45 @@ async function openNode ({
       ctx.sources.extraSources.clear()
       ctx.sources.activeSources.clear()
       await ctx.channel.channel.close()
-      ctx.channel.wakeup.destroy()
-      await ctx.blobs.server.close()
       await ctx.storage.store.close()
     })()
     return closingPromise
+  }
+
+  // Connects to a peer by key. `lanFirst`: a LAN dial was just started, so give it 1.5 s before also joining through
+  // the DHT, which would otherwise open a second connection to the same peer.
+  function joinPeer (keyHex, { lanFirst = false } = {}) {
+    if (!str(keyHex, HEX64)) return
+    const key = b4a.from(keyHex, 'hex')
+    if (b4a.equals(key, ctx.net.swarm.keyPair.publicKey)) return
+    const join = () => { try { ctx.net.swarm.joinPeer(key) } catch {} }
+    if (!lanFirst || ctx.net.dht || !ctx.net.lan) return join()
+    setTimeout(() => { if (!ctx.life.closing && !ctx.net.hasLanPeer(key)) join() }, 1500).unref?.()
+  }
+
+  // The connection to a peer: the open one, else a new one. `lan` is the peer's LAN endpoint when mDNS showed it
+  // ({host, port}); that address is dialed first.
+  function connectPeer (keyHex, { lan = null, timeoutMs = 30_000 } = {}) {
+    if (!str(keyHex, HEX64)) return Promise.reject(new Error('A peer key is 64 hex characters'))
+    const key = b4a.from(keyHex, 'hex')
+    for (const conn of ctx.net.peerConns) {
+      if (!conn.destroyed && conn.remotePublicKey && b4a.equals(conn.remotePublicKey, key)) return Promise.resolve(conn)
+    }
+    return new Promise((resolve, reject) => {
+      const settle = (err, conn) => {
+        clearTimeout(timer)
+        ctx.net.connListeners.delete(onconn)
+        if (err) reject(err)
+        else resolve(conn)
+      }
+      const onconn = conn => { if (conn.remotePublicKey && b4a.equals(conn.remotePublicKey, key)) settle(null, conn) }
+      const timer = setTimeout(() => settle(new Error('The peer did not connect')), timeoutMs)
+      timer.unref?.()
+      ctx.net.connListeners.add(onconn)
+      const dialed = Boolean(lan?.host && lan?.port && ctx.net.lan?.dialDirect)
+      if (dialed) ctx.net.lan.dialDirect(keyHex, lan.host, lan.port)
+      joinPeer(keyHex, { lanFirst: dialed })
+    })
   }
 
   return {
@@ -250,25 +332,14 @@ async function openNode ({
     blobCore: ctx.blobs.blobCore,
     seedableCores,
     privateRouting: Boolean(ctx.net.dht),
-    bootstrap: bootstrap || null,
-    relayThrough: relayThrough || null,
     hasLan: () => Boolean(ctx.net.lan),
     lanEndpoint: () => ctx.net.lan?.port && ctx.net.lan?.host ? { host: ctx.net.lan.host, port: ctx.net.lan.port, publicKey: b4a.toString(ctx.net.swarm.keyPair.publicKey, 'hex') } : null,
-    dialLanPeer: ep => { if (ep?.publicKey && ep?.host && ep?.port) ctx.net.lan?.dialDirect?.(ep.publicKey, ep.host, ep.port) },
     // This node's peer key, hex, as other peers and TV receivers name it.
     peerKey: b4a.toString(ctx.net.swarm.keyPair.publicKey, 'hex'),
-    // The DHT casting opens its Noise RPC sessions on (the private overlay's own when private routing is on).
-    dht: ctx.net.swarm.dht,
-    // Connects to a peer by key. `lanFirst`: a LAN dial was just started, so give it 1.5 s before also joining through
-    // the DHT, which would otherwise open a second connection to the same peer.
-    joinPeer: (keyHex, { lanFirst = false } = {}) => {
-      if (!str(keyHex, HEX64)) return
-      const key = b4a.from(keyHex, 'hex')
-      if (b4a.equals(key, ctx.net.swarm.keyPair.publicKey)) return
-      const join = () => { try { ctx.net.swarm.joinPeer(key) } catch {} }
-      if (!lanFirst || ctx.net.dht || !ctx.net.lan) return join()
-      setTimeout(() => { if (!ctx.life.closing && !ctx.net.hasLanPeer(key)) join() }, 1500).unref?.()
-    },
+    joinPeer,
+    connectPeer,
+    isLanConnection: conn => ctx.net.lanPeers.has(conn),
+    joinLanTopic: ctx.net.joinLanTopic,
     evictBehind: ctx.blobs.evictBehind,
     refreshBlockCount: core => ctx.blobs.syncBlockCounter(core),
     channel: ctx.channel.channel,
@@ -311,9 +382,12 @@ async function openNode ({
     streamUrl: ctx.blobs.streamUrl,
     httpViewing: () => Date.now() - ctx.blobs.lastHttpViewAt() < 3000,
     markBulkPeer: (hex, on) => { if (hex) on ? ctx.blobs.bulkPeers.add(hex) : ctx.blobs.bulkPeers.delete(hex) },
+    isSourcePeer: hex => ctx.blobs.sourcePeers.has(hex),
     blobServer: ctx.blobs.server,
     setLan: ctx.net.setLan,
     lanStats: () => (ctx.net.lan ? ctx.net.lan.stats() : null),
+    suspend,
+    resume,
     close,
     get closing () { return ctx.life.closing }
   }

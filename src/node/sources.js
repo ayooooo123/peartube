@@ -101,8 +101,9 @@ export async function createSources (ctx) {
     if (force) {
       // A channel we already hold is a refresh: let the topic lookups answer first, or `update()`
       // returns at once against whatever peer spoke last. This is throttled across the node —
-      // paying it per channel would stall rotating a large library for no extra truth.
-      if (src.hydrated && Date.now() - lastSwarmFlushAt > 10_000) {
+      // paying it per channel would stall rotating a large library for no extra truth. The private swarm has no
+      // topic lookups to flush (and no `flush`), so a privately routed node reads at once.
+      if (!ctx.net.dht && src.hydrated && Date.now() - lastSwarmFlushAt > 10_000) {
         lastSwarmFlushAt = Date.now()
         await Promise.race([ctx.net.swarm.flush().catch(() => {}), new Promise(r => setTimeout(r, 3_000))])
       }

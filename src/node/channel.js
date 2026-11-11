@@ -62,23 +62,72 @@ export async function createChannel (ctx) {
   // system and view cores: the owner itself, or a node that landed on them before. A landing leaves
   // those cores sparse here, so keep them whole and live: this node can then hand the landing on
   // when the owner is unreachable, and never stalls on a block only the owner holds.
-  const landedCores = new Map()
-  function mirrorLanding (changes) {
+  // Landings are held per channel. A channel that lands again on new keys closes its old cores. A sleeping
+  // channel keeps its landed cores open only until they are whole, so this node can still hand the landing
+  // on, then closes them; it reopens them when it wakes. An unfollowed channel has them purged.
+  // `landedCores` is the flat view of open sessions the relay seeds from and the node closes wholesale.
+  const landedCores = new Map() // core hex -> open session
+  const landedByChannel = new Map() // channel hex -> Map<'system'|'view', { hex, held }>
+  function heldElsewhere (hex, channelHex) {
+    for (const [ch, recs] of landedByChannel) {
+      if (ch === channelHex) continue
+      for (const rec of recs.values()) if (rec.held && rec.hex === hex) return true
+    }
+    return false
+  }
+  function openLanding (hex) {
+    if (landedCores.has(hex)) return
+    const core = ctx.storage.store.get({ key: b4a.from(hex, 'hex') })
+    landedCores.set(hex, core)
+    core.ready().then(() => core.download({ start: 0, end: -1 })).catch(() => {})
+  }
+  function dropLanding (hex) {
+    const core = landedCores.get(hex)
+    if (!core) return
+    landedCores.delete(hex)
+    return core.close().catch(() => {})
+  }
+  function closeWhenWhole (hex) {
+    const core = landedCores.get(hex)
+    if (!core) return
+    core.ready()
+      .then(async () => { if (!(await core.has(0, core.length))) await core.download({ start: 0, end: core.length }).done() })
+      .catch(() => {})
+      .then(() => { if (landedCores.get(hex) === core && !heldElsewhere(hex, null)) dropLanding(hex) })
+  }
+  async function releaseLanding (channelHex, { purge = false } = {}) {
+    const recs = landedByChannel.get(channelHex)
+    if (!recs) return
+    if (purge) landedByChannel.delete(channelHex)
+    for (const rec of recs.values()) {
+      rec.held = false
+      if (heldElsewhere(rec.hex, channelHex)) continue
+      if (!purge) { closeWhenWhole(rec.hex); continue }
+      await dropLanding(rec.hex)
+      await ctx.storage.store.purge(b4a.from(rec.hex, 'hex'), { force: true }).catch(() => {})
+    }
+  }
+  function mirrorLanding (changes, channelHex) {
+    let recs = landedByChannel.get(channelHex)
+    if (!recs) { recs = new Map(); landedByChannel.set(channelHex, recs) }
+    // an update means the channel is awake: a landing it let close while asleep follows the owner again
+    for (const rec of recs.values()) if (!rec.held) { rec.held = true; openLanding(rec.hex) }
     for (const name of ['system', 'view']) {
       const c = changes?.get(name)
       if (!c?.to?.key || c.incremental) continue
       const hex = b4a.toString(c.to.key, 'hex')
-      if (landedCores.has(hex)) continue
-      const core = ctx.storage.store.get({ key: c.to.key })
-      landedCores.set(hex, core)
-      core.ready().then(() => core.download({ start: 0, end: -1 })).catch(() => {})
+      const prev = recs.get(name)
+      if (prev?.hex === hex) continue
+      openLanding(hex)
+      recs.set(name, { hex, held: true })
+      if (prev && !heldElsewhere(prev.hex, channelHex)) dropLanding(prev.hex)
     }
   }
   const primaryCache = { entries: [], byId: new Map(), discovered: [] }
   channel = new Autobee(chNs, targetKey ? b4a.from(targetKey, 'hex') : null, {
     ...(founderKeyPair ? { keyPair: founderKeyPair } : {}),
     apply: primaryApply,
-    update: (view, changes) => { mirrorLanding(changes); syncWriterCores().catch(() => {}); ctx.update() },
+    update: (view, changes) => { mirrorLanding(changes, b4a.toString(channel.key, 'hex')); syncWriterCores().catch(() => {}); ctx.update() },
     optimistic: true,
     isTrusted: makeIsTrusted(() => b4a.toString(channel.key, 'hex')),
     wakeup
@@ -144,7 +193,15 @@ export async function createChannel (ctx) {
       }
       await Promise.race([channel.update().catch(() => {}), new Promise(r => setTimeout(r, 2_000))])
     } else await applied(channel)
-    const { entriesList, discoveredList } = await ctx.sources.scanChannelView(channel.view, primaryKey)
+    let scan
+    try {
+      scan = await ctx.sources.scanChannelView(channel.view, primaryKey)
+    } catch (err) {
+      // A landed view whose blocks nobody serves ends at the read stream's timeout; the last complete scan stands.
+      if (err?.code !== 'REQUEST_TIMEOUT') throw err
+      return
+    }
+    const { entriesList, discoveredList } = scan
     // Replace, never merge: the primary is fully applied before every scan, so an announce that is
     // gone is really gone. Merging kept deleted titles alive for findEntry forever.
     ctx.sources.indexChannelRecords(primaryCache, entriesList, discoveredList)
@@ -274,6 +331,7 @@ export async function createChannel (ctx) {
     landedCores,
     primaryCache,
     mirrorLanding,
+    releaseLanding,
     syncWriterCores,
     refreshPrimaryCache,
     currentChannelEpoch,

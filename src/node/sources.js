@@ -77,7 +77,9 @@ export async function createSources (ctx) {
   async function scanChannelView (view, viaKey) {
     const entriesList = []
     const discoveredList = []
-    for await (const node of view.createReadStream()) {
+    // A landed view can be sparse where nobody serves its blocks: the stream's own timeout ends the
+    // read instead of letting `search()` or the rotation tick wait for a block that never arrives.
+    for await (const node of view.createReadStream({ timeout: 5_000 })) {
       const sub = b4a.toString(node.key)
       if (sub.startsWith('source/')) {
         const op = decodeOp(node.value)
@@ -128,14 +130,23 @@ export async function createSources (ctx) {
     // A follower's view grows only while something walks it. One pass can leave the linearizer
     // parked on a block nobody asked for, so the background tick keeps reading until the count
     // stops moving (bounded); that is exactly the scanning `search()` used to do on every call.
-    let scan = await scanChannelView(src.bee.view, src.key)
-    if (force) {
-      for (let pass = 0; pass < 5 && !ctx.life.closing; pass++) {
-        const next = await scanChannelView(src.bee.view, src.key)
-        if (next.entriesList.length <= scan.entriesList.length) break
-        scan = next
-        await new Promise(resolve => setTimeout(resolve, 400))
+    let scan
+    try {
+      scan = await scanChannelView(src.bee.view, src.key)
+      if (force) {
+        for (let pass = 0; pass < 5 && !ctx.life.closing; pass++) {
+          const next = await scanChannelView(src.bee.view, src.key)
+          if (next.entriesList.length <= scan.entriesList.length) break
+          scan = next
+          await new Promise(resolve => setTimeout(resolve, 400))
+        }
       }
+    } catch (err) {
+      // A sparse landing ends at the read stream's timeout: keep what this record already holds and mark it
+      // for a rescan (`cachedRev` -1 is the due flag) instead of clearing a cache this scan cannot replace.
+      if (err?.code !== 'REQUEST_TIMEOUT') throw err
+      src.cachedRev = -1
+      return
     }
     const { entriesList, discoveredList } = scan
     const prevCount = src.entries.length
@@ -192,24 +203,31 @@ export async function createSources (ctx) {
     return { src, existed: false }
   }
 
-  async function hibernateSource (src) {
-    if (!src?.bee) return
-    if (src.closing) return src.closing
-    src.closing = (async () => {
-      try {
-        if (!ctx.life.closing && (src.rev !== src.cachedRev || src.viewVersion !== src.bee.view.version)) {
-          await refreshSourceCache(src, { waitSync: false }).catch(() => {})
+  async function hibernateSource (src, { purge = false } = {}) {
+    if (!src) return
+    if (src.bee && !src.closing) {
+      src.closing = (async () => {
+        try {
+          if (!ctx.life.closing && (src.rev !== src.cachedRev || src.viewVersion !== src.bee.view.version)) {
+            await refreshSourceCache(src, { waitSync: false }).catch(() => {})
+          }
+        } finally {
+          const oldBee = src.bee
+          src.bee = null
+          activeSources.delete(src.key)
+          ctx.net.leaveOverlayTopic(`channel:${src.key}`).catch(() => {})
+          if (oldBee) await oldBee.close().catch(() => {})
+          // The landing follows the Autobee: a sleeping channel keeps none of its landed cores open, and
+          // an unfollowed one purges them (the view and system cores go back to the peers that serve them).
+          await ctx.channel.releaseLanding(src.key, { purge }).catch(() => {})
+          src.closing = null
         }
-      } finally {
-        const oldBee = src.bee
-        src.bee = null
-        activeSources.delete(src.key)
-        ctx.net.leaveOverlayTopic(`channel:${src.key}`).catch(() => {})
-        if (oldBee) await oldBee.close().catch(() => {})
-        src.closing = null
-      }
-    })()
-    return src.closing
+      })()
+      return src.closing
+    }
+    if (src.closing) await src.closing.catch(() => {})
+    // Hibernated already (or closed while this call waited): only a purge has anything left to do.
+    await ctx.channel.releaseLanding(src.key, { purge }).catch(() => {})
   }
 
   let poolGate = Promise.resolve()
@@ -255,9 +273,11 @@ export async function createSources (ctx) {
         if (ctx.life.closing || extraSources.get(k) !== src) return null
         let bee = null
         const subApply = makeApply(() => b4a.toString(bee.key, 'hex'))
-        bee = new Autobee(ctx.storage.store.namespace(`channel:${k}`), b4a.from(k, 'hex'), {
+        // FindingPeers is per Corestore instance: called on the root store, it never reaches this channel's cores.
+        const beeNs = ctx.storage.store.namespace(`channel:${k}`)
+        bee = new Autobee(beeNs, b4a.from(k, 'hex'), {
           apply: subApply,
-          update: (view, changes) => { ctx.channel.mirrorLanding(changes); src.rev++; ctx.update() },
+          update: (view, changes) => { ctx.channel.mirrorLanding(changes, k); src.rev++; ctx.update() },
           optimistic: true,
           isTrusted: makeIsTrusted(() => b4a.toString(bee.key, 'hex')),
           wakeup: ctx.channel.wakeup
@@ -322,7 +342,7 @@ export async function createSources (ctx) {
     delete savedCatalog[k]
     scheduleCatalogSave()
     if (src.opening) await src.opening.catch(() => {})
-    await hibernateSource(src)
+    await hibernateSource(src, { purge: true })
     await ctx.net.leaveOverlayTopic(`channel:${k}`)
     ctx.update()
     return { removed: true }

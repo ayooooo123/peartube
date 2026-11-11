@@ -89,7 +89,7 @@
   },
   "dependencies": {
     "@hyperswarm/secret-stream": "^6.9.2",
-    "autobee": "2.12.1",
+    "autobee": "github:ayooooo123/autobee#dd5080037a435e275ef751e2e44e6d07f91092e5",
     "b4a": "^1.9.0",
     "bare": "1.36.0",
     "bare-buffer": "^3.7.1",

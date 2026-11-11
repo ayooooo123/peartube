@@ -10,6 +10,7 @@ import Autobee from 'autobee'
 import Corestore from 'corestore'
 import Hyperswarm from 'hyperswarm'
 import { createNode } from '../src/index.js'
+import { makeApply } from '../src/apply.js'
 
 const tmp = () => mkdtempSync(join(tmpdir(), 'peartube-test-'))
 
@@ -28,9 +29,9 @@ const blob = { blockOffset: 0, blockLength: 1, byteOffset: 0, byteLength: 1 }
 const announce = (id, title) => ({ type: 'announce', id, title, size: 1, sha256: zero, blobs: zero, blob })
 
 // A forger M far past Autobee's fast-forward distance, whose apply plants an entry under A's key.
-// `granted` decides whether A grants M the 'writer' role first; either way M is never an owner.
+// `role` is the role A grants M first ('writer' or 'mod'; none for a stranger); M is never an owner.
 // `ownerOffline` takes A down before the new relay joins, so M is the only peer and the only stamp on offer.
-async function forgerScenario (t, { granted, ownerOffline = false }) {
+async function forgerScenario (t, { role = null, ownerOffline = false }) {
   const testnet = await createTestnet(3)
   const a = await createNode({ storage: tmp(), bootstrap: testnet.bootstrap })
   const tracker = a.status().tracker
@@ -49,7 +50,7 @@ async function forgerScenario (t, { granted, ownerOffline = false }) {
   const mStore = new Corestore(tmp())
   const m = new Autobee(mStore.namespace('tracker'), Buffer.from(tracker, 'hex'), { apply: forgingApply, optimistic: true })
   await m.ready()
-  if (granted) await a.grantWriter(m.local.key.toString('hex'), { role: 'writer' })
+  if (role) await a.grantWriter(m.local.key.toString('hex'), { role })
   const mSwarm = new Hyperswarm({ bootstrap: testnet.bootstrap })
   mSwarm.on('connection', conn => m.replicate(conn))
   mSwarm.join(m.discoveryKey)
@@ -81,7 +82,7 @@ async function forgerScenario (t, { granted, ownerOffline = false }) {
   const forgedOn = async node => (await node.search('imdb:tt6666666')).length
   await until(async () => (await c.search('imdb:tt0000001')).length || await forgedOn(c), 120000)
   assert.equal(await forgedOn(c), 0, 'the new relay adopted a view with a forged entry')
-  if (granted) {
+  if (role) {
     await until(async () => (await c.search('imdb:tt5000040')).length, 120000)
   } else {
     // an ungranted stranger's announces never reach the catalog either
@@ -98,19 +99,96 @@ async function forgerScenario (t, { granted, ownerOffline = false }) {
 }
 
 test('an ungranted optimistic stranger far ahead with a forging apply cannot hand its view to a new relay', async t => {
-  await forgerScenario(t, { granted: false })
+  await forgerScenario(t, {})
 })
 
 test('a granted non-owner writer far ahead with a forging apply cannot hand its view to a new relay', async t => {
-  await forgerScenario(t, { granted: true })
+  await forgerScenario(t, { role: 'writer' })
+})
+
+test('a moderator far ahead with a forging apply cannot hand its view to a new relay', async t => {
+  await forgerScenario(t, { role: 'mod' })
 })
 
 test('with the owner offline, an ungranted stranger\'s stamped view is not adopted', async t => {
-  await forgerScenario(t, { granted: false, ownerOffline: true })
+  await forgerScenario(t, { ownerOffline: true })
 })
 
 test('with the owner offline, a granted non-owner writer\'s stamped view is not adopted', async t => {
-  await forgerScenario(t, { granted: true, ownerOffline: true })
+  await forgerScenario(t, { role: 'writer', ownerOffline: true })
+})
+
+// D is linked as an owner device and the follower C trusts it; A then revokes D. A revoked device that
+// goes offline, forges far ahead and comes back must not hand C its view, even though C trusted it before.
+test('a revoked owner device cannot hand its forged view to a follower that trusted it before', async t => {
+  const testnet = await createTestnet(3)
+  const a = await createNode({ storage: tmp(), bootstrap: testnet.bootstrap })
+  const tracker = a.status().tracker
+  await a.publish({ id: 'imdb:tt0000001', title: 'Honest' }, Readable.from([randomBytes(100)]))
+
+  const forgedKey = `imdb:tt6666666/${a.status().writer}/${zero}:0`
+  const forged = JSON.stringify(announce('imdb:tt6666666', 'Forged'))
+  const honest = makeApply(() => tracker)
+  let forging = false
+  async function deviceApply (nodes, view, host) {
+    if (!forging) return honest(nodes, view, host)
+    for (const node of nodes) {
+      await host.addWriter(node.key, { isIndexer: false })
+      const w = view.write()
+      w.tryPut(Buffer.from(forgedKey), Buffer.from(forged))
+      await w.flush()
+    }
+  }
+  const dStore = new Corestore(tmp())
+  const d = new Autobee(dStore.namespace('tracker'), Buffer.from(tracker, 'hex'), { apply: deviceApply, optimistic: true })
+  await d.ready()
+  const dHex = d.local.key.toString('hex')
+  await a.grantWriter(dHex, { role: 'owner' })
+  let dSwarm = new Hyperswarm({ bootstrap: testnet.bootstrap })
+  dSwarm.on('connection', conn => d.replicate(conn))
+  dSwarm.join(d.discoveryKey)
+  const c = await createNode({ storage: tmp(), bootstrap: testnet.bootstrap, tracker })
+  t.after(async () => { await c.close(); await a.close(); await dSwarm.destroy(); await d.close(); await dStore.close(); await testnet.destroy() })
+
+  await until(async () => (await c.search('imdb:tt0000001')).length)
+  await until(() => d.writable)
+  // C judges D while D is a granted owner device, so its answer is cached
+  await until(() => c.channel.trusted.isTrusted(d.local.key, c.channel.view))
+
+  await a.revokeWriter(dHex)
+  await until(async () => Boolean(await c.channel.view.get(Buffer.from(`revoked/${dHex}`))))
+
+  await dSwarm.destroy()
+  forging = true
+  for (let i = 0; i <= 40; i++) {
+    const before = d.local.length
+    await d.append(Buffer.from(JSON.stringify(announce(`imdb:tt${5100000 + i}`, 'D'))), { optimistic: !d.writable })
+    while (d.local.length <= before) { await new Promise(resolve => setTimeout(resolve, 300)); await d.update() }
+  }
+  assert.ok(await d.view.get(Buffer.from(forgedKey)), 'the revoked device built the forged view')
+  const deviceSystem = d.views()[0].key.toString('hex')
+  const landed = []
+  c.channel.on('move-to', to => landed.push(to.key.toString('hex')))
+  // record every verdict C's hook gives D from here on: proof that C considered D's forged heads
+  const hooks = c.channel.trusted.hooks
+  const judge = hooks.isTrusted
+  const verdicts = []
+  hooks.isTrusted = async (key, reference) => {
+    const verdict = await judge(key, reference)
+    if (key.equals(d.local.key)) verdicts.push(verdict)
+    return verdict
+  }
+  dSwarm = new Hyperswarm({ bootstrap: testnet.bootstrap })
+  dSwarm.on('connection', conn => d.replicate(conn))
+  dSwarm.join(d.discoveryKey)
+
+  // either C asks about D again (the fix) or lands on D's view from its stale cache (the bug)
+  await until(() => verdicts.length || landed.includes(deviceSystem), 120000)
+  await new Promise(resolve => setTimeout(resolve, 3000))
+  assert.ok(verdicts.every(v => !v), 'C trusted the revoked device again')
+  t.diagnostic(`fastForwards=${c.channel.stats.fastForwards} landed=${landed.map(k => k.slice(0, 6)).join(',') || 'none'} device=${deviceSystem.slice(0, 6)}`)
+  assert.ok(!landed.includes(deviceSystem), 'the follower fast-forwarded onto the revoked device\'s view')
+  assert.equal((await c.search('imdb:tt6666666')).length, 0, 'a forged entry reached the follower')
 })
 
 test('a new relay fast-forwards onto the channel owner\'s view instead of replaying it', async t => {

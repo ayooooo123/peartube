@@ -179,15 +179,18 @@ pub unsafe extern "C" fn pt_open(ext_ptr: *const u8, ext_len: usize) -> i32 {
             Err(e) => return set_json_error(&mut st, &format!("Demuxer error ({container}): {e}")),
         };
 
-        let streams: Vec<StreamInfo> = demuxer.streams().iter().take(256).cloned().collect();
+        let mut streams: Vec<StreamInfo> = demuxer.streams().iter().take(256).cloned().collect();
         let mut first_video: Option<u32> = None;
         let mut first_audio: Option<u32> = None;
         let mut tracks_json = Vec::new();
-        for s in &streams {
+        for s in &mut streams {
             let kind = match s.params.media_type {
                 MediaType::Video => {
                     if first_video.is_none() {
                         first_video = Some(s.index);
+                        if container == "matroska" || container == "webm" {
+                            crate::enrich_mkv_hdr_from_probe(&probe_buf, &mut s.params);
+                        }
                     }
                     "video"
                 }
@@ -231,29 +234,33 @@ pub unsafe extern "C" fn pt_open(ext_ptr: *const u8, ext_len: usize) -> i32 {
             })
             .unwrap_or(0.0);
 
-        // Peek up to 128 packets when extradata lacks Annex-B SPS/PPS, raw AV1 OBUs, or VP9 profile bits.
+        // Peek up to 64 packets until the first video keyframe so `probe_mse_video` can inspect
+        // in-band SPS/PPS, AV1 OBUs, VP9 profile bits, HDR10 SEI 137/144 (`mdcv`/`clli`), and DoVi RPUs (`dvcC`/`dvvC`).
         let mut peek_packets = VecDeque::new();
-        let mut mse_cfg = first_video
-            .and_then(|vi| streams.iter().find(|s| s.index == vi))
-            .and_then(|vs| probe_mse_video(vs, None));
-        if mse_cfg.is_none()
-            && let Some(vi) = first_video
-            && let Some(vs) = streams.iter().find(|s| s.index == vi).cloned()
+        if let Some(vi) = first_video
+            && let Some(vs) = streams.iter().find(|s| s.index == vi)
             && matches!(vs.params.codec_id.as_str(), "h264" | "h265" | "hevc" | "av1" | "vp9")
         {
-            for _ in 0..128 {
+            for _ in 0..64 {
                 let Ok(pkt) = demuxer.next_packet() else {
                     break;
                 };
                 let is_vkf = pkt.stream_index == vi && pkt.flags.keyframe;
                 peek_packets.push_back(pkt);
                 if is_vkf {
-                    mse_cfg = probe_mse_video(&vs, peek_packets.back().map(|p| p.data.as_slice()));
                     break;
                 }
             }
         }
-
+        let first_kf_bytes = first_video.and_then(|vi| {
+            peek_packets
+                .iter()
+                .find(|p| p.stream_index == vi && p.flags.keyframe)
+                .map(|p| p.data.as_slice())
+        });
+        let mse_cfg = first_video
+            .and_then(|vi| streams.iter().find(|s| s.index == vi))
+            .and_then(|vs| probe_mse_video(vs, first_kf_bytes));
         let first_kf_bytes = peek_packets.back().map(|p| p.data.as_slice());
         let video_color = first_video
             .and_then(|vi| streams.iter().find(|s| s.index == vi))
@@ -349,8 +356,9 @@ pub extern "C" fn pt_configure(video_stream: i32, audio_stream: i32, sub_stream:
             _ => VideoOutputMode::Software,
         };
         sess.out_queue.clear();
+        sess.hidden_gops.clear();
+        sess.hidden_gop_bytes = 0;
         sess.streaming_io.store(true, Ordering::Relaxed);
-
         let mut active = Vec::new();
         if let Some(v) = sess.video_idx {
             active.push(v);
@@ -397,11 +405,13 @@ pub extern "C" fn pt_seek(target_secs: f64) -> i32 {
 
         sess.peek_packets.clear();
         sess.out_queue.clear();
+        sess.hidden_gops.clear();
+        sess.hidden_gop_bytes = 0;
+        sess.client_clock = clamped;
         sess.demux_eof = false;
         sess.flushed_eof = false;
         sess.seek_target = Some(clamped);
         sess.audio_seek_target = Some(clamped);
-
         if sess.demuxer.seek_to(seek_stream, ticks).is_err() {
             let _ = sess.demuxer.seek_to(seek_stream, 0);
         }

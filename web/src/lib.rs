@@ -12,6 +12,7 @@
 // decode order keeps all 24 of its pictures here too.
 mod controller;
 mod decode_order;
+mod dovi_rpu;
 mod ffi;
 mod abi;
 use std::cell::RefCell;
@@ -632,8 +633,11 @@ struct MseVideoConfig {
     codec_string: String,
     frame_ticks_90k: i64,
     colr_nclx: Option<(u8, u8, u8, bool)>,
+    mdcv: Option<[u8; 24]>,
+    clli: Option<[u8; 4]>,
+    dovi_config: Option<([u8; 4], [u8; 24])>,
+    pasp: Option<(u32, u32)>,
 }
-
 impl MseVideoConfig {
     /// The type the page hands `MediaSource.isTypeSupported` and `addSourceBuffer`.
     fn mime_type(&self) -> String {
@@ -854,16 +858,31 @@ fn keep_hevc_nal(nal: &[u8]) -> bool {
     }
     let nal_type = (nal[0] >> 1) & 0x3F;
     let layer_id = ((nal[0] & 1) << 5) | (nal[1] >> 3);
-    layer_id == 0 && nal_type < 62
+    nal_type != 63 && (layer_id == 0 || nal_type == 62)
+}
+
+fn push_hevc_fmp4_nal(out: &mut Vec<u8>, nal: &[u8]) {
+    if !keep_hevc_nal(nal) {
+        return;
+    }
+    if ((nal[0] >> 1) & 0x3F) == 62
+        && let Some(rewritten) = dovi_rpu::rewrite_p7_rpu_nal_to_p81(nal)
+    {
+        out.extend_from_slice(&(rewritten.len() as u32).to_be_bytes());
+        out.extend_from_slice(&rewritten);
+        return;
+    }
+    out.extend_from_slice(&(nal.len() as u32).to_be_bytes());
+    out.extend_from_slice(nal);
 }
 
 // Moves 4-byte H.264, HEVC, AV1, and VP9 packet buffers straight through with zero allocations.
-fn to_fmp4_sample_bytes(mut data: Vec<u8>, framing: NalFraming, kind: VideoCodecKind) -> Vec<u8> {
+fn to_fmp4_sample_bytes(data: Vec<u8>, framing: NalFraming, kind: VideoCodecKind) -> Vec<u8> {
     match framing {
         NalFraming::RawPassthrough => data,
         NalFraming::LengthPrefixed(4) if kind == VideoCodecKind::H264 => data,
         NalFraming::LengthPrefixed(4) if kind == VideoCodecKind::Hevc => {
-            // Fast zero-alloc scan: 99.9% of 4K HEVC packets keep every NAL untouched.
+            // Fast zero-alloc scan: 99.9% of 4K HEVC packets (including Profile 5 / Profile 8 DoVi) keep every NAL untouched.
             let mut pos = 0usize;
             let mut all_valid = true;
             while pos + 4 <= data.len() {
@@ -872,7 +891,8 @@ fn to_fmp4_sample_bytes(mut data: Vec<u8>, framing: NalFraming, kind: VideoCodec
                     all_valid = pos == data.len();
                     break;
                 }
-                if !keep_hevc_nal(&data[pos + 4..pos + 4 + len]) {
+                let nal = &data[pos + 4..pos + 4 + len];
+                if !keep_hevc_nal(nal) || dovi_rpu::is_p7_rpu_nal(nal) {
                     all_valid = false;
                     break;
                 }
@@ -881,24 +901,17 @@ fn to_fmp4_sample_bytes(mut data: Vec<u8>, framing: NalFraming, kind: VideoCodec
             if all_valid && pos == data.len() {
                 return data;
             }
-            // Compact in-place with zero heap allocations when non-base-layer/filler NALs appear.
+            let mut out = Vec::with_capacity(data.len());
             let mut rpos = 0usize;
-            let mut wpos = 0usize;
             while rpos + 4 <= data.len() {
                 let len = u32::from_be_bytes([data[rpos], data[rpos + 1], data[rpos + 2], data[rpos + 3]]) as usize;
                 if len == 0 || rpos + 4 + len > data.len() {
                     break;
                 }
-                if keep_hevc_nal(&data[rpos + 4..rpos + 4 + len]) {
-                    if wpos != rpos {
-                        data.copy_within(rpos..rpos + 4 + len, wpos);
-                    }
-                    wpos += 4 + len;
-                }
+                push_hevc_fmp4_nal(&mut out, &data[rpos + 4..rpos + 4 + len]);
                 rpos += 4 + len;
             }
-            data.truncate(wpos);
-            data
+            out
         }
         NalFraming::LengthPrefixed(w) => {
             let width = w as usize;
@@ -915,22 +928,24 @@ fn to_fmp4_sample_bytes(mut data: Vec<u8>, framing: NalFraming, kind: VideoCodec
                 }
                 let nal = &data[pos..pos + len];
                 pos += len;
-                if kind == VideoCodecKind::Hevc && !keep_hevc_nal(nal) {
-                    continue;
+                if kind == VideoCodecKind::Hevc {
+                    push_hevc_fmp4_nal(&mut out, nal);
+                } else {
+                    out.extend_from_slice(&(nal.len() as u32).to_be_bytes());
+                    out.extend_from_slice(nal);
                 }
-                out.extend_from_slice(&(nal.len() as u32).to_be_bytes());
-                out.extend_from_slice(nal);
             }
             out
         }
         NalFraming::AnnexB => {
             let mut out = Vec::with_capacity(data.len() + 16);
             for nal in split_annexb_nals(&data) {
-                if kind == VideoCodecKind::Hevc && !keep_hevc_nal(nal) {
-                    continue;
+                if kind == VideoCodecKind::Hevc {
+                    push_hevc_fmp4_nal(&mut out, nal);
+                } else {
+                    out.extend_from_slice(&(nal.len() as u32).to_be_bytes());
+                    out.extend_from_slice(nal);
                 }
-                out.extend_from_slice(&(nal.len() as u32).to_be_bytes());
-                out.extend_from_slice(nal);
             }
             out
         }
@@ -1369,6 +1384,616 @@ fn hevc_codec_string_from_ptl(ptl12: &[u8]) -> String {
     codec_string
 }
 
+pub const OPT_CONTAINER_DOVI: &str = "container.dovi_record";
+pub const OPT_CONTAINER_MDCV: &str = "container.hdr_mdcv";
+pub const OPT_CONTAINER_CLLI: &str = "container.hdr_clli";
+
+pub(crate) fn hex_encode(bytes: &[u8]) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut out = String::with_capacity(bytes.len() * 2);
+    for &b in bytes {
+        out.push(HEX[(b >> 4) as usize] as char);
+        out.push(HEX[(b & 0x0F) as usize] as char);
+    }
+    out
+}
+
+pub(crate) fn hex_decode(hex: &str) -> Option<Vec<u8>> {
+    if hex.len() % 2 != 0 {
+        return None;
+    }
+    let mut out = Vec::with_capacity(hex.len() / 2);
+    for pair in hex.as_bytes().chunks_exact(2) {
+        let nib = |c: u8| match c {
+            b'0'..=b'9' => Some(c - b'0'),
+            b'a'..=b'f' => Some(c - b'a' + 10),
+            b'A'..=b'F' => Some(c - b'A' + 10),
+            _ => None,
+        };
+        out.push((nib(pair[0])? << 4) | nib(pair[1])?);
+    }
+    Some(out)
+}
+
+fn nonzero_clli(bytes: &[u8]) -> Option<[u8; 4]> {
+    let arr: [u8; 4] = bytes.get(..4)?.try_into().ok()?;
+    (arr != [0, 0, 0, 0]).then_some(arr)
+}
+
+fn find_fourcc_box<'a>(bytes: &'a [u8], fourcc: &[u8; 4]) -> Option<&'a [u8]> {
+    let mut i = 0usize;
+    while i + 8 <= bytes.len() {
+        if &bytes[i + 4..i + 8] == fourcc {
+            let size = u32::from_be_bytes([bytes[i], bytes[i + 1], bytes[i + 2], bytes[i + 3]]) as usize;
+            if size >= 8 && i + size <= bytes.len() {
+                return Some(&bytes[i + 8..i + size]);
+            }
+        }
+        i += 1;
+    }
+    None
+}
+
+fn find_dovi_box(bytes: &[u8]) -> Option<&[u8]> {
+    let mut i = 0usize;
+    while i + 8 <= bytes.len() {
+        if &bytes[i + 4..i + 8] == b"dvcC" || &bytes[i + 4..i + 8] == b"dvvC" {
+            let size = u32::from_be_bytes([bytes[i], bytes[i + 1], bytes[i + 2], bytes[i + 3]]) as usize;
+            if size >= 32 && i + size <= bytes.len() {
+                return Some(&bytes[i + 8..i + size]);
+            } else if bytes.len() >= i + 8 + 24 {
+                return Some(&bytes[i + 8..i + 8 + 24]);
+            }
+        }
+        i += 1;
+    }
+    None
+}
+
+pub(crate) fn build_dovi_record(
+    profile: u8,
+    level: u8,
+    rpu: bool,
+    el: bool,
+    bl: bool,
+    compat_id: u8,
+) -> [u8; 24] {
+    let mut rec = [0u8; 24];
+    rec[0] = 1;
+    rec[1] = 0;
+    let w: u16 = ((u16::from(profile) & 0x7F) << 9)
+        | ((u16::from(level) & 0x3F) << 3)
+        | (u16::from(rpu) << 2)
+        | (u16::from(el) << 1)
+        | u16::from(bl);
+    rec[2..4].copy_from_slice(&w.to_be_bytes());
+    rec[4] = (compat_id & 0x0F) << 4;
+    rec
+}
+
+fn parse_dovi_record(bytes: &[u8]) -> Option<(u8, u8, u8, [u8; 24])> {
+    if bytes.len() < 24 || bytes[0] != 1 {
+        return None;
+    }
+    let w = u16::from_be_bytes([bytes[2], bytes[3]]);
+    let profile = ((w >> 9) & 0x7F) as u8;
+    let level = ((w >> 3) & 0x3F) as u8;
+    let compat_id = (bytes[4] >> 4) & 0x0F;
+    let mut record = [0u8; 24];
+    record.copy_from_slice(&bytes[..24]);
+    Some((profile, level, compat_id, record))
+}
+
+fn read_ebml_id(buf: &[u8]) -> Option<(u32, usize)> {
+    let b0 = *buf.first()?;
+    let len = b0.leading_zeros() as usize + 1;
+    if len > 4 || buf.len() < len {
+        return None;
+    }
+    let mut id = 0u32;
+    for &b in &buf[..len] {
+        id = (id << 8) | u32::from(b);
+    }
+    Some((id, len))
+}
+
+fn read_ebml_size(buf: &[u8]) -> Option<(usize, usize)> {
+    let b0 = *buf.first()?;
+    let len = b0.leading_zeros() as usize + 1;
+    if len > 8 || buf.len() < len {
+        return None;
+    }
+    let mask = if len == 8 { 0u8 } else { (1u8 << (8 - len)) - 1 };
+    let mut sz = u64::from(b0 & mask);
+    let mut all_ones = (b0 & mask) == mask;
+    for &b in &buf[1..len] {
+        sz = (sz << 8) | u64::from(b);
+        all_ones &= b == 0xFF;
+    }
+    if all_ones {
+        return Some((buf.len() - len, len));
+    }
+    Some((sz as usize, len))
+}
+
+fn read_ebml_uint(buf: &[u8]) -> u64 {
+    let mut v = 0u64;
+    for &b in buf.iter().take(8) {
+        v = (v << 8) | u64::from(b);
+    }
+    v
+}
+
+fn read_ebml_float(buf: &[u8]) -> Option<f64> {
+    match buf.len() {
+        4 => Some(f64::from(f32::from_be_bytes(buf.try_into().ok()?))),
+        8 => Some(f64::from_be_bytes(buf.try_into().ok()?)),
+        _ => None,
+    }
+}
+
+/// Scans the Matroska `Tracks` header in `probe_buf` for `BlockAdditionMapping` (`dvcC`/`dvvC`)
+/// and `Colour` (`MaxCLL`, `MaxFALL`, `MasteringMetadata`) and populates `params.options`.
+pub(crate) fn enrich_mkv_hdr_from_probe(probe_buf: &[u8], params: &mut CodecParameters) {
+    fn walk_mastering(buf: &[u8]) -> Option<[u8; 24]> {
+        let mut pos = 0usize;
+        let (mut rx, mut ry, mut gx, mut gy, mut bx, mut by, mut wx, mut wy, mut lmax, mut lmin) =
+            (None, None, None, None, None, None, None, None, None, None);
+        while pos < buf.len() {
+            let (id, id_len) = read_ebml_id(&buf[pos..])?;
+            let (sz, sz_len) = read_ebml_size(&buf[pos + id_len..])?;
+            let hdr = id_len + sz_len;
+            if pos + hdr + sz > buf.len() {
+                break;
+            }
+            let body = &buf[pos + hdr..pos + hdr + sz];
+            match id {
+                0x55D1 => rx = read_ebml_float(body),
+                0x55D2 => ry = read_ebml_float(body),
+                0x55D3 => gx = read_ebml_float(body),
+                0x55D4 => gy = read_ebml_float(body),
+                0x55D5 => bx = read_ebml_float(body),
+                0x55D6 => by = read_ebml_float(body),
+                0x55D7 => wx = read_ebml_float(body),
+                0x55D8 => wy = read_ebml_float(body),
+                0x55D9 => lmax = read_ebml_float(body),
+                0x55DA => lmin = read_ebml_float(body),
+                _ => {}
+            }
+            pos += hdr + sz;
+        }
+        let q_c = |v: f64| -> Option<u16> {
+            (v.is_finite() && (0.0..=1.0).contains(&v)).then(|| (v * 50_000.0).round().clamp(0.0, 50_000.0) as u16)
+        };
+        let q_l = |v: f64| -> Option<u32> {
+            (v.is_finite() && v >= 0.0).then(|| (v * 10_000.0).round().clamp(0.0, u32::MAX as f64) as u32)
+        };
+        let coords = [
+            q_c(gx?)?,
+            q_c(gy?)?,
+            q_c(bx?)?,
+            q_c(by?)?,
+            q_c(rx?)?,
+            q_c(ry?)?,
+            q_c(wx?)?,
+            q_c(wy?)?,
+        ];
+        let mut out = [0u8; 24];
+        for (idx, c) in coords.into_iter().enumerate() {
+            out[idx * 2..idx * 2 + 2].copy_from_slice(&c.to_be_bytes());
+        }
+        out[16..20].copy_from_slice(&q_l(lmax?)?.to_be_bytes());
+        out[20..24].copy_from_slice(&q_l(lmin?)?.to_be_bytes());
+        Some(out)
+    }
+
+    fn walk_ebml(buf: &[u8], depth: u8, params: &mut CodecParameters) {
+        if depth > 6 {
+            return;
+        }
+        let mut pos = 0usize;
+        while pos < buf.len() {
+            let Some((id, id_len)) = read_ebml_id(&buf[pos..]) else {
+                break;
+            };
+            let Some((sz, sz_len)) = read_ebml_size(&buf[pos + id_len..]) else {
+                break;
+            };
+            let hdr = id_len + sz_len;
+            let end = (pos + hdr).saturating_add(sz).min(buf.len());
+            let body = &buf[pos + hdr..end];
+            match id {
+                // Segment (0x18538067), Tracks (0x1654AE6B), TrackEntry (0xAE), Video (0xE0)
+                0x1853_8067 | 0x1654_AE6B | 0xAE | 0xE0 => walk_ebml(body, depth + 1, params),
+                // BlockAdditionMapping (0x41E4)
+                0x41E4 => {
+                    let mut bpos = 0usize;
+                    let mut add_type = 0u64;
+                    let mut extra: Option<&[u8]> = None;
+                    while bpos < body.len() {
+                        let Some((bid, bl1)) = read_ebml_id(&body[bpos..]) else { break };
+                        let Some((bsz, bl2)) = read_ebml_size(&body[bpos + bl1..]) else { break };
+                        let bh = bl1 + bl2;
+                        if bpos + bh + bsz > body.len() {
+                            break;
+                        }
+                        let bbody = &body[bpos + bh..bpos + bh + bsz];
+                        if bid == 0x41E7 {
+                            add_type = read_ebml_uint(bbody);
+                        } else if bid == 0x41ED {
+                            extra = Some(bbody);
+                        }
+                        bpos += bh + bsz;
+                    }
+                    if (add_type == 0x6476_6343 || add_type == 0x6476_7643)
+                        && let Some(rec) = extra
+                        && rec.len() >= 24
+                        && params.options.get(OPT_CONTAINER_DOVI).is_none()
+                    {
+                        params.options.insert(OPT_CONTAINER_DOVI, hex_encode(&rec[..24]));
+                    }
+                }
+                // Colour (0x55B0)
+                0x55B0 => {
+                    let mut cpos = 0usize;
+                    let mut max_cll = 0u16;
+                    let mut max_fall = 0u16;
+                    while cpos < body.len() {
+                        let Some((cid, cl1)) = read_ebml_id(&body[cpos..]) else { break };
+                        let Some((csz, cl2)) = read_ebml_size(&body[cpos + cl1..]) else { break };
+                        let ch = cl1 + cl2;
+                        if cpos + ch + csz > body.len() {
+                            break;
+                        }
+                        let cbody = &body[cpos + ch..cpos + ch + csz];
+                        match cid {
+                            0x55BC => max_cll = read_ebml_uint(cbody).min(u16::MAX as u64) as u16,
+                            0x55BD => max_fall = read_ebml_uint(cbody).min(u16::MAX as u64) as u16,
+                            0x55D0 if params.options.get(OPT_CONTAINER_MDCV).is_none() => {
+                                if let Some(mdcv) = walk_mastering(cbody) {
+                                    params.options.insert(OPT_CONTAINER_MDCV, hex_encode(&mdcv));
+                                }
+                            }
+                            _ => {}
+                        }
+                        cpos += ch + csz;
+                    }
+                    if (max_cll > 0 || max_fall > 0) && params.options.get(OPT_CONTAINER_CLLI).is_none() {
+                        let mut clli = [0u8; 4];
+                        clli[0..2].copy_from_slice(&max_cll.to_be_bytes());
+                        clli[2..4].copy_from_slice(&max_fall.to_be_bytes());
+                        params.options.insert(OPT_CONTAINER_CLLI, hex_encode(&clli));
+                    }
+                }
+                // Stop once Cluster (0x1F43B675) starts.
+                0x1F43_B675 => break,
+                _ => {}
+            }
+            if id == 0x1853_8067 {
+                break;
+            }
+            pos = end;
+        }
+    }
+
+    walk_ebml(probe_buf, 0, params);
+}
+
+fn parse_sei_messages(rbsp: &[u8], mut callback: impl FnMut(u32, &[u8])) {
+    let mut pos = 0usize;
+    while pos < rbsp.len() && rbsp[pos] != 0x80 {
+        let mut payload_type = 0u32;
+        while pos < rbsp.len() && rbsp[pos] == 0xFF {
+            payload_type = payload_type.saturating_add(255);
+            pos += 1;
+        }
+        if pos >= rbsp.len() {
+            break;
+        }
+        payload_type = payload_type.saturating_add(u32::from(rbsp[pos]));
+        pos += 1;
+        let mut payload_size = 0usize;
+        while pos < rbsp.len() && rbsp[pos] == 0xFF {
+            payload_size = payload_size.saturating_add(255);
+            pos += 1;
+        }
+        if pos >= rbsp.len() {
+            break;
+        }
+        payload_size = payload_size.saturating_add(rbsp[pos] as usize);
+        pos += 1;
+        if pos + payload_size > rbsp.len() {
+            break;
+        }
+        callback(payload_type, &rbsp[pos..pos + payload_size]);
+        pos += payload_size;
+    }
+}
+
+fn iter_framed_nals<'a>(data: &'a [u8], framing: NalFraming) -> Vec<&'a [u8]> {
+    match framing {
+        NalFraming::AnnexB => split_annexb_nals(data),
+        NalFraming::LengthPrefixed(sz) => {
+            let s = sz as usize;
+            let mut out = Vec::new();
+            if s == 0 {
+                return out;
+            }
+            let mut pos = 0usize;
+            while pos + s <= data.len() {
+                let mut nlen = 0usize;
+                for &b in &data[pos..pos + s] {
+                    nlen = (nlen << 8) | (b as usize);
+                }
+                pos += s;
+                if pos + nlen > data.len() {
+                    break;
+                }
+                if nlen > 0 {
+                    out.push(&data[pos..pos + nlen]);
+                }
+                pos += nlen;
+            }
+            out
+        }
+        NalFraming::RawPassthrough => Vec::new(),
+    }
+}
+
+fn parse_hevc_rpu_profile(nals: &[&[u8]]) -> Option<u8> {
+    let nal = nals
+        .iter()
+        .find(|nal| nal.len() >= 8 && ((nal[0] >> 1) & 0x3F) == 62)?;
+    let mut rbsp = unescape_rbsp_prefix(&nal[2..], nal.len());
+    while rbsp.last() == Some(&0) {
+        rbsp.pop();
+    }
+    if rbsp.len() < 6 || rbsp[0] != 0x19 || *rbsp.last()? != 0x80 {
+        return None;
+    }
+    let data = &rbsp[1..];
+    let mut bit_pos = 0usize;
+    let mut read_bits = |count: usize| -> Option<u32> {
+        if bit_pos + count > data.len() * 8 {
+            return None;
+        }
+        let mut v = 0u32;
+        for _ in 0..count {
+            let b = (data[bit_pos / 8] >> (7 - (bit_pos % 8))) & 1;
+            v = (v << 1) | u32::from(b);
+            bit_pos += 1;
+        }
+        Some(v)
+    };
+    let read_ue = |read_bits: &mut dyn FnMut(usize) -> Option<u32>| -> Option<u32> {
+        let mut lz = 0usize;
+        while read_bits(1)? == 0 {
+            lz += 1;
+            if lz > 31 {
+                return None;
+            }
+        }
+        if lz == 0 {
+            Some(0)
+        } else {
+            Some((1u32 << lz) - 1 + read_bits(lz)?)
+        }
+    };
+    if read_bits(6)? != 2 {
+        return None;
+    }
+    let rpu_format = read_bits(11)?;
+    let vdr_rpu_profile = read_bits(4)?;
+    let _vdr_rpu_level = read_bits(4)?;
+    if read_bits(1)? == 0 {
+        return None;
+    }
+    let _chroma = read_bits(1)?;
+    let coef_data_type = read_bits(2)?;
+    if coef_data_type == 0 {
+        read_ue(&mut read_bits)?;
+    }
+    let _norm = read_bits(2)?;
+    let bl_full = read_bits(1)? != 0;
+    if vdr_rpu_profile == 0 && bl_full {
+        Some(5)
+    } else if vdr_rpu_profile == 1 {
+        if (rpu_format & 0x700) == 0 {
+            let _bl = read_ue(&mut read_bits)?;
+            let _el = read_ue(&mut read_bits)?;
+            let _vdr = read_ue(&mut read_bits)?;
+            let _srf = read_bits(9)?;
+            let disable_residual = read_bits(1)? != 0;
+            Some(if !disable_residual { 7 } else { 8 })
+        } else {
+            Some(8)
+        }
+    } else {
+        None
+    }
+}
+
+fn av1_mdcv_to_mp4(av1: [u8; 24]) -> [u8; 24] {
+    let u16_at = |i: usize| u64::from(u16::from_be_bytes([av1[i], av1[i + 1]]));
+    let u32_at = |i: usize| u64::from(u32::from_be_bytes([av1[i], av1[i + 1], av1[i + 2], av1[i + 3]]));
+    let chroma = |v: u64| u16::try_from((v * 50_000 + 32_768) / 65_536).unwrap_or(u16::MAX);
+    let luminance = |v: u64, scale: u64| u32::try_from((v * 10_000 + scale / 2) / scale).unwrap_or(u32::MAX);
+    let mut out = [0u8; 24];
+    for (slot, primary) in [1, 2, 0].into_iter().enumerate() {
+        out[4 * slot..4 * slot + 2].copy_from_slice(&chroma(u16_at(4 * primary)).to_be_bytes());
+        out[4 * slot + 2..4 * slot + 4].copy_from_slice(&chroma(u16_at(4 * primary + 2)).to_be_bytes());
+    }
+    out[12..14].copy_from_slice(&chroma(u16_at(12)).to_be_bytes());
+    out[14..16].copy_from_slice(&chroma(u16_at(14)).to_be_bytes());
+    out[16..20].copy_from_slice(&luminance(u32_at(16), 256).to_be_bytes());
+    out[20..24].copy_from_slice(&luminance(u32_at(20), 16_384).to_be_bytes());
+    out
+}
+
+fn extract_av1_hdr_obus(data: &[u8], mdcv: &mut Option<[u8; 24]>, clli: &mut Option<[u8; 4]>) {
+    let mut pos = 0usize;
+    while pos < data.len() {
+        let hdr = data[pos];
+        let obu_type = (hdr >> 3) & 0x0F;
+        let has_ext = (hdr & 0x04) != 0;
+        let has_size = (hdr & 0x02) != 0;
+        let hdr_len = 1 + usize::from(has_ext);
+        if pos + hdr_len > data.len() {
+            break;
+        }
+        let (payload_len, size_bytes) = if has_size {
+            let Some((sz, sb)) = read_leb128(&data[pos + hdr_len..]) else {
+                break;
+            };
+            (sz, sb)
+        } else {
+            (data.len() - (pos + hdr_len), 0)
+        };
+        let obu_total = hdr_len + size_bytes + payload_len;
+        if pos + obu_total > data.len() {
+            break;
+        }
+        if obu_type == 5 && payload_len >= 2 {
+            let obu_payload = &data[pos + hdr_len + size_bytes..pos + obu_total];
+            if let Some((meta_type, m_sb)) = read_leb128(obu_payload) {
+                let body = &obu_payload[m_sb..];
+                match meta_type {
+                    1 if body.len() >= 4 && clli.is_none() => *clli = nonzero_clli(&body[..4]),
+                    2 if body.len() >= 24 && mdcv.is_none() => {
+                        *mdcv = body[..24].try_into().ok().map(av1_mdcv_to_mp4);
+                    }
+                    _ => {}
+                }
+            }
+        }
+        pos += obu_total;
+    }
+}
+
+fn extract_hdr_and_dovi_boxes(
+    params: &CodecParameters,
+    first_keyframe: Option<&[u8]>,
+    framing: NalFraming,
+    extra_sei_nals: &[Vec<u8>],
+    colr_nclx: &mut Option<(u8, u8, u8, bool)>,
+) -> (Option<[u8; 24]>, Option<[u8; 4]>, Option<([u8; 4], [u8; 24])>) {
+    let mut mdcv: Option<[u8; 24]> = None;
+    let mut clli: Option<[u8; 4]> = None;
+    let extra = &params.extradata;
+    let codec_id = params.codec_id.as_str();
+
+    match codec_id {
+        "h264" | "h265" | "hevc" => {
+            let hdr_bytes = if codec_id == "h264" { 1usize } else { 2usize };
+            let sei_type = if codec_id == "h264" { 6u8 } else { 39u8 };
+            let mut scan_sei = |nal: &[u8]| {
+                if nal.len() > hdr_bytes {
+                    let rbsp = unescape_rbsp_prefix(&nal[hdr_bytes..], nal.len());
+                    parse_sei_messages(&rbsp, |ptype, payload| {
+                        if ptype == 137 && payload.len() == 24 && mdcv.is_none() {
+                            mdcv = payload.try_into().ok();
+                        } else if ptype == 144 && payload.len() == 4 && clli.is_none() {
+                            clli = nonzero_clli(payload);
+                        }
+                    });
+                }
+            };
+            for nal in extra_sei_nals {
+                scan_sei(nal);
+            }
+            if matches!(framing, NalFraming::AnnexB) {
+                for nal in split_annexb_nals(extra) {
+                    let nt = if codec_id == "h264" { nal[0] & 0x1F } else if nal.len() >= 2 { (nal[0] >> 1) & 0x3F } else { 0 };
+                    if nt == sei_type {
+                        scan_sei(nal);
+                    }
+                }
+            }
+            if let Some(kf) = first_keyframe {
+                for nal in iter_framed_nals(kf, framing) {
+                    let nt = if codec_id == "h264" { nal[0] & 0x1F } else if nal.len() >= 2 { (nal[0] >> 1) & 0x3F } else { 0 };
+                    if nt == sei_type {
+                        scan_sei(nal);
+                    }
+                }
+            }
+        }
+        "av1" => {
+            if extra.len() > 4 && (extra[0] & 0x80) != 0 && (extra[0] & 0x7F) == 1 {
+                extract_av1_hdr_obus(&extra[4..], &mut mdcv, &mut clli);
+            } else {
+                extract_av1_hdr_obus(extra, &mut mdcv, &mut clli);
+            }
+            if let Some(kf) = first_keyframe {
+                extract_av1_hdr_obus(kf, &mut mdcv, &mut clli);
+            }
+        }
+        _ => {}
+    }
+
+    if mdcv.is_none() {
+        mdcv = params
+            .options
+            .get(OPT_CONTAINER_MDCV)
+            .and_then(|h| hex_decode(h))
+            .and_then(|b| b.try_into().ok())
+            .or_else(|| find_fourcc_box(extra, b"mdcv").and_then(|b| b.get(..24)?.try_into().ok()));
+    }
+    if clli.is_none() {
+        clli = params
+            .options
+            .get(OPT_CONTAINER_CLLI)
+            .and_then(|h| hex_decode(h))
+            .and_then(|b| nonzero_clli(&b))
+            .or_else(|| find_fourcc_box(extra, b"clli").and_then(nonzero_clli));
+    }
+
+    let mut dovi_config = None;
+    if matches!(codec_id, "h265" | "hevc" | "av1") {
+        let raw_dovi = find_dovi_box(extra)
+            .map(|b| b.to_vec())
+            .or_else(|| params.options.get(OPT_CONTAINER_DOVI).and_then(|h| hex_decode(h)));
+        let parsed = raw_dovi.as_deref().and_then(parse_dovi_record);
+        let rpu_profile = if matches!(codec_id, "h265" | "hevc") {
+            first_keyframe
+                .map(|kf| iter_framed_nals(kf, framing))
+                .and_then(|nals| parse_hevc_rpu_profile(&nals))
+        } else {
+            None
+        };
+        let trc = colr_nclx.map(|(_, t, _, _)| t).unwrap_or(0);
+        let resolved = match parsed {
+            Some((profile, level, compat_id, record)) => {
+                let lvl = if level > 0 { level } else { 6 };
+                if profile == 7 {
+                    Some((8u8, build_dovi_record(8, lvl, true, false, true, 1), 1u8))
+                } else {
+                    Some((profile, record, compat_id))
+                }
+            }
+            None => match rpu_profile {
+                Some(5) => Some((5, build_dovi_record(5, 6, true, false, true, 0), 0)),
+                Some(7 | 8) if trc == 18 => Some((8, build_dovi_record(8, 6, true, false, true, 4), 4)),
+                Some(7 | 8) => Some((8, build_dovi_record(8, 6, true, false, true, 1), 1)),
+                _ => None,
+            },
+        };
+        if let Some((profile, record, compat_id)) = resolved {
+            if profile == 5 || compat_id == 1 {
+                let full = colr_nclx.is_some_and(|(_, _, _, f)| f);
+                *colr_nclx = Some((9, 16, 9, full));
+            } else if compat_id == 4 {
+                let full = colr_nclx.is_some_and(|(_, _, _, f)| f);
+                *colr_nclx = Some((9, 18, 9, full));
+            }
+            let fourcc = if profile > 7 { *b"dvvC" } else { *b"dvcC" };
+            dovi_config = Some((fourcc, record));
+        }
+    }
+
+    (mdcv, clli, dovi_config)
+}
+
 fn probe_mse_video(stream: &StreamInfo, first_keyframe: Option<&[u8]>) -> Option<MseVideoConfig> {
     let params = &stream.params;
     let w = params.width.unwrap_or(0);
@@ -1383,12 +2008,20 @@ fn probe_mse_video(stream: &StreamInfo, first_keyframe: Option<&[u8]>) -> Option
         .unwrap_or(24.0);
     let frame_ticks_90k = ((VIDEO_TIMESCALE as f64) / fps).round().max(1.0) as i64;
     let extra = &params.extradata;
-    let colr_nclx = resolve_video_color(params, first_keyframe, None, None).exact_nclx();
+    let mut colr_nclx = resolve_video_color(params, first_keyframe, None, None).exact_nclx();
+    let pasp = find_fourcc_box(extra, b"pasp").and_then(|b| {
+        let hs = u32::from_be_bytes(b.get(0..4)?.try_into().ok()?);
+        let vs = u32::from_be_bytes(b.get(4..8)?.try_into().ok()?);
+        (hs > 0 && vs > 0 && hs != vs).then_some((hs, vs))
+    });
 
     match params.codec_id.as_str() {
         "h264" => {
             if extra.len() >= 7 && extra[0] == 1 {
                 let len_size = (extra[4] & 3) + 1;
+                let framing = NalFraming::LengthPrefixed(len_size);
+                let (mdcv, clli, dovi_config) =
+                    extract_hdr_and_dovi_boxes(params, first_keyframe, framing, &[], &mut colr_nclx);
                 let mut rec = extra.clone();
                 rec[4] |= 0x03;
                 let codec_string = format!("avc1.{:02x}{:02x}{:02x}", extra[1], extra[2], extra[3]);
@@ -1396,7 +2029,7 @@ fn probe_mse_video(stream: &StreamInfo, first_keyframe: Option<&[u8]>) -> Option
                     kind: VideoCodecKind::H264,
                     width: w,
                     height: h,
-                    framing: NalFraming::LengthPrefixed(len_size),
+                    framing,
                     container: MseContainer::Fmp4,
                     config_box_fourcc: *b"avcC",
                     sample_entry_fourcc: *b"avc1",
@@ -1404,6 +2037,10 @@ fn probe_mse_video(stream: &StreamInfo, first_keyframe: Option<&[u8]>) -> Option
                     codec_string,
                     frame_ticks_90k,
                     colr_nclx,
+                    mdcv,
+                    clli,
+                    dovi_config,
+                    pasp,
                 })
             } else {
                 let mut sps: Option<Vec<u8>> = None;
@@ -1418,6 +2055,9 @@ fn probe_mse_video(stream: &StreamInfo, first_keyframe: Option<&[u8]>) -> Option
                     }
                 }
                 let (sps, pps) = (sps?, pps?);
+                let framing = NalFraming::AnnexB;
+                let (mdcv, clli, dovi_config) =
+                    extract_hdr_and_dovi_boxes(params, first_keyframe, framing, &[], &mut colr_nclx);
                 let codec_string = format!("avc1.{:02x}{:02x}{:02x}", sps[1], sps[2], sps[3]);
                 let mut rec = Vec::with_capacity(11 + sps.len() + pps.len());
                 rec.extend_from_slice(&[1, sps[1], sps[2], sps[3], 0xFF, 0xE1]);
@@ -1430,7 +2070,7 @@ fn probe_mse_video(stream: &StreamInfo, first_keyframe: Option<&[u8]>) -> Option
                     kind: VideoCodecKind::H264,
                     width: w,
                     height: h,
-                    framing: NalFraming::AnnexB,
+                    framing,
                     container: MseContainer::Fmp4,
                     config_box_fourcc: *b"avcC",
                     sample_entry_fourcc: *b"avc1",
@@ -1438,18 +2078,25 @@ fn probe_mse_video(stream: &StreamInfo, first_keyframe: Option<&[u8]>) -> Option
                     codec_string,
                     frame_ticks_90k,
                     colr_nclx,
+                    mdcv,
+                    clli,
+                    dovi_config,
+                    pasp,
                 })
             }
         }
         "h265" | "hevc" => {
             if extra.len() >= 23 && extra[0] == 1 {
                 let len_size = (extra[21] & 3) + 1;
+                let framing = NalFraming::LengthPrefixed(len_size);
                 let mut header_22 = extra[0..22].to_vec();
                 header_22[21] |= 0x03;
-                // Strip SEI (39/40) and Dolby Vision RPU/EL arrays from hvcC so VideoToolbox accepts 4K UHD remuxes.
+                // Strip SEI (39/40) and Dolby Vision RPU/EL arrays from hvcC so VideoToolbox accepts 4K UHD remuxes,
+                // while capturing Prefix SEI (39) to populate the sample entry's `mdcv` and `clli` boxes.
                 let num_arrays = extra[22] as usize;
                 let mut pos = 23usize;
                 let mut kept_arrays: Vec<(u8, Vec<Vec<u8>>)> = Vec::new();
+                let mut extra_sei_nals: Vec<Vec<u8>> = Vec::new();
                 for _ in 0..num_arrays {
                     if pos + 3 > extra.len() {
                         break;
@@ -1469,6 +2116,8 @@ fn probe_mse_video(stream: &StreamInfo, first_keyframe: Option<&[u8]>) -> Option
                         }
                         if matches!(nal_type, 32..=34) {
                             nals.push(extra[pos..pos + nlen].to_vec());
+                        } else if nal_type == 39 {
+                            extra_sei_nals.push(extra[pos..pos + nlen].to_vec());
                         }
                         pos += nlen;
                     }
@@ -1476,6 +2125,13 @@ fn probe_mse_video(stream: &StreamInfo, first_keyframe: Option<&[u8]>) -> Option
                         kept_arrays.push((nal_type, nals));
                     }
                 }
+                let (mdcv, clli, dovi_config) = extract_hdr_and_dovi_boxes(
+                    params,
+                    first_keyframe,
+                    framing,
+                    &extra_sei_nals,
+                    &mut colr_nclx,
+                );
                 let mut rec = Vec::with_capacity(23 + 256);
                 rec.extend_from_slice(&header_22);
                 rec.push(kept_arrays.len() as u8);
@@ -1492,7 +2148,7 @@ fn probe_mse_video(stream: &StreamInfo, first_keyframe: Option<&[u8]>) -> Option
                     kind: VideoCodecKind::Hevc,
                     width: w,
                     height: h,
-                    framing: NalFraming::LengthPrefixed(len_size),
+                    framing,
                     container: MseContainer::Fmp4,
                     config_box_fourcc: *b"hvcC",
                     sample_entry_fourcc: *b"hvc1",
@@ -1500,6 +2156,10 @@ fn probe_mse_video(stream: &StreamInfo, first_keyframe: Option<&[u8]>) -> Option
                     codec_string,
                     frame_ticks_90k,
                     colr_nclx,
+                    mdcv,
+                    clli,
+                    dovi_config,
+                    pasp,
                 })
             } else {
                 // Annex-B HEVC (e.g. MPEG-TS): extract VPS (32), SPS (33), PPS (34) and synthesize hvcC.
@@ -1520,6 +2180,9 @@ fn probe_mse_video(stream: &StreamInfo, first_keyframe: Option<&[u8]>) -> Option
                     }
                 }
                 let (vps, sps, pps) = (vps?, sps?, pps?);
+                let framing = NalFraming::AnnexB;
+                let (mdcv, clli, dovi_config) =
+                    extract_hdr_and_dovi_boxes(params, first_keyframe, framing, &[], &mut colr_nclx);
                 let sps_rbsp = unescape_rbsp_prefix(&sps, 20);
                 if sps_rbsp.len() < 15 {
                     return None;
@@ -1542,7 +2205,7 @@ fn probe_mse_video(stream: &StreamInfo, first_keyframe: Option<&[u8]>) -> Option
                     kind: VideoCodecKind::Hevc,
                     width: w,
                     height: h,
-                    framing: NalFraming::AnnexB,
+                    framing,
                     container: MseContainer::Fmp4,
                     config_box_fourcc: *b"hvcC",
                     sample_entry_fourcc: *b"hvc1",
@@ -1550,11 +2213,22 @@ fn probe_mse_video(stream: &StreamInfo, first_keyframe: Option<&[u8]>) -> Option
                     codec_string,
                     frame_ticks_90k,
                     colr_nclx,
+                    mdcv,
+                    clli,
+                    dovi_config,
+                    pasp,
                 })
             }
         }
         "av1" => {
             let (av1c, codec_string) = build_av1_config(stream, first_keyframe)?;
+            let (mdcv, clli, dovi_config) = extract_hdr_and_dovi_boxes(
+                params,
+                first_keyframe,
+                NalFraming::RawPassthrough,
+                &[],
+                &mut colr_nclx,
+            );
             Some(MseVideoConfig {
                 kind: VideoCodecKind::Av1,
                 width: w,
@@ -1567,6 +2241,10 @@ fn probe_mse_video(stream: &StreamInfo, first_keyframe: Option<&[u8]>) -> Option
                 codec_string,
                 frame_ticks_90k,
                 colr_nclx,
+                mdcv,
+                clli,
+                dovi_config,
+                pasp,
             })
         }
         "vp9" => {
@@ -1574,6 +2252,13 @@ fn probe_mse_video(stream: &StreamInfo, first_keyframe: Option<&[u8]>) -> Option
                 return None;
             }
             let (vpcc, codec_string) = build_vp9_config(stream, first_keyframe, w, h);
+            let (mdcv, clli, _) = extract_hdr_and_dovi_boxes(
+                params,
+                first_keyframe,
+                NalFraming::RawPassthrough,
+                &[],
+                &mut colr_nclx,
+            );
             Some(MseVideoConfig {
                 kind: VideoCodecKind::Vp9,
                 width: w,
@@ -1586,6 +2271,10 @@ fn probe_mse_video(stream: &StreamInfo, first_keyframe: Option<&[u8]>) -> Option
                 codec_string,
                 frame_ticks_90k,
                 colr_nclx,
+                mdcv,
+                clli,
+                dovi_config: None,
+                pasp,
             })
         }
         // Browsers take VP8 through MSE only in WebM (Chromium refuses `vp08` in MP4), and the
@@ -1602,6 +2291,10 @@ fn probe_mse_video(stream: &StreamInfo, first_keyframe: Option<&[u8]>) -> Option
             codec_string: "vp8".to_string(),
             frame_ticks_90k,
             colr_nclx: None,
+            mdcv: None,
+            clli: None,
+            dovi_config: None,
+            pasp: None,
         }),
         _ => None,
     }
@@ -1661,6 +2354,9 @@ fn build_fmp4_init(cfg: &MseVideoConfig) -> Vec<u8> {
     vse.extend_from_slice(&0x0018u16.to_be_bytes());
     vse.extend_from_slice(&0xFFFFu16.to_be_bytes());
     vse.extend_from_slice(&wrap_box(&cfg.config_box_fourcc, &cfg.config_payload));
+    if let Some((dovi_fourcc, dovi_rec)) = &cfg.dovi_config {
+        vse.extend_from_slice(&wrap_box(dovi_fourcc, dovi_rec));
+    }
     if let Some((prim, trc, mat, full)) = cfg.colr_nclx {
         let mut colr = Vec::with_capacity(11);
         colr.extend_from_slice(b"nclx");
@@ -1669,6 +2365,18 @@ fn build_fmp4_init(cfg: &MseVideoConfig) -> Vec<u8> {
         colr.extend_from_slice(&u16::from(mat).to_be_bytes());
         colr.push(if full { 0x80 } else { 0x00 });
         vse.extend_from_slice(&wrap_box(b"colr", &colr));
+    }
+    if let Some(mdcv) = &cfg.mdcv {
+        vse.extend_from_slice(&wrap_box(b"mdcv", mdcv));
+    }
+    if let Some(clli) = &cfg.clli {
+        vse.extend_from_slice(&wrap_box(b"clli", clli));
+    }
+    if let Some((sar_w, sar_h)) = cfg.pasp {
+        let mut pasp_body = [0u8; 8];
+        pasp_body[0..4].copy_from_slice(&sar_w.to_be_bytes());
+        pasp_body[4..8].copy_from_slice(&sar_h.to_be_bytes());
+        vse.extend_from_slice(&wrap_box(b"pasp", &pasp_body));
     }
     let sample_entry = wrap_box(&cfg.sample_entry_fourcc, &vse);
 
@@ -2351,8 +3059,7 @@ impl WebSession {
         {
             self.hidden_gops.pop_front();
         }
-        let mut gop: Vec<Packet> = std::mem::take(&mut self.hidden_gops).into_iter().flatten().collect();
-        self.hidden_gop_bytes = 0;
+        let mut gop: Vec<Packet> = self.hidden_gops.iter().flatten().cloned().collect();
         if gop.is_empty() {
             if self.video_mode == VideoOutputMode::Software {
                 self.drop_until_keyframe = true;
@@ -3137,12 +3844,194 @@ mod tests {
             codec_string: "avc1.640028".to_string(),
             frame_ticks_90k: 3750,
             colr_nclx: untagged.exact_nclx(),
+            mdcv: None,
+            clli: None,
+            dovi_config: None,
+            pasp: None,
         };
         let init_untagged = build_fmp4_init(&cfg);
         assert!(!init_untagged.windows(4).any(|w| w == b"colr"), "untagged stream must omit colr box");
+        assert!(!init_untagged.windows(4).any(|w| w == b"mdcv"), "untagged stream must omit mdcv box");
+        assert!(!init_untagged.windows(4).any(|w| w == b"clli"), "untagged stream must omit clli box");
         cfg.colr_nclx = partial.exact_nclx();
+        cfg.mdcv = Some([0x33; 24]);
+        cfg.clli = Some([0x03, 0xE8, 0x01, 0x90]); // MaxCLL=1000, MaxFALL=400
+        cfg.dovi_config = Some((*b"dvvC", build_dovi_record(8, 6, true, false, true, 1)));
+        cfg.pasp = Some((4, 3));
         let init_tagged = build_fmp4_init(&cfg);
         assert!(init_tagged.windows(15).any(|w| w == b"colrnclx\x00\x09\x00\x10\x00\x02\x00"), "tagged stream writes exact colr/nclx box with 2 for unspecified");
+        assert!(init_tagged.windows(8).any(|w| w == b"\x00\x00\x00\x20mdcv"), "HDR stream writes 32-byte mdcv box");
+        assert!(init_tagged.windows(12).any(|w| w == b"\x00\x00\x00\x0cclli\x03\xe8\x01\x90"), "HDR stream writes 12-byte clli box with MaxCLL=1000 MaxFALL=400");
+        assert!(init_tagged.windows(8).any(|w| w == b"\x00\x00\x00\x20dvvC"), "Dolby Vision P8 stream writes 32-byte dvvC box");
+        assert!(init_tagged.windows(16).any(|w| w == b"\x00\x00\x00\x10pasp\x00\x00\x00\x04\x00\x00\x00\x03"), "anamorphic stream writes 16-byte pasp box");
+    }
+
+    #[test]
+    fn probe_mse_video_extracts_sei_and_mkv_ebml_hdr_and_dovi_boxes() {
+        // Build an HEVC Prefix SEI (NAL type 39) carrying SEI 137 (mdcv) and SEI 144 (clli: MaxCLL=1200, MaxFALL=350).
+        let mut sei_nal = vec![39 << 1, 1];
+        sei_nal.push(137);
+        sei_nal.push(24);
+        sei_nal.extend_from_slice(&[0x44; 24]);
+        sei_nal.push(144);
+        sei_nal.push(4);
+        sei_nal.extend_from_slice(&[0x04, 0xB0, 0x01, 0x5E]);
+        sei_nal.push(0x80);
+
+        let mut keyframe = Vec::with_capacity(4 + sei_nal.len());
+        keyframe.extend_from_slice(&(sei_nal.len() as u32).to_be_bytes());
+        keyframe.extend_from_slice(&sei_nal);
+
+        let mut params = CodecParameters::video("hevc".into());
+        params.width = Some(3840);
+        params.height = Some(2160);
+        params.options.insert(
+            OPT_CONTAINER_DOVI,
+            hex_encode(&build_dovi_record(7, 6, true, true, true, 1)),
+        );
+
+        let mut colr_nclx = None;
+        let (mdcv, clli, dovi_config) = extract_hdr_and_dovi_boxes(
+            &params,
+            Some(&keyframe),
+            NalFraming::LengthPrefixed(4),
+            &[],
+            &mut colr_nclx,
+        );
+        assert_eq!(mdcv, Some([0x44; 24]));
+        assert_eq!(clli, Some([0x04, 0xB0, 0x01, 0x5E]));
+        // Profile 7 container record promotes to Profile 8.1 (`dvvC`) and forces PQ BT.2020 `colr`.
+        assert_eq!(
+            dovi_config,
+            Some((*b"dvvC", build_dovi_record(8, 6, true, false, true, 1)))
+        );
+        assert_eq!(colr_nclx, Some((9, 16, 9, false)));
+
+        let cfg = MseVideoConfig {
+            kind: VideoCodecKind::Hevc,
+            width: 3840,
+            height: 2160,
+            framing: NalFraming::LengthPrefixed(4),
+            container: MseContainer::Fmp4,
+            config_box_fourcc: *b"hvcC",
+            sample_entry_fourcc: *b"hvc1",
+            config_payload: vec![1u8; 23],
+            codec_string: "hvc1.2.4.L153.B0".to_string(),
+            frame_ticks_90k: 3750,
+            colr_nclx,
+            mdcv,
+            clli,
+            dovi_config,
+            pasp: None,
+        };
+        let init = build_fmp4_init(&cfg);
+        assert!(init.windows(32).any(|w| &w[0..8] == b"\x00\x00\x00\x20mdcv" && &w[8..32] == &[0x44; 24]));
+        assert!(init.windows(12).any(|w| w == b"\x00\x00\x00\x0cclli\x04\xb0\x01\x5e"));
+        assert!(init.windows(8).any(|w| w == b"\x00\x00\x00\x20dvvC"));
+
+        // Remux a Profile 7 STDL access unit ([BL IDR] + [EL UNSPEC63] + [P7 FEL RPU UNSPEC62])
+        // and verify emitted fMP4 sample bytes strip EL (63) and convert RPU (62) to CRC-valid Profile 8.1.
+        let p7_rpu = dovi_rpu::ParsedRpu {
+            profile: 7,
+            el_type: Some(dovi_rpu::DoviElType::Fel),
+            header: dovi_rpu::RpuHeader {
+                rpu_type: 2,
+                rpu_format: 18,
+                vdr_rpu_profile: 1,
+                vdr_rpu_level: 0,
+                vdr_seq_info_present_flag: true,
+                chroma_resampling_explicit_filter_flag: false,
+                chroma_filter_idc: 0,
+                coefficient_data_type: 0,
+                coefficient_log2_denom: 23,
+                coef_len: 23,
+                vdr_rpu_normalized_idc: 1,
+                bl_video_full_range_flag: false,
+                bl_bit_depth_minus8: 2,
+                el_bit_depth_minus8: 2,
+                ext_mapping_idc: 0,
+                vdr_bit_depth_minus8: 4,
+                spatial_resampling_filter_flag: false,
+                reserved_zero_3bits: 0,
+                el_spatial_resampling_filter_flag: true,
+                disable_residual_flag: false,
+                vdr_dm_metadata_present_flag: true,
+                use_prev_vdr_rpu_flag: false,
+                prev_vdr_rpu_id: 0,
+            },
+            mapping: Some(dovi_rpu::RpuMapping {
+                vdr_rpu_id: 0,
+                mapping_color_space: 0,
+                mapping_chroma_format_idc: 0,
+                num_x_partitions_minus1: 0,
+                num_y_partitions_minus1: 0,
+                curves: [
+                    dovi_rpu::ComponentCurve::identity_p81(),
+                    dovi_rpu::ComponentCurve::identity_p81(),
+                    dovi_rpu::ComponentCurve::identity_p81(),
+                ],
+                nlq_pred_pivots: Some([0, 1023]),
+                nlq: Some(dovi_rpu::RpuNlq {
+                    nlq_offset: [512, 512, 512],
+                    vdr_in_max_int: [1, 1, 1],
+                    vdr_in_max_frac: [0, 0, 0],
+                    dz_slope_int: [0, 0, 0],
+                    dz_slope_frac: [1 << 21, 1 << 21, 1 << 21],
+                    dz_threshold_int: [0, 0, 0],
+                    dz_threshold_frac: [0, 0, 0],
+                }),
+            }),
+            dm_data: Some(dovi_rpu::VdrDmPayload {
+                compressed: false,
+                affected_dm_metadata_id: 0,
+                current_dm_metadata_id: 0,
+                scene_refresh_flag: 1,
+                ycc_to_rgb_coef: [9574, 0, 13802, 9574, -1540, -5348, 9574, 17610, 0],
+                ycc_to_rgb_offset: [16_777_216, 134_217_728, 134_217_728],
+                rgb_to_lms_coef: [7222, 8771, 390, 2654, 12430, 1300, 0, 422, 15962],
+                signal_eotf: 65535,
+                signal_eotf_param0: 0,
+                signal_eotf_param1: 0,
+                signal_eotf_param2: 0,
+                signal_bit_depth: 12,
+                signal_color_space: 0,
+                signal_chroma_format: 0,
+                signal_full_range_flag: 1,
+                source_min_pq: 62,
+                source_max_pq: 3079,
+                source_diagonal: 42,
+                cmv29_blocks: vec![dovi_rpu::ExtBlockRaw {
+                    length_bytes: 5,
+                    level: 1,
+                    payload_bytes: vec![0x00, 0x3E, 0x0C, 0x07, 0x04],
+                }],
+                cmv40_blocks: Some(vec![dovi_rpu::ExtBlockRaw {
+                    length_bytes: 10,
+                    level: 8,
+                    payload_bytes: vec![0, 0x08, 0x00, 0x08, 0x00, 0x08, 0x00, 0, 0, 0],
+                }]),
+                trailing_bits: Vec::new(),
+            }),
+            crc32: 0,
+        };
+        let p7_rpu_nal = p7_rpu.encode_hevc_unspec62_nal();
+        let bl_nal = [0x26u8, 0x01, 0xAF, 0x12, 0x34];
+        let el_nal = [0x7Eu8, 0x01, 0x26, 0x09, 0xDE, 0xAD];
+        let mut stdl_pkt = Vec::new();
+        for nal in [bl_nal.as_slice(), el_nal.as_slice(), p7_rpu_nal.as_slice()] {
+            stdl_pkt.extend_from_slice(&(nal.len() as u32).to_be_bytes());
+            stdl_pkt.extend_from_slice(nal);
+        }
+        let emitted = to_fmp4_sample_bytes(stdl_pkt, NalFraming::LengthPrefixed(4), VideoCodecKind::Hevc);
+        let emitted_nals = iter_framed_nals(&emitted, NalFraming::LengthPrefixed(4));
+        assert_eq!(emitted_nals.len(), 2, "EL (63) stripped while BL (19) and RPU (62) remain");
+        assert_eq!(emitted_nals[0], bl_nal.as_slice());
+        assert_eq!((emitted_nals[1][0] >> 1) & 0x3F, 62);
+        let emitted_rpu = dovi_rpu::parse_rpu_rbsp(&dovi_rpu::unescape_rbsp(&emitted_nals[1][2..]))
+            .expect("valid CRC-verified Profile 8.1 RPU in emitted fMP4 sample");
+        assert_eq!(emitted_rpu.profile, 8);
+        assert!(emitted_rpu.header.disable_residual_flag);
+        assert!(!emitted_rpu.header.el_spatial_resampling_filter_flag);
     }
 }
 

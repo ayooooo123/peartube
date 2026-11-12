@@ -440,9 +440,9 @@ function setPageHidden (nextHidden) {
       postReadBlock(lastBlk, false)
     }
     const now = workerMediaTime()
+    wasm?.pt_set_clock?.(now)
     if (useWebCodecs) openWebCodecsInstance(activeSeq, now)
     wasm?.pt_set_hidden?.(0)
-    if (useWebCodecs && !closed && !eof) schedulePump(0)
   }
 }
 

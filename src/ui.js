@@ -2154,6 +2154,7 @@ function openPlayer (entry, at = 0) {
     p.audioStarted = false
     p.primed = false
     p.rebuffering = false
+    p.returnSyncPending = false
     p.audioBaseMedia = targetSecs
     p.freeBaseMedia = targetSecs
     p.freeBasePerf = performance.now()
@@ -2431,6 +2432,7 @@ function openPlayer (entry, at = 0) {
         }
       }
     } else if (m.type === 'returnCtrl') {
+      p.returnSyncPending = false
       if (p.paused || !p.primed || p.seeking) return
       if (m.mode === 1) {
         p.pendingReturnSnap = true
@@ -2978,7 +2980,8 @@ function resyncOnReturn (fromHidden = false) {
   const p = player
   const wasHidden = fromHidden || p.windowOccluded
   p.windowOccluded = false
-  if (p.paused || !p.primed || p.seeking) return
+  p.lastTickWall = performance.now()
+  if (p.paused || !p.primed || p.seeking || p.returnSyncPending) return
   const audio = p.currentMediaTime ? p.currentMediaTime() : (p.freeBaseMedia || 0)
   p.suppressStageClickUntil = performance.now() + 900
   if (p.audioCtx?.state === 'suspended') p.audioCtx.resume().catch(() => {})
@@ -2988,6 +2991,7 @@ function resyncOnReturn (fromHidden = false) {
     p.drainMseQueue?.()
     if (v.paused) v.play().catch(() => {})
   }
+  p.returnSyncPending = true
   p.syncWorkerClock?.(audio, true, {
     returnSync: true,
     wasHidden,

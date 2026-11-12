@@ -49,11 +49,12 @@ pub fn pack_audio_f32(out: &mut Vec<u8>, left: &[f32], right: &[f32]) {
     let frames = left.len().min(right.len());
     out.clear();
     out.reserve(frames * 8);
-    for &x in &left[..frames] {
-        out.extend_from_slice(&x.to_le_bytes());
-    }
-    for &x in &right[..frames] {
-        out.extend_from_slice(&x.to_le_bytes());
+    if frames > 0 {
+        // SAFETY: f32 is Pod with identical little-endian representation on wasm32/arm64/x86.
+        unsafe {
+            out.extend_from_slice(std::slice::from_raw_parts(left.as_ptr().cast::<u8>(), frames * 4));
+            out.extend_from_slice(std::slice::from_raw_parts(right.as_ptr().cast::<u8>(), frames * 4));
+        }
     }
 }
 
@@ -137,24 +138,33 @@ pub fn clamp_stereo_simd(dst_l: &mut [f32], dst_r: &mut [f32]) {
     }
 }
 
-/// 10-bit little-endian samples to 8-bit, 16 pixels per two SIMD ops.
+/// 10-bit little-endian samples to 8-bit with 4x4 Bayer ordered dithering, 16 pixels per two SIMD ops.
+/// Exact multiples of 4 (`px & 3 == 0`) remain untouched while fractional 10-bit steps dither across 2x2 quads.
 #[cfg(target_arch = "wasm32")]
-pub fn pack_u16_to_u8(src_row: &[u8], dst_row: &mut [u8]) {
+pub fn pack_u16_to_u8(src_row: &[u8], dst_row: &mut [u8], row: usize) {
+    const BAYER_4X4: [[u16; 4]; 4] = [
+        [0, 2, 1, 3],
+        [3, 1, 2, 0],
+        [1, 3, 0, 2],
+        [2, 0, 3, 1],
+    ];
+    let d4 = BAYER_4X4[row & 3];
+    let d = u16x8(d4[0], d4[1], d4[2], d4[3], d4[0], d4[1], d4[2], d4[3]);
     let cols = dst_row.len().min(src_row.len() / 2);
     let chunks16 = cols / 16;
     let sp = src_row.as_ptr();
     let dp = dst_row.as_mut_ptr();
     for i in 0..chunks16 {
         unsafe {
-            let lo = u16x8_shr(v128_load(sp.add(i * 32) as *const v128), 2);
-            let hi = u16x8_shr(v128_load(sp.add(i * 32 + 16) as *const v128), 2);
+            let lo = u16x8_shr(u16x8_add(v128_load(sp.add(i * 32) as *const v128), d), 2);
+            let hi = u16x8_shr(u16x8_add(v128_load(sp.add(i * 32 + 16) as *const v128), d), 2);
             let packed = u8x16_narrow_i16x8(lo, hi);
             v128_store(dp.add(i * 16) as *mut v128, packed);
         }
     }
     for i in (chunks16 * 16)..cols {
         let px = u16::from_le_bytes([src_row[i * 2], src_row[i * 2 + 1]]);
-        dst_row[i] = (px >> 2).min(255) as u8;
+        dst_row[i] = ((px + d4[i & 3]) >> 2).min(255) as u8;
     }
 }
 
@@ -172,5 +182,77 @@ pub fn average_rows(row0: &[u8], row1: &[u8], drow: &mut [u8]) {
     }
     for i in (chunks16 * 16)..cwu {
         drow[i] = ((u16::from(row0[i]) + u16::from(row1[i]) + 1) >> 1) as u8;
+    }
+}
+
+/// SIMD128 stereo downmix of interleaved 32-bit signed PCM (e.g. 5.1 / 7.1 TrueHD & LPCM).
+#[cfg(target_arch = "wasm32")]
+pub fn downmix_s32le_simd(
+    plane: &[u8],
+    ch: usize,
+    avail: usize,
+    gains: &[[f32; 2]],
+    dl: &mut [f32],
+    dr: &mut [f32],
+) {
+    const SCALE: f32 = 1.0 / 2_147_483_648.0;
+    if ch == 8 && gains.len() >= 8 {
+        let gl0 = f32x4(gains[0][0] * SCALE, gains[1][0] * SCALE, gains[2][0] * SCALE, gains[3][0] * SCALE);
+        let gl1 = f32x4(gains[4][0] * SCALE, gains[5][0] * SCALE, gains[6][0] * SCALE, gains[7][0] * SCALE);
+        let gr0 = f32x4(gains[0][1] * SCALE, gains[1][1] * SCALE, gains[2][1] * SCALE, gains[3][1] * SCALE);
+        let gr1 = f32x4(gains[4][1] * SCALE, gains[5][1] * SCALE, gains[6][1] * SCALE, gains[7][1] * SCALE);
+        let sp = plane.as_ptr();
+        for i in 0..avail {
+            unsafe {
+                let f0 = f32x4_convert_i32x4(v128_load(sp.add(i * 32) as *const v128));
+                let f1 = f32x4_convert_i32x4(v128_load(sp.add(i * 32 + 16) as *const v128));
+                let l4 = f32x4_add(f32x4_mul(f0, gl0), f32x4_mul(f1, gl1));
+                let r4 = f32x4_add(f32x4_mul(f0, gr0), f32x4_mul(f1, gr1));
+                let lp = f32x4_add(l4, i32x4_shuffle::<2, 3, 0, 1>(l4, l4));
+                let rp = f32x4_add(r4, i32x4_shuffle::<2, 3, 0, 1>(r4, r4));
+                let l = f32x4_extract_lane::<0>(lp) + f32x4_extract_lane::<1>(lp);
+                let r = f32x4_extract_lane::<0>(rp) + f32x4_extract_lane::<1>(rp);
+                dl[i] = l.clamp(-1.0, 1.0);
+                dr[i] = r.clamp(-1.0, 1.0);
+            }
+        }
+        return;
+    }
+    if ch == 6 && gains.len() >= 6 {
+        let gl0 = f32x4(gains[0][0] * SCALE, gains[1][0] * SCALE, gains[2][0] * SCALE, gains[3][0] * SCALE);
+        let gr0 = f32x4(gains[0][1] * SCALE, gains[1][1] * SCALE, gains[2][1] * SCALE, gains[3][1] * SCALE);
+        let g4l = gains[4][0] * SCALE;
+        let g5l = gains[5][0] * SCALE;
+        let g4r = gains[4][1] * SCALE;
+        let g5r = gains[5][1] * SCALE;
+        let sp = plane.as_ptr();
+        for i in 0..avail {
+            unsafe {
+                let base = sp.add(i * 24);
+                let f0 = f32x4_convert_i32x4(v128_load(base as *const v128));
+                let s4 = i32::from_le_bytes(*base.add(16).cast::<[u8; 4]>()) as f32;
+                let s5 = i32::from_le_bytes(*base.add(20).cast::<[u8; 4]>()) as f32;
+                let l4 = f32x4_mul(f0, gl0);
+                let r4 = f32x4_mul(f0, gr0);
+                let lp = f32x4_add(l4, i32x4_shuffle::<2, 3, 0, 1>(l4, l4));
+                let rp = f32x4_add(r4, i32x4_shuffle::<2, 3, 0, 1>(r4, r4));
+                let l = f32x4_extract_lane::<0>(lp) + f32x4_extract_lane::<1>(lp) + s4 * g4l + s5 * g5l;
+                let r = f32x4_extract_lane::<0>(rp) + f32x4_extract_lane::<1>(rp) + s4 * g4r + s5 * g5r;
+                dl[i] = l.clamp(-1.0, 1.0);
+                dr[i] = r.clamp(-1.0, 1.0);
+            }
+        }
+        return;
+    }
+    for (i, frame) in plane[..avail * ch * 4].chunks_exact(ch * 4).enumerate() {
+        let mut l = 0.0f32;
+        let mut r = 0.0f32;
+        for (b, &[gl, gr]) in frame.chunks_exact(4).zip(&gains[..ch]) {
+            let s = i32::from_le_bytes([b[0], b[1], b[2], b[3]]) as f32 * SCALE;
+            l += s * gl;
+            r += s * gr;
+        }
+        dl[i] = l.clamp(-1.0, 1.0);
+        dr[i] = r.clamp(-1.0, 1.0);
     }
 }

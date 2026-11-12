@@ -43,7 +43,7 @@ function buildFixtures (dir) {
   const h264Path = join(dir, 'cinema_h264.mkv')
   execFileSync(FFMPEG, [
     '-loglevel', 'error', '-y',
-    '-f', 'lavfi', '-i', 'testsrc2=size=1280x534:rate=24',
+    '-f', 'lavfi', '-i', 'testsrc2=size=1920x800:rate=24',
     '-f', 'lavfi', '-i', 'sine=frequency=440:sample_rate=48000',
     '-f', 'lavfi', '-i', 'sine=frequency=660:sample_rate=48000',
     '-i', srtPath,
@@ -71,7 +71,7 @@ function buildFixtures (dir) {
     '-t', '36',
     '-map', '0:v', '-map', '1:a', '-map', '2:a',
     '-c:v', 'libx265', '-pix_fmt', 'yuv420p10le', '-preset', 'ultrafast',
-    '-x265-params', 'keyint=192:min-keyint=192:scenecut=0:bframes=6:rc-lookahead=12:repeat-headers=1:log-level=error',
+    '-x265-params', 'keyint=192:min-keyint=192:scenecut=0:bframes=6:rc-lookahead=12:repeat-headers=1:colorprim=bt2020:transfer=smpte2084:colormatrix=bt2020nc:log-level=error',
     '-c:a:0', 'truehd', '-strict', '-2', '-ac:a:0', '2',
     '-c:a:1', 'eac3', '-ac:a:1', '6', '-b:a:1', '384k',
     uhdPath
@@ -361,16 +361,39 @@ test('web player survives long-GOP seeks, rapid scrub storms, TrueHD slices, Web
     assert.equal(iso.sab, true, 'SharedArrayBuffer unlocked')
     result.checks.isolation = iso
 
-    // 2. WebCodecs+WASM is #1 primary on secure contexts: mid-GOP seek, video-only seek, focus race, scrub storm,
-    //    macOS window drag (rAF stalled 900 ms), macOS window leave/occlusion (rAF stalled 2.4 s while visible), and hidden tab.
+    // 2. MSE+WASM (<video>) is #1 primary; fallbackSw() hands off to WebCodecs+WASM for mid-GOP seek, video-only seek,
+    //    focus race, scrub storm, macOS window drag (rAF stalled 900 ms), macOS window occlusion, and hidden tab.
     await evaluate(`openPlayer(S.entries.find(e => e.id === 'imdb:tt3397884')); true`)
-    await waitFor(`!!player && player.primed && player.drawnFrames >= 8`, 'H.264 WebCodecs primary playback started')
+    await waitFor(`!!player && player.primed && player.useMse && $('pVideo').currentTime >= 0.3`, 'H.264 MSE primary playback started')
+    const msePrimary = await evaluate(`({ useMse: player.useMse, usingWebCodecs: player.usingWebCodecs, badge: $('pBadge').textContent })`)
+    assert.equal(msePrimary.useMse, true, 'MSE chosen first')
+    assert.ok(msePrimary.badge.includes('(MSE+WASM)'), 'badge shows MSE+WASM: ' + msePrimary.badge)
+    await evaluate(`(() => { player.mseSupported = false; $('pVideo').onerror(); return true })()`)
+    await waitFor(`!!player && player.primed && player.usingWebCodecs && player.drawnFrames >= 12`, 'WebCodecs fallback playback started')
+    const readbackCheck = await evaluate(`(async () => {
+      const queryMem = () => new Promise(resolve => {
+        const onMem = ev => {
+          if (ev.data?.type !== 'mem') return;
+          player.worker.removeEventListener('message', onMem);
+          resolve(ev.data);
+        };
+        player.worker.addEventListener('message', onMem);
+        player.worker.postMessage({ cmd: 'mem' });
+      });
+      const m1 = await queryMem();
+      const startDrawn = player.drawnFrames;
+      while (player.drawnFrames < startDrawn + 36) await new Promise(r => setTimeout(r, 40));
+      const m2 = await queryMem();
+      return { m1, m2, framesElapsed: player.drawnFrames - startDrawn };
+    })()`)
+    assert.equal(readbackCheck.m1.streamCropSame, 3, '1080p stream settled letterbox after 3 agreeing samples')
+    assert.equal(readbackCheck.m1.cropReadbacks, 3, 'exactly 3 getImageData readbacks to settle 1080p crop')
+    assert.equal(readbackCheck.m2.cropReadbacks, 3, 'zero additional getImageData readbacks across >35 1080p frames after settling')
     const primaryOpen = await evaluate(`({ usingWebCodecs: player.usingWebCodecs, useMse: player.useMse, badge: $('pBadge').textContent })`)
-    assert.equal(primaryOpen.usingWebCodecs, true, 'WebCodecs VideoDecoder chosen first')
+    assert.equal(primaryOpen.usingWebCodecs, true, 'WebCodecs VideoDecoder chosen on MSE fallback')
     assert.equal(primaryOpen.useMse, false)
     assert.ok(primaryOpen.badge.includes('(WebCodecs+WASM)'), 'badge shows WebCodecs+WASM: ' + primaryOpen.badge)
-    result.checks.primaryOpen = primaryOpen
-
+    result.checks.primaryOpen = { msePrimary, webCodecsFallback: primaryOpen, readbackCheck }
     net.delayMs = 40
     await evaluate(`seekTo(23.2); true`)
     await waitFor(`player.primed && player.drawnFrames >= 4`, 'WebCodecs long-GOP seek primed')
@@ -485,9 +508,16 @@ test('web player survives long-GOP seeks, rapid scrub storms, TrueHD slices, Web
     // 3. 10-bit HEVC + TrueHD + E-AC-3 UHD remux on WebCodecs primary, runtime fallback to MSE+WASM, and >21 s hidden tab.
     net.delayMs = 0
     await evaluate(`openPlayer(S.entries.find(e => e.id === 'imdb:tt5052448')); true`)
-    await waitFor(`!!player && player.primed && player.drawnFrames >= 6`, 'UHD HEVC10+TrueHD WebCodecs playing')
-    assert.equal(await evaluate(`player.usingWebCodecs`), true, '10-bit HEVC uses WebCodecs primary')
+    await waitFor(`!!player && player.primed`, 'UHD HEVC10+TrueHD opened')
+    await evaluate(`(() => { if (player.useMse) { player.mseSupported = false; $('pVideo').onerror(); } return true })()`)
+    await waitFor(`!!player && player.primed && player.usingWebCodecs && player.drawnFrames >= 6`, 'UHD HEVC10+TrueHD WebCodecs playing')
+    assert.equal(await evaluate(`player.usingWebCodecs`), true, '10-bit HEVC uses WebCodecs fallback')
     assert.ok((await evaluate(`$('pBadge').textContent`)).includes('h265 (WebCodecs+WASM) · truehd'))
+    const uhdColorWc = await evaluate(`({ videoColor: player.manifest?.videoColor, cs: yuvGl?.cs })`)
+    assert.equal(uhdColorWc.videoColor?.matrix, 2, 'UHD HEVC10 VUI resolved BT.2020 matrix')
+    assert.equal(uhdColorWc.videoColor?.primaries, 'bt2020', 'UHD HEVC10 VUI resolved BT.2020 primaries')
+    assert.equal(uhdColorWc.videoColor?.wideGamut, true, 'UHD HEVC10 marked wideGamut')
+    assert.equal(uhdColorWc.cs, 'display-p3', 'WebCodecs wide-gamut UHD frame activates display-p3 on pGlCanvas')
 
     // Switch audio track to E-AC-3 and seek mid-GOP on WebCodecs.
     await evaluate(`(() => {
@@ -536,9 +566,12 @@ test('web player survives long-GOP seeks, rapid scrub storms, TrueHD slices, Web
       return true;
     })()`)
     await waitFor(`player.primed && player.drawnFrames >= 8`, 'TrueHD software mid-GOP seek drew frames')
-    const trueHdSw = await evaluate(`({ eof: player.eof, drawn: player.drawnFrames, a: player.currentMediaTime() })`)
+    const trueHdSw = await evaluate(`({ eof: player.eof, drawn: player.drawnFrames, a: player.currentMediaTime(), cs: yuvGl?.cs, mat: yuvGl?.matrix, full: yuvGl?.full })`)
     assert.equal(trueHdSw.eof, false, 'TrueHD >4,096 pre-target packet skip does not trigger false EOF')
-    result.checks.uhdTrueHd = { eac3, trueHdSw }
+    assert.equal(trueHdSw.cs, 'srgb', 'software YUV path restores srgb drawingBufferColorSpace')
+    assert.equal(trueHdSw.mat, 2, 'software YUV path applies BT.2020 matrix uniform')
+    assert.equal(trueHdSw.full, 0, 'software YUV path applies limited-range uniform')
+    result.checks.uhdTrueHd = { uhdColorWc, eac3, trueHdSw }
 
     // Saved resume position (`play(e)` with `at > maxVideo`) + pre-manifest seek must start at `at` instead of deadlocking at 0:00.
     net.delayMs = 80
@@ -598,6 +631,34 @@ test('web player survives long-GOP seeks, rapid scrub storms, TrueHD slices, Web
     assert.ok(Math.abs(mseBg.v - mseBg.a) < 0.35, `MSE post-return A/V sync tight: v=${mseBg.v} a=${mseBg.a}`)
     assert.equal(mseBg.statusHidden, true)
     result.checks.mseBackground = { minLead: Math.min(...mseBg.leads), v: mseBg.v, a: mseBg.a, bufStart: mseBg.bufStart }
+    // Forced QuotaExceededError regression: when now is 6.8 s into an 8 s GOP ([16..24 s]), quota eviction
+    // must cap cut strictly before activeKf (16.0 s) so the active GOP under the playhead remains buffered.
+    const quotaCheck = await evaluate(`(async () => {
+      const v = $('pVideo');
+      const now = player.currentMediaTime();
+      const cutAt4 = player.safeMseEvictCut(22.8, 1.5);
+      let threwOnce = false;
+      const origAppend = player.sb.appendBuffer.bind(player.sb);
+      player.sb.appendBuffer = buf => {
+        if (!threwOnce) {
+          threwOnce = true;
+          throw new DOMException('QuotaExceededError', 'QuotaExceededError');
+        }
+        return origAppend(buf);
+      };
+      player.mseQueue.unshift(new ArrayBuffer(0));
+      player.drainMseQueue();
+      while (player.sb.updating) await new Promise(r => setTimeout(r, 20));
+      player.sb.appendBuffer = origAppend;
+      player.mseQueue = player.mseQueue.filter(b => b.byteLength > 0);
+      const cur = player.currentMediaTime();
+      const b0 = v.buffered.length ? v.buffered.start(0) : -1;
+      const bEnd = v.buffered.length ? v.buffered.end(v.buffered.length - 1) : -1;
+      return { now, cur, cutAt4, rustMaxEvictCap: player.rustMaxEvictCap, b0, bEnd, inBuffer: cur >= b0 - 0.1 && cur <= bEnd };
+    })()`)
+    assert.ok(quotaCheck.cutAt4 === 0 || quotaCheck.cutAt4 < 16.0, `QuotaExceededError cut stays before 16.0 s active keyframe: ${JSON.stringify(quotaCheck)}`)
+    assert.equal(quotaCheck.inBuffer, true, `playhead remains buffered after forced QuotaExceededError: ${JSON.stringify(quotaCheck)}`)
+    result.checks.mseQuota = quotaCheck
     // 4. Pure WASM+GPU software video: only in-flight pictures may arrive just after hide; the live GOP replays on return.
     await evaluate(`(() => {
       window.__hiddenSwFrames = [];
@@ -697,6 +758,70 @@ test('web player survives long-GOP seeks, rapid scrub storms, TrueHD slices, Web
     }
     result.checks.aviBackground = aviCycles
 
+
+    // 5. SDR color patch accuracy across software YUV (BT.709 limited, BT.601 limited, BT.709 full) and WebCodecs VideoFrame.
+    const colorPatchCheck = await evaluate(`(() => {
+      const r = getYuvGl();
+      const { gl } = r;
+      const drawYuvPatch = (yVal, uVal, vVal, matrix, full) => {
+        const w = 4, h = 4, cw = 2, ch = 2;
+        const buf = new ArrayBuffer(w * h + cw * ch * 2);
+        const u8 = new Uint8Array(buf);
+        u8.fill(yVal, 0, 16);
+        u8.fill(uVal, 16, 20);
+        u8.fill(vVal, 20, 24);
+        player.videoCrop = null;
+        if (r.cs !== 'srgb') {
+          r.cs = 'srgb';
+          if ('drawingBufferColorSpace' in gl) gl.drawingBufferColorSpace = 'srgb';
+          if ('unpackColorSpace' in gl) gl.unpackColorSpace = 'srgb';
+        }
+        r.mode = 0; gl.uniform1i(r.modeLoc, 0);
+        r.matrix = matrix; gl.uniform1i(r.matrixLoc, matrix);
+        r.full = full; gl.uniform1i(r.fullLoc, full);
+        r.w = w; r.h = h; r.canvas.width = w; r.canvas.height = h;
+        gl.viewport(0, 0, w, h);
+        gl.uniform4f(r.cropLoc, 0, 0, 1, 1);
+        gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, r.texY);
+        gl.texImage2D(gl.TEXTURE_2D, 0, gl.LUMINANCE, w, h, 0, gl.LUMINANCE, gl.UNSIGNED_BYTE, u8.subarray(0, 16));
+        gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, r.texU);
+        gl.texImage2D(gl.TEXTURE_2D, 0, gl.LUMINANCE, cw, ch, 0, gl.LUMINANCE, gl.UNSIGNED_BYTE, u8.subarray(16, 20));
+        gl.activeTexture(gl.TEXTURE2); gl.bindTexture(gl.TEXTURE_2D, r.texV);
+        gl.texImage2D(gl.TEXTURE_2D, 0, gl.LUMINANCE, cw, ch, 0, gl.LUMINANCE, gl.UNSIGNED_BYTE, u8.subarray(20, 24));
+        gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+        const px = new Uint8Array(4);
+        gl.readPixels(1, 1, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, px);
+        return [px[0], px[1], px[2]];
+      };
+      // Neutral studio gray (Y=126, U=128, V=128) in BT.709 limited -> ~128,128,128
+      const gray709 = drawYuvPatch(126, 128, 128, 0, 0);
+      // Pure studio red in BT.709 limited (Y=63, U=102, V=240) vs BT.601 limited (Y=82, U=90, V=240)
+      const red709 = drawYuvPatch(63, 102, 240, 0, 0);
+      const red601 = drawYuvPatch(82, 90, 240, 1, 0);
+      // Full-range neutral black (Y=0, U=128, V=128) and white (Y=255, U=128, V=128)
+      const blackFull = drawYuvPatch(0, 128, 128, 0, 1);
+      const whiteFull = drawYuvPatch(255, 128, 128, 0, 1);
+      // WebCodecs VideoFrame SDR patch stays in sRGB and matches source RGB
+      const vfData = new Uint8Array(4 * 4 * 4);
+      for (let i = 0; i < vfData.length; i += 4) { vfData[i] = 200; vfData[i + 1] = 100; vfData[i + 2] = 50; vfData[i + 3] = 255; }
+      const vf = new VideoFrame(vfData, { format: 'RGBA', codedWidth: 4, codedHeight: 4, timestamp: 0, colorSpace: { primaries: 'bt709', transfer: 'iec61966-2-1', matrix: 'rgb', fullRange: true } });
+      r.mode = 1; gl.uniform1i(r.modeLoc, 1);
+      gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, r.texY);
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, vf);
+      gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+      const vfPx = new Uint8Array(4);
+      gl.readPixels(1, 1, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, vfPx);
+      vf.close();
+      return { gray709, red709, red601, blackFull, whiteFull, vfRgb: [vfPx[0], vfPx[1], vfPx[2]], cs: gl.drawingBufferColorSpace || 'srgb' };
+    })()`)
+    assert.ok(colorPatchCheck.gray709.every(c => Math.abs(c - 128) <= 1), 'BT.709 neutral gray has zero chroma tint: ' + JSON.stringify(colorPatchCheck.gray709))
+    assert.ok(colorPatchCheck.red709[0] >= 254 && colorPatchCheck.red709[1] <= 2 && colorPatchCheck.red709[2] <= 2, 'BT.709 studio red accurate: ' + JSON.stringify(colorPatchCheck.red709))
+    assert.ok(colorPatchCheck.red601[0] >= 254 && colorPatchCheck.red601[1] <= 2 && colorPatchCheck.red601[2] <= 2, 'BT.601 studio red accurate: ' + JSON.stringify(colorPatchCheck.red601))
+    assert.deepEqual(colorPatchCheck.blackFull, [0, 0, 0], 'full-range Y=0 black accurate')
+    assert.deepEqual(colorPatchCheck.whiteFull, [255, 255, 255], 'full-range Y=255 white accurate')
+    assert.ok(Math.abs(colorPatchCheck.vfRgb[0] - 200) <= 2 && Math.abs(colorPatchCheck.vfRgb[1] - 100) <= 2 && Math.abs(colorPatchCheck.vfRgb[2] - 50) <= 2, 'SDR VideoFrame patch accurate in sRGB: ' + JSON.stringify(colorPatchCheck.vfRgb))
+    assert.equal(colorPatchCheck.cs, 'srgb', 'SDR path keeps sRGB drawingBufferColorSpace')
+    result.checks.colorPatches = colorPatchCheck
     assert.deepEqual(issues, [], 'no console errors or uncaught exceptions')
     result.pass = true
     writeFileSync(join(outDir, 'web-player-stress-result.json'), JSON.stringify(result, null, 2))

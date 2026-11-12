@@ -46,10 +46,13 @@ pub const MODE_WEBCODECS: i32 = 2;
 
 #[unsafe(no_mangle)]
 pub extern "C" fn pt_abi_json() -> usize {
+    let pf_in_flight = controller::PREFETCH_IN_FLIGHT;
+    let pf_lookahead = controller::PREFETCH_LOOKAHEAD_BLOCKS;
+    let max_cache_blocks = controller::MAX_CACHE_BLOCKS;
     STATE.with(|c| {
         let mut st = c.borrow_mut();
         st.json_buf = format!(
-            r#"{{"step":{{"eof":{STEP_EOF},"mseInit":{STEP_MSE_INIT},"mseSegment":{STEP_MSE_SEGMENT},"videoRgba":{STEP_VIDEO_RGBA},"audioPlanarF32":{STEP_AUDIO_PLANAR_F32},"subText":{STEP_SUB_TEXT},"subBitmap":{STEP_SUB_BITMAP},"videoYuv420":{STEP_VIDEO_YUV420},"videoPacket":{STEP_VIDEO_PACKET},"yield":{STEP_YIELD}}},"mode":{{"software":{MODE_SOFTWARE},"mse":{MODE_MSE},"webcodecs":{MODE_WEBCODECS}}},"limits":{{"maxHiddenGops":{MAX_HIDDEN_GOPS},"maxGopPkts":{MAX_GOP_PKTS}}}}}"#
+            r#"{{"step":{{"eof":{STEP_EOF},"mseInit":{STEP_MSE_INIT},"mseSegment":{STEP_MSE_SEGMENT},"videoRgba":{STEP_VIDEO_RGBA},"audioPlanarF32":{STEP_AUDIO_PLANAR_F32},"subText":{STEP_SUB_TEXT},"subBitmap":{STEP_SUB_BITMAP},"videoYuv420":{STEP_VIDEO_YUV420},"videoPacket":{STEP_VIDEO_PACKET},"yield":{STEP_YIELD}}},"mode":{{"software":{MODE_SOFTWARE},"mse":{MODE_MSE},"webcodecs":{MODE_WEBCODECS}}},"limits":{{"maxHiddenGops":{MAX_HIDDEN_GOPS},"maxGopPkts":{MAX_GOP_PKTS},"prefetchInFlight":{pf_in_flight},"prefetchLookahead":{pf_lookahead},"maxCacheBlocks":{max_cache_blocks}}}}}"#
         ).into_bytes();
         st.json_buf.len()
     })
@@ -176,7 +179,7 @@ pub unsafe extern "C" fn pt_open(ext_ptr: *const u8, ext_len: usize) -> i32 {
             Err(e) => return set_json_error(&mut st, &format!("Demuxer error ({container}): {e}")),
         };
 
-        let streams: Vec<StreamInfo> = demuxer.streams().iter().take(64).cloned().collect();
+        let streams: Vec<StreamInfo> = demuxer.streams().iter().take(256).cloned().collect();
         let mut first_video: Option<u32> = None;
         let mut first_audio: Option<u32> = None;
         let mut tracks_json = Vec::new();
@@ -251,9 +254,14 @@ pub unsafe extern "C" fn pt_open(ext_ptr: *const u8, ext_len: usize) -> i32 {
             }
         }
 
+        let first_kf_bytes = peek_packets.back().map(|p| p.data.as_slice());
+        let video_color = first_video
+            .and_then(|vi| streams.iter().find(|s| s.index == vi))
+            .map(|vs| resolve_video_color(&vs.params, first_kf_bytes, None, None));
+
         let webcodecs_hint = first_video
             .and_then(|vi| streams.iter().find(|s| s.index == vi))
-            .and_then(|vs| build_webcodecs_hint(vs, mse_cfg.as_ref()));
+            .and_then(|vs| build_webcodecs_hint(vs, mse_cfg.as_ref(), video_color.unwrap_or_default()));
 
         let (width, height) = first_video
             .and_then(|vi| streams.iter().find(|s| s.index == vi))
@@ -267,6 +275,8 @@ pub unsafe extern "C" fn pt_open(ext_ptr: *const u8, ext_len: usize) -> i32 {
             "height": mse_cfg.as_ref().map_or(height, |c| c.height),
             "mseType": mse_cfg.as_ref().map(MseVideoConfig::mime_type),
             "webCodecs": webcodecs_hint,
+            "videoColor": video_color.map(ResolvedVideoColor::to_manifest_json),
+            "rules": controller::PlayerController::rules_json(duration_secs),
             "tracks": tracks_json,
             "defaultVideo": first_video,
             "defaultAudio": first_audio,
@@ -313,8 +323,11 @@ pub unsafe extern "C" fn pt_open(ext_ptr: *const u8, ext_len: usize) -> i32 {
             mse_min_dts: 0,
             mse_started: false,
             seek_target: None,
+            audio_seek_target: None,
+            preseek_mlp_gop: Vec::new(),
             demux_eof: false,
             flushed_eof: false,
+            controller: controller::PlayerController::default(),
         });
         0
     })
@@ -350,7 +363,13 @@ pub extern "C" fn pt_configure(video_stream: i32, audio_stream: i32, sub_stream:
         }
         sess.demuxer.set_active_streams(&active);
         sess.rebuild_decoders();
-
+        sess.controller.reset(
+            0.0,
+            0.0,
+            sess.video_idx.is_some(),
+            sess.audio_idx.is_some(),
+            sess.video_mode,
+        );
         if sess.video_mode == VideoOutputMode::Mse
             && let Some(cfg) = sess.mse_cfg.as_ref()
         {
@@ -381,11 +400,19 @@ pub extern "C" fn pt_seek(target_secs: f64) -> i32 {
         sess.demux_eof = false;
         sess.flushed_eof = false;
         sess.seek_target = Some(clamped);
+        sess.audio_seek_target = Some(clamped);
 
         if sess.demuxer.seek_to(seek_stream, ticks).is_err() {
             let _ = sess.demuxer.seek_to(seek_stream, 0);
         }
         sess.rebuild_decoders();
+        sess.controller.reset(
+            clamped,
+            0.0,
+            sess.video_idx.is_some(),
+            sess.audio_idx.is_some(),
+            sess.video_mode,
+        );
         if sess.video_mode == VideoOutputMode::Mse
             && let Some(cfg) = sess.mse_cfg.as_ref()
         {
@@ -408,9 +435,306 @@ pub extern "C" fn pt_set_clock(clock_secs: f64) {
 pub extern "C" fn pt_set_hidden(hidden: i32) {
     STATE.with(|cell| {
         if let Some(sess) = cell.borrow_mut().session.as_mut() {
-            sess.set_hidden(hidden != 0);
+            let h = hidden != 0;
+            sess.controller.page_hidden = h;
+            sess.set_hidden(h);
         }
     });
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn pt_ctrl_apply_clock(
+    time_secs: f64,
+    wall_ms: f64,
+    playing: i32,
+    video_sec: f64,
+    audio_sec: f64,
+) {
+    STATE.with(|cell| {
+        if let Some(sess) = cell.borrow_mut().session.as_mut() {
+            sess.controller
+                .apply_clock(time_secs, wall_ms, playing != 0, video_sec, audio_sec);
+            sess.client_clock = sess.controller.media_time(wall_ms);
+        }
+    });
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn pt_ctrl_media_time(wall_ms: f64) -> f64 {
+    STATE.with(|cell| {
+        cell.borrow()
+            .session
+            .as_ref()
+            .map_or(0.0, |s| s.controller.media_time(wall_ms))
+    })
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn pt_ctrl_buffered_ahead(
+    wall_ms: f64,
+    wc_span_sec: f64,
+    wc_in_flight: u32,
+) -> i32 {
+    STATE.with(|cell| {
+        cell.borrow()
+            .session
+            .as_ref()
+            .map_or(0, |s| i32::from(s.controller.buffered_ahead(wall_ms, wc_span_sec, wc_in_flight)))
+    })
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn pt_ctrl_on_video_frame(pts_secs: f64) {
+    STATE.with(|cell| {
+        if let Some(sess) = cell.borrow_mut().session.as_mut() {
+            sess.controller.on_video_frame(pts_secs);
+        }
+    });
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn pt_ctrl_evict_cut(
+    now_secs: f64,
+    keep_behind_secs: f64,
+    b0_secs: f64,
+    b_end_secs: f64,
+) -> f64 {
+    STATE.with(|cell| {
+        cell.borrow_mut()
+            .session
+            .as_mut()
+            .map_or(0.0, |s| s.controller.safe_mse_evict_cut(now_secs, keep_behind_secs, b0_secs, b_end_secs))
+    })
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn pt_ctrl_max_evict_cap(now_secs: f64, keep_behind_secs: f64) -> f64 {
+    STATE.with(|cell| {
+        cell.borrow()
+            .session
+            .as_ref()
+            .map_or(0.0, |s| s.controller.max_safe_evict_cap(now_secs, keep_behind_secs))
+    })
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn pt_ctrl_prefetch_plan(base_block: u32, total_bytes: u64, block_bytes: u32) -> u64 {
+    let (_start_b, end_b, evict_b, _max_f) =
+        controller::PlayerController::prefetch_plan(base_block, total_bytes, block_bytes);
+    (u64::from(end_b) << 32) | u64::from(evict_b)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn pt_ctrl_crop_due(w: u32) -> i32 {
+    STATE.with(|cell| {
+        cell.borrow_mut()
+            .session
+            .as_mut()
+            .map_or(0, |s| i32::from(s.controller.crop_sample_due(w)))
+    })
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pt_ctrl_probe_crop(
+    ptr: *const u8,
+    len: usize,
+    sw: u32,
+    sh: u32,
+    full_w: u32,
+    full_h: u32,
+    rgba: i32,
+) -> i32 {
+    if ptr.is_null() || len == 0 {
+        return 0;
+    }
+    let slice = unsafe { ffi::bytes(ptr, len) };
+    STATE.with(|cell| {
+        let mut st = cell.borrow_mut();
+        let Some(sess) = st.session.as_mut() else {
+            return 0;
+        };
+        let Some(c) = sess.controller.probe_letterbox(slice, sw, sh, full_w, full_h, rgba != 0) else {
+            return 0;
+        };
+        st.out_x = c.left as i32;
+        st.out_y = c.top as i32;
+        st.out_w = c.right;
+        st.out_h = c.bottom;
+        st.out_cw = u32::from(c.full);
+        1
+    })
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn pt_ctrl_crop_stats() -> u64 {
+    STATE.with(|cell| {
+        cell.borrow()
+            .session
+            .as_ref()
+            .map_or(0, |s| {
+                (u64::from(s.controller.crop_readbacks) << 32)
+                    | u64::from(s.controller.stream_crop_same)
+            })
+    })
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn pt_ctrl_mse_tick(
+    now_secs: f64,
+    vt_secs: f64,
+    b0_secs: f64,
+    b_end_secs: f64,
+    ready_state: u32,
+    mse_stalled: i32,
+    can_hard_sync: i32,
+    duration_secs: f64,
+    rebuffering: i32,
+    mse_buffered_ahead_sec: f64,
+    audio_queued_ahead_sec: f64,
+    eof: i32,
+) -> i32 {
+    STATE.with(|cell| {
+        let mut st = cell.borrow_mut();
+        let Some(sess) = st.session.as_mut() else {
+            return 0;
+        };
+        let act = sess.controller.evaluate_mse_tick(
+            now_secs,
+            vt_secs,
+            b0_secs,
+            b_end_secs,
+            ready_state,
+            mse_stalled != 0,
+            can_hard_sync != 0,
+            duration_secs,
+            rebuffering != 0,
+            mse_buffered_ahead_sec,
+            audio_queued_ahead_sec,
+            eof != 0,
+        );
+        st.out_pts = act.evict_to;
+        st.out_dur = act.snap_to;
+        st.out_w = (act.playback_rate * 1000.0).round() as u32;
+        st.out_h = (act.max_evict_cap * 1000.0).round() as u32;
+        st.out_x = i32::from(act.exit_rebuffer);
+        1
+    })
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn pt_ctrl_return_sync(
+    use_mse: i32,
+    was_hidden: i32,
+    is_avi: i32,
+    audio_secs: f64,
+    video_secs: f64,
+    mse_buffered_at_audio: f64,
+    sb_updating: i32,
+) -> u32 {
+    let (mode, _target) = controller::PlayerController::evaluate_return_sync(
+        use_mse != 0,
+        was_hidden != 0,
+        is_avi != 0,
+        audio_secs,
+        video_secs,
+        mse_buffered_at_audio,
+        sb_updating != 0,
+    );
+    mode
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn pt_cache_clear_all() {
+    controller::CACHE.with(|c| c.borrow_mut().clear_all());
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn pt_cache_reset_stream() {
+    controller::CACHE.with(|c| c.borrow_mut().reset_stream_state());
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pt_cache_put_head(ptr: *const u8, len: usize) {
+    if ptr.is_null() || len == 0 {
+        return;
+    }
+    let slice = unsafe { ffi::bytes(ptr, len) };
+    controller::CACHE.with(|c| c.borrow_mut().put_head_bytes(slice));
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pt_cache_set_partial(start: u64, ptr: *const u8, len: usize) {
+    if ptr.is_null() || len == 0 {
+        return;
+    }
+    let slice = unsafe { ffi::bytes(ptr, len) };
+    controller::CACHE.with(|c| c.borrow_mut().set_partial_bytes(start, slice));
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pt_cache_put_block(idx: u32, ptr: *const u8, len: usize) -> i32 {
+    if ptr.is_null() || len == 0 {
+        return -1;
+    }
+    let slice = unsafe { ffi::bytes(ptr, len) };
+    controller::CACHE.with(|c| c.borrow_mut().put_block_bytes(idx, slice))
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn pt_cache_take_read_req() -> u32 {
+    controller::CACHE.with(|c| c.borrow_mut().take_read_req())
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn pt_cache_block_count() -> u32 {
+    controller::CACHE.with(|c| c.borrow().block_count())
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pt_cache_read_cached(
+    offset: u64,
+    dst_ptr: *mut u8,
+    len: usize,
+    streaming_mode: i32,
+) -> usize {
+    if dst_ptr.is_null() || len == 0 {
+        return 0;
+    }
+    let dst = unsafe { std::slice::from_raw_parts_mut(dst_ptr, len) };
+    controller::CACHE.with(|c| c.borrow_mut().read_cached(offset, dst, streaming_mode != 0))
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn pt_cache_should_yield(
+    streaming_mode: i32,
+    page_hidden: i32,
+    stream_len: u64,
+    now_ms: f64,
+) -> u32 {
+    controller::CACHE.with(|c| {
+        c.borrow_mut()
+            .should_yield_for_next_block(streaming_mode != 0, page_hidden != 0, stream_len, now_ms)
+    })
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn pt_cache_next_hidden_block(stream_len: u64) -> i32 {
+    controller::CACHE.with(|c| c.borrow_mut().next_hidden_prefetch_block(stream_len))
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn pt_cache_hidden_done(idx: u32) {
+    controller::CACHE.with(|c| c.borrow_mut().hidden_done(idx));
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn pt_cache_hidden_clear() {
+    controller::CACHE.with(|c| c.borrow_mut().hidden_clear());
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn pt_cache_last_posted_block() -> i32 {
+    controller::CACHE.with(|c| c.borrow().last_posted_block)
 }
 
 #[unsafe(no_mangle)]
@@ -465,24 +789,30 @@ pub extern "C" fn pt_step() -> i32 {
                     st.out_dur = 0.0;
                     STEP_MSE_INIT
                 }
-                Some(OutItem::MseSegment { data, start, end }) => {
+                Some(OutItem::MseSegment { data, start, end, key_ms }) => {
+                    sess.controller.on_mse_segment(start, end, key_ms);
                     st.out_buf = data;
                     st.out_pts = start;
                     st.out_dur = end;
+                    st.out_w = key_ms;
                     STEP_MSE_SEGMENT
                 }
                 Some(OutItem::VideoRgba { data, pts, w, h }) => {
+                    sess.controller.on_video_frame(pts);
                     st.out_buf = data;
                     st.out_pts = pts;
                     st.out_w = w;
                     st.out_h = h;
                     STEP_VIDEO_RGBA
                 }
-                Some(OutItem::VideoYuv420 { data, pts, w, h }) => {
+                Some(OutItem::VideoYuv420 { data, pts, w, h, matrix_id, full_range }) => {
+                    sess.controller.on_video_frame(pts);
                     st.out_buf = data;
                     st.out_pts = pts;
                     st.out_w = w;
                     st.out_h = h;
+                    st.out_x = i32::from(matrix_id);
+                    st.out_y = i32::from(full_range);
                     STEP_VIDEO_YUV420
                 }
                 Some(OutItem::VideoPacket { data, pts, dur, keyframe }) => {
@@ -493,6 +823,7 @@ pub extern "C" fn pt_step() -> i32 {
                     STEP_VIDEO_PACKET
                 }
                 Some(OutItem::AudioPlanarF32 { data, pts, rate, frames }) => {
+                    sess.controller.on_audio_chunk(rate, frames);
                     st.out_buf = data;
                     st.out_pts = pts;
                     st.out_rate = rate;

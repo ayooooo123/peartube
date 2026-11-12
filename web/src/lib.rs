@@ -10,10 +10,10 @@
 
 // The demux repair the native player already runs, so a movie stamped in
 // decode order keeps all 24 of its pictures here too.
+mod controller;
 mod decode_order;
 mod ffi;
 mod abi;
-
 use std::cell::RefCell;
 use std::collections::VecDeque;
 use std::io::{self, Read, Seek, SeekFrom};
@@ -21,11 +21,12 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, LazyLock};
 
 use oxideav_core::{
-    ChannelLayout, ChannelPosition, CodecParameters, Decoder, Demuxer, Error as AvError, Frame,
-    MediaType, Packet, PixelFormat, ProbeData, RuntimeContext, SampleFormat, Segment, StreamInfo,
-    SubtitleCue, TimeBase, VideoFrame, PROBE_SCORE_EXTENSION,
+    ChannelLayout, ChannelPosition, CodecParameters, ColorPrimaries, ColorRange, ColorSignal,
+    Decoder, Demuxer, Error as AvError, Frame, MatrixCoefficients, MediaType, Packet, PixelFormat,
+    ProbeData, RuntimeContext, SampleFormat, Segment, StreamInfo, SubtitleCue, TimeBase,
+    TransferCharacteristics, VideoFrame, PROBE_SCORE_EXTENSION,
 };
-use oxideav_pixfmt::{ConvertOptions, FrameInfo};
+use oxideav_pixfmt::{ColorSpace, ConvertOptions, FrameInfo};
 use serde_json::json;
 
 pub const MAX_HIDDEN_GOPS: usize = 12;
@@ -108,9 +109,18 @@ impl HttpRangeSource {
         if page.data.len() < want {
             page.data.resize(want, 0);
         }
+        let streaming = self.streaming.load(Ordering::Relaxed);
         let mut filled = 0usize;
         while filled < want {
-            let got = ffi::read_at(aligned_start + filled as u64, &mut page.data[filled..want]);
+            let cur_off = aligned_start + filled as u64;
+            let cached_got = controller::CACHE.with(|c| {
+                c.borrow_mut().read_cached(cur_off, &mut page.data[filled..want], streaming)
+            });
+            if cached_got > 0 {
+                filled += cached_got;
+                continue;
+            }
+            let got = ffi::read_at(cur_off, &mut page.data[filled..want]);
             if got < 0 {
                 page.valid = 0;
                 return Err(io::Error::other("HTTP Range read failed"));
@@ -353,23 +363,30 @@ impl StereoMix {
                 n
             }
             SampleFormat::S32 => {
-                const SCALE: f32 = 1.0 / 2_147_483_648.0;
                 let plane = &af.data[0];
                 let avail = (plane.len() / (ch * 4)).min(n);
                 out_l.truncate(base_idx + avail);
                 out_r.truncate(base_idx + avail);
                 let dl = &mut out_l[base_idx..base_idx + avail];
                 let dr = &mut out_r[base_idx..base_idx + avail];
-                for (i, frame) in plane[..avail * ch * 4].chunks_exact(ch * 4).enumerate() {
-                    let mut l = 0.0f32;
-                    let mut r = 0.0f32;
-                    for (b, &[gl, gr]) in frame.chunks_exact(4).zip(&self.gains[..ch]) {
-                        let s = i32::from_le_bytes([b[0], b[1], b[2], b[3]]) as f32 * SCALE;
-                        l += s * gl;
-                        r += s * gr;
+                #[cfg(target_arch = "wasm32")]
+                {
+                    ffi::downmix_s32le_simd(plane, ch, avail, &self.gains[..ch], dl, dr);
+                }
+                #[cfg(not(target_arch = "wasm32"))]
+                {
+                    const SCALE: f32 = 1.0 / 2_147_483_648.0;
+                    for (i, frame) in plane[..avail * ch * 4].chunks_exact(ch * 4).enumerate() {
+                        let mut l = 0.0f32;
+                        let mut r = 0.0f32;
+                        for (b, &[gl, gr]) in frame.chunks_exact(4).zip(&self.gains[..ch]) {
+                            let s = i32::from_le_bytes([b[0], b[1], b[2], b[3]]) as f32 * SCALE;
+                            l += s * gl;
+                            r += s * gr;
+                        }
+                        dl[i] = l.clamp(-1.0, 1.0);
+                        dr[i] = r.clamp(-1.0, 1.0);
                     }
-                    dl[i] = l.clamp(-1.0, 1.0);
-                    dr[i] = r.clamp(-1.0, 1.0);
                 }
                 avail
             }
@@ -467,8 +484,15 @@ fn sample_f32_fallback(format: SampleFormat, data: &[Vec<u8>], channels: usize, 
     }
 }
 
-// SIMD128 10-bit YUV420P10LE -> 8-bit YUV420P narrowing kernel (16 pixels per 2 SIMD ops).
+// SIMD128 10-bit YUV420P10LE -> 8-bit YUV420P narrowing kernel with 4x4 Bayer ordered dithering.
 fn pack_plane_10_to_8(plane: &oxideav_core::VideoPlane, cols: usize, rows: usize, dst: &mut Vec<u8>) {
+    #[cfg(not(target_arch = "wasm32"))]
+    const BAYER_4X4: [[u16; 4]; 4] = [
+        [0, 2, 1, 3],
+        [3, 1, 2, 0],
+        [1, 3, 0, 2],
+        [2, 0, 3, 1],
+    ];
     let row_bytes = cols * 2;
     let base = dst.len();
     dst.resize(base + cols * rows, 0);
@@ -482,12 +506,13 @@ fn pack_plane_10_to_8(plane: &oxideav_core::VideoPlane, cols: usize, rows: usize
         let dst_row = &mut out[r * cols..(r + 1) * cols];
         #[cfg(target_arch = "wasm32")]
         {
-            ffi::pack_u16_to_u8(src_row, dst_row);
+            ffi::pack_u16_to_u8(src_row, dst_row, r);
         }
         #[cfg(not(target_arch = "wasm32"))]
         {
-            for (d, px) in dst_row.iter_mut().zip(src_row.chunks_exact(2)) {
-                *d = (u16::from_le_bytes([px[0], px[1]]) >> 2).min(255) as u8;
+            let d4 = BAYER_4X4[r & 3];
+            for (c, (d, px)) in dst_row.iter_mut().zip(src_row.chunks_exact(2)).enumerate() {
+                *d = ((u16::from_le_bytes([px[0], px[1]]) + d4[c & 3]) >> 2).min(255) as u8;
             }
         }
     }
@@ -606,6 +631,7 @@ struct MseVideoConfig {
     config_payload: Vec<u8>,
     codec_string: String,
     frame_ticks_90k: i64,
+    colr_nclx: Option<(u8, u8, u8, bool)>,
 }
 
 impl MseVideoConfig {
@@ -639,6 +665,121 @@ impl MseVideoConfig {
     }
 }
 
+#[derive(Clone, Copy, Default)]
+pub(crate) struct ResolvedVideoColor {
+    pub(crate) primaries: ColorPrimaries,
+    pub(crate) transfer: TransferCharacteristics,
+    pub(crate) matrix: MatrixCoefficients,
+    pub(crate) full_range: bool,
+    pub(crate) explicit_range: bool,
+    pub(crate) matrix_id: u8,
+    pub(crate) wide_gamut: bool,
+}
+
+impl ResolvedVideoColor {
+    pub(crate) fn to_manifest_json(self) -> serde_json::Value {
+        let primaries = match self.primaries {
+            ColorPrimaries::BT2020 => "bt2020",
+            ColorPrimaries::SMPTE_EG432 => "smpte432",
+            ColorPrimaries::BT470_SYSTEM_BG => "bt470bg",
+            ColorPrimaries::BT601_525 => "smpte170m",
+            ColorPrimaries::BT709 => "bt709",
+            _ if self.primaries.is_unspecified() => {
+                if self.matrix_id == 1 { "smpte170m" } else { "bt709" }
+            }
+            _ => "other",
+        };
+        json!({
+            "matrix": self.matrix_id,
+            "fullRange": self.full_range,
+            "primaries": primaries,
+            "wideGamut": self.wide_gamut,
+        })
+    }
+
+    pub(crate) fn to_webcodecs_color_space(self) -> Option<serde_json::Value> {
+        let primaries = if self.primaries.is_unspecified() {
+            None
+        } else {
+            match self.primaries {
+                ColorPrimaries::BT709 => Some("bt709"),
+                ColorPrimaries::BT470_SYSTEM_BG => Some("bt470bg"),
+                ColorPrimaries::BT601_525 => Some("smpte170m"),
+                ColorPrimaries::BT2020 => Some("bt2020"),
+                ColorPrimaries::SMPTE_EG432 => Some("smpte432"),
+                _ => return None,
+            }
+        };
+        let transfer = if self.transfer.is_unspecified() {
+            None
+        } else {
+            match self.transfer {
+                TransferCharacteristics::BT709 => Some("bt709"),
+                TransferCharacteristics::BT601 => Some("smpte170m"),
+                TransferCharacteristics::IEC61966_2_1 => Some("iec61966-2-1"),
+                TransferCharacteristics::LINEAR => Some("linear"),
+                TransferCharacteristics::SMPTE_ST2084 => Some("pq"),
+                TransferCharacteristics::ARIB_STD_B67 => Some("hlg"),
+                _ => return None,
+            }
+        };
+        let matrix = if self.matrix.is_unspecified() {
+            None
+        } else {
+            match self.matrix {
+                MatrixCoefficients::IDENTITY => Some("rgb"),
+                MatrixCoefficients::BT709 => Some("bt709"),
+                MatrixCoefficients::BT470_SYSTEM_BG => Some("bt470bg"),
+                MatrixCoefficients::BT601_525 => Some("smpte170m"),
+                MatrixCoefficients::BT2020_NCL => Some("bt2020-ncl"),
+                _ => return None,
+            }
+        };
+        if primaries.is_none() && transfer.is_none() && matrix.is_none() && !self.explicit_range {
+            return None;
+        }
+        let mut obj = serde_json::Map::new();
+        if let Some(p) = primaries {
+            obj.insert("primaries".into(), json!(p));
+        }
+        if let Some(t) = transfer {
+            obj.insert("transfer".into(), json!(t));
+        }
+        if let Some(m) = matrix {
+            obj.insert("matrix".into(), json!(m));
+        }
+        if self.explicit_range {
+            obj.insert("fullRange".into(), json!(self.full_range));
+        }
+        Some(serde_json::Value::Object(obj))
+    }
+
+    fn pixfmt_color_space(self) -> ColorSpace {
+        match (self.matrix_id, self.full_range) {
+            (2, true) => ColorSpace::Bt2020Full,
+            (2, false) => ColorSpace::Bt2020Limited,
+            (1, true) => ColorSpace::Bt601Full,
+            (1, false) => ColorSpace::Bt601Limited,
+            (_, true) => ColorSpace::Bt709Full,
+            (_, false) => ColorSpace::Bt709Limited,
+        }
+    }
+
+    pub(crate) fn exact_nclx(self) -> Option<(u8, u8, u8, bool)> {
+        if self.primaries.is_unspecified()
+            && self.transfer.is_unspecified()
+            && self.matrix.is_unspecified()
+            && !self.explicit_range
+        {
+            return None;
+        }
+        let p = if self.primaries.is_unspecified() { 2 } else { self.primaries.0 };
+        let t = if self.transfer.is_unspecified() { 2 } else { self.transfer.0 };
+        let m = if self.matrix.is_unspecified() { 2 } else { self.matrix.0 };
+        Some((p, t, m, self.full_range))
+    }
+}
+
 #[derive(Clone)]
 struct ActiveVideoMeta {
     time_base: TimeBase,
@@ -648,8 +789,8 @@ struct ActiveVideoMeta {
     frame_dur: f64,
     codec_kind: VideoCodecKind,
     h264_framing: NalFraming,
+    color: ResolvedVideoColor,
 }
-
 #[derive(Clone)]
 struct ActiveAudioMeta {
     time_base: TimeBase,
@@ -716,11 +857,49 @@ fn keep_hevc_nal(nal: &[u8]) -> bool {
     layer_id == 0 && nal_type < 62
 }
 
-// Moves 4-byte H.264, AV1, and VP9 packet buffers straight through with zero allocations or copies.
-fn to_fmp4_sample_bytes(data: Vec<u8>, framing: NalFraming, kind: VideoCodecKind) -> Vec<u8> {
+// Moves 4-byte H.264, HEVC, AV1, and VP9 packet buffers straight through with zero allocations.
+fn to_fmp4_sample_bytes(mut data: Vec<u8>, framing: NalFraming, kind: VideoCodecKind) -> Vec<u8> {
     match framing {
         NalFraming::RawPassthrough => data,
         NalFraming::LengthPrefixed(4) if kind == VideoCodecKind::H264 => data,
+        NalFraming::LengthPrefixed(4) if kind == VideoCodecKind::Hevc => {
+            // Fast zero-alloc scan: 99.9% of 4K HEVC packets keep every NAL untouched.
+            let mut pos = 0usize;
+            let mut all_valid = true;
+            while pos + 4 <= data.len() {
+                let len = u32::from_be_bytes([data[pos], data[pos + 1], data[pos + 2], data[pos + 3]]) as usize;
+                if len == 0 || pos + 4 + len > data.len() {
+                    all_valid = pos == data.len();
+                    break;
+                }
+                if !keep_hevc_nal(&data[pos + 4..pos + 4 + len]) {
+                    all_valid = false;
+                    break;
+                }
+                pos += 4 + len;
+            }
+            if all_valid && pos == data.len() {
+                return data;
+            }
+            // Compact in-place with zero heap allocations when non-base-layer/filler NALs appear.
+            let mut rpos = 0usize;
+            let mut wpos = 0usize;
+            while rpos + 4 <= data.len() {
+                let len = u32::from_be_bytes([data[rpos], data[rpos + 1], data[rpos + 2], data[rpos + 3]]) as usize;
+                if len == 0 || rpos + 4 + len > data.len() {
+                    break;
+                }
+                if keep_hevc_nal(&data[rpos + 4..rpos + 4 + len]) {
+                    if wpos != rpos {
+                        data.copy_within(rpos..rpos + 4 + len, wpos);
+                    }
+                    wpos += 4 + len;
+                }
+                rpos += 4 + len;
+            }
+            data.truncate(wpos);
+            data
+        }
         NalFraming::LengthPrefixed(w) => {
             let width = w as usize;
             let mut out = Vec::with_capacity(data.len() + 16);
@@ -792,6 +971,52 @@ fn is_droppable_h264_nonref(data: &[u8], framing: NalFraming) -> bool {
                 if (1..=5).contains(&nal_type) {
                     saw_vcl = true;
                     if nal_type == 5 || ((b0 >> 5) & 3) != 0 {
+                        return false;
+                    }
+                }
+            }
+        }
+        _ => return false,
+    }
+    saw_vcl
+}
+
+// True when every VCL NAL in an HEVC packet is a spec-defined non-reference picture
+// (even-numbered VCL NAL types 0..=14: TRAIL_N, TSA_N, STSA_N, RADL_N, RASL_N, RSV_VCL_N10..14).
+fn is_droppable_hevc_nonref(data: &[u8], framing: NalFraming) -> bool {
+    let mut saw_vcl = false;
+    match framing {
+        NalFraming::LengthPrefixed(w) if w >= 1 && w <= 4 => {
+            let width = w as usize;
+            let mut pos = 0usize;
+            while pos + width < data.len() {
+                let mut len = 0usize;
+                for &b in &data[pos..pos + width] {
+                    len = (len << 8) | (b as usize);
+                }
+                pos += width;
+                if len < 2 || pos + len > data.len() {
+                    return false;
+                }
+                let nal_type = (data[pos] >> 1) & 0x3F;
+                pos += len;
+                if nal_type < 32 {
+                    saw_vcl = true;
+                    if nal_type > 14 || (nal_type & 1) != 0 {
+                        return false;
+                    }
+                }
+            }
+        }
+        NalFraming::AnnexB => {
+            for nal in split_annexb_nals(data) {
+                if nal.len() < 2 {
+                    continue;
+                }
+                let nal_type = (nal[0] >> 1) & 0x3F;
+                if nal_type < 32 {
+                    saw_vcl = true;
+                    if nal_type > 14 || (nal_type & 1) != 0 {
                         return false;
                     }
                 }
@@ -909,14 +1134,217 @@ fn build_vp9_config(stream: &StreamInfo, first_keyframe: Option<&[u8]>, w: u32, 
     } else {
         51
     };
+    let color = resolve_video_color(&stream.params, first_keyframe, None, None);
+    let (prim_iso, trc_iso, mat_iso, full_range) = color.exact_nclx().unwrap_or((1, 1, 1, false));
     let mut vpcc = Vec::with_capacity(12);
     vpcc.extend_from_slice(&[1, 0, 0, 0]); // FullBox version=1, flags=0
     vpcc.push(profile);
     vpcc.push(level);
-    vpcc.push((bit_depth << 4) | 0x02); // chromaSubsampling=1 (4:2:0), limited range
-    vpcc.extend_from_slice(&[1, 1, 1, 0, 0]); // BT.709 color + 0-len init data
+    vpcc.push((bit_depth << 4) | 0x02 | u8::from(full_range));
+    vpcc.extend_from_slice(&[prim_iso, trc_iso, mat_iso, 0, 0]);
     let codec_string = format!("vp09.{profile:02}.{level:02}.{bit_depth:02}");
     (vpcc, codec_string)
+}
+
+fn fill_color_from_sps(params: &CodecParameters, first_keyframe: Option<&[u8]>, sig: &mut ColorSignal) {
+    let extra = &params.extradata;
+    match params.codec_id.as_str() {
+        "h264" => {
+            let mut sps_nal: Option<&[u8]> = None;
+            if extra.len() >= 8 && extra[0] == 1 && (extra[5] & 0x1F) > 0 {
+                let sps_len = u16::from_be_bytes([extra[6], extra[7]]) as usize;
+                if sps_len >= 2 && 8 + sps_len <= extra.len() {
+                    sps_nal = Some(&extra[8..8 + sps_len]);
+                }
+            }
+            if sps_nal.is_none() {
+                for src in [Some(extra.as_slice()), first_keyframe].into_iter().flatten() {
+                    for nal in split_annexb_nals(src) {
+                        if nal.len() >= 2 && (nal[0] & 0x1F) == 7 {
+                            sps_nal = Some(nal);
+                            break;
+                        }
+                    }
+                    if sps_nal.is_some() {
+                        break;
+                    }
+                }
+            }
+            if let Some(nal) = sps_nal {
+                let rbsp = unescape_rbsp_prefix(&nal[1..], 512);
+                if let Ok(sps) = oxideav_h264::sps::Sps::parse(&rbsp)
+                    && let Some(vst) = sps.vui.as_ref().and_then(|v| v.video_signal_type.as_ref())
+                {
+                    if sig.range.is_unspecified() {
+                        sig.range = if vst.video_full_range_flag {
+                            ColorRange::Full
+                        } else {
+                            ColorRange::Limited
+                        };
+                    }
+                    if let Some(cd) = &vst.colour_description {
+                        if sig.primaries.is_unspecified() && cd.colour_primaries != 0 && cd.colour_primaries != 2 {
+                            sig.primaries = ColorPrimaries(cd.colour_primaries);
+                        }
+                        if sig.transfer.is_unspecified() && cd.transfer_characteristics != 0 && cd.transfer_characteristics != 2 {
+                            sig.transfer = TransferCharacteristics(cd.transfer_characteristics);
+                        }
+                        if sig.matrix.is_unspecified() && cd.matrix_coefficients != 0 && cd.matrix_coefficients != 2 {
+                            sig.matrix = MatrixCoefficients(cd.matrix_coefficients);
+                        }
+                    }
+                }
+            }
+        }
+        "h265" | "hevc" => {
+            let mut sps_nal: Option<&[u8]> = None;
+            if extra.len() >= 23 && extra[0] == 1 {
+                let num_arrays = extra[22] as usize;
+                let mut pos = 23usize;
+                'outer: for _ in 0..num_arrays {
+                    if pos + 3 > extra.len() {
+                        break;
+                    }
+                    let nal_type = extra[pos] & 0x3F;
+                    let count = u16::from_be_bytes([extra[pos + 1], extra[pos + 2]]) as usize;
+                    pos += 3;
+                    for _ in 0..count {
+                        if pos + 2 > extra.len() {
+                            break 'outer;
+                        }
+                        let nlen = u16::from_be_bytes([extra[pos], extra[pos + 1]]) as usize;
+                        pos += 2;
+                        if pos + nlen > extra.len() {
+                            break 'outer;
+                        }
+                        if nal_type == 33 && nlen >= 3 && sps_nal.is_none() {
+                            sps_nal = Some(&extra[pos..pos + nlen]);
+                        }
+                        pos += nlen;
+                    }
+                }
+            }
+            if sps_nal.is_none() {
+                for src in [Some(extra.as_slice()), first_keyframe].into_iter().flatten() {
+                    for nal in split_annexb_nals(src) {
+                        if nal.len() >= 3 && ((nal[0] >> 1) & 0x3F) == 33 {
+                            sps_nal = Some(nal);
+                            break;
+                        }
+                    }
+                    if sps_nal.is_some() {
+                        break;
+                    }
+                }
+            }
+            if let Some(nal) = sps_nal {
+                let rbsp = unescape_rbsp_prefix(&nal[2..], 512);
+                if let Ok(sps) = oxideav_h265::sps::SeqParameterSet::parse(&rbsp)
+                    && let Some(vst) = sps.vui_parameters.as_ref().and_then(|v| v.video_signal_type.as_ref())
+                {
+                    if sig.range.is_unspecified() {
+                        sig.range = if vst.video_full_range_flag {
+                            ColorRange::Full
+                        } else {
+                            ColorRange::Limited
+                        };
+                    }
+                    if let Some(cd) = &vst.colour_description {
+                        if sig.primaries.is_unspecified() && cd.colour_primaries != 0 && cd.colour_primaries != 2 {
+                            sig.primaries = ColorPrimaries(cd.colour_primaries);
+                        }
+                        if sig.transfer.is_unspecified() && cd.transfer_characteristics != 0 && cd.transfer_characteristics != 2 {
+                            sig.transfer = TransferCharacteristics(cd.transfer_characteristics);
+                        }
+                        if sig.matrix.is_unspecified() && cd.matrix_coeffs != 0 && cd.matrix_coeffs != 2 {
+                            sig.matrix = MatrixCoefficients(cd.matrix_coeffs);
+                        }
+                    }
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+pub(crate) fn resolve_video_color(
+    params: &CodecParameters,
+    first_keyframe: Option<&[u8]>,
+    frame_sig: Option<ColorSignal>,
+    fmt: Option<PixelFormat>,
+) -> ResolvedVideoColor {
+    let mut sig = params.color_signal;
+    if let Some(fs) = frame_sig {
+        if !fs.primaries.is_unspecified() {
+            sig.primaries = fs.primaries;
+        }
+        if !fs.transfer.is_unspecified() {
+            sig.transfer = fs.transfer;
+        }
+        if !fs.matrix.is_unspecified() {
+            sig.matrix = fs.matrix;
+        }
+        if !fs.range.is_unspecified() {
+            sig.range = fs.range;
+        }
+    }
+    if sig.primaries.is_unspecified()
+        || sig.transfer.is_unspecified()
+        || sig.matrix.is_unspecified()
+        || sig.range.is_unspecified()
+    {
+        fill_color_from_sps(params, first_keyframe, &mut sig);
+    }
+    let pix = fmt.or(params.pixel_format);
+    let is_yuvj = matches!(
+        pix,
+        Some(PixelFormat::YuvJ420P | PixelFormat::YuvJ422P | PixelFormat::YuvJ444P)
+    );
+    let explicit_range = is_yuvj || !sig.range.is_unspecified();
+    let full_range = is_yuvj
+        || sig.range == ColorRange::Full
+        || (sig.range.is_unspecified() && params.resolved_color_range() == ColorRange::Full);
+    let w = params.width.unwrap_or(0);
+    let h = params.height.unwrap_or(0);
+    let is_sd = w > 0 && h > 0 && w < 1280 && h <= 576;
+    let matrix_id = if matches!(
+        sig.matrix,
+        MatrixCoefficients::BT2020_NCL | MatrixCoefficients::BT2020_CL
+    ) || (sig.matrix.is_unspecified() && sig.primaries == ColorPrimaries::BT2020)
+    {
+        2u8
+    } else if matches!(
+        sig.matrix,
+        MatrixCoefficients::BT470_SYSTEM_BG
+            | MatrixCoefficients::BT601_525
+            | MatrixCoefficients::SMPTE_ST240
+            | MatrixCoefficients::FCC
+    ) || (sig.matrix.is_unspecified()
+        && (matches!(
+            sig.primaries,
+            ColorPrimaries::BT470_SYSTEM_BG
+                | ColorPrimaries::BT601_525
+                | ColorPrimaries::SMPTE_ST240
+                | ColorPrimaries::BT470_SYSTEM_M
+        ) || (sig.primaries.is_unspecified() && is_sd)))
+    {
+        1u8
+    } else {
+        0u8
+    };
+    let wide_gamut = matches!(
+        sig.primaries,
+        ColorPrimaries::BT2020 | ColorPrimaries::SMPTE_EG432
+    );
+    ResolvedVideoColor {
+        primaries: sig.primaries,
+        transfer: sig.transfer,
+        matrix: sig.matrix,
+        full_range,
+        explicit_range,
+        matrix_id,
+        wide_gamut,
+    }
 }
 
 fn hevc_codec_string_from_ptl(ptl12: &[u8]) -> String {
@@ -955,6 +1383,7 @@ fn probe_mse_video(stream: &StreamInfo, first_keyframe: Option<&[u8]>) -> Option
         .unwrap_or(24.0);
     let frame_ticks_90k = ((VIDEO_TIMESCALE as f64) / fps).round().max(1.0) as i64;
     let extra = &params.extradata;
+    let colr_nclx = resolve_video_color(params, first_keyframe, None, None).exact_nclx();
 
     match params.codec_id.as_str() {
         "h264" => {
@@ -974,6 +1403,7 @@ fn probe_mse_video(stream: &StreamInfo, first_keyframe: Option<&[u8]>) -> Option
                     config_payload: rec,
                     codec_string,
                     frame_ticks_90k,
+                    colr_nclx,
                 })
             } else {
                 let mut sps: Option<Vec<u8>> = None;
@@ -1007,6 +1437,7 @@ fn probe_mse_video(stream: &StreamInfo, first_keyframe: Option<&[u8]>) -> Option
                     config_payload: rec,
                     codec_string,
                     frame_ticks_90k,
+                    colr_nclx,
                 })
             }
         }
@@ -1068,6 +1499,7 @@ fn probe_mse_video(stream: &StreamInfo, first_keyframe: Option<&[u8]>) -> Option
                     config_payload: rec,
                     codec_string,
                     frame_ticks_90k,
+                    colr_nclx,
                 })
             } else {
                 // Annex-B HEVC (e.g. MPEG-TS): extract VPS (32), SPS (33), PPS (34) and synthesize hvcC.
@@ -1117,6 +1549,7 @@ fn probe_mse_video(stream: &StreamInfo, first_keyframe: Option<&[u8]>) -> Option
                     config_payload: rec,
                     codec_string,
                     frame_ticks_90k,
+                    colr_nclx,
                 })
             }
         }
@@ -1133,6 +1566,7 @@ fn probe_mse_video(stream: &StreamInfo, first_keyframe: Option<&[u8]>) -> Option
                 config_payload: av1c,
                 codec_string,
                 frame_ticks_90k,
+                colr_nclx,
             })
         }
         "vp9" => {
@@ -1151,6 +1585,7 @@ fn probe_mse_video(stream: &StreamInfo, first_keyframe: Option<&[u8]>) -> Option
                 config_payload: vpcc,
                 codec_string,
                 frame_ticks_90k,
+                colr_nclx,
             })
         }
         // Browsers take VP8 through MSE only in WebM (Chromium refuses `vp08` in MP4), and the
@@ -1166,6 +1601,7 @@ fn probe_mse_video(stream: &StreamInfo, first_keyframe: Option<&[u8]>) -> Option
             config_payload: Vec::new(),
             codec_string: "vp8".to_string(),
             frame_ticks_90k,
+            colr_nclx: None,
         }),
         _ => None,
     }
@@ -1225,6 +1661,15 @@ fn build_fmp4_init(cfg: &MseVideoConfig) -> Vec<u8> {
     vse.extend_from_slice(&0x0018u16.to_be_bytes());
     vse.extend_from_slice(&0xFFFFu16.to_be_bytes());
     vse.extend_from_slice(&wrap_box(&cfg.config_box_fourcc, &cfg.config_payload));
+    if let Some((prim, trc, mat, full)) = cfg.colr_nclx {
+        let mut colr = Vec::with_capacity(11);
+        colr.extend_from_slice(b"nclx");
+        colr.extend_from_slice(&u16::from(prim).to_be_bytes());
+        colr.extend_from_slice(&u16::from(trc).to_be_bytes());
+        colr.extend_from_slice(&u16::from(mat).to_be_bytes());
+        colr.push(if full { 0x80 } else { 0x00 });
+        vse.extend_from_slice(&wrap_box(b"colr", &colr));
+    }
     let sample_entry = wrap_box(&cfg.sample_entry_fourcc, &vse);
 
     let mut stsd_body = Vec::with_capacity(8 + sample_entry.len());
@@ -1602,17 +2047,18 @@ fn extract_visible_rgba(vf: &VideoFrame) -> Option<(i32, i32, u32, u32, u32, u32
 
 enum OutItem {
     MseInit(Vec<u8>),
-    MseSegment { data: Vec<u8>, start: f64, end: f64 },
+    MseSegment { data: Vec<u8>, start: f64, end: f64, key_ms: u32 },
     VideoRgba { data: Vec<u8>, pts: f64, w: u32, h: u32 },
-    VideoYuv420 { data: Vec<u8>, pts: f64, w: u32, h: u32 },
+    VideoYuv420 { data: Vec<u8>, pts: f64, w: u32, h: u32, matrix_id: u8, full_range: bool },
     VideoPacket { data: Vec<u8>, pts: f64, dur: f64, keyframe: bool },
     AudioPlanarF32 { data: Vec<u8>, pts: f64, rate: u32, frames: u32 },
     SubText { text: Vec<u8>, start: f64, end: f64 },
     SubBitmap { rgba: Vec<u8>, start: f64, end: f64, x: i32, y: i32, w: u32, h: u32, cw: u32, ch: u32 },
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum VideoOutputMode {
+#[derive(Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) enum VideoOutputMode {
+    #[default]
     Software,
     Mse,
     WebCodecs,
@@ -1660,8 +2106,11 @@ struct WebSession {
     mse_min_dts: i64,
     mse_started: bool,
     seek_target: Option<f64>,
+    audio_seek_target: Option<f64>,
+    preseek_mlp_gop: Vec<Packet>,
     demux_eof: bool,
     flushed_eof: bool,
+    controller: controller::PlayerController,
 }
 
 #[derive(Default)]
@@ -1712,14 +2161,23 @@ fn make_subtitle_cue(cue: &SubtitleCue, pkt_start: f64, pkt_dur: Option<f64>) ->
     })
 }
 
-fn build_webcodecs_hint(vs: &StreamInfo, mse_cfg: Option<&MseVideoConfig>) -> Option<serde_json::Value> {
+fn build_webcodecs_hint(
+    vs: &StreamInfo,
+    mse_cfg: Option<&MseVideoConfig>,
+    color: ResolvedVideoColor,
+) -> Option<serde_json::Value> {
     let w = vs.params.width.unwrap_or(0);
     let h = vs.params.height.unwrap_or(0);
     if w == 0 || h == 0 {
         return None;
     }
+    let color_space = color.to_webcodecs_color_space();
     if vs.params.codec_id.as_str() == "vp8" {
-        return Some(json!({ "codec": "vp8", "width": w, "height": h, "raw": true }));
+        let mut hint = json!({ "codec": "vp8", "width": w, "height": h, "raw": true });
+        if let Some(cs) = color_space {
+            hint["colorSpace"] = cs;
+        }
+        return Some(hint);
     }
     let cfg = mse_cfg?;
     let desc_bytes: &[u8] = match cfg.kind {
@@ -1732,12 +2190,16 @@ fn build_webcodecs_hint(vs: &StreamInfo, mse_cfg: Option<&MseVideoConfig>) -> Op
         use std::fmt::Write;
         let _ = write!(&mut hex, "{b:02x}");
     }
-    Some(json!({
+    let mut hint = json!({
         "codec": cfg.codec_string,
         "width": cfg.width,
         "height": cfg.height,
         "descriptionHex": hex,
-    }))
+    });
+    if let Some(cs) = color_space {
+        hint["colorSpace"] = cs;
+    }
+    Some(hint)
 }
 
 impl WebSession {
@@ -1781,6 +2243,7 @@ impl WebSession {
         self.audio_accum_pts = None;
         self.audio_accum_rate = 0;
         self.audio_first_flushed = false;
+        self.preseek_mlp_gop.clear();
         self.video_next_pts = self.seek_target.unwrap_or(0.0);
         self.video_seeded = false;
         self.drop_until_keyframe = false;
@@ -1815,6 +2278,7 @@ impl WebSession {
             } else {
                 NalFraming::AnnexB
             };
+            let color = resolve_video_color(&s.params, None, None, None);
             self.video_meta = Some(ActiveVideoMeta {
                 time_base: tb,
                 width: s.params.width.unwrap_or(0),
@@ -1823,6 +2287,7 @@ impl WebSession {
                 frame_dur,
                 codec_kind,
                 h264_framing,
+                color,
             });
             if self.video_mode == VideoOutputMode::Software {
                 self.video_dec = ctx.codecs.first_decoder(&s.params).ok();
@@ -1872,8 +2337,10 @@ impl WebSession {
             return;
         }
         if hidden {
-            self.hidden_gops.clear();
-            self.hidden_gop_bytes = 0;
+            if self.video_mode == VideoOutputMode::Software {
+                self.hidden_gops.clear();
+                self.hidden_gop_bytes = 0;
+            }
             return;
         }
         while self.hidden_gops.len() >= 2
@@ -1899,6 +2366,13 @@ impl WebSession {
             }
             self.drop_until_keyframe = false;
             self.video_seeded = false;
+            self.replaying_hidden_gop = true;
+            for pkt in gop.drain(..) {
+                self.handle_video_packet(pkt);
+            }
+            self.replaying_hidden_gop = false;
+        } else if self.video_mode == VideoOutputMode::WebCodecs {
+            self.mse_started = false;
             self.replaying_hidden_gop = true;
             for pkt in gop.drain(..) {
                 self.handle_video_packet(pkt);
@@ -1998,15 +2472,30 @@ impl WebSession {
         let y_len = wu * hu;
         let c_len = cwu * chu;
         let total_yuv = y_len + c_len * 2;
+        let frame_color = self
+            .video_idx
+            .and_then(|vi| self.stream_info(vi))
+            .map(|s| resolve_video_color(&s.params, None, vf.color_signal(), Some(fmt)))
+            .or_else(|| self.video_meta.as_ref().map(|vm| vm.color))
+            .unwrap_or_default();
+        let matrix_id = frame_color.matrix_id;
+        let full_range = frame_color.full_range;
 
-        if fmt == PixelFormat::Yuv420P && vf.planes.len() >= 3 {
+        if matches!(fmt, PixelFormat::Yuv420P | PixelFormat::YuvJ420P) && vf.planes.len() >= 3 {
             let mut packed = self.take_pooled_buf(total_yuv);
             if pack_plane_8(&vf.planes[0], wu, hu, &mut packed)
                 && pack_plane_8(&vf.planes[1], cwu, chu, &mut packed)
                 && pack_plane_8(&vf.planes[2], cwu, chu, &mut packed)
                 && packed.len() == total_yuv
             {
-                self.out_queue.push_back(OutItem::VideoYuv420 { data: packed, pts, w, h });
+                self.out_queue.push_back(OutItem::VideoYuv420 {
+                    data: packed,
+                    pts,
+                    w,
+                    h,
+                    matrix_id,
+                    full_range,
+                });
                 return;
             }
             self.recycle_buf(packed);
@@ -2016,36 +2505,61 @@ impl WebSession {
             pack_plane_10_to_8(&vf.planes[1], cwu, chu, &mut packed);
             pack_plane_10_to_8(&vf.planes[2], cwu, chu, &mut packed);
             if packed.len() == total_yuv {
-                self.out_queue.push_back(OutItem::VideoYuv420 { data: packed, pts, w, h });
+                self.out_queue.push_back(OutItem::VideoYuv420 {
+                    data: packed,
+                    pts,
+                    w,
+                    h,
+                    matrix_id,
+                    full_range,
+                });
                 return;
             }
             self.recycle_buf(packed);
-        } else if fmt == PixelFormat::Yuv422P && vf.planes.len() >= 3 {
+        } else if matches!(fmt, PixelFormat::Yuv422P | PixelFormat::YuvJ422P) && vf.planes.len() >= 3 {
             let mut packed = self.take_pooled_buf(total_yuv);
             if pack_plane_8(&vf.planes[0], wu, hu, &mut packed)
                 && subsample_422_chroma(&vf.planes[1], cwu, hu, chu, &mut packed)
                 && subsample_422_chroma(&vf.planes[2], cwu, hu, chu, &mut packed)
                 && packed.len() == total_yuv
             {
-                self.out_queue.push_back(OutItem::VideoYuv420 { data: packed, pts, w, h });
+                self.out_queue.push_back(OutItem::VideoYuv420 {
+                    data: packed,
+                    pts,
+                    w,
+                    h,
+                    matrix_id,
+                    full_range,
+                });
                 return;
             }
             self.recycle_buf(packed);
-        } else if fmt == PixelFormat::Yuv444P && vf.planes.len() >= 3 {
+        } else if matches!(fmt, PixelFormat::Yuv444P | PixelFormat::YuvJ444P) && vf.planes.len() >= 3 {
             let mut packed = self.take_pooled_buf(total_yuv);
             if pack_plane_8(&vf.planes[0], wu, hu, &mut packed)
                 && subsample_444_chroma(&vf.planes[1], wu, hu, cwu, chu, &mut packed)
                 && subsample_444_chroma(&vf.planes[2], wu, hu, cwu, chu, &mut packed)
                 && packed.len() == total_yuv
             {
-                self.out_queue.push_back(OutItem::VideoYuv420 { data: packed, pts, w, h });
+                self.out_queue.push_back(OutItem::VideoYuv420 {
+                    data: packed,
+                    pts,
+                    w,
+                    h,
+                    matrix_id,
+                    full_range,
+                });
                 return;
             }
             self.recycle_buf(packed);
         }
 
         let info = FrameInfo::new(fmt, w, h);
-        let converted = oxideav_pixfmt::convert(vf, info, PixelFormat::Rgba, &ConvertOptions::default());
+        let opts = ConvertOptions {
+            color_space: frame_color.pixfmt_color_space(),
+            ..Default::default()
+        };
+        let converted = oxideav_pixfmt::convert(vf, info, PixelFormat::Rgba, &opts);
         if let Ok(rgba_frame) = converted
             && let Some(plane) = rgba_frame.planes.first()
         {
@@ -2088,22 +2602,44 @@ impl WebSession {
                     data_4byte,
                 });
             }
-            let (emit_n, need_n) = if self.mse_seq == 0 { (8usize, 16usize) } else { (16usize, 24usize) };
-            if self.mse_gop.len() >= need_n {
-                let chunk: Vec<GopPacket> = self.mse_gop.drain(..emit_n).collect();
-                self.mse_seq = self.mse_seq.wrapping_add(1);
-                if let Some(cfg) = self.mse_cfg.as_ref()
-                    && let Some((seg, start, end)) =
-                        cfg.media_segment(self.mse_seq, &chunk, &self.mse_gop, &mut self.mse_min_dts)
-                {
-                    self.out_queue.push_back(OutItem::MseSegment { data: seg, start, end });
+            let (min_emit, lookahead) = if self.mse_seq == 0 { (8usize, 8usize) } else { (16usize, 8usize) };
+            if self.mse_gop.len() >= min_emit + lookahead {
+                let max_k = self.mse_gop.len() - lookahead;
+                let mut cut = (min_emit..=max_k).find(|&k| {
+                    let max_before = self.mse_gop[..k].iter().map(|p| p.pts_90k).max().unwrap_or(0);
+                    let min_after = self.mse_gop[k..].iter().map(|p| p.pts_90k).min().unwrap_or(i64::MAX);
+                    max_before < min_after
+                });
+                if cut.is_none() && self.mse_gop.len() >= 64 {
+                    cut = Some(min_emit);
+                }
+                if let Some(emit_n) = cut {
+                    let chunk: Vec<GopPacket> = self.mse_gop.drain(..emit_n).collect();
+                    let key_ms = chunk
+                        .iter()
+                        .filter(|p| p.sync)
+                        .map(|p| ((p.pts_90k.max(0) as f64) / 90.0).round() as u32)
+                        .min()
+                        .unwrap_or(u32::MAX);
+                    self.mse_seq = self.mse_seq.wrapping_add(1);
+                    if let Some(cfg) = self.mse_cfg.as_ref()
+                        && let Some((seg, start, end)) =
+                            cfg.media_segment(self.mse_seq, &chunk, &self.mse_gop, &mut self.mse_min_dts)
+                    {
+                        self.out_queue.push_back(OutItem::MseSegment { data: seg, start, end, key_ms });
+                    }
                 }
             }
             return;
         }
 
+        if self.video_mode == VideoOutputMode::WebCodecs && !self.replaying_hidden_gop {
+            self.stash_hidden_gop_packet(pkt.clone());
+        }
         if self.video_hidden && self.container != "avi" {
-            self.stash_hidden_gop_packet(pkt);
+            if self.video_mode != VideoOutputMode::WebCodecs {
+                self.stash_hidden_gop_packet(pkt);
+            }
             return;
         }
 
@@ -2159,9 +2695,11 @@ impl WebSession {
             let drop_b = (self.client_clock > 0.25 && est + 0.090 < self.client_clock)
                 || self.seek_target.is_some_and(|t| est + 0.040 < t);
             if drop_b
-                && vm.codec_kind == VideoCodecKind::H264
                 && !pkt.flags.keyframe
-                && is_droppable_h264_nonref(&pkt.data, vm.h264_framing)
+                && ((vm.codec_kind == VideoCodecKind::H264
+                    && is_droppable_h264_nonref(&pkt.data, vm.h264_framing))
+                    || (vm.codec_kind == VideoCodecKind::Hevc
+                        && is_droppable_hevc_nonref(&pkt.data, vm.h264_framing)))
             {
                 return;
             }
@@ -2214,6 +2752,52 @@ impl WebSession {
     }
 
     fn handle_audio_packet(&mut self, pkt: Packet) {
+        if let Some(target) = self.audio_seek_target
+            && let Some((tb, is_mlp_family)) = self.audio_meta.as_ref().map(|am| {
+                (
+                    am.time_base,
+                    matches!(am.params.codec_id.as_str(), "truehd" | "mlp"),
+                )
+            })
+        {
+            let pkt_secs = pkt
+                .pts
+                .or(pkt.dts)
+                .filter(|_| tb.is_valid())
+                .map(|t| tb.seconds_of(t).max(0.0));
+            if is_mlp_family {
+                if let Some(ps) = pkt_secs
+                    && ps + 0.005 < target
+                    && self.preseek_mlp_gop.len() < 160
+                {
+                    let d = &pkt.data;
+                    if d.len() >= 32
+                        && (u32::from_be_bytes([d[4], d[5], d[6], d[7]]) & 0xffff_fffe)
+                            == 0xf872_6fba
+                    {
+                        self.preseek_mlp_gop.clear();
+                    }
+                    self.preseek_mlp_gop.push(pkt);
+                    return;
+                }
+                self.audio_seek_target = None;
+                let gop = std::mem::take(&mut self.preseek_mlp_gop);
+                for g in gop {
+                    self.decode_one_audio_packet(g);
+                }
+            } else if let Some(ps) = pkt_secs {
+                // Keep ~80 ms of pre-roll packets before `target` so stateful MDCT codecs
+                // (AC-3, E-AC-3, AAC, Opus, Vorbis, DTS) warm their overlap window cleanly.
+                if ps + 0.080 < target {
+                    return;
+                }
+                self.audio_seek_target = None;
+            }
+        }
+        self.decode_one_audio_packet(pkt);
+    }
+
+    fn decode_one_audio_packet(&mut self, pkt: Packet) {
         let Some(dec) = self.audio_dec.as_mut() else { return };
         let Some(am) = self.audio_meta.as_ref() else { return };
         let tb = am.time_base;
@@ -2259,6 +2843,9 @@ impl WebSession {
             {
                 continue;
             }
+            if self.video_mode != VideoOutputMode::Software {
+                self.seek_target = None;
+            }
             let chan_layout = am
                 .params
                 .resolved_layout()
@@ -2278,7 +2865,7 @@ impl WebSession {
             let (_, mixer) = self.audio_mix.as_ref().unwrap();
             mixer.append_frame_planar(&af, format, &mut self.audio_left, &mut self.audio_right);
 
-            let flush_thresh = if self.audio_first_flushed { 8192 } else { 1024 };
+            let flush_thresh = if self.audio_first_flushed { 4096 } else { 1024 };
             if self.audio_left.len() >= flush_thresh {
                 self.audio_first_flushed = true;
                 self.flush_audio_accum();
@@ -2371,8 +2958,14 @@ impl WebSession {
             {
                 self.mse_seq = self.mse_seq.wrapping_add(1);
                 let gop = std::mem::take(&mut self.mse_gop);
+                let key_ms = gop
+                    .iter()
+                    .filter(|p| p.sync)
+                    .map(|p| ((p.pts_90k.max(0) as f64) / 90.0).round() as u32)
+                    .min()
+                    .unwrap_or(u32::MAX);
                 if let Some((seg, start, end)) = cfg.media_segment(self.mse_seq, &gop, &[], &mut self.mse_min_dts) {
-                    self.out_queue.push_back(OutItem::MseSegment { data: seg, start, end });
+                    self.out_queue.push_back(OutItem::MseSegment { data: seg, start, end, key_ms });
                 }
             }
         } else if self.video_mode == VideoOutputMode::Software {
@@ -2395,6 +2988,161 @@ impl WebSession {
                 self.convert_and_push_video(&vf, pts, w, h, fmt);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_params(
+        primaries: ColorPrimaries,
+        transfer: TransferCharacteristics,
+        matrix: MatrixCoefficients,
+        range: ColorRange,
+    ) -> CodecParameters {
+        let mut p = CodecParameters::video("hevc".into());
+        p.width = Some(1920);
+        p.height = Some(1080);
+        p.color_signal.primaries = primaries;
+        p.color_signal.transfer = transfer;
+        p.color_signal.matrix = matrix;
+        p.color_signal.range = range;
+        p
+    }
+
+    #[test]
+    fn webcodecs_color_space_emits_only_exact_mappings() {
+        let bt709 = resolve_video_color(
+            &make_params(
+                ColorPrimaries::BT709,
+                TransferCharacteristics::BT709,
+                MatrixCoefficients::BT709,
+                ColorRange::Limited,
+            ),
+            None,
+            None,
+            None,
+        );
+        assert_eq!(
+            bt709.to_webcodecs_color_space(),
+            Some(json!({
+                "primaries": "bt709",
+                "transfer": "bt709",
+                "matrix": "bt709",
+                "fullRange": false,
+            }))
+        );
+
+        let p3 = resolve_video_color(
+            &make_params(
+                ColorPrimaries::SMPTE_EG432,
+                TransferCharacteristics::SMPTE_ST2084,
+                MatrixCoefficients::BT2020_NCL,
+                ColorRange::Limited,
+            ),
+            None,
+            None,
+            None,
+        );
+        assert!(p3.wide_gamut);
+        assert_eq!(
+            p3.to_webcodecs_color_space(),
+            Some(json!({
+                "primaries": "smpte432",
+                "transfer": "pq",
+                "matrix": "bt2020-ncl",
+                "fullRange": false,
+            }))
+        );
+
+        // Non-representable standards must return None so WebCodecs keeps in-band bitstream VUI.
+        for bad in [
+            make_params(
+                ColorPrimaries::BT2020,
+                TransferCharacteristics::SMPTE_ST2084,
+                MatrixCoefficients::BT2020_CL,
+                ColorRange::Limited,
+            ),
+            make_params(
+                ColorPrimaries(11), // DCI-P3 theater white point != Display-P3 (12)
+                TransferCharacteristics::BT709,
+                MatrixCoefficients::BT709,
+                ColorRange::Limited,
+            ),
+            make_params(
+                ColorPrimaries::SMPTE_ST240,
+                TransferCharacteristics::SMPTE_ST240,
+                MatrixCoefficients::SMPTE_ST240,
+                ColorRange::Limited,
+            ),
+            make_params(
+                ColorPrimaries::BT601_525,
+                TransferCharacteristics::BT601,
+                MatrixCoefficients::FCC,
+                ColorRange::Limited,
+            ),
+        ] {
+            let resolved = resolve_video_color(&bad, None, None, None);
+            assert_eq!(resolved.to_webcodecs_color_space(), None);
+        }
+        // DCI-P3 (11) must not claim Display-P3 wideGamut.
+        let dci_p3 = resolve_video_color(
+            &make_params(
+                ColorPrimaries(11),
+                TransferCharacteristics::BT709,
+                MatrixCoefficients::BT709,
+                ColorRange::Limited,
+            ),
+            None,
+            None,
+            None,
+        );
+        assert!(!dci_p3.wide_gamut);
+        assert_eq!(dci_p3.to_manifest_json()["primaries"], "other");
+        // Untagged streams must not invent nclx tags, and partially tagged streams keep H.273 2 (Unspecified).
+        let untagged = resolve_video_color(
+            &make_params(
+                ColorPrimaries::UNSPECIFIED,
+                TransferCharacteristics::UNSPECIFIED,
+                MatrixCoefficients::UNSPECIFIED,
+                ColorRange::Unspecified,
+            ),
+            None,
+            None,
+            None,
+        );
+        assert_eq!(untagged.exact_nclx(), None);
+        let partial = resolve_video_color(
+            &make_params(
+                ColorPrimaries::BT2020,
+                TransferCharacteristics::SMPTE_ST2084,
+                MatrixCoefficients::UNSPECIFIED,
+                ColorRange::Unspecified,
+            ),
+            None,
+            None,
+            None,
+        );
+        assert_eq!(partial.exact_nclx(), Some((9, 16, 2, false)));
+        let mut cfg = MseVideoConfig {
+            kind: VideoCodecKind::H264,
+            width: 1920,
+            height: 1080,
+            framing: NalFraming::LengthPrefixed(4),
+            container: MseContainer::Fmp4,
+            config_box_fourcc: *b"avcC",
+            sample_entry_fourcc: *b"avc1",
+            config_payload: vec![1, 0x64, 0x00, 0x28, 0xff, 0xe1, 0x00, 0x04, 0x67, 0x64, 0x00, 0x28, 0x01, 0x00, 0x04, 0x68, 0xee, 0x3c, 0x80],
+            codec_string: "avc1.640028".to_string(),
+            frame_ticks_90k: 3750,
+            colr_nclx: untagged.exact_nclx(),
+        };
+        let init_untagged = build_fmp4_init(&cfg);
+        assert!(!init_untagged.windows(4).any(|w| w == b"colr"), "untagged stream must omit colr box");
+        cfg.colr_nclx = partial.exact_nclx();
+        let init_tagged = build_fmp4_init(&cfg);
+        assert!(init_tagged.windows(15).any(|w| w == b"colrnclx\x00\x09\x00\x10\x00\x02\x00"), "tagged stream writes exact colr/nclx box with 2 for unspecified");
     }
 }
 

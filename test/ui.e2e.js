@@ -508,6 +508,8 @@ test('relay web UI: settings, plugins as intents, identification, and taste gate
     await waitApi(async () => (await getJson('/v1/jobs/' + aspectJob.jobId)).status === 'done', 'variable-aspect clip stored').catch(async e => { throw new Error(e.message + ': ' + JSON.stringify(await getJson('/v1/jobs/' + aspectJob.jobId))) })
     await waitFor(`S.entries.some(e => e.id === 'clip:variableaspect')`, 'variable-aspect clip in library', 15_000)
     await evaluate(`(() => { openPlayer(S.entries.find(e => e.id === 'clip:variableaspect')); return true })()`)
+    await waitFor(`!!player && player.manifest`, 'variable-aspect manifest ready', 15_000)
+    await evaluate(`(() => { if (player.useMse) { player.mseSupported = false; $('pVideo').onerror(); } return true })()`)
     await waitFor(`!!player && player.primed && player.usingWebCodecs`, 'WebCodecs variable-aspect playback', 30_000)
     await waitFor(`player.videoCrop?.h < 160 && ($('pCanvas').style.display === 'block' ? $('pCanvas') : $('pGlCanvas')).height === player.videoCrop.h`, 'encoded scope picture fills the stage without second side bars', 10_000)
     await shot('player-scope-1440-dark', true)

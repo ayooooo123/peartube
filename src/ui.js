@@ -1,12 +1,15 @@
 import { readFileSync } from 'node:fs'
 
-const lockHash = (() => {
+const ASSET_VER = (() => {
   try {
-    return readFileSync(new URL('../web/assets/peartube_web.lock.sha256', import.meta.url), 'utf8').trim()
+    const lock = readFileSync(new URL('../web/assets/peartube_web.lock.sha256', import.meta.url), 'utf8').trim()
+    const wrk = readFileSync(new URL('../web/assets/player-worker.js', import.meta.url))
+    let h = 0x811c9dc5
+    for (let i = 0; i < wrk.length; i++) h = Math.imul(h ^ wrk[i], 0x01000193) >>> 0
+    return lock ? '?v=' + lock.slice(0, 12) + h.toString(16).padStart(8, '0') : ''
   } catch {}
   return ''
 })()
-const ASSET_VER = lockHash ? '?v=' + lockHash.slice(0, 16) : ''
 
 // Single-page dashboard for relays & local client daemons; textContent guards every peer string.
 export const page = `<!doctype html>
@@ -1703,7 +1706,7 @@ function resolveStreamUrl (rawUrl) {
   }
 }
 
-// GPU BT.709 YUV420P WebGL renderer: uploads planar Y/U/V straight to textures in ~0.15ms with zero CPU color conversion.
+// GPU BT.709 / BT.601 / BT.2020 YUV420P WebGL renderer: uploads planar Y/U/V straight to textures in ~0.15ms with zero CPU color conversion.
 let yuvGl = null
 function getYuvGl () {
   if (yuvGl !== null) return yuvGl
@@ -1712,10 +1715,11 @@ function getYuvGl () {
     c.getContext('webgl', { alpha: false, antialias: false, depth: false, stencil: false, preserveDrawingBuffer: false })
   if (!gl) { yuvGl = false; return false }
   const vs = gl.createShader(gl.VERTEX_SHADER)
-  gl.shaderSource(vs, 'attribute vec2 a_pos;varying vec2 v_uv;uniform vec4 u_crop;void main(){vec2 uv=vec2(a_pos.x*0.5+0.5,0.5-a_pos.y*0.5);v_uv=mix(u_crop.xy,u_crop.zw,uv);gl_Position=vec4(a_pos,0.0,1.0);}')
+  gl.shaderSource(vs, 'precision highp float;attribute vec2 a_pos;varying vec2 v_uv;uniform vec4 u_crop;void main(){vec2 uv=vec2(a_pos.x*0.5+0.5,0.5-a_pos.y*0.5);v_uv=mix(u_crop.xy,u_crop.zw,uv);gl_Position=vec4(a_pos,0.0,1.0);}')
   gl.compileShader(vs)
   const fs = gl.createShader(gl.FRAGMENT_SHADER)
-  gl.shaderSource(fs, 'precision mediump float;varying vec2 v_uv;uniform int u_mode;uniform sampler2D u_y;uniform sampler2D u_u;uniform sampler2D u_v;void main(){if(u_mode==1){gl_FragColor=vec4(texture2D(u_y,v_uv).rgb,1.0);return;}float y=(texture2D(u_y,v_uv).r-0.062745)*1.164384;float u=texture2D(u_u,v_uv).r-0.5;float v=texture2D(u_v,v_uv).r-0.5;gl_FragColor=vec4(y+1.792741*v,y-0.213249*u-0.532909*v,y+2.112402*u,1.0);}')
+  const fsPrec = gl.getShaderPrecisionFormat?.(gl.FRAGMENT_SHADER, gl.HIGH_FLOAT)?.precision ? 'precision highp float;' : 'precision mediump float;'
+  gl.shaderSource(fs, fsPrec + 'varying vec2 v_uv;uniform int u_mode;uniform int u_matrix;uniform int u_full;uniform sampler2D u_y;uniform sampler2D u_u;uniform sampler2D u_v;void main(){if(u_mode==1){gl_FragColor=vec4(texture2D(u_y,v_uv).rgb,1.0);return;}float y=texture2D(u_y,v_uv).r;float u=texture2D(u_u,v_uv).r-(128.0/255.0);float v=texture2D(u_v,v_uv).r-(128.0/255.0);if(u_full==0){y=(y-(16.0/255.0))*(255.0/219.0);u*=255.0/224.0;v*=255.0/224.0;}vec3 rgb;if(u_matrix==1){rgb=vec3(y+1.402*v,y-0.34413629*u-0.71413629*v,y+1.772*u);}else if(u_matrix==2){rgb=vec3(y+1.4746*v,y-0.16455313*u-0.57135313*v,y+1.8814*u);}else{rgb=vec3(y+1.5748*v,y-0.18732427*u-0.46812427*v,y+1.8556*u);}gl_FragColor=vec4(clamp(rgb,0.0,1.0),1.0);}')
   gl.compileShader(fs)
   const prog = gl.createProgram()
   gl.attachShader(prog, vs); gl.attachShader(prog, fs); gl.linkProgram(prog); gl.useProgram(prog)
@@ -1741,10 +1745,14 @@ function getYuvGl () {
   gl.uniform1i(gl.getUniformLocation(prog, 'u_u'), 1)
   gl.uniform1i(gl.getUniformLocation(prog, 'u_v'), 2)
   const modeLoc = gl.getUniformLocation(prog, 'u_mode')
+  const matrixLoc = gl.getUniformLocation(prog, 'u_matrix')
+  const fullLoc = gl.getUniformLocation(prog, 'u_full')
   const cropLoc = gl.getUniformLocation(prog, 'u_crop')
   gl.uniform1i(modeLoc, 0)
+  gl.uniform1i(matrixLoc, 0)
+  gl.uniform1i(fullLoc, 0)
   gl.uniform4f(cropLoc, 0, 0, 1, 1)
-  yuvGl = { gl, canvas: c, texY, texU, texV, modeLoc, cropLoc, mode: 0, w: 0, h: 0 }
+  yuvGl = { gl, canvas: c, texY, texU, texV, modeLoc, matrixLoc, fullLoc, cropLoc, mode: 0, matrix: 0, full: 0, cs: 'srgb', w: 0, h: 0 }
   return yuvGl
 }
 
@@ -1886,9 +1894,9 @@ function openPlayer (entry, at = 0) {
     freeBaseMedia: initialAt,
     freeBasePerf: performance.now(),
     primed: false,
+    rebuffering: false,
     paused: false,
     seeking: false,
-    duration: 0,
     seq,
     manifest: null,
     videoStream: -1,
@@ -1930,8 +1938,8 @@ function openPlayer (entry, at = 0) {
   const video = $('pVideo')
 
   function currentMediaTime () {
-    if (!p.primed || p.paused) return p.freeBaseMedia
-    if (p.audioStream >= 0 && p.audioCtx && p.audioStarted && p.audioCtx.state === 'running') {
+    if (!p.primed || p.paused || p.rebuffering) return p.freeBaseMedia
+    if (p.audioStream >= 0 && p.audioCtx && p.audioStarted && p.audioCtx.state === 'running' && p.audioNodes.length > 0) {
       const outT = audioOutTime(p.audioCtx)
       for (const a of p.audioNodes) {
         if (outT >= a.startCtx && outT <= a.endCtx) {
@@ -1940,7 +1948,8 @@ function openPlayer (entry, at = 0) {
           break
         }
       }
-      if (outT >= p.audioBaseCtx) {
+      const lastEnd = p.audioNodes[p.audioNodes.length - 1].endCtx
+      if (outT >= p.audioBaseCtx && outT <= lastEnd + 0.08) {
         const t = p.audioBaseMedia + (outT - p.audioBaseCtx)
         p.freeBaseMedia = t
         p.freeBasePerf = performance.now()
@@ -1974,8 +1983,32 @@ function openPlayer (entry, at = 0) {
   function effectiveHidden () {
     return document.visibilityState !== 'visible' || Boolean(p.windowOccluded)
   }
-  function syncWorkerClock (timeSecs, playing) {
-    try { worker.postMessage({ cmd: 'clock', time: timeSecs, wallMs: nowWallMs(), playing, hidden: effectiveHidden() }) } catch {}
+  function syncWorkerClock (timeSecs, playing, extra = null) {
+    const pf = performance.now()
+    const b0 = (p.useMse && video.buffered.length > 0) ? (p.rebuffering ? mseActiveStart(p.freeBaseMedia) : video.buffered.start(0)) : -1
+    const bEnd = (p.useMse && video.buffered.length > 0) ? video.buffered.end(video.buffered.length - 1) : -1
+    const mseStalled = Boolean(p.useMse && p.lastMseAdvanceWall && (pf - p.lastMseAdvanceWall) > 650)
+    const canHardSync = Boolean(p.audioStarted && !video.seeking && (p.lastHardSync === 0 || (pf - p.lastHardSync) > 1200))
+    try {
+      worker.postMessage({
+        cmd: 'clock',
+        time: timeSecs,
+        wallMs: nowWallMs(),
+        playing,
+        hidden: effectiveHidden(),
+        vt: p.useMse ? video.currentTime : undefined,
+        b0,
+        bEnd,
+        readyState: p.useMse ? video.readyState : 0,
+        mseStalled,
+        canHardSync,
+        duration: p.duration || 0,
+        rebuffering: Boolean(p.rebuffering),
+        mseBufferedAhead: p.useMse ? mseBufferedAhead(p.freeBaseMedia) : 0,
+        audioQueuedAhead: queuedAudioAheadSec(),
+        ...extra
+      })
+    } catch {}
   }
   p.syncWorkerClock = syncWorkerClock
   function scheduleAudioChunk (m) {
@@ -2005,7 +2038,7 @@ function openPlayer (entry, at = 0) {
     const nowCtx = p.audioCtx.currentTime
     const startCtx = Math.max(nowCtx + 0.02, p.nextAudioCtxTime || (nowCtx + 0.03))
     p.nextAudioCtxTime = startCtx + ab.duration
-    if (!p.audioStarted) {
+    if (!p.audioStarted || (p.audioNodes.length === 0 && !p.rebuffering)) {
       p.audioStarted = true
       p.audioBaseMedia = m.pts
       p.audioBaseCtx = startCtx
@@ -2020,10 +2053,84 @@ function openPlayer (entry, at = 0) {
     node.start(startCtx)
   }
 
+  function pendingAudioSec () {
+    let s = 0
+    for (const m of p.pendingAudio) s += m.samples / (m.rate || 48000)
+    return s
+  }
+  function queuedAudioAheadSec () {
+    if (!p.audioCtx || p.audioNodes.length === 0) return 0
+    const last = p.audioNodes[p.audioNodes.length - 1]
+    return Math.max(0, last.endCtx - p.audioCtx.currentTime)
+  }
+  function mseBufferedAhead (atTime) {
+    if (!p.sb) return 0
+    let best = 0
+    for (let i = 0; i < p.sb.buffered.length; i++) {
+      const bs = p.sb.buffered.start(i), be = p.sb.buffered.end(i)
+      if (atTime + 0.35 >= bs && atTime <= be + 0.05) {
+        best = Math.max(best, be - Math.max(atTime, bs))
+      }
+    }
+    return best
+  }
+  p.mseBufferedAhead = mseBufferedAhead
+  function mseActiveStart (atTime) {
+    if (!p.sb || p.sb.buffered.length === 0) return -1
+    for (let i = 0; i < p.sb.buffered.length; i++) {
+      const bs = p.sb.buffered.start(i), be = p.sb.buffered.end(i)
+      if (atTime + 0.35 >= bs && atTime <= be + 0.05) return bs
+    }
+    return p.sb.buffered.start(0)
+  }
+  function enterRebuffer () {
+    if (p.rebuffering || !p.primed || p.paused || p.seeking || p.eof || !p.useMse) return
+    p.rebuffering = true
+    const hold = video.currentTime > 0 ? video.currentTime : p.freeBaseMedia
+    p.freeBaseMedia = hold
+    p.freeBasePerf = performance.now()
+    video.pause()
+    p.audioCtx?.suspend?.().catch(() => {})
+    syncWorkerClock(hold, !p.paused)
+    $('pStatus').textContent = 'Buffering…'
+    $('pStatus').style.display = 'block'
+    pumpPrefetch(p)
+  }
+  function maybeExitRebuffer () {
+    if (!p.rebuffering || player !== p) return
+    syncWorkerClock(p.freeBaseMedia, !p.paused)
+  }
+  function applyRebufferExit (snapTo) {
+    if (!p.rebuffering || player !== p) return
+    p.rebuffering = false
+    $('pStatus').style.display = 'none'
+    p.freeBasePerf = performance.now()
+    p.lastMseAdvanceWall = p.freeBasePerf
+    if (typeof snapTo === 'number' && snapTo >= 0) {
+      try { video.currentTime = snapTo; p.freeBaseMedia = snapTo; p.lastMseTime = snapTo } catch {}
+    }
+    if (!p.paused) {
+      if (p.audioCtx) {
+        p.audioCtx.resume().then(() => {
+          if (player === p && !p.paused && !p.rebuffering) {
+            p.audioBaseMedia = p.freeBaseMedia
+            p.audioBaseCtx = p.audioCtx.currentTime
+            syncWorkerClock(p.freeBaseMedia, true)
+          }
+        }).catch(() => {})
+      }
+      video.play().catch(() => {})
+      syncWorkerClock(p.freeBaseMedia, true)
+    }
+  }
+
   function tryPrime () {
     if (p.primed || !p.manifest) return
-    const vReady = p.videoStream < 0 || (p.useMse ? (p.mseReady && video.readyState >= 2) : (p.workerGlPrimed || p.drawnFrames >= 1 || p.swFrames.length >= 2)) || p.eof
-    const aReady = p.audioStream < 0 || p.pendingAudio.length >= 1 || p.eof
+    const rules = p.manifest.rules
+    const minSwFrames = rules?.minSwPrimeFrames ?? 2
+    const minAudioSec = rules?.minAudioPrimeSec ?? 0.01
+    const vReady = p.videoStream < 0 || (p.useMse ? (p.mseReady && video.readyState >= 2) : (p.workerGlPrimed || p.drawnFrames >= 1 || p.swFrames.length >= minSwFrames)) || p.eof
+    const aReady = p.audioStream < 0 || pendingAudioSec() >= minAudioSec || p.eof
     if (!vReady || !aReady) return
     p.primed = true
     $('pStatus').style.display = 'none'
@@ -2046,6 +2153,7 @@ function openPlayer (entry, at = 0) {
     p.nextAudioCtxTime = 0
     p.audioStarted = false
     p.primed = false
+    p.rebuffering = false
     p.audioBaseMedia = targetSecs
     p.freeBaseMedia = targetSecs
     p.freeBasePerf = performance.now()
@@ -2069,8 +2177,8 @@ function openPlayer (entry, at = 0) {
     const bStart = p.sb.buffered.start(0)
     const bEnd = p.sb.buffered.end(p.sb.buffered.length - 1)
     // Wait until buffered segments actually reach the target timestamp inside a long GOP (or EOF)
-    // instead of snapping backward to the keyframe 6–10 s earlier and desyncing from audio.
-    if (bEnd >= p.mseStartAt + 0.04 || (p.eof && !p.sb.updating && p.mseQueue.length === 0)) {
+    const minMseLead = p.manifest?.rules?.minMsePrimeLeadSec ?? 0.04
+    if (bEnd >= p.mseStartAt + minMseLead || (p.eof && !p.sb.updating && p.mseQueue.length === 0)) {
       p.mseReady = true
       const snap = Math.max(bStart, Math.min(p.mseStartAt, bEnd > bStart + 0.02 ? bEnd - 0.02 : bStart))
       video.currentTime = snap
@@ -2085,6 +2193,7 @@ function openPlayer (entry, at = 0) {
     video.playbackRate = 1
     if (p.msUrl) { try { URL.revokeObjectURL(p.msUrl) } catch {} p.msUrl = '' }
     p.mseQueue.length = 0
+    p.mseKeyframes = []
     p.sb = null
     p.mseReady = false
     p.mseStartAt = startAt
@@ -2108,6 +2217,7 @@ function openPlayer (entry, at = 0) {
         sb.addEventListener('updateend', () => {
           if (player !== p || p.sb !== sb || p.ms?.readyState !== 'open') return
           finalizeMsePrimeIfReady()
+          maybeExitRebuffer()
           drainMseQueue()
           if (p.pendingReturnSnap && !p.sb.updating && p.mseQueue.length === 0) {
             p.pendingReturnSnap = false
@@ -2121,39 +2231,54 @@ function openPlayer (entry, at = 0) {
     }, { once: true })
   }
 
+  function safeMseEvictCut (now, keepBehind) {
+    if (!p.sb || p.sb.buffered.length === 0) return 0
+    const b0 = p.sb.buffered.start(0)
+    const bEnd = p.sb.buffered.end(p.sb.buffered.length - 1)
+    const maxSafe = (typeof p.rustMaxEvictCap === 'number' && p.rustMaxEvictCap > 0) ? p.rustMaxEvictCap : (now - Math.max(keepBehind, 10))
+    const cut = Math.min(bEnd - 0.5, now - keepBehind, maxSafe)
+    return cut > b0 + 0.2 ? cut : 0
+  }
+  p.safeMseEvictCut = safeMseEvictCut
+
+  function applyMseEvict (cut) {
+    if (!p.sb || p.ms?.readyState !== 'open' || p.sb.updating || p.sb.buffered.length === 0 || !(cut > 0)) return false
+    const b0 = p.sb.buffered.start(0)
+    const bEnd = p.sb.buffered.end(p.sb.buffered.length - 1)
+    if (cut <= b0 + 0.2) return false
+    const now = p.primed ? currentMediaTime() : p.mseStartAt
+    if (video.currentTime < cut + 0.5) {
+      try { video.currentTime = Math.min(Math.max(b0, bEnd - 0.25), Math.max(cut + 0.5, now - 0.5)) } catch {}
+    }
+    try { p.sb.remove(0, cut); return true } catch { return false }
+  }
+
   function drainMseQueue () {
     if (!p.sb || p.ms?.readyState !== 'open' || p.sb.updating) return
-    const now = p.primed ? currentMediaTime() : p.mseStartAt
-    // Trim behind now - 6 once 10 s trails the playhead so 60+ Mbps 4K remuxes stay well below Chromium's 150 MB SourceBuffer cap.
-    if (p.sb.buffered.length > 0 && now - p.sb.buffered.start(0) > 10 && now - 6 > p.sb.buffered.start(0) + 1) {
-      const b0 = p.sb.buffered.start(0)
-      const bEnd = p.sb.buffered.end(p.sb.buffered.length - 1)
-      const cut = now - 6
-      if (video.currentTime < cut + 0.5) {
-        try { video.currentTime = Math.min(Math.max(b0, bEnd - 0.5), Math.max(cut + 0.5, now - 1)) } catch {}
-      }
-      try { p.sb.remove(0, cut); return } catch {}
+    if (p.pendingEvictTo > 0) {
+      const cut = p.pendingEvictTo
+      p.pendingEvictTo = 0
+      if (applyMseEvict(cut)) return
     }
     if (p.mseQueue.length > 0) {
       const buf = p.mseQueue.shift()
       try {
         p.sb.appendBuffer(buf)
       } catch (err) {
-        // High-bitrate 4K remuxes can brush SourceBuffer QuotaExceededError on bitrate spikes; advance a stalled background <video>
-        // past the cut point and evict progressively instead of killing hardware MSE onto 4K software decode.
+        // High-bitrate 4K remuxes can brush SourceBuffer QuotaExceededError on bitrate spikes; ask Rust
+        // (pt_ctrl_evict_cut / rustMaxEvictCap) for the keyframe-safe cutoff instead of removing activeKf.
         if (err?.name === 'QuotaExceededError') {
           buf.__retries = (buf.__retries || 0) + 1
           if (p.sb.buffered.length > 0 && buf.__retries <= 4) {
-            p.mseQueue.unshift(buf)
+            const now = p.primed ? currentMediaTime() : p.mseStartAt
+            const keepBehind = Math.max(1.5, 5 - buf.__retries)
             const b0 = p.sb.buffered.start(0)
             const bEnd = p.sb.buffered.end(p.sb.buffered.length - 1)
-            const keepBehind = Math.max(1.5, 5 - buf.__retries)
-            const cut = Math.min(bEnd - 0.5, Math.max(b0 + Math.max(1, (bEnd - b0) * 0.35), now - keepBehind))
-            if (cut > b0 + 0.1) {
-              if (video.currentTime < cut + 0.5) {
-                try { video.currentTime = Math.min(Math.max(b0, bEnd - 0.25), Math.max(cut + 0.5, now - 0.5)) } catch {}
-              }
-              try { p.sb.remove(0, cut); return } catch {}
+            p.worker?.postMessage({ cmd: 'evictCut', now, keepBehind, b0, bEnd })
+            const cut = safeMseEvictCut(now, keepBehind)
+            if (cut > 0) {
+              p.mseQueue.unshift(buf)
+              if (applyMseEvict(cut)) return
             }
           }
           if (p.primed) {
@@ -2254,10 +2379,10 @@ function openPlayer (entry, at = 0) {
       p.webCodecsSupported = Boolean(m.webCodecsSupported)
       const MS = window.MediaSource || window.ManagedMediaSource
       p.mseSupported = Boolean(p.videoStream >= 0 && mf.mseType && MS && MS.isTypeSupported(mf.mseType))
-      // Prefer WebCodecs VideoDecoder first whenever available: we own every VideoFrame and draw call,
-      // bypassing Chromium's silent-<video> background/occlusion throttling. Plain-HTTP LAN pages fall back to MSE.
-      p.allowWebCodecs = Boolean(p.videoStream >= 0 && p.webCodecsSupported)
-      p.useMse = Boolean(!p.allowWebCodecs && p.mseSupported)
+      // Prefer MSE (<video>) first whenever supported so macOS/iOS promote directly to AVSampleBufferDisplayLayer
+      // (native BT.709/BT.1886 colors, 10-bit P010/HDR, zero per-frame JS copy). Fall back to WebCodecs -> WASM+GPU.
+      p.useMse = Boolean(p.mseSupported)
+      p.allowWebCodecs = Boolean(!p.useMse && p.videoStream >= 0 && p.webCodecsSupported)
       p.usingWebCodecs = p.allowWebCodecs
       if (p.useMse) {
         setupMse(p.startAt)
@@ -2282,8 +2407,51 @@ function openPlayer (entry, at = 0) {
       updateBadge()
       seekTo(currentMediaTime())
     } else if (m.type === 'mseInit' || m.type === 'mseSeg') {
+      if (m.type === 'mseSeg' && typeof m.maxEvictCap === 'number' && m.maxEvictCap > 0) {
+        p.rustMaxEvictCap = m.maxEvictCap
+      }
       p.mseQueue.push(m.buf)
       drainMseQueue()
+    } else if (m.type === 'mseCtrl') {
+      if (typeof m.maxEvictCap === 'number' && m.maxEvictCap > 0) p.rustMaxEvictCap = m.maxEvictCap
+      if (m.exitRebuffer && p.rebuffering) applyRebufferExit(m.snapTo)
+      if (m.evictTo > 0 && p.useMse) {
+        if (!applyMseEvict(m.evictTo)) p.pendingEvictTo = m.evictTo
+      }
+      if (p.useMse && p.primed && !p.paused && !p.rebuffering && !video.seeking) {
+        if (m.snapTo >= 0) {
+          p.drainMseQueue?.()
+          p.lastHardSync = performance.now()
+          p.lastMseTime = m.snapTo
+          p.lastMseAdvanceWall = p.lastHardSync
+          try { video.currentTime = m.snapTo } catch {}
+          if (video.paused) video.play().catch(() => {})
+        } else if (typeof m.rate === 'number' && m.rate > 0 && Math.abs(video.playbackRate - m.rate) > 0.005) {
+          video.playbackRate = m.rate
+        }
+      }
+    } else if (m.type === 'returnCtrl') {
+      if (p.paused || !p.primed || p.seeking) return
+      if (m.mode === 1) {
+        p.pendingReturnSnap = true
+      } else if (m.mode === 2) {
+        p.pendingReturnSnap = false
+        try { video.currentTime = m.target } catch {}
+        p.lastMseTime = m.target
+        p.lastHardSync = performance.now()
+      } else if (m.mode === 3) {
+        p.pendingReturnSnap = false
+        seekTo(m.target)
+      } else {
+        p.pendingReturnSnap = false
+        if (p.useMse) {
+          p.lastMseTime = m.target
+          p.lastHardSync = performance.now()
+        } else {
+          p.lastDrawWall = performance.now()
+          p.lastSwPts = null
+        }
+      }
     } else if (m.type === 'videoPrimed') {
       p.workerGlPrimed = true
       p.usingWebCodecs = Boolean(m.hw)
@@ -2311,6 +2479,7 @@ function openPlayer (entry, at = 0) {
         tryPrime()
       } else {
         scheduleAudioChunk(m)
+        if (p.rebuffering) maybeExitRebuffer()
       }
     } else if (m.type === 'subText') {
       p.subCues.push({ kind: 'text', start: m.start, end: m.end, text: m.text })
@@ -2318,8 +2487,12 @@ function openPlayer (entry, at = 0) {
       p.subCues.push({ kind: 'bitmap', start: m.start, end: m.end, x: m.x, y: m.y, w: m.w, h: m.h, cw: m.cw, ch: m.ch, buf: m.buf })
     } else if (m.type === 'readBlock') {
       p.lastReadBlock = m.block
-      // The Worker missed this block, so a stale done mark must not make the page skip refetching it.
-      if (m.force) p.prefetchDone.delete(m.block)
+      if (typeof m.endBlock === 'number') p.prefetchEndBlock = m.endBlock
+      if (typeof m.evictBefore === 'number') p.prefetchEvictBefore = m.evictBefore
+      if (typeof m.maxInFlight === 'number' && m.maxInFlight > 0) p.prefetchMaxInFlight = m.maxInFlight
+      // When force is true, the Worker's own sync XHR is already fetching m.block to blockEnd;
+      // mark m.block done here so pumpPrefetch puts full P2P bandwidth onto m.block + 1..N instead of duplicating it.
+      if (m.force && !p.prefetchInFlight.has(m.block)) p.prefetchDone.add(m.block)
       pumpPrefetch(p)
     } else if (m.type === 'videoCrop') {
       p.videoCrop = m.full ? null : { x: m.left, y: m.top, w: m.right - m.left, h: m.bottom - m.top, cw: m.w, ch: m.h }
@@ -2329,38 +2502,34 @@ function openPlayer (entry, at = 0) {
     } else if (m.type === 'eof') {
       p.eof = true
       finalizeMsePrimeIfReady()
+      maybeExitRebuffer()
       tryPrime()
     }
   }
 
-  // Blocks the demuxer is about to need, fetched here where fetch() is reliable (the Worker's own
-  // prefetch can hang, and one blocked sync read drops every picture due behind it).
+  // Executes the block prefetch plan (block..endBlock, evictBefore, maxInFlight) computed by Rust's pt_ctrl_prefetch_plan.
   function pumpPrefetch (p) {
     if (!p || player !== p || !p.worker || !p.streamUrl || !streamBlockBytes) return
-    // While hidden or occluded, let any already-started page fetches finish into blockCache, then yield new ones to the Worker.
     if (effectiveHidden()) return
     const base = p.lastReadBlock
     if (!Number.isFinite(base) || base < 0) return
+    const evictBefore = typeof p.prefetchEvictBefore === 'number' ? p.prefetchEvictBefore : Math.max(0, base - (p.manifest?.rules?.evictTrailBlocks ?? 4))
     if (p.prefetchDone.size > 96) {
       for (const k of p.prefetchDone) {
-        if (k < base - 4) p.prefetchDone.delete(k)
+        if (k < evictBefore) p.prefetchDone.delete(k)
       }
     }
-    // Keep 18 x 2 MiB (36 MiB) warm inside the 64 MiB Worker ring without wiping ahead-of-base marks on rollover.
-    for (let i = 0; i <= 18; i++) {
-      // Six in flight is the browser's per-host connection cap, and the most short 2 MiB reads a
-      // weak link actually rewards: measured on a Wi-Fi path to a 10-foot relay, four in flight gave
-      // 82 Mbps and six gave 154, so the 36 MiB read-ahead fills in about half the time and a dip
-      // no longer drains it.
-      if (p.prefetchInFlight.size >= 6) break
-      const idx = base + i
+    const maxInFlight = p.prefetchMaxInFlight || p.manifest?.rules?.prefetchInFlight || 6
+    const endBlock = typeof p.prefetchEndBlock === 'number' ? p.prefetchEndBlock : (base + (p.manifest?.rules?.prefetchLookahead ?? 24) + 1)
+    for (let idx = base; idx < endBlock; idx++) {
+      if (p.prefetchInFlight.size >= maxInFlight) break
       if (idx < 0) continue
       if (p.prefetchDone.has(idx) || p.prefetchInFlight.has(idx)) continue
       const start = idx * streamBlockBytes
       const end = start + streamBlockBytes - 1
       const ctl = new AbortController()
       p.prefetchInFlight.set(idx, ctl)
-      const killTimer = setTimeout(() => { try { ctl.abort() } catch {} }, 6000)
+      const killTimer = setTimeout(() => { try { ctl.abort() } catch {} }, 15000)
       const settle = () => { clearTimeout(killTimer); p.prefetchInFlight.delete(idx) }
       fetch(p.streamUrl, { headers: { range: 'bytes=' + start + '-' + end }, signal: ctl.signal })
         .then(r => (r.ok || r.status === 206) ? r.arrayBuffer() : null)
@@ -2393,6 +2562,15 @@ function openPlayer (entry, at = 0) {
       if (r) {
         if (glCanvas.style.display !== 'block') { glCanvas.style.display = 'block'; canvas.style.display = 'none' }
         const { gl } = r
+        const framePrim = f.hwFrame.colorSpace?.primaries || p.manifest?.videoColor?.primaries || ''
+        const targetCs = (framePrim === 'bt2020' || framePrim === 'smpte432') ? 'display-p3' : 'srgb'
+        if (r.cs !== targetCs) {
+          r.cs = targetCs
+          try {
+            if ('drawingBufferColorSpace' in gl) gl.drawingBufferColorSpace = targetCs
+            if ('unpackColorSpace' in gl) gl.unpackColorSpace = targetCs
+          } catch {}
+        }
         if (r.w !== ow || r.h !== oh) {
           r.w = ow; r.h = oh
           glCanvas.width = ow; glCanvas.height = oh
@@ -2418,8 +2596,19 @@ function openPlayer (entry, at = 0) {
     if (r) {
       if (glCanvas.style.display !== 'block') { glCanvas.style.display = 'block'; canvas.style.display = 'none' }
       const { gl } = r
+      if (r.cs !== 'srgb') {
+        r.cs = 'srgb'
+        try {
+          if ('drawingBufferColorSpace' in gl) gl.drawingBufferColorSpace = 'srgb'
+          if ('unpackColorSpace' in gl) gl.unpackColorSpace = 'srgb'
+        } catch {}
+      }
       const modeChanged = r.mode !== 0
       if (modeChanged) { r.mode = 0; gl.uniform1i(r.modeLoc, 0) }
+      const nextMat = typeof f.matrix === 'number' ? f.matrix : (p.manifest?.videoColor?.matrix || 0)
+      const nextFull = (typeof f.full === 'boolean' ? f.full : Boolean(p.manifest?.videoColor?.fullRange)) ? 1 : 0
+      if (r.matrix !== nextMat) { r.matrix = nextMat; gl.uniform1i(r.matrixLoc, nextMat) }
+      if (r.full !== nextFull) { r.full = nextFull; gl.uniform1i(r.fullLoc, nextFull) }
       const cw = (f.w + 1) >> 1, ch = (f.h + 1) >> 1
       const u8 = new Uint8Array(f.buf, 0, f.byteLen || f.buf.byteLength)
       const yLen = f.w * f.h, cLen = cw * ch
@@ -2480,33 +2669,15 @@ function openPlayer (entry, at = 0) {
       }
     }
 
-    if (p.primed && p.useMse && p.mseReady && !p.paused) {
+    if (p.rebuffering) maybeExitRebuffer()
+    if (p.primed && p.useMse && p.mseReady && !p.paused && !p.rebuffering) {
       const vt = video.currentTime
       if (vt > p.lastMseTime) {
         p.consumedVideoSec += Math.min(1.0, vt - p.lastMseTime)
         p.lastMseTime = vt
+        p.lastMseAdvanceWall = pf
         if (!video.seeking && video.readyState >= 2 && $('pStatus').textContent === 'Buffering…') {
           $('pStatus').style.display = 'none'
-        }
-      }
-      if (p.audioStarted && !video.seeking) {
-        const drift = vt - now
-        if (Math.abs(drift) > 1.2 && (p.lastHardSync === 0 || (pf - p.lastHardSync) > 2500)) {
-          for (let i = 0; i < video.buffered.length; i++) {
-            if (now >= video.buffered.start(i) && now + 0.25 <= video.buffered.end(i)) {
-              p.lastHardSync = pf
-              p.lastMseTime = now
-              video.currentTime = now
-              if (video.paused) video.play().catch(() => {})
-              break
-            }
-          }
-        } else if (video.readyState >= 2) {
-          if (drift > 0.20) video.playbackRate = 0.95
-          else if (drift > 0.025) video.playbackRate = 0.98
-          else if (drift < -0.20) video.playbackRate = 1.05
-          else if (drift < -0.025) video.playbackRate = 1.02
-          else if (video.playbackRate !== 1) video.playbackRate = 1
         }
       }
     } else if (p.primed && !p.useMse && p.swFrames.length > 0 && !p.paused) {
@@ -2610,7 +2781,7 @@ function openPlayer (entry, at = 0) {
     const aSec = p.consumedAudioSec
     p.consumedVideoSec = 0
     p.consumedAudioSec = 0
-    p.worker.postMessage({ cmd: 'consumed', videoSec: vSec, audioSec: aSec, time: currentMediaTime(), wallMs: nowWallMs(), playing: !p.paused, hidden: effectiveHidden() })
+    syncWorkerClock(currentMediaTime(), !p.paused, { cmd: 'consumed', videoSec: vSec, audioSec: aSec })
   }, 250)
 
   const vid = $('pVideo')
@@ -2618,15 +2789,14 @@ function openPlayer (entry, at = 0) {
     vid.addEventListener('waiting', () => {
       if (player !== p || !p.useMse || effectiveHidden()) return
       if (p.lastTickWall && performance.now() - p.lastTickWall > 200) return
-      const now = currentMediaTime()
+      const checkAt = video.currentTime > 0 ? video.currentTime : currentMediaTime()
       for (let i = 0; i < vid.buffered.length; i++) {
-        if (now >= vid.buffered.start(i) && now + 0.4 <= vid.buffered.end(i)) return
+        if (checkAt >= vid.buffered.start(i) && checkAt + 0.35 <= vid.buffered.end(i)) return
       }
-      $('pStatus').textContent = 'Buffering…'
-      $('pStatus').style.display = 'block'
+      enterRebuffer()
     })
     vid.addEventListener('playing', () => {
-      if (player === p && $('pStatus').textContent === 'Buffering…') $('pStatus').style.display = 'none'
+      if (player === p && !p.rebuffering && $('pStatus').textContent === 'Buffering…') $('pStatus').style.display = 'none'
     })
   }
   const extMatch = (entry.streamUrl || '').split('?')[0].split('.').pop() || ''
@@ -2810,7 +2980,6 @@ function resyncOnReturn (fromHidden = false) {
   p.windowOccluded = false
   if (p.paused || !p.primed || p.seeking) return
   const audio = p.currentMediaTime ? p.currentMediaTime() : (p.freeBaseMedia || 0)
-  // The first click that brings the window back is a focus click, not a play/pause command.
   p.suppressStageClickUntil = performance.now() + 900
   if (p.audioCtx?.state === 'suspended') p.audioCtx.resume().catch(() => {})
   if (p.useMse) {
@@ -2818,45 +2987,25 @@ function resyncOnReturn (fromHidden = false) {
     v.playbackRate = 1
     p.drainMseQueue?.()
     if (v.paused) v.play().catch(() => {})
-    // Hard A/V sync after any absence. The SourceBuffer keeps filling while hidden, so if the live
-    // position is buffered we snap the element there instantly; if segments are mid-append, wait for updateend.
-    let buffered = false
-    for (let i = 0; i < v.buffered.length; i++) {
-      if (audio >= v.buffered.start(i) - 0.15 && audio + 0.15 <= v.buffered.end(i)) { buffered = true; break }
-    }
-    if (!buffered) {
-      if (p.sb?.updating || p.mseQueue.length > 0) {
-        p.pendingReturnSnap = true
-        p.syncWorkerClock?.(audio, true)
-        return
-      }
-      seekTo(audio)
-      return
-    }
-    p.pendingReturnSnap = false
-    if (Math.abs(v.currentTime - audio) > 0.2) { try { v.currentTime = audio } catch {} }
-    p.lastMseTime = audio
-    p.lastHardSync = performance.now()
-  } else {
-    // AVI decodes ahead with hidden audio; restart at the clock instead of showing a stale picture for seconds.
-    if (wasHidden && p.manifest?.container === 'avi') {
-      p.syncWorkerClock?.(audio, true)
-      seekTo(audio)
-      return
-    }
-    // Reset the stall timer so returning from a hidden tab never flashes Buffering… before the replayed GOP frame draws.
-    p.lastDrawWall = performance.now()
-    p.lastSwPts = null
   }
-  p.syncWorkerClock?.(audio, true)
+  p.syncWorkerClock?.(audio, true, {
+    returnSync: true,
+    wasHidden,
+    isAvi: p.manifest?.container === 'avi',
+    mseBufferedAtAudio: p.useMse ? p.mseBufferedAhead?.(audio) : 0,
+    sbUpdating: Boolean(p.sb?.updating || p.mseQueue.length > 0)
+  })
   p.pumpPrefetch?.(p)
 }
 addEventListener('visibilitychange', () => {
   if (!player) return
   const hidden = document.visibilityState !== 'visible'
-  const liveNow = player.currentMediaTime ? player.currentMediaTime() : (player.freeBaseMedia || 0)
-  player.syncWorkerClock?.(liveNow, !player.paused)
-  if (!hidden) resyncOnReturn(true)
+  if (hidden) {
+    const liveNow = player.currentMediaTime ? player.currentMediaTime() : (player.freeBaseMedia || 0)
+    player.syncWorkerClock?.(liveNow, !player.paused)
+  } else {
+    resyncOnReturn(true)
+  }
 })
 addEventListener('focus', () => {
   if (document.visibilityState === 'visible') resyncOnReturn()

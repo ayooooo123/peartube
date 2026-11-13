@@ -5,7 +5,9 @@ import android.content.Intent
 import android.os.PowerManager
 import android.os.Environment
 import android.os.StatFs
-import com.peartube.shared.WorkletBridge
+import com.peartube.shared.EngineBridge
+import com.peartube.shared.IpcTransport
+import com.peartube.shared.NativeTransport
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -100,9 +102,10 @@ class ReceiverWorker(private val appContext: Context) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private val ready = CompletableDeferred<Ipc?>()
     private var worklet: Worklet? = null
+    private val native = BuildConfig.ENGINE == "rust"
 
-    private val bridge = WorkletBridge(
-        ready = ready,
+    private val bridge = EngineBridge(
+        transport = if (native) NativeTransport() else IpcTransport(ready) { worklet },
         onEvent = ::dispatchEvent,
         onFatal = { error.value = it },
         stoppedMessage = "Receiver engine stopped",
@@ -110,6 +113,10 @@ class ReceiverWorker(private val appContext: Context) {
 
     init {
         scope.launch(Dispatchers.IO) {
+            if (native) {
+                bridge.read()
+                return@launch
+            }
             try {
                 val bundle = appContext.assets.open("worker.bundle").use { it.readBytes() }
                 val w = Worklet(appContext)
@@ -117,7 +124,7 @@ class ReceiverWorker(private val appContext: Context) {
                 w.start("/worker.bundle", bundle)
                 worklet = w
                 ready.complete(pipe)
-                scope.launch { bridge.read(pipe) }
+                bridge.read()
             } catch (e: Throwable) {
                 ready.complete(null)
                 bridge.fail("Receiver engine failed to start: ${e.message ?: e}")

@@ -1,8 +1,8 @@
 package com.peartube.app
 
 import android.content.Context
-import com.peartube.shared.WorkerException
-import com.peartube.shared.WorkletBridge
+import com.peartube.shared.EngineBridge
+import com.peartube.shared.IpcTransport
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -36,8 +36,8 @@ class Worker(context: Context) {
     private val ready = CompletableDeferred<Ipc?>()
     private var worklet: Worklet? = null
 
-    private val bridge = WorkletBridge(
-        ready = ready,
+    private val bridge = EngineBridge(
+        transport = IpcTransport(ready) { worklet },
         onEvent = ::dispatchEvent,
         onFatal = { _events.tryEmit(Event.Exited) },
         stoppedMessage = "The P2P worker stopped",
@@ -53,7 +53,7 @@ class Worker(context: Context) {
                 worklet.start("/worker.bundle", bundle)
                 this@Worker.worklet = worklet
                 ready.complete(ipc)
-                scope.launch { bridge.read(ipc) }
+                scope.launch { bridge.read() }
                 // Casting works before (and between) node starts once the worklet knows where pairings live.
                 scope.launch {
                     runCatching { bridge.call("init", JSONObject().put("castStorage", File(storeDir, "cast").path)) }
@@ -174,11 +174,11 @@ class Worker(context: Context) {
 
     /** Stops the worklet's I/O while the app is in the background. */
     fun suspend() {
-        scope.launch(lifecycle) { worklet?.suspend() }
+        scope.launch(lifecycle) { bridge.suspend() }
     }
 
     fun resume() {
-        scope.launch(lifecycle) { worklet?.resume() }
+        scope.launch(lifecycle) { bridge.resume() }
     }
 
     // Every call waits for init, so no cast call reaches the worklet before it knows its storage.

@@ -6,3 +6,8 @@
 -keepclasseswithmembernames class com.peartube.app.player.NativePlayer {
     native <methods>;
 }
+
+# libpeartube_jni.so binds its functions to these names.
+-keepclasseswithmembernames class com.peartube.shared.PearTubeNative {
+    native <methods>;
+}

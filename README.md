@@ -429,7 +429,8 @@ The released clients are a Kotlin app for Android (`android/`) and a GPUI app fo
 runs `src/index.js` in a Bare worklet through `bare-kit` and plays through the Rust player in
 [peartube-media](https://github.com/ayooooo123/peartube-media): hardware decoders (MediaCodec,
 VideoToolbox) where supported, software otherwise, drawn into a native view under overlay
-controls.
+controls. Android builds default to that JS engine; `-Ppeartube.engine=rust` builds one against
+the prebuilt, pinned peartube-native engine in `native.lock` instead.
 
 Apps connect to peers directly rather than routing everything through a relay: they follow
 catalogs, open `peartube://` links, cast, fetch the pieces playback needs, and seed cached
@@ -521,6 +522,8 @@ Builds:
 sh worklet/bare-kit.sh           # once: bare-kit on QuickJS, plus V8 for the TV receiver (Android if the NDK exists, macOS on a Mac)
 sh android/release.sh            # signed arm64 phone APK
 sh android/release-tv.sh         # signed arm64 TV receiver APK
+cd android && ./gradlew :tv:assembleDebug -Ppeartube.engine=rust   # TV receiver on the pinned peartube-native engine
+python3 sync-native.py check     # contract files changed since native.lock's jsRef (fails for a rust-default platform)
 npm run app                      # macOS: builds and opens PearTube.app
 sh desktop/bundle.sh --zip       # macOS: release zip
 sh desktop/bundle.sh --receiver --zip

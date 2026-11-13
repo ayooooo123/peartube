@@ -1,20 +1,20 @@
 {
-  "release": "unpinned",
-  "commit": "",
-  "jsRef": "",
+  "release": "ffi-f825f52a8",
+  "commit": "f825f52a881cfad341fb334d61105fc5cf7e8e4b",
+  "jsRef": "8286e22f676a605ca27adae79355225efc0b6b77",
   "abiVersion": 1,
   "assets": {
     "android-arm64": {
       "file": "peartube_native_ffi-android-arm64.so",
-      "sha256": ""
+      "sha256": "0e050330ce4d0a2340601209dd65a93b0f451ad571e90b895053e0070552e53d"
     },
     "darwin-arm64": {
       "file": "peartube_native_ffi-darwin-arm64.dylib",
-      "sha256": ""
+      "sha256": "216dba22e44bc8242ec5dc070bf1b31fe8e66197c2809b54eb91639ebc0fe52c"
     },
     "header": {
       "file": "peartube_native.h",
-      "sha256": ""
+      "sha256": "8dad38d102c6723f6a7f1cdf6f944030943b04ba903eeed1b87e33bfd3050063"
     }
   },
   "engine": {

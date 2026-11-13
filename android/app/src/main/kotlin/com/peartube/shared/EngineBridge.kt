@@ -1,5 +1,6 @@
 package com.peartube.shared
 
+import android.util.Log
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import org.json.JSONObject
@@ -98,6 +99,12 @@ class EngineBridge(
             return
         }
         val event = msg.optString("event")
-        if (event.isNotEmpty()) onEvent(event, msg)
+        if (event.isNotEmpty()) {
+            try {
+                onEvent(event, msg)
+            } catch (e: Exception) {
+                Log.e("PearTube", "the $event handler failed", e)
+            }
+        }
     }
 }

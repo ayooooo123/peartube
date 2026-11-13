@@ -262,6 +262,8 @@ androidComponents {
                 ndk.set(androidComponents.sdkComponents.ndkDirectory)
                 libsDir.set(layout.buildDirectory.dir("native/${variant.name}"))
                 fetchDir.set(layout.buildDirectory.dir("native-fetch/${variant.name}"))
+                // A local checkout can change without the path changing: let its own cargo decide, every build.
+                outputs.upToDateWhen { nativeLocal == null }
             }
             variant.sources.jniLibs?.addGeneratedSourceDirectory(native, TvNativeTask::libsDir)
         }

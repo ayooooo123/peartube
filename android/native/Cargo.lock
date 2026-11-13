@@ -22,7 +22,7 @@ dependencies = [
 [[package]]
 name = "audio-trim"
 version = "0.4.1"
-source = "git+https://github.com/ayooooo123/peartube-media?rev=253af8911c0330f8465ae6c4a4dc1500ea70f59d#253af8911c0330f8465ae6c4a4dc1500ea70f59d"
+source = "git+https://github.com/ayooooo123/peartube-media?rev=1e0d7464bbc7027242580388092a5e65030d2e18#1e0d7464bbc7027242580388092a5e65030d2e18"
 dependencies = [
  "oxideav-core",
 ]
@@ -113,7 +113,7 @@ dependencies = [
 [[package]]
 name = "codec-als"
 version = "0.4.1"
-source = "git+https://github.com/ayooooo123/peartube-media?rev=253af8911c0330f8465ae6c4a4dc1500ea70f59d#253af8911c0330f8465ae6c4a4dc1500ea70f59d"
+source = "git+https://github.com/ayooooo123/peartube-media?rev=1e0d7464bbc7027242580388092a5e65030d2e18#1e0d7464bbc7027242580388092a5e65030d2e18"
 dependencies = [
  "oxideav-core",
 ]
@@ -121,7 +121,7 @@ dependencies = [
 [[package]]
 name = "codec-ape"
 version = "0.4.1"
-source = "git+https://github.com/ayooooo123/peartube-media?rev=253af8911c0330f8465ae6c4a4dc1500ea70f59d#253af8911c0330f8465ae6c4a4dc1500ea70f59d"
+source = "git+https://github.com/ayooooo123/peartube-media?rev=1e0d7464bbc7027242580388092a5e65030d2e18#1e0d7464bbc7027242580388092a5e65030d2e18"
 dependencies = [
  "oxideav-core",
 ]
@@ -129,7 +129,7 @@ dependencies = [
 [[package]]
 name = "codec-apple-audio"
 version = "0.1.0"
-source = "git+https://github.com/ayooooo123/peartube-media?rev=253af8911c0330f8465ae6c4a4dc1500ea70f59d#253af8911c0330f8465ae6c4a4dc1500ea70f59d"
+source = "git+https://github.com/ayooooo123/peartube-media?rev=1e0d7464bbc7027242580388092a5e65030d2e18#1e0d7464bbc7027242580388092a5e65030d2e18"
 dependencies = [
  "oxideav-core",
 ]
@@ -137,7 +137,7 @@ dependencies = [
 [[package]]
 name = "codec-atrac"
 version = "0.4.1"
-source = "git+https://github.com/ayooooo123/peartube-media?rev=253af8911c0330f8465ae6c4a4dc1500ea70f59d#253af8911c0330f8465ae6c4a4dc1500ea70f59d"
+source = "git+https://github.com/ayooooo123/peartube-media?rev=1e0d7464bbc7027242580388092a5e65030d2e18#1e0d7464bbc7027242580388092a5e65030d2e18"
 dependencies = [
  "oxideav-core",
 ]
@@ -145,7 +145,7 @@ dependencies = [
 [[package]]
 name = "codec-dca"
 version = "0.1.0"
-source = "git+https://github.com/ayooooo123/peartube-media?rev=253af8911c0330f8465ae6c4a4dc1500ea70f59d#253af8911c0330f8465ae6c4a4dc1500ea70f59d"
+source = "git+https://github.com/ayooooo123/peartube-media?rev=1e0d7464bbc7027242580388092a5e65030d2e18#1e0d7464bbc7027242580388092a5e65030d2e18"
 dependencies = [
  "demux-seek-core",
  "oxideav-core",
@@ -154,7 +154,7 @@ dependencies = [
 [[package]]
 name = "codec-dv"
 version = "0.4.1"
-source = "git+https://github.com/ayooooo123/peartube-media?rev=253af8911c0330f8465ae6c4a4dc1500ea70f59d#253af8911c0330f8465ae6c4a4dc1500ea70f59d"
+source = "git+https://github.com/ayooooo123/peartube-media?rev=1e0d7464bbc7027242580388092a5e65030d2e18#1e0d7464bbc7027242580388092a5e65030d2e18"
 dependencies = [
  "oxideav-core",
 ]
@@ -162,7 +162,7 @@ dependencies = [
 [[package]]
 name = "codec-gsm"
 version = "0.4.1"
-source = "git+https://github.com/ayooooo123/peartube-media?rev=253af8911c0330f8465ae6c4a4dc1500ea70f59d#253af8911c0330f8465ae6c4a4dc1500ea70f59d"
+source = "git+https://github.com/ayooooo123/peartube-media?rev=1e0d7464bbc7027242580388092a5e65030d2e18#1e0d7464bbc7027242580388092a5e65030d2e18"
 dependencies = [
  "oxideav-core",
 ]
@@ -170,7 +170,7 @@ dependencies = [
 [[package]]
 name = "codec-lpcm"
 version = "0.4.1"
-source = "git+https://github.com/ayooooo123/peartube-media?rev=253af8911c0330f8465ae6c4a4dc1500ea70f59d#253af8911c0330f8465ae6c4a4dc1500ea70f59d"
+source = "git+https://github.com/ayooooo123/peartube-media?rev=1e0d7464bbc7027242580388092a5e65030d2e18#1e0d7464bbc7027242580388092a5e65030d2e18"
 dependencies = [
  "oxideav-core",
 ]
@@ -178,7 +178,7 @@ dependencies = [
 [[package]]
 name = "codec-midi"
 version = "0.1.0"
-source = "git+https://github.com/ayooooo123/peartube-media?rev=253af8911c0330f8465ae6c4a4dc1500ea70f59d#253af8911c0330f8465ae6c4a4dc1500ea70f59d"
+source = "git+https://github.com/ayooooo123/peartube-media?rev=1e0d7464bbc7027242580388092a5e65030d2e18#1e0d7464bbc7027242580388092a5e65030d2e18"
 dependencies = [
  "oxideav-core",
 ]
@@ -186,7 +186,7 @@ dependencies = [
 [[package]]
 name = "codec-mlp"
 version = "0.1.0"
-source = "git+https://github.com/ayooooo123/peartube-media?rev=253af8911c0330f8465ae6c4a4dc1500ea70f59d#253af8911c0330f8465ae6c4a4dc1500ea70f59d"
+source = "git+https://github.com/ayooooo123/peartube-media?rev=1e0d7464bbc7027242580388092a5e65030d2e18#1e0d7464bbc7027242580388092a5e65030d2e18"
 dependencies = [
  "demux-seek-core",
  "oxideav-core",
@@ -195,7 +195,7 @@ dependencies = [
 [[package]]
 name = "codec-mp1"
 version = "0.4.1"
-source = "git+https://github.com/ayooooo123/peartube-media?rev=253af8911c0330f8465ae6c4a4dc1500ea70f59d#253af8911c0330f8465ae6c4a4dc1500ea70f59d"
+source = "git+https://github.com/ayooooo123/peartube-media?rev=1e0d7464bbc7027242580388092a5e65030d2e18#1e0d7464bbc7027242580388092a5e65030d2e18"
 dependencies = [
  "mpegaudiodsp",
  "oxideav-core",
@@ -204,7 +204,7 @@ dependencies = [
 [[package]]
 name = "codec-mp2"
 version = "0.4.1"
-source = "git+https://github.com/ayooooo123/peartube-media?rev=253af8911c0330f8465ae6c4a4dc1500ea70f59d#253af8911c0330f8465ae6c4a4dc1500ea70f59d"
+source = "git+https://github.com/ayooooo123/peartube-media?rev=1e0d7464bbc7027242580388092a5e65030d2e18#1e0d7464bbc7027242580388092a5e65030d2e18"
 dependencies = [
  "mpegaudiodsp",
  "oxideav-core",
@@ -214,7 +214,7 @@ dependencies = [
 [[package]]
 name = "codec-musepack"
 version = "0.4.1"
-source = "git+https://github.com/ayooooo123/peartube-media?rev=253af8911c0330f8465ae6c4a4dc1500ea70f59d#253af8911c0330f8465ae6c4a4dc1500ea70f59d"
+source = "git+https://github.com/ayooooo123/peartube-media?rev=1e0d7464bbc7027242580388092a5e65030d2e18#1e0d7464bbc7027242580388092a5e65030d2e18"
 dependencies = [
  "mpegaudiodsp",
  "oxideav-core",
@@ -223,7 +223,7 @@ dependencies = [
 [[package]]
 name = "codec-ra"
 version = "0.1.0"
-source = "git+https://github.com/ayooooo123/peartube-media?rev=253af8911c0330f8465ae6c4a4dc1500ea70f59d#253af8911c0330f8465ae6c4a4dc1500ea70f59d"
+source = "git+https://github.com/ayooooo123/peartube-media?rev=1e0d7464bbc7027242580388092a5e65030d2e18#1e0d7464bbc7027242580388092a5e65030d2e18"
 dependencies = [
  "oxideav-core",
 ]
@@ -231,7 +231,7 @@ dependencies = [
 [[package]]
 name = "codec-rv"
 version = "0.4.1"
-source = "git+https://github.com/ayooooo123/peartube-media?rev=253af8911c0330f8465ae6c4a4dc1500ea70f59d#253af8911c0330f8465ae6c4a4dc1500ea70f59d"
+source = "git+https://github.com/ayooooo123/peartube-media?rev=1e0d7464bbc7027242580388092a5e65030d2e18#1e0d7464bbc7027242580388092a5e65030d2e18"
 dependencies = [
  "oxideav-core",
 ]
@@ -239,7 +239,7 @@ dependencies = [
 [[package]]
 name = "codec-shorten"
 version = "0.4.1"
-source = "git+https://github.com/ayooooo123/peartube-media?rev=253af8911c0330f8465ae6c4a4dc1500ea70f59d#253af8911c0330f8465ae6c4a4dc1500ea70f59d"
+source = "git+https://github.com/ayooooo123/peartube-media?rev=1e0d7464bbc7027242580388092a5e65030d2e18#1e0d7464bbc7027242580388092a5e65030d2e18"
 dependencies = [
  "oxideav-core",
 ]
@@ -247,7 +247,7 @@ dependencies = [
 [[package]]
 name = "codec-speech"
 version = "0.4.1"
-source = "git+https://github.com/ayooooo123/peartube-media?rev=253af8911c0330f8465ae6c4a4dc1500ea70f59d#253af8911c0330f8465ae6c4a4dc1500ea70f59d"
+source = "git+https://github.com/ayooooo123/peartube-media?rev=1e0d7464bbc7027242580388092a5e65030d2e18#1e0d7464bbc7027242580388092a5e65030d2e18"
 dependencies = [
  "oxideav-core",
 ]
@@ -255,7 +255,7 @@ dependencies = [
 [[package]]
 name = "codec-speex"
 version = "0.4.1"
-source = "git+https://github.com/ayooooo123/peartube-media?rev=253af8911c0330f8465ae6c4a4dc1500ea70f59d#253af8911c0330f8465ae6c4a4dc1500ea70f59d"
+source = "git+https://github.com/ayooooo123/peartube-media?rev=1e0d7464bbc7027242580388092a5e65030d2e18#1e0d7464bbc7027242580388092a5e65030d2e18"
 dependencies = [
  "oxideav-core",
 ]
@@ -263,7 +263,7 @@ dependencies = [
 [[package]]
 name = "codec-svq1"
 version = "0.1.0"
-source = "git+https://github.com/ayooooo123/peartube-media?rev=253af8911c0330f8465ae6c4a4dc1500ea70f59d#253af8911c0330f8465ae6c4a4dc1500ea70f59d"
+source = "git+https://github.com/ayooooo123/peartube-media?rev=1e0d7464bbc7027242580388092a5e65030d2e18#1e0d7464bbc7027242580388092a5e65030d2e18"
 dependencies = [
  "oxideav-core",
 ]
@@ -271,7 +271,7 @@ dependencies = [
 [[package]]
 name = "codec-svq3"
 version = "0.1.0"
-source = "git+https://github.com/ayooooo123/peartube-media?rev=253af8911c0330f8465ae6c4a4dc1500ea70f59d#253af8911c0330f8465ae6c4a4dc1500ea70f59d"
+source = "git+https://github.com/ayooooo123/peartube-media?rev=1e0d7464bbc7027242580388092a5e65030d2e18#1e0d7464bbc7027242580388092a5e65030d2e18"
 dependencies = [
  "compcol",
  "oxideav-core",
@@ -280,7 +280,7 @@ dependencies = [
 [[package]]
 name = "codec-tak"
 version = "0.4.1"
-source = "git+https://github.com/ayooooo123/peartube-media?rev=253af8911c0330f8465ae6c4a4dc1500ea70f59d#253af8911c0330f8465ae6c4a4dc1500ea70f59d"
+source = "git+https://github.com/ayooooo123/peartube-media?rev=1e0d7464bbc7027242580388092a5e65030d2e18#1e0d7464bbc7027242580388092a5e65030d2e18"
 dependencies = [
  "oxideav-core",
 ]
@@ -288,7 +288,7 @@ dependencies = [
 [[package]]
 name = "codec-tracker"
 version = "0.4.1"
-source = "git+https://github.com/ayooooo123/peartube-media?rev=253af8911c0330f8465ae6c4a4dc1500ea70f59d#253af8911c0330f8465ae6c4a4dc1500ea70f59d"
+source = "git+https://github.com/ayooooo123/peartube-media?rev=1e0d7464bbc7027242580388092a5e65030d2e18#1e0d7464bbc7027242580388092a5e65030d2e18"
 dependencies = [
  "oxideav-core",
 ]
@@ -296,7 +296,7 @@ dependencies = [
 [[package]]
 name = "codec-tta"
 version = "0.4.1"
-source = "git+https://github.com/ayooooo123/peartube-media?rev=253af8911c0330f8465ae6c4a4dc1500ea70f59d#253af8911c0330f8465ae6c4a4dc1500ea70f59d"
+source = "git+https://github.com/ayooooo123/peartube-media?rev=1e0d7464bbc7027242580388092a5e65030d2e18#1e0d7464bbc7027242580388092a5e65030d2e18"
 dependencies = [
  "oxideav-core",
 ]
@@ -304,7 +304,7 @@ dependencies = [
 [[package]]
 name = "codec-vp3"
 version = "0.4.1"
-source = "git+https://github.com/ayooooo123/peartube-media?rev=253af8911c0330f8465ae6c4a4dc1500ea70f59d#253af8911c0330f8465ae6c4a4dc1500ea70f59d"
+source = "git+https://github.com/ayooooo123/peartube-media?rev=1e0d7464bbc7027242580388092a5e65030d2e18#1e0d7464bbc7027242580388092a5e65030d2e18"
 dependencies = [
  "oxideav-core",
 ]
@@ -312,7 +312,7 @@ dependencies = [
 [[package]]
 name = "codec-vp56"
 version = "0.4.1"
-source = "git+https://github.com/ayooooo123/peartube-media?rev=253af8911c0330f8465ae6c4a4dc1500ea70f59d#253af8911c0330f8465ae6c4a4dc1500ea70f59d"
+source = "git+https://github.com/ayooooo123/peartube-media?rev=1e0d7464bbc7027242580388092a5e65030d2e18#1e0d7464bbc7027242580388092a5e65030d2e18"
 dependencies = [
  "oxideav-core",
 ]
@@ -320,7 +320,7 @@ dependencies = [
 [[package]]
 name = "codec-wavpack"
 version = "0.4.1"
-source = "git+https://github.com/ayooooo123/peartube-media?rev=253af8911c0330f8465ae6c4a4dc1500ea70f59d#253af8911c0330f8465ae6c4a4dc1500ea70f59d"
+source = "git+https://github.com/ayooooo123/peartube-media?rev=1e0d7464bbc7027242580388092a5e65030d2e18#1e0d7464bbc7027242580388092a5e65030d2e18"
 dependencies = [
  "demux-seek-core",
  "oxideav-core",
@@ -329,7 +329,7 @@ dependencies = [
 [[package]]
 name = "codec-wma"
 version = "0.4.1"
-source = "git+https://github.com/ayooooo123/peartube-media?rev=253af8911c0330f8465ae6c4a4dc1500ea70f59d#253af8911c0330f8465ae6c4a4dc1500ea70f59d"
+source = "git+https://github.com/ayooooo123/peartube-media?rev=1e0d7464bbc7027242580388092a5e65030d2e18#1e0d7464bbc7027242580388092a5e65030d2e18"
 dependencies = [
  "oxideav-core",
 ]
@@ -337,7 +337,7 @@ dependencies = [
 [[package]]
 name = "codec-wmv"
 version = "0.4.1"
-source = "git+https://github.com/ayooooo123/peartube-media?rev=253af8911c0330f8465ae6c4a4dc1500ea70f59d#253af8911c0330f8465ae6c4a4dc1500ea70f59d"
+source = "git+https://github.com/ayooooo123/peartube-media?rev=1e0d7464bbc7027242580388092a5e65030d2e18#1e0d7464bbc7027242580388092a5e65030d2e18"
 dependencies = [
  "demux-seek-core",
  "oxideav-core",
@@ -346,7 +346,7 @@ dependencies = [
 [[package]]
 name = "codecs"
 version = "0.4.1"
-source = "git+https://github.com/ayooooo123/peartube-media?rev=253af8911c0330f8465ae6c4a4dc1500ea70f59d#253af8911c0330f8465ae6c4a4dc1500ea70f59d"
+source = "git+https://github.com/ayooooo123/peartube-media?rev=1e0d7464bbc7027242580388092a5e65030d2e18#1e0d7464bbc7027242580388092a5e65030d2e18"
 dependencies = [
  "codec-als",
  "codec-ape",
@@ -383,15 +383,12 @@ dependencies = [
  "oxideav-aac",
  "oxideav-ac3",
  "oxideav-adpcm",
- "oxideav-ass",
  "oxideav-av1",
  "oxideav-avi",
  "oxideav-basic",
  "oxideav-cinepak",
- "oxideav-cook",
  "oxideav-core",
  "oxideav-dirac",
- "oxideav-dts",
  "oxideav-dvd",
  "oxideav-flac",
  "oxideav-flv",
@@ -410,20 +407,15 @@ dependencies = [
  "oxideav-mpeg12video",
  "oxideav-mpeg4video",
  "oxideav-mpegts",
- "oxideav-msmpeg4",
  "oxideav-ogg",
  "oxideav-opus",
- "oxideav-speex",
- "oxideav-sub-image",
+ "oxideav-pixfmt",
  "oxideav-subtitle",
- "oxideav-svq",
  "oxideav-theora",
  "oxideav-vc2",
  "oxideav-vorbis",
- "oxideav-vp6",
  "oxideav-vp8",
  "oxideav-vp9",
- "oxideav-wma",
  "subs-bitmap",
  "subs-cc",
  "subs-text",
@@ -485,7 +477,7 @@ dependencies = [
 [[package]]
 name = "demux-asf"
 version = "0.4.1"
-source = "git+https://github.com/ayooooo123/peartube-media?rev=253af8911c0330f8465ae6c4a4dc1500ea70f59d#253af8911c0330f8465ae6c4a4dc1500ea70f59d"
+source = "git+https://github.com/ayooooo123/peartube-media?rev=1e0d7464bbc7027242580388092a5e65030d2e18#1e0d7464bbc7027242580388092a5e65030d2e18"
 dependencies = [
  "demux-seek-core",
  "oxideav-core",
@@ -494,7 +486,7 @@ dependencies = [
 [[package]]
 name = "demux-misc"
 version = "0.4.1"
-source = "git+https://github.com/ayooooo123/peartube-media?rev=253af8911c0330f8465ae6c4a4dc1500ea70f59d#253af8911c0330f8465ae6c4a4dc1500ea70f59d"
+source = "git+https://github.com/ayooooo123/peartube-media?rev=1e0d7464bbc7027242580388092a5e65030d2e18#1e0d7464bbc7027242580388092a5e65030d2e18"
 dependencies = [
  "demux-seek-core",
  "oxideav-core",
@@ -503,7 +495,7 @@ dependencies = [
 [[package]]
 name = "demux-mxf"
 version = "0.4.1"
-source = "git+https://github.com/ayooooo123/peartube-media?rev=253af8911c0330f8465ae6c4a4dc1500ea70f59d#253af8911c0330f8465ae6c4a4dc1500ea70f59d"
+source = "git+https://github.com/ayooooo123/peartube-media?rev=1e0d7464bbc7027242580388092a5e65030d2e18#1e0d7464bbc7027242580388092a5e65030d2e18"
 dependencies = [
  "oxideav-core",
 ]
@@ -511,7 +503,7 @@ dependencies = [
 [[package]]
 name = "demux-rm"
 version = "0.1.0"
-source = "git+https://github.com/ayooooo123/peartube-media?rev=253af8911c0330f8465ae6c4a4dc1500ea70f59d#253af8911c0330f8465ae6c4a4dc1500ea70f59d"
+source = "git+https://github.com/ayooooo123/peartube-media?rev=1e0d7464bbc7027242580388092a5e65030d2e18#1e0d7464bbc7027242580388092a5e65030d2e18"
 dependencies = [
  "demux-seek-core",
  "oxideav-core",
@@ -520,7 +512,7 @@ dependencies = [
 [[package]]
 name = "demux-seek-core"
 version = "0.4.1"
-source = "git+https://github.com/ayooooo123/peartube-media?rev=253af8911c0330f8465ae6c4a4dc1500ea70f59d#253af8911c0330f8465ae6c4a4dc1500ea70f59d"
+source = "git+https://github.com/ayooooo123/peartube-media?rev=1e0d7464bbc7027242580388092a5e65030d2e18#1e0d7464bbc7027242580388092a5e65030d2e18"
 dependencies = [
  "oxideav-core",
 ]
@@ -600,12 +592,6 @@ dependencies = [
  "block-padding",
  "generic-array",
 ]
-
-[[package]]
-name = "intl"
-version = "0.4.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f5bfae726bb3f672d4f4b1f29cee6c74898a35230a4c794d8292c21129107f21"
 
 [[package]]
 name = "itoa"
@@ -717,7 +703,7 @@ dependencies = [
 [[package]]
 name = "mpegaudiodsp"
 version = "0.4.1"
-source = "git+https://github.com/ayooooo123/peartube-media?rev=253af8911c0330f8465ae6c4a4dc1500ea70f59d#253af8911c0330f8465ae6c4a4dc1500ea70f59d"
+source = "git+https://github.com/ayooooo123/peartube-media?rev=1e0d7464bbc7027242580388092a5e65030d2e18#1e0d7464bbc7027242580388092a5e65030d2e18"
 
 [[package]]
 name = "ndk"
@@ -1095,7 +1081,7 @@ checksum = "9f7c3e4beb33f85d45ae3e3a1792185706c8e16d043238c593331cc7cd313b50"
 [[package]]
 name = "oxideav-aac"
 version = "0.1.7"
-source = "git+https://github.com/ayooooo123/oxideav-aac?rev=32be901911fcb64a0dd4f9ec9ceb72a980a9dedd#32be901911fcb64a0dd4f9ec9ceb72a980a9dedd"
+source = "git+https://github.com/ayooooo123/oxideav-aac?rev=9aba2c4b6cf0db235c3c411aec192aa2c20b0c42#9aba2c4b6cf0db235c3c411aec192aa2c20b0c42"
 dependencies = [
  "oxideav-core",
 ]
@@ -1103,7 +1089,7 @@ dependencies = [
 [[package]]
 name = "oxideav-ac3"
 version = "0.0.11"
-source = "git+https://github.com/ayooooo123/oxideav-ac3?rev=65384d52a21eddd59ab72409278f497f045f9a7f#65384d52a21eddd59ab72409278f497f045f9a7f"
+source = "git+https://github.com/ayooooo123/oxideav-ac3?rev=c8a5572a971c39ffb107d23b077883051a3dd3e0#c8a5572a971c39ffb107d23b077883051a3dd3e0"
 dependencies = [
  "oxideav-core",
 ]
@@ -1117,21 +1103,9 @@ dependencies = [
 ]
 
 [[package]]
-name = "oxideav-ass"
-version = "0.0.11"
-source = "git+https://github.com/OxideAV/oxideav-ass?rev=368f4df2dd383cc66fb57cf859ad6ff80719bc0e#368f4df2dd383cc66fb57cf859ad6ff80719bc0e"
-dependencies = [
- "oxideav-core",
- "oxideav-image-filter",
- "oxideav-raster",
- "oxideav-scribe",
- "oxideav-subtitle",
-]
-
-[[package]]
 name = "oxideav-av1"
 version = "0.1.20"
-source = "git+https://github.com/ayooooo123/oxideav-av1?rev=70aa67a7656e1f4fc082bedd78363f9cfd7dbdee#70aa67a7656e1f4fc082bedd78363f9cfd7dbdee"
+source = "git+https://github.com/ayooooo123/oxideav-av1?rev=0e3169676abe5ad6730c7c313162c860c0dfe2f2#0e3169676abe5ad6730c7c313162c860c0dfe2f2"
 dependencies = [
  "oxideav-core",
 ]
@@ -1161,17 +1135,9 @@ dependencies = [
 ]
 
 [[package]]
-name = "oxideav-cook"
-version = "0.0.2"
-source = "git+https://github.com/OxideAV/oxideav-cook?rev=f8584e427c6f87de24e2f2de124e0242824f7006#f8584e427c6f87de24e2f2de124e0242824f7006"
-dependencies = [
- "oxideav-core",
-]
-
-[[package]]
 name = "oxideav-core"
 version = "0.1.42"
-source = "git+https://github.com/ayooooo123/oxideav-core?rev=979d7e32865f1cbd028171637922423da595d15e#979d7e32865f1cbd028171637922423da595d15e"
+source = "git+https://github.com/ayooooo123/oxideav-core?rev=a0c93821d9a50703395e4639813f58b9bc3dd450#a0c93821d9a50703395e4639813f58b9bc3dd450"
 dependencies = [
  "bytemuck",
  "serde_json",
@@ -1182,14 +1148,6 @@ dependencies = [
 name = "oxideav-dirac"
 version = "0.0.9"
 source = "git+https://github.com/ayooooo123/oxideav-dirac?rev=3057407074a0fa80c3d4c02aea7f37cc55bc091c#3057407074a0fa80c3d4c02aea7f37cc55bc091c"
-dependencies = [
- "oxideav-core",
-]
-
-[[package]]
-name = "oxideav-dts"
-version = "0.0.1"
-source = "git+https://github.com/OxideAV/oxideav-dts?rev=9a7c128366aa4914331825e3b5d40a3d3304c090#9a7c128366aa4914331825e3b5d40a3d3304c090"
 dependencies = [
  "oxideav-core",
 ]
@@ -1247,7 +1205,7 @@ dependencies = [
 [[package]]
 name = "oxideav-h264"
 version = "0.1.10"
-source = "git+https://github.com/ayooooo123/oxideav-h264?rev=8df6e11df901ee55e40f656ad689eda2533660ab#8df6e11df901ee55e40f656ad689eda2533660ab"
+source = "git+https://github.com/ayooooo123/oxideav-h264?rev=389f95fd2f77e5383eaa9fc60503bef46106eb3a#389f95fd2f77e5383eaa9fc60503bef46106eb3a"
 dependencies = [
  "oxideav-core",
  "thiserror 2.0.21",
@@ -1256,7 +1214,7 @@ dependencies = [
 [[package]]
 name = "oxideav-h265"
 version = "0.0.14"
-source = "git+https://github.com/ayooooo123/oxideav-h265?rev=4d3e6ec0c6d73bd23a98f43326c4cc0bb652f9cf#4d3e6ec0c6d73bd23a98f43326c4cc0bb652f9cf"
+source = "git+https://github.com/ayooooo123/oxideav-h265?rev=05a117e72f0421c8df16c1bad51e85ee02f8f8fd#05a117e72f0421c8df16c1bad51e85ee02f8f8fd"
 dependencies = [
  "oxideav-core",
 ]
@@ -1289,15 +1247,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "oxideav-image-filter"
-version = "0.1.2"
-source = "git+https://github.com/OxideAV/oxideav-image-filter?rev=601f4fe832e31fdd9dc3f2bf171389cc09f0dd68#601f4fe832e31fdd9dc3f2bf171389cc09f0dd68"
-dependencies = [
- "oxideav-core",
- "serde_json",
-]
-
-[[package]]
 name = "oxideav-indeo"
 version = "0.0.1"
 source = "git+https://github.com/ayooooo123/oxideav-indeo?rev=34d5d899b74bd4add72e0572813458bd9fa9a853#34d5d899b74bd4add72e0572813458bd9fa9a853"
@@ -1316,7 +1265,7 @@ dependencies = [
 [[package]]
 name = "oxideav-mkv"
 version = "0.0.11"
-source = "git+https://github.com/ayooooo123/oxideav-mkv?rev=a516f258ceef276b528b4c3dde7fff01e6930a30#a516f258ceef276b528b4c3dde7fff01e6930a30"
+source = "git+https://github.com/ayooooo123/oxideav-mkv?rev=0b366a47ee7d72242d9cc078ad6d3ba0b684613d#0b366a47ee7d72242d9cc078ad6d3ba0b684613d"
 dependencies = [
  "compcol",
  "oxideav-core",
@@ -1342,7 +1291,7 @@ dependencies = [
 [[package]]
 name = "oxideav-mp3"
 version = "0.1.3"
-source = "git+https://github.com/ayooooo123/oxideav-mp3?rev=9f353eabd1d7a7980c1fc8b5ef9fa1b5515f5bf4#9f353eabd1d7a7980c1fc8b5ef9fa1b5515f5bf4"
+source = "git+https://github.com/ayooooo123/oxideav-mp3?rev=f5afe1450cd623a0ccfab5780374a09138c54d74#f5afe1450cd623a0ccfab5780374a09138c54d74"
 dependencies = [
  "oxideav-core",
  "oxideav-id3",
@@ -1362,7 +1311,7 @@ dependencies = [
 [[package]]
 name = "oxideav-mpeg12video"
 version = "0.0.13"
-source = "git+https://github.com/ayooooo123/oxideav-mpeg12video?rev=02de487a4b604640633b142d21fb6c5308b27b04#02de487a4b604640633b142d21fb6c5308b27b04"
+source = "git+https://github.com/ayooooo123/oxideav-mpeg12video?rev=7498e661b4b1c97fadcc140d3aae1e13caa65185#7498e661b4b1c97fadcc140d3aae1e13caa65185"
 dependencies = [
  "oxideav-core",
 ]
@@ -1370,7 +1319,7 @@ dependencies = [
 [[package]]
 name = "oxideav-mpeg4video"
 version = "0.1.8"
-source = "git+https://github.com/ayooooo123/oxideav-mpeg4video?rev=666e9915fa31dfb79dd841a4f6b28977e1e5cf71#666e9915fa31dfb79dd841a4f6b28977e1e5cf71"
+source = "git+https://github.com/ayooooo123/oxideav-mpeg4video?rev=4f4d348bfdfd5687299b30b3b6dba91628ca98e4#4f4d348bfdfd5687299b30b3b6dba91628ca98e4"
 dependencies = [
  "oxideav-core",
 ]
@@ -1382,14 +1331,6 @@ source = "git+https://github.com/ayooooo123/oxideav-mpegts?rev=cc1142280d1a3da64
 dependencies = [
  "oxideav-core",
  "thiserror 2.0.21",
-]
-
-[[package]]
-name = "oxideav-msmpeg4"
-version = "0.0.10"
-source = "git+https://github.com/ayooooo123/oxideav-msmpeg4?rev=def8962c09aa5d339dada2d2308c61186a67e074#def8962c09aa5d339dada2d2308c61186a67e074"
-dependencies = [
- "oxideav-core",
 ]
 
 [[package]]
@@ -1409,49 +1350,11 @@ dependencies = [
 ]
 
 [[package]]
-name = "oxideav-otf"
-version = "0.1.5"
-source = "git+https://github.com/OxideAV/oxideav-otf?rev=554299a740ce7236bf2c5e751bb7df5befd52dd0#554299a740ce7236bf2c5e751bb7df5befd52dd0"
-dependencies = [
- "oxideav-core",
-]
-
-[[package]]
 name = "oxideav-pixfmt"
 version = "0.1.9"
-source = "git+https://github.com/ayooooo123/oxideav-pixfmt?rev=23eacde8aec70c111b6fe99ae9f922a8922a1f12#23eacde8aec70c111b6fe99ae9f922a8922a1f12"
+source = "git+https://github.com/ayooooo123/oxideav-pixfmt?rev=a14f1ff2f0fae0ce0eeae42d4b34e80ec01bf921#a14f1ff2f0fae0ce0eeae42d4b34e80ec01bf921"
 dependencies = [
  "oxideav-core",
-]
-
-[[package]]
-name = "oxideav-png"
-version = "0.1.11"
-source = "git+https://github.com/OxideAV/oxideav-png?rev=39bdba2cfd11545056934f12482afd56be3b7628#39bdba2cfd11545056934f12482afd56be3b7628"
-dependencies = [
- "compcol",
- "oxideav-core",
-]
-
-[[package]]
-name = "oxideav-raster"
-version = "0.1.3"
-source = "git+https://github.com/OxideAV/oxideav-raster?rev=e601465cb38e4ac77b384265bf51d3e9b7e29d8e#e601465cb38e4ac77b384265bf51d3e9b7e29d8e"
-dependencies = [
- "oxideav-core",
- "oxideav-pixfmt",
-]
-
-[[package]]
-name = "oxideav-scribe"
-version = "0.1.10"
-source = "git+https://github.com/OxideAV/oxideav-scribe?rev=bc27a9820c2abca73cb04f5e9e1a2e989ca302aa#bc27a9820c2abca73cb04f5e9e1a2e989ca302aa"
-dependencies = [
- "intl",
- "oxideav-core",
- "oxideav-otf",
- "oxideav-png",
- "oxideav-ttf",
 ]
 
 [[package]]
@@ -1463,52 +1366,18 @@ dependencies = [
 ]
 
 [[package]]
-name = "oxideav-speex"
-version = "0.0.10"
-source = "git+https://github.com/OxideAV/oxideav-speex?rev=8886c67204b1464a5ed1bd32c29f5501dd3cae91#8886c67204b1464a5ed1bd32c29f5501dd3cae91"
-dependencies = [
- "oxideav-core",
-]
-
-[[package]]
-name = "oxideav-sub-image"
-version = "0.0.9"
-source = "git+https://github.com/OxideAV/oxideav-sub-image?rev=a6b5c5c2c4c495d6a5bdc2a4a7c93b58948b9085#a6b5c5c2c4c495d6a5bdc2a4a7c93b58948b9085"
-dependencies = [
- "oxideav-core",
-]
-
-[[package]]
 name = "oxideav-subtitle"
 version = "0.1.2"
-source = "git+https://github.com/ayooooo123/oxideav-subtitle?rev=405630a2886d91f6171052b8c112e77d10bb1b3a#405630a2886d91f6171052b8c112e77d10bb1b3a"
+source = "git+https://github.com/ayooooo123/oxideav-subtitle?rev=17a5728bb8712096f3d1503c3a7bf27f47fa9a1e#17a5728bb8712096f3d1503c3a7bf27f47fa9a1e"
 dependencies = [
  "oxideav-core",
  "oxideav-pixfmt",
- "oxideav-raster",
- "oxideav-scribe",
-]
-
-[[package]]
-name = "oxideav-svq"
-version = "0.0.3"
-source = "git+https://github.com/ayooooo123/oxideav-svq?rev=660bce1f0d49208e9e9e77225d0c8e89a98c26fc#660bce1f0d49208e9e9e77225d0c8e89a98c26fc"
-dependencies = [
- "oxideav-core",
 ]
 
 [[package]]
 name = "oxideav-theora"
 version = "0.0.12"
 source = "git+https://github.com/ayooooo123/oxideav-theora?rev=a7674665c76370f2a6bbc4e72af5f31256cae8b0#a7674665c76370f2a6bbc4e72af5f31256cae8b0"
-dependencies = [
- "oxideav-core",
-]
-
-[[package]]
-name = "oxideav-ttf"
-version = "0.1.8"
-source = "git+https://github.com/OxideAV/oxideav-ttf?rev=ecea11566de6c72439c0b3bbdef85926db892cc9#ecea11566de6c72439c0b3bbdef85926db892cc9"
 dependencies = [
  "oxideav-core",
 ]
@@ -1531,14 +1400,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "oxideav-vp6"
-version = "0.0.9"
-source = "git+https://github.com/ayooooo123/oxideav-vp6?rev=4a2ff51bc5e139b1833f3bf08dd1f167e6225c29#4a2ff51bc5e139b1833f3bf08dd1f167e6225c29"
-dependencies = [
- "oxideav-core",
-]
-
-[[package]]
 name = "oxideav-vp8"
 version = "0.2.7"
 source = "git+https://github.com/ayooooo123/oxideav-vp8?rev=5aad171851320a741981f3d331c1e3cfdb48c044#5aad171851320a741981f3d331c1e3cfdb48c044"
@@ -1549,15 +1410,7 @@ dependencies = [
 [[package]]
 name = "oxideav-vp9"
 version = "0.0.14"
-source = "git+https://github.com/ayooooo123/oxideav-vp9?rev=8be9d44359d4db4fc23ec4297b627ae4e3d436a5#8be9d44359d4db4fc23ec4297b627ae4e3d436a5"
-dependencies = [
- "oxideav-core",
-]
-
-[[package]]
-name = "oxideav-wma"
-version = "0.0.4"
-source = "git+https://github.com/OxideAV/oxideav-wma?rev=ab1eeb2acb51388d5da21e735723ac05bd7226fe#ab1eeb2acb51388d5da21e735723ac05bd7226fe"
+source = "git+https://github.com/ayooooo123/oxideav-vp9?rev=284c488a80a99f7ed1b8bd560245856e9d681598#284c488a80a99f7ed1b8bd560245856e9d681598"
 dependencies = [
  "oxideav-core",
 ]
@@ -1606,7 +1459,7 @@ checksum = "9b4f627cb1b25917193a259e49bdad08f671f8d9708acfd5fe0a8c1455d87220"
 [[package]]
 name = "player"
 version = "0.4.1"
-source = "git+https://github.com/ayooooo123/peartube-media?rev=253af8911c0330f8465ae6c4a4dc1500ea70f59d#253af8911c0330f8465ae6c4a4dc1500ea70f59d"
+source = "git+https://github.com/ayooooo123/peartube-media?rev=1e0d7464bbc7027242580388092a5e65030d2e18#1e0d7464bbc7027242580388092a5e65030d2e18"
 dependencies = [
  "audio-trim",
  "block2",
@@ -1789,7 +1642,7 @@ checksum = "f9395f0f0eee849a9b707b2f06bb92a6a422090e2123bb2ef8e87a0e61892a8e"
 [[package]]
 name = "subs-bitmap"
 version = "0.4.1"
-source = "git+https://github.com/ayooooo123/peartube-media?rev=253af8911c0330f8465ae6c4a4dc1500ea70f59d#253af8911c0330f8465ae6c4a4dc1500ea70f59d"
+source = "git+https://github.com/ayooooo123/peartube-media?rev=1e0d7464bbc7027242580388092a5e65030d2e18#1e0d7464bbc7027242580388092a5e65030d2e18"
 dependencies = [
  "oxideav-core",
 ]
@@ -1797,7 +1650,7 @@ dependencies = [
 [[package]]
 name = "subs-cc"
 version = "0.4.1"
-source = "git+https://github.com/ayooooo123/peartube-media?rev=253af8911c0330f8465ae6c4a4dc1500ea70f59d#253af8911c0330f8465ae6c4a4dc1500ea70f59d"
+source = "git+https://github.com/ayooooo123/peartube-media?rev=1e0d7464bbc7027242580388092a5e65030d2e18#1e0d7464bbc7027242580388092a5e65030d2e18"
 dependencies = [
  "oxideav-core",
 ]
@@ -1805,7 +1658,7 @@ dependencies = [
 [[package]]
 name = "subs-render"
 version = "0.4.1"
-source = "git+https://github.com/ayooooo123/peartube-media?rev=253af8911c0330f8465ae6c4a4dc1500ea70f59d#253af8911c0330f8465ae6c4a4dc1500ea70f59d"
+source = "git+https://github.com/ayooooo123/peartube-media?rev=1e0d7464bbc7027242580388092a5e65030d2e18#1e0d7464bbc7027242580388092a5e65030d2e18"
 dependencies = [
  "ab_glyph_rasterizer",
  "oxideav-subtitle",
@@ -1820,10 +1673,9 @@ dependencies = [
 [[package]]
 name = "subs-text"
 version = "0.4.1"
-source = "git+https://github.com/ayooooo123/peartube-media?rev=253af8911c0330f8465ae6c4a4dc1500ea70f59d#253af8911c0330f8465ae6c4a4dc1500ea70f59d"
+source = "git+https://github.com/ayooooo123/peartube-media?rev=1e0d7464bbc7027242580388092a5e65030d2e18#1e0d7464bbc7027242580388092a5e65030d2e18"
 dependencies = [
  "oxideav-core",
- "oxideav-subtitle",
  "roxmltree",
 ]
 
@@ -2178,3 +2030,18 @@ name = "zmij"
 version = "1.0.23"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "29666d0abbfad1e3dc4dcf6144730dd3a3ab225bbbdac83319345b1b44ccfc1b"
+
+[[patch.unused]]
+name = "oxideav-ass"
+version = "0.0.11"
+source = "git+https://github.com/OxideAV/oxideav-ass?rev=368f4df2dd383cc66fb57cf859ad6ff80719bc0e#368f4df2dd383cc66fb57cf859ad6ff80719bc0e"
+
+[[patch.unused]]
+name = "oxideav-sub-image"
+version = "0.0.9"
+source = "git+https://github.com/OxideAV/oxideav-sub-image?rev=a6b5c5c2c4c495d6a5bdc2a4a7c93b58948b9085#a6b5c5c2c4c495d6a5bdc2a4a7c93b58948b9085"
+
+[[patch.unused]]
+name = "oxideav-wma"
+version = "0.0.4"
+source = "git+https://github.com/OxideAV/oxideav-wma?rev=ab1eeb2acb51388d5da21e735723ac05bd7226fe#ab1eeb2acb51388d5da21e735723ac05bd7226fe"

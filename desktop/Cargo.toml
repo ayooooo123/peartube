@@ -1,9 +1,15 @@
-# The Mac app: a GPUI window over the Bare worklet and the Rust player. The
+# The Mac app: a GPUI window over the P2P engine and the Rust player. The
 # version is package.json's; this crate has none of its own.
 [package]
 name = "peartube"
 edition = "2024"
 publish = false
+
+[features]
+# Runs the P2P engine in-process from the pinned peartube-native library
+# (sync-native.py fetches it) instead of the Bare worklet and bare-kit.
+# desktop/bundle.sh --engine rust turns this on.
+engine-rust = []
 
 [[bin]]
 name = "PearTube"

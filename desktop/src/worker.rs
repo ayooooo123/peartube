@@ -1,9 +1,15 @@
-//! The P2P worker: a Bare worklet (bare-kit) running `worklet/worker.js`, which
-//! is the relay's own core. We talk to it in newline-delimited JSON over
-//! bare-kit's IPC pipes; worker.js documents the messages.
+//! The P2P worker: the relay's own core, reached in newline-delimited JSON.
+//! The default build runs `worklet/worker.js` in a Bare worklet (bare-kit) over
+//! its IPC pipes; `--features engine-rust` runs the same lines in the pinned
+//! peartube-native engine through its C ABI (peartube_native.h). worker.js
+//! documents the messages.
 
-use std::collections::{HashMap, VecDeque};
-use std::ffi::{c_char, c_int, c_void};
+use std::collections::HashMap;
+#[cfg(not(feature = "engine-rust"))]
+use std::collections::VecDeque;
+use std::ffi::c_void;
+#[cfg(not(feature = "engine-rust"))]
+use std::ffi::{c_char, c_int};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, LazyLock};
@@ -16,6 +22,7 @@ use serde_json::{Value, json};
 use crate::settings::{Settings, SourceSpec};
 
 // worklet/worker.js packed by build.rs with bare-pack.
+#[cfg(not(feature = "engine-rust"))]
 static BUNDLE: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/worker.bundle"));
 
 #[derive(Clone, Debug, Default, PartialEq, Deserialize)]
@@ -24,7 +31,9 @@ pub struct RouteTraffic {
     pub peers: u64,
     pub rx_bytes: u64,
     pub tx_bytes: u64,
+    #[serde(deserialize_with = "whole_bytes")]
     pub down_bps: u64,
+    #[serde(deserialize_with = "whole_bytes")]
     pub up_bps: u64,
 }
 
@@ -92,9 +101,9 @@ pub struct Status {
     pub cache_max_bytes: u64,
     pub peers: u64,
     pub lan_peers: u64,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "whole_bytes")]
     pub down_bps: u64,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "whole_bytes")]
     pub up_bps: u64,
     #[serde(default)]
     pub rx_bytes: u64,
@@ -365,36 +374,68 @@ pub enum Event {
     ReceiverCommand(ReceiverCommand),
     /// The worker hit an uncaught error.
     Fatal(String),
-    /// The worklet closed its IPC; no more replies will come.
+    /// The engine stopped; no more replies will come.
     Exited,
 }
 
-// bare-kit 3's C API (include/bare-kit.h in the framework).
+unsafe extern "C" {
+    fn malloc_zone_pressure_relief(zone: *mut c_void, goal: usize) -> usize;
+}
 
+type Reply = Result<Value, String>;
+
+/// State shared with the engine's output thread.
+#[derive(Default)]
+struct Shared {
+    pending: Mutex<HashMap<u64, oneshot::Sender<Reply>>>,
+    subscribers: Mutex<Vec<mpsc::UnboundedSender<Event>>>,
+}
+
+/// Why a line did not reach the engine.
+enum TransportError {
+    /// The engine is gone; no more replies will come.
+    Stopped,
+    /// The engine rejected this line but still runs. Only the Rust engine reports one.
+    #[cfg_attr(not(feature = "engine-rust"), allow(dead_code))]
+    Rejected(String),
+}
+
+// The JS engine: bare-kit 3's C API (include/bare-kit.h in the framework).
+
+#[cfg(not(feature = "engine-rust"))]
 #[repr(C)]
 struct BareWorklet {
     _opaque: [u8; 0],
 }
 
+#[cfg(not(feature = "engine-rust"))]
 #[repr(C)]
 struct BareIpcPoll {
     _private: [u8; 0],
 }
 
+#[cfg(not(feature = "engine-rust"))]
 type IpcPollCb = extern "C" fn(*mut BareIpcPoll, c_int);
 
+#[cfg(not(feature = "engine-rust"))]
 const IPC_READABLE: c_int = 0x1;
+#[cfg(not(feature = "engine-rust"))]
 const IPC_WRITABLE: c_int = 0x2;
+#[cfg(not(feature = "engine-rust"))]
 const IPC_WOULD_BLOCK: c_int = -1;
 
+#[cfg(not(feature = "engine-rust"))]
 #[repr(C)]
 struct BareIpc {
     _opaque: [u8; 0],
 }
 
+#[cfg(not(feature = "engine-rust"))]
 unsafe extern "C" {
     fn bare_worklet_create(options: *const c_void, result: *mut *mut BareWorklet) -> c_int;
     fn bare_worklet_start(worklet: *mut BareWorklet, filename: *const c_char, source: *const c_void, len: usize, argc: c_int, argv: *const *const c_char) -> c_int;
+    fn bare_worklet_suspend(worklet: *mut BareWorklet, linger: c_int);
+    fn bare_worklet_resume(worklet: *mut BareWorklet);
     fn bare_ipc_create(worklet: *mut BareWorklet, result: *mut *mut BareIpc) -> c_int;
     fn bare_ipc_read(ipc: *mut BareIpc, data: *mut c_void, len: usize) -> c_int;
     fn bare_ipc_write(ipc: *mut BareIpc, data: *const c_void, len: usize) -> c_int;
@@ -403,18 +444,47 @@ unsafe extern "C" {
     fn bare_ipc_poll_stop(poll: *mut BareIpcPoll) -> c_int;
     fn bare_ipc_poll_set_data(poll: *mut BareIpcPoll, data: *mut c_void);
     fn bare_ipc_poll_get_data(poll: *mut BareIpcPoll) -> *mut c_void;
-    fn malloc_zone_pressure_relief(zone: *mut c_void, goal: usize) -> usize;
 }
 
-type Reply = Result<Value, String>;
+// The Rust engine: the six pt_* functions of peartube_native.h, ABI 1.
 
-/// State shared with the IPC reader thread.
-#[derive(Default)]
-struct Shared {
-    pending: Mutex<HashMap<u64, oneshot::Sender<Reply>>>,
-    subscribers: Mutex<Vec<mpsc::UnboundedSender<Event>>>,
+#[cfg(feature = "engine-rust")]
+const ABI_VERSION: u32 = 1;
+#[cfg(feature = "engine-rust")]
+const PT_OK: i32 = 0;
+#[cfg(feature = "engine-rust")]
+const PT_ERR_UNKNOWN_HANDLE: i32 = 4;
+#[cfg(feature = "engine-rust")]
+const PT_ERR_BACKEND: i32 = 5;
+
+#[cfg(feature = "engine-rust")]
+type LineCallback = extern "C" fn(*mut c_void, *const u8, usize);
+
+#[cfg(feature = "engine-rust")]
+unsafe extern "C" {
+    fn pt_abi_version() -> u32;
+    fn pt_init(config: *const u8, config_len: usize, on_line: LineCallback, user_data: *mut c_void, out_handle: *mut *mut c_void) -> i32;
+    fn pt_send_line(handle: *mut c_void, line: *const u8, len: usize) -> i32;
+    fn pt_suspend(handle: *mut c_void, linger_ms: u64);
+    fn pt_resume(handle: *mut c_void);
+    fn pt_shutdown(handle: *mut c_void);
 }
 
+/// The line callback runs on the engine's output thread, with bytes borrowed
+/// only for the call: copy them out before dispatching.
+#[cfg(feature = "engine-rust")]
+extern "C" fn engine_line(user_data: *mut c_void, line: *const u8, len: usize) {
+    if user_data.is_null() || (line.is_null() && len > 0) {
+        return;
+    }
+    let shared = unsafe { &*(user_data as *const Shared) };
+    let bytes = unsafe { std::slice::from_raw_parts(line, len) };
+    for line in bytes.split(|&byte| byte == b'\n').filter(|line| !line.is_empty()) {
+        shared.dispatch(line);
+    }
+}
+
+#[cfg(not(feature = "engine-rust"))]
 struct IpcCtx {
     shared: Arc<Shared>,
     ipc: *mut BareIpc,
@@ -424,9 +494,12 @@ struct IpcCtx {
     writing: Mutex<()>,
 }
 
+#[cfg(not(feature = "engine-rust"))]
 unsafe impl Send for IpcCtx {}
+#[cfg(not(feature = "engine-rust"))]
 unsafe impl Sync for IpcCtx {}
 
+#[cfg(not(feature = "engine-rust"))]
 extern "C" fn ipc_callback(poll: *mut BareIpcPoll, events: c_int) {
     let data = unsafe { bare_ipc_poll_get_data(poll) } as *const IpcCtx;
     if data.is_null() {
@@ -441,6 +514,7 @@ extern "C" fn ipc_callback(poll: *mut BareIpcPoll, events: c_int) {
     }
 }
 
+#[cfg(not(feature = "engine-rust"))]
 impl IpcCtx {
     fn watch(&self, writable: bool) {
         unsafe {
@@ -501,7 +575,7 @@ impl IpcCtx {
         }
     }
 
-    fn send(&self, bytes: Vec<u8>) -> Result<(), String> {
+    fn send(&self, bytes: &[u8]) -> Result<(), TransportError> {
         let _writer = self.writing.lock();
         let n = unsafe { bare_ipc_write(self.ipc, bytes.as_ptr().cast(), bytes.len()) };
         if n >= 0 {
@@ -510,44 +584,31 @@ impl IpcCtx {
             }
             self.outbox.lock().push_back(bytes[n as usize..].to_vec());
         } else if n == IPC_WOULD_BLOCK {
-            self.outbox.lock().push_back(bytes);
+            self.outbox.lock().push_back(bytes.to_vec());
         } else {
-            return Err("The P2P worker stopped".to_string());
+            return Err(TransportError::Stopped);
         }
         self.watch(true);
         Ok(())
     }
 }
 
-pub struct Worker {
+/// The worklet handle is only passed to bare-kit calls, which are thread safe;
+/// everything else is behind a Mutex or atomic.
+#[cfg(not(feature = "engine-rust"))]
+struct Transport {
     worklet: *mut BareWorklet,
-    ipc: *mut BareIpc,
-    poll: *mut BareIpcPoll,
     ctx: Arc<IpcCtx>,
-    next_id: AtomicU64,
-    shared: Arc<Shared>,
 }
 
-// The worklet handle is only passed to bare-kit calls, which are thread safe;
-// everything else is behind a Mutex or atomic.
-unsafe impl Send for Worker {}
-unsafe impl Sync for Worker {}
+#[cfg(not(feature = "engine-rust"))]
+unsafe impl Send for Transport {}
+#[cfg(not(feature = "engine-rust"))]
+unsafe impl Sync for Transport {}
 
-static WORKER: LazyLock<Result<Worker, String>> = LazyLock::new(Worker::spawn);
-
-pub fn worker() -> Result<&'static Worker, String> {
-    WORKER.as_ref().map_err(Clone::clone)
-}
-
-/// Drains empty xzone magazines across Rust, RocksDB, BareKit, and VideoToolbox back to macOS as clean pages.
-pub fn release_unused_memory() {
-    unsafe {
-        malloc_zone_pressure_relief(std::ptr::null_mut(), 0);
-    }
-}
-
-impl Worker {
-    fn spawn() -> Result<Worker, String> {
+#[cfg(not(feature = "engine-rust"))]
+impl Transport {
+    fn start(shared: &Arc<Shared>) -> Result<Transport, String> {
         let (worklet, ipc, poll) = unsafe {
             // A write to a closed socket or pipe must fail with EPIPE, not kill the app.
             libc::signal(libc::SIGPIPE, libc::SIG_IGN);
@@ -563,7 +624,6 @@ impl Worker {
             check(bare_worklet_start(worklet, c"/worker.bundle".as_ptr(), BUNDLE.as_ptr().cast(), BUNDLE.len(), 0, std::ptr::null()), "start")?;
             (worklet, ipc, poll)
         };
-        let shared = Arc::new(Shared::default());
         let ctx = Arc::new(IpcCtx {
             shared: shared.clone(),
             ipc,
@@ -576,13 +636,125 @@ impl Worker {
             bare_ipc_poll_set_data(poll, Arc::as_ptr(&ctx) as *const c_void as *mut c_void);
             check(bare_ipc_poll_start(poll, IPC_READABLE, ipc_callback), "IPC poll start")?;
         }
-        let worker = Worker { worklet, ipc, poll, ctx, next_id: AtomicU64::new(1), shared };
-        // First line on the pipe, ahead of any call: casting works before (and between) node starts.
+        Ok(Transport { worklet, ctx })
+    }
+
+    fn send(&self, line: &[u8]) -> Result<(), TransportError> {
+        self.ctx.send(line)
+    }
+
+    fn suspend(&self, linger_ms: u64) {
+        unsafe { bare_worklet_suspend(self.worklet, linger_ms.min(c_int::MAX as u64) as c_int) }
+    }
+
+    fn resume(&self) {
+        unsafe { bare_worklet_resume(self.worklet) }
+    }
+}
+
+/// The engine handle, shut down when the worker goes away. Its line callback
+/// only dispatches, so this never runs on the engine's own output thread.
+#[cfg(feature = "engine-rust")]
+struct Transport {
+    handle: *mut c_void,
+}
+
+#[cfg(feature = "engine-rust")]
+unsafe impl Send for Transport {}
+#[cfg(feature = "engine-rust")]
+unsafe impl Sync for Transport {}
+
+#[cfg(feature = "engine-rust")]
+impl Drop for Transport {
+    fn drop(&mut self) {
+        // Delivers every line already queued, then stops; no callback after it.
+        unsafe { pt_shutdown(self.handle) }
+    }
+}
+
+#[cfg(feature = "engine-rust")]
+impl Transport {
+    fn start(shared: &Arc<Shared>) -> Result<Transport, String> {
+        // A write to a closed socket must fail with EPIPE, not kill the app.
+        unsafe {
+            libc::signal(libc::SIGPIPE, libc::SIG_IGN);
+        }
+        let version = unsafe { pt_abi_version() };
+        if version != ABI_VERSION {
+            return Err(format!("The pinned Rust engine speaks ABI {version}, but this app needs ABI {ABI_VERSION}: re-pin native.lock"));
+        }
+        // Defaults: the loopback API on the app's port. The init line sets where
+        // casting keeps its identity.
+        let config = b"{}";
+        let mut handle = std::ptr::null_mut();
+        let user_data = Arc::as_ptr(shared) as *const Shared as *mut c_void;
+        let status = unsafe { pt_init(config.as_ptr(), config.len(), engine_line, user_data, &mut handle) };
+        if status != PT_OK {
+            return Err(format!("The Rust engine could not start ({status})"));
+        }
+        eprintln!("PearTube: peartube-native engine ABI {version}");
+        Ok(Transport { handle })
+    }
+
+    fn send(&self, line: &[u8]) -> Result<(), TransportError> {
+        let status = unsafe { pt_send_line(self.handle, line.as_ptr(), line.len()) };
+        match status {
+            PT_OK => Ok(()),
+            // The engine has gone: fail every waiting call, like a closed IPC.
+            PT_ERR_UNKNOWN_HANDLE | PT_ERR_BACKEND => Err(TransportError::Stopped),
+            code => Err(TransportError::Rejected(format!("The Rust engine rejected a line ({code})"))),
+        }
+    }
+
+    fn suspend(&self, linger_ms: u64) {
+        unsafe { pt_suspend(self.handle, linger_ms) }
+    }
+
+    fn resume(&self) {
+        unsafe { pt_resume(self.handle) }
+    }
+}
+
+pub struct Worker {
+    transport: Transport,
+    next_id: AtomicU64,
+    shared: Arc<Shared>,
+}
+
+static WORKER: LazyLock<Result<Worker, String>> = LazyLock::new(Worker::spawn);
+
+pub fn worker() -> Result<&'static Worker, String> {
+    WORKER.as_ref().map_err(Clone::clone)
+}
+
+/// Drains empty xzone magazines across Rust, RocksDB, the engine, and VideoToolbox back to macOS as clean pages.
+pub fn release_unused_memory() {
+    unsafe {
+        malloc_zone_pressure_relief(std::ptr::null_mut(), 0);
+    }
+}
+
+impl Worker {
+    fn spawn() -> Result<Worker, String> {
+        let shared = Arc::new(Shared::default());
+        let transport = Transport::start(&shared)?;
+        let worker = Worker { transport, next_id: AtomicU64::new(1), shared };
+        // First line, ahead of any call: casting works before (and between) node starts.
         let mut init = serde_json::to_vec(&json!({ "id": 0, "method": "init", "params": { "castStorage": STORE_DIR.join("cast").to_string_lossy() } }))
             .map_err(|err| err.to_string())?;
         init.push(b'\n');
-        worker.ctx.send(init)?;
+        worker.send_line(&init)?;
         Ok(worker)
+    }
+
+    /// Hands pending work to the node's peers and idles it, as the machine goes to sleep.
+    pub fn suspend(&self, linger_ms: u64) {
+        self.transport.suspend(linger_ms);
+    }
+
+    /// Comes back from `suspend`.
+    pub fn resume(&self) {
+        self.transport.resume();
     }
 
     pub async fn start(&self, settings: &Settings) -> Result<Status, String> {
@@ -591,7 +763,9 @@ impl Worker {
             "defaultFolder": "default",
             "settings": settings,
         });
-        parse(self.call("start", params).await?)
+        let status: Status = parse(self.call("start", params).await?)?;
+        eprintln!("PearTube: node started, channel {} tracker {}", status.channel, status.tracker);
+        Ok(status)
     }
 
     pub async fn normalize_settings(&self, raw: Value, require_channel: bool) -> Result<Settings, String> {
@@ -599,7 +773,7 @@ impl Worker {
         parse(res)
     }
 
-    /// Applies the playback cache ceiling without restarting the worklet.
+    /// Applies the playback cache ceiling without restarting the engine.
     pub async fn set_cache_max(&self, max_bytes: u64) -> Result<u64, String> {
         let value = self.call("setCacheMax", json!({ "maxBytes": max_bytes })).await?;
         Ok(value.get("cacheMaxBytes").and_then(Value::as_u64).unwrap_or(0))
@@ -701,13 +875,25 @@ impl Worker {
         self.shared.pending.lock().insert(id, tx);
         let mut line = serde_json::to_vec(&json!({ "id": id, "method": method, "params": params })).map_err(|err| err.to_string())?;
         line.push(b'\n');
-        if let Err(err) = self.ctx.send(line) {
+        if let Err(err) = self.send_line(&line) {
             self.shared.pending.lock().remove(&id);
             return Err(err);
         }
         rx.await.map_err(|_| "The P2P worker stopped".to_string())?
     }
 
+    fn send_line(&self, line: &[u8]) -> Result<(), String> {
+        match self.transport.send(line) {
+            Ok(()) => Ok(()),
+            Err(TransportError::Stopped) => {
+                // The engine is gone: fail every waiting call rather than hang one.
+                self.shared.pending.lock().clear();
+                self.shared.broadcast(Event::Exited);
+                Err("The P2P worker stopped".to_string())
+            }
+            Err(TransportError::Rejected(err)) => Err(err),
+        }
+    }
 }
 
 impl Shared {
@@ -761,6 +947,7 @@ impl Shared {
     }
 }
 
+#[cfg(not(feature = "engine-rust"))]
 fn check(code: c_int, what: &str) -> Result<(), String> {
     if code == 0 { Ok(()) } else { Err(format!("bare-kit {what} failed ({code})")) }
 }
@@ -770,7 +957,12 @@ fn parse<T: serde::de::DeserializeOwned>(value: Value) -> Result<T, String> {
     serde_json::from_value(value).map_err(|err| format!("Unexpected reply from the P2P worker: {err}"))
 }
 
-/// Where the app keeps its settings and bare-kit's unpacked assets: the same
+/// A transfer rate is a JSON number and may be fractional; the UI shows whole bytes.
+fn whole_bytes<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<u64, D::Error> {
+    Ok(f64::deserialize(deserializer)?.max(0.0).round() as u64)
+}
+
+/// Where the app keeps its settings and the engine's unpacked assets: the same
 /// place the Dioxus app used, so an upgrade keeps them. PEARTUBE_STORAGE
 /// overrides this and STORE_DIR.
 pub static DATA_DIR: LazyLock<PathBuf> = LazyLock::new(|| app_dir("Library/Application Support/PearTube"));

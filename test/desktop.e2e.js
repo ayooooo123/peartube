@@ -1,13 +1,14 @@
 // End to end through the Mac app's P2P stack: a relay publishes a file; the
-// app's Bare worklet, driven from Rust by desktop/examples/smoke.rs exactly as
+// app's engine, driven from Rust by desktop/examples/smoke.rs exactly as
 // the UI drives it, joins the tracker, finds the entry and streams it back.
 // Once connected, the relay publishes a second entry under the same id and then
 // removes it; the app must see both changes through update events alone, as
 // the UI does. The first test meets over a local testnet DHT and also plays
-// the entry through the app's player (peartube-media), over the worklet's
+// the entry through the app's player (peartube-media), over the engine's
 // stream: every frame and every audio sample must equal FFmpeg's decode of the
 // file. The second test meets over LAN discovery alone. Needs cargo, ffmpeg
-// and `sh worklet/bare-kit.sh darwin`. Leaves its evidence in desktop/target/e2e/.
+// and `sh worklet/bare-kit.sh darwin`, unless PEARTUBE_ENGINE=rust builds the
+// Rust engine instead. Leaves its evidence in desktop/target/e2e/.
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { execFileSync, spawn } from 'node:child_process'
@@ -24,6 +25,12 @@ import { createPrivateGuard } from '../src/private-overlay.js'
 
 const sha256 = bytes => createHash('sha256').update(bytes).digest('hex')
 const tmp = name => mkdtempSync(join(tmpdir(), `peartube-${name}-`))
+// PEARTUBE_ENGINE=rust builds smoke against the pinned peartube-native library.
+const smokeArgs = id => [
+  'run', '--quiet', '--manifest-path', 'desktop/Cargo.toml',
+  ...(process.env.PEARTUBE_ENGINE === 'rust' ? ['--features', 'engine-rust'] : []),
+  '--example', 'smoke', '--', id,
+]
 
 test('the app worklet streams a relay entry and follows the tracker live', async t => {
   const testnet = await createTestnet(3)
@@ -115,7 +122,7 @@ test('the QuickJS app worklet links via 12-word recovery phrase and decodes an e
   const bootstrap = testnet.bootstrap.map(node => `localhost:${node.port}`)
   const storage = tmp('mnemonic-app')
   writeFileSync(join(storage, 'settings.json'), JSON.stringify({ mnemonic, bootstrap }))
-  const cargo = ['run', '--quiet', '--manifest-path', 'desktop/Cargo.toml', '--example', 'smoke', '--', published.id]
+  const cargo = smokeArgs(published.id)
   const smoke = spawn('cargo', cargo, { env: { ...process.env, PEARTUBE_PLAY: '1', PEARTUBE_STORAGE: storage }, stdio: ['ignore', 'pipe', 'inherit'] })
   t.after(() => smoke.kill())
 
@@ -145,7 +152,7 @@ test('the QuickJS app worklet links via 12-word recovery phrase and decodes an e
 async function drive (t, relay, published, settings, env = {}) {
   const storage = tmp('app')
   writeFileSync(join(storage, 'settings.json'), JSON.stringify({ tracker: relay.status().tracker, ...settings }))
-  const cargo = ['run', '--quiet', '--manifest-path', 'desktop/Cargo.toml', '--example', 'smoke', '--', published.id]
+  const cargo = smokeArgs(published.id)
   const smoke = spawn('cargo', cargo, { env: { ...process.env, ...env, PEARTUBE_STORAGE: storage }, stdio: ['ignore', 'pipe', 'inherit'] })
   t.after(() => smoke.kill())
 

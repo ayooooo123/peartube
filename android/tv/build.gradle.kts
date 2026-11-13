@@ -133,6 +133,13 @@ abstract class TvNativeTask @Inject constructor(private val exec: ExecOperations
 
     @TaskAction
     fun run() {
+        // A pinned engine must match this checkout's engine contract; a local checkout is the developer's call.
+        if (local.get().isEmpty()) {
+            exec.exec {
+                workingDir = repo.get().asFile
+                commandLine("python3", script.get().asFile.path, "check", "--strict")
+            }
+        }
         val fetched = fetchDir.get().asFile.apply { deleteRecursively(); mkdirs() }
         val out = libsDir.get().asFile.resolve("arm64-v8a").apply { deleteRecursively(); mkdirs() }
         exec.exec {
@@ -262,8 +269,9 @@ androidComponents {
                 ndk.set(androidComponents.sdkComponents.ndkDirectory)
                 libsDir.set(layout.buildDirectory.dir("native/${variant.name}"))
                 fetchDir.set(layout.buildDirectory.dir("native-fetch/${variant.name}"))
-                // A local checkout can change without the path changing: let its own cargo decide, every build.
-                outputs.upToDateWhen { nativeLocal == null }
+                // Runs every build: the contract check reads the app's sources, and a local checkout changes
+                // without its path changing. Pinned files come from the download cache, so this costs seconds.
+                outputs.upToDateWhen { false }
             }
             variant.sources.jniLibs?.addGeneratedSourceDirectory(native, TvNativeTask::libsDir)
         }

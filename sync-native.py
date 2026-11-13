@@ -8,15 +8,16 @@ the JS engine; `-Ppeartube.engine=rust` builds against these prebuilt libraries.
     python3 sync-native.py fetch <asset-key>... <out-dir>
     python3 sync-native.py fetch --local <peartube-native checkout> <asset-key>... <out-dir>
     python3 sync-native.py pin <release-tag>
-    python3 sync-native.py check
+    python3 sync-native.py check [--strict]
 
 Asset keys: android-arm64, darwin-arm64, header. `fetch` refuses an unpinned
 lock, verifies every sha256 and caches downloads in `$XDG_CACHE_HOME` /
 `~/.cache/peartube-native/<release>/`. `--local` builds `ffi/build.sh <target>
 <dir>` from a checkout instead and checks no hash. `pin` rewrites `native.lock`
 from the release's `ffi-manifest.json` and keeps the existing `engine` map.
-`check` lists the contract files changed since the lock's `jsRef`; it fails only
-when a platform's default engine is `rust`.
+`check` lists the contract files changed since the lock's `jsRef`; it fails
+when a platform's default engine is `rust`, or with `--strict`, which every
+build linking the pinned Rust engine runs.
 """
 import hashlib
 import json
@@ -205,9 +206,14 @@ def cmd_pin(args):
     return 0
 
 
-def cmd_check(_args):
+def cmd_check(args):
     lock = load_lock()
     rust = sorted(platform for platform, engine in lock.get("engine", {}).items() if engine == "rust")
+    # --strict: a build that links the Rust engine fails on any drift, whatever the defaults say.
+    if args == ["--strict"]:
+        rust = rust or ["this build"]
+    elif args:
+        fail("usage: sync-native.py check [--strict]")
     jsref = lock.get("jsRef") or ""
     if lock.get("release") in (None, "", "unpinned"):
         print("native.lock is unpinned; no released engine to check against.")
@@ -238,10 +244,9 @@ def cmd_check(_args):
     for name in changed:
         print(f"  {name}")
     if rust:
-        print(f"platforms defaulting to rust ({', '.join(rust)}) must be re-pinned "
-              f"after peartube-native matches this commit")
+        print(f"rust engine ({', '.join(rust)}): re-pin after peartube-native matches this commit")
         return 1
-    print("every platform defaults to js; a build-flag rust APK is not covered by this check")
+    print("every platform defaults to js; a rust build runs this check with --strict")
     return 0
 
 

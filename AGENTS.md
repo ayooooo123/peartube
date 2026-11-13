@@ -143,7 +143,7 @@ sh android/release-tv.sh    # signed arm64 Dumb TV Receiver APK (com.peartube.re
 node android/e2e.mjs --serial <adb serial> --relay http://<relay>:8174 [--lan] [--apk path]   # E2E on a connected phone
 sh web/build.sh             # compiles peartube-media to wasm32-unknown-unknown (+simd128) into web/assets/peartube_web.wasm
 python3 sync-player.py      # after pushing peartube-media: pin both apps to its HEAD
-python3 sync-native.py check # contract files changed since native.lock's jsRef (fails for a rust-default platform)
+python3 sync-native.py check # contract files changed since native.lock's jsRef (fails for a rust-default platform; every pinned rust build runs it with --strict)
 python3 sync-native.py pin <release-tag>   # after peartube-native publishes a release: rewrite native.lock
 ```
 

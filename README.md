@@ -523,7 +523,7 @@ sh worklet/bare-kit.sh           # once: bare-kit on QuickJS, plus V8 for the TV
 sh android/release.sh            # signed arm64 phone APK
 sh android/release-tv.sh         # signed arm64 TV receiver APK
 cd android && ./gradlew :tv:assembleDebug -Ppeartube.engine=rust   # TV receiver on the pinned peartube-native engine
-python3 sync-native.py check     # contract files changed since native.lock's jsRef (fails for a rust-default platform)
+python3 sync-native.py check     # contract files changed since native.lock's jsRef (fails for a rust-default platform; every pinned rust build runs it with --strict)
 npm run app                      # macOS: builds and opens PearTube.app
 sh desktop/bundle.sh --zip       # macOS: release zip
 sh desktop/bundle.sh --receiver --zip

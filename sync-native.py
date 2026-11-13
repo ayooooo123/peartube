@@ -8,6 +8,7 @@ the JS engine; `-Ppeartube.engine=rust` builds against these prebuilt libraries.
     python3 sync-native.py fetch <asset-key>... <out-dir>
     python3 sync-native.py fetch --local <peartube-native checkout> <asset-key>... <out-dir>
     python3 sync-native.py pin <release-tag>
+    python3 sync-native.py engine [js|rust] [surface...]
     python3 sync-native.py check [--strict]
 
 Asset keys: android-arm64, android-arm64-dev, darwin-arm64, header. The `-dev`
@@ -36,7 +37,7 @@ LOCK = ROOT / "native.lock"
 REPO = "https://github.com/ayooooo123/peartube-native"
 ASSET_KEYS = ("android-arm64", "android-arm64-dev", "darwin-arm64", "header")
 HEADER = "peartube_native.h"
-ENGINES = {"android-tv": "js", "android-app": "js", "desktop": "js", "ios": "js"}
+ENGINES = {"android-tv": "js", "android-app": "js", "desktop": "js", "ios": "js", "relay": "js"}
 
 
 def fail(message):
@@ -51,7 +52,7 @@ def load_lock():
     except ValueError as error:
         fail(f"{LOCK.name} is not valid JSON: {error}")
     lock.setdefault("assets", {})
-    lock.setdefault("engine", dict(ENGINES))
+    lock["engine"] = {**ENGINES, **(lock.get("engine") or {})}
     return lock
 
 
@@ -253,6 +254,30 @@ def cmd_check(args):
     return 0
 
 
+def cmd_engine(args):
+    lock = load_lock()
+    engines = lock["engine"]
+    if not args:
+        for surface, choice in engines.items():
+            print(f"{surface}={choice}")
+        return 0
+    choice, targets = args[0], args[1:] or list(ENGINES)
+    if choice not in ("js", "rust"):
+        fail(f"engine must be js or rust, not {choice!r}")
+    bad = [t for t in targets if t not in ENGINES]
+    if bad:
+        fail(f"unknown surface(s) {', '.join(bad)}; expected {', '.join(ENGINES)}")
+    if choice == "rust" and any(t != "relay" for t in targets):
+        rc = cmd_check(["--strict"])
+        if rc != 0:
+            return rc
+    for t in targets:
+        engines[t] = choice
+    LOCK.write_text(json.dumps(lock, indent=2) + "\n")
+    print(", ".join(f"{k}={v}" for k, v in engines.items()))
+    return 0
+
+
 def main(argv):
     if not argv or argv[0] in ("-h", "--help"):
         print(__doc__)
@@ -264,6 +289,8 @@ def main(argv):
         return cmd_pin(rest)
     if command == "check":
         return cmd_check(rest)
+    if command == "engine":
+        return cmd_engine(rest)
     fail(f"unknown command {command!r}; try --help")
 
 

@@ -1,0 +1,194 @@
+name: Release (JS + Rust Engines)
+
+# Publishes every release surface in both P2P engines side by side:
+#   - macOS Desktop & TV Receiver zips: JS (`PearTube-<ver>-macos-arm64.zip`) + Rust (`PearTube-<ver>-rust-macos-arm64.zip`)
+#   - Android Phone & TV Receiver APKs: JS (`*-arm64.apk`) + Rust (`*-rust-arm64.apk`)
+#   - Linux x86_64 native relay tarball (`peartube-relay-<ver>-rust-linux-x64.tar.gz`)
+#   - Multi-arch GHCR relay images: `:js` / `:<tag>-js` (Bare) and `:rust` / `:<tag>-rust` (peartube-native)
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag (e.g. v0.4.43) for manual dry-run or publish
+        required: false
+
+permissions:
+  contents: write
+  packages: write
+
+jobs:
+  macos:
+    runs-on: macos-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.x
+          cache: npm
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: "desktop\nweb"
+      - run: npm ci
+      - run: python3 sync-native.py check --strict
+      - run: sh worklet/bare-kit.sh darwin
+      - name: Bundle macOS Desktop & Receiver (JS + Rust)
+        run: |
+          sh desktop/bundle.sh --engine both --zip
+          sh desktop/bundle.sh --receiver --engine both --zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos-arm64
+          path: desktop/target/release/*-macos-*.zip
+          if-no-files-found: error
+
+  android:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      NDK_VERSION: 29.0.14206865
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.x
+          cache: npm
+      - run: npm ci
+      - run: python3 sync-native.py check --strict
+      - uses: actions/setup-java@v4
+        with:
+          distribution: zulu
+          java-version: 17
+      - name: Android NDK
+        run: |
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --install "ndk;$NDK_VERSION" | tail -n 1
+          echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/$NDK_VERSION" >> "$GITHUB_ENV"
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: android/native
+      - run: npm install --global cmake-runtime@4.3.1 ninja-runtime@1.13.2
+      - run: sh worklet/bare-kit.sh arm64-v8a arm64-v8a-v8
+      - name: Build Android Phone & TV APKs (JS + Rust)
+        working-directory: android
+        run: |
+          ver=$(node -p 'require("../package.json").version')
+          mkdir -p ../dist-android
+          ./gradlew --console=plain :app:assembleDebug :tv:assembleDebug -Ppeartube.engine=js
+          cp app/build/outputs/apk/debug/app-debug.apk "../dist-android/PearTube-$ver-arm64.apk"
+          cp tv/build/outputs/apk/debug/tv-debug.apk "../dist-android/PearTubeReceiver-$ver-arm64.apk"
+          ./gradlew --console=plain :app:assembleDebug :tv:assembleDebug -Ppeartube.engine=rust
+          cp app/build/outputs/apk/debug/app-debug.apk "../dist-android/PearTube-$ver-rust-arm64.apk"
+          cp tv/build/outputs/apk/debug/tv-debug.apk "../dist-android/PearTubeReceiver-$ver-rust-arm64.apk"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: android-arm64
+          path: dist-android/*.apk
+          if-no-files-found: error
+
+  relay:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: peartube
+          fetch-depth: 0
+      - id: meta
+        working-directory: peartube
+        run: |
+          python3 sync-native.py check --strict
+          ver=$(node -p 'require("./package.json").version')
+          commit=$(node -p 'require("./native.lock").commit')
+          def_eng=$(node -p 'require("./native.lock").engine.relay || "js"')
+          tag="${{ github.event.inputs.tag || github.ref_name }}"
+          echo "ver=$ver" >> "$GITHUB_OUTPUT"
+          echo "native_commit=$commit" >> "$GITHUB_OUTPUT"
+          echo "default_engine=$def_eng" >> "$GITHUB_OUTPUT"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "image=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/peartube-relay" >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ github.repository_owner }}/peartube-native
+          ref: ${{ steps.meta.outputs.native_commit }}
+          path: stack/peartube-native
+      - name: Checkout Rust stack crates at STACK.lock
+        run: |
+          while read -r repo sha; do
+            git clone --quiet "https://github.com/${{ github.repository_owner }}/$repo.git" "stack/$repo"
+            git -C "stack/$repo" checkout --quiet "$sha"
+          done < stack/peartube-native/STACK.lock
+      - name: Build Linux x86_64 Rust relay binary tarball
+        run: |
+          sudo apt-get update && sudo apt-get install -y --no-install-recommends clang libclang-dev
+          cargo build --manifest-path stack/peartube-native/Cargo.toml --release --locked --bin peartube-relay
+          mkdir -p relay-pkg/web dist-relay
+          node -e "import('./peartube/src/ui.js').then(m => require('fs').writeFileSync('relay-pkg/web/index.html', m.page))"
+          cp peartube/web/assets/peartube_web.wasm peartube/web/assets/peartube_web.wasm.gz peartube/web/assets/player-worker.js relay-pkg/web/
+          cp stack/peartube-native/target/release/peartube-relay peartube/scripts/relay-engine.sh relay-pkg/
+          tar -C relay-pkg -czf "dist-relay/peartube-relay-${{ steps.meta.outputs.ver }}-rust-linux-x64.tar.gz" .
+      - uses: actions/upload-artifact@v4
+        with:
+          name: relay-linux-x64
+          path: dist-relay/*.tar.gz
+          if-no-files-found: error
+      - uses: docker/setup-qemu-action@v3
+        if: startsWith(github.ref, 'refs/tags/v')
+      - uses: docker/setup-buildx-action@v3
+        if: startsWith(github.ref, 'refs/tags/v')
+      - uses: docker/login-action@v3
+        if: startsWith(github.ref, 'refs/tags/v')
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Push JS Relay Image (:js, :<tag>-js)
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: docker/build-push-action@v6
+        with:
+          context: peartube
+          push: true
+          platforms: linux/amd64,linux/arm64
+          tags: |
+            ${{ steps.meta.outputs.image }}:js
+            ${{ steps.meta.outputs.image }}:${{ steps.meta.outputs.tag }}-js
+            ${{ steps.meta.outputs.default_engine == 'js' && format('{0}:latest', steps.meta.outputs.image) || '' }}
+      - name: Push Rust Relay Image (:rust, :<tag>-rust)
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: stack/peartube-native/relay.Dockerfile
+          push: true
+          platforms: linux/amd64,linux/arm64
+          tags: |
+            ${{ steps.meta.outputs.image }}:rust
+            ${{ steps.meta.outputs.image }}:${{ steps.meta.outputs.tag }}-rust
+            ${{ steps.meta.outputs.default_engine == 'rust' && format('{0}:latest', steps.meta.outputs.image) || '' }}
+
+  publish:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [macos, android, relay]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+      - name: Checksums & GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          cd artifacts
+          sha256sum * > SHA256SUMS
+          gh release create "${{ github.ref_name }}" * --generate-notes --verify-tag

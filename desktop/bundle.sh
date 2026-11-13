@@ -7,7 +7,7 @@
 #   sh desktop/bundle.sh --zip    and zip it for a release, beside the app:
 #                                 PearTube-<version>-macos-<arch>.zip
 #   sh desktop/bundle.sh --engine rust   build it with the Rust engine
-#
+#   sh desktop/bundle.sh --engine both --zip   build both JS and Rust release zips
 # --engine picks the P2P engine: js (the Bare worklet: BareKit and its addon
 # frameworks) or rust (the pinned peartube-native dylib). The default is
 # native.lock's engine.desktop.
@@ -20,25 +20,34 @@ cd "$(dirname "$0")"
 version=$(node -p 'require("../package.json").version')
 host=darwin-$(uname -m | sed 's/x86_64/x64/')
 
-engine=""
+engine="${PEARTUBE_ENGINE:-}"
 receiver=0
 action=""
+self="$0"
 while [ $# -gt 0 ]; do
   case "$1" in
     --receiver) receiver=1 ;;
     --open|--zip) action="$1" ;;
     --engine)
       shift
-      [ $# -gt 0 ] || { echo "--engine needs rust or js" >&2; exit 2; }
+      [ $# -gt 0 ] || { echo "--engine needs js, rust or both" >&2; exit 2; }
       engine="$1" ;;
     *) echo "unknown argument: $1" >&2; exit 2 ;;
   esac
   shift
 done
 [ -n "$engine" ] || engine=$(node -p 'require("../native.lock").engine.desktop')
+if [ "$engine" = "both" ]; then
+  [ "$action" != "--open" ] || { echo "--open cannot open both engines at once" >&2; exit 2; }
+  rec_arg=""
+  [ "$receiver" = "1" ] && rec_arg="--receiver"
+  sh "$self" $rec_arg --engine js ${action:+"$action"}
+  sh "$self" $rec_arg --engine rust ${action:+"$action"}
+  exit 0
+fi
 case "$engine" in
   js|rust) ;;
-  *) echo "--engine must be js or rust, not $engine" >&2; exit 2 ;;
+  *) echo "--engine must be js, rust or both, not $engine" >&2; exit 2 ;;
 esac
 
 if [ "$receiver" = "1" ]; then
@@ -59,8 +68,9 @@ else
   CARGO_ENCODED_RUSTFLAGS="$rustflags" cargo build --release --bin "$exe"
 fi
 
-app="target/release/$exe.app"
-rm -rf "$app"
+stage="target/release/bundle-$engine"
+app="$stage/$exe.app"
+rm -rf "$stage"
 mkdir -p "$app/Contents/MacOS" "$app/Contents/Frameworks"
 cp "target/release/$exe" "$app/Contents/MacOS/"
 if [ "$engine" = "rust" ]; then
@@ -117,13 +127,17 @@ else
   codesign --force --sign - --timestamp=none "$app/Contents/Frameworks/"*.framework
 fi
 codesign --force --sign - --timestamp=none "$app"
+rm -rf "target/release/$exe.app"
+ditto "$app" "target/release/$exe.app"
 
-if [ "$action" = "--open" ]; then open "$app"; fi
+if [ "$action" = "--open" ]; then open "target/release/$exe.app"; fi
 if [ "$action" = "--zip" ]; then
-  zip="target/release/$exe-$version-macos-$(uname -m).zip"
+  suffix=""
+  [ "$engine" = "rust" ] && suffix="-rust"
+  zip="target/release/$exe-$version$suffix-macos-$(uname -m).zip"
   rm -f "$zip"
   # ditto keeps the bundle's symlinks and signatures, which zip(1) breaks.
   ditto -c -k --keepParent "$app" "$zip"
   echo "$zip"
 fi
-echo "$app"
+echo "target/release/$exe.app"

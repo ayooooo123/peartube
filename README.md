@@ -520,19 +520,22 @@ Builds:
 
 ```sh
 sh worklet/bare-kit.sh           # once: bare-kit on QuickJS, plus V8 for the TV receiver (Android if the NDK exists, macOS on a Mac)
-sh android/release.sh            # signed arm64 phone APK
-sh android/release-tv.sh         # signed arm64 TV receiver APK
+sh android/release.sh [--engine js|rust|both]      # signed arm64 phone APK(s)
+sh android/release-tv.sh [--engine js|rust|both]   # signed arm64 TV receiver APK(s)
 cd android && ./gradlew :tv:assembleDebug -Ppeartube.engine=rust   # TV receiver on the pinned peartube-native engine
+python3 sync-native.py engine [js|rust] [surface...] # show or flip default engine(s) in native.lock
 python3 sync-native.py check     # contract files changed since native.lock's jsRef (fails for a rust-default platform; every pinned rust build runs it with --strict)
-npm run app                      # macOS: builds and opens PearTube.app
-sh desktop/bundle.sh --zip       # macOS: release zip
-sh desktop/bundle.sh --receiver --zip
+npm run app                      # macOS: builds and opens PearTube.app (npm run app:rust for Rust engine)
+sh desktop/bundle.sh [--engine js|rust|both] --zip # macOS: JS and/or Rust release zip(s)
+sh desktop/bundle.sh --receiver [--engine js|rust|both] --zip
+sh scripts/relay-engine.sh [status|rust|js]        # swap a relay host between Bare JS and native Rust engines
 ```
 
 CI runs the core and Cast suites on every push and pull request, publishes the multi-arch
-`ghcr.io/ayooooo123/peartube-relay:latest` image on `main`, and builds the Android debug APKs
-when `android/`, `worklet/` or `src/` changes.
-
+`ghcr.io/ayooooo123/peartube-relay:latest` image on `main`, builds the Android debug APKs
+when `android/`, `worklet/` or `src/` changes, and `.github/workflows/release.yml` publishes
+both JS and Rust release artifacts (`:js` + `:rust` relay images, macOS zips, Android APKs, and
+Linux x64 relay binary) on `v*` tags.
 ## History
 
 The previous platform (apps, channels, HRPC, transcoding, custody proofs) is tagged

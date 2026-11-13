@@ -82,7 +82,9 @@
     "test:desktop": "node --test --test-force-exit test/desktop.e2e.js",
     "test:cast": "node --test test/cast.e2e.js",
     "test:web": "node --test test/web-player.e2e.js",
-    "app": "sh desktop/bundle.sh --open"
+    "app": "sh desktop/bundle.sh --open",
+    "app:rust": "sh desktop/bundle.sh --engine rust --open",
+    "engine": "python3 sync-native.py engine"
   },
   "engines": {
     "node": ">=22"

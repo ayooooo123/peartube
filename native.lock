@@ -1,0 +1,26 @@
+{
+  "release": "unpinned",
+  "commit": "",
+  "jsRef": "",
+  "abiVersion": 1,
+  "assets": {
+    "android-arm64": {
+      "file": "peartube_native_ffi-android-arm64.so",
+      "sha256": ""
+    },
+    "darwin-arm64": {
+      "file": "peartube_native_ffi-darwin-arm64.dylib",
+      "sha256": ""
+    },
+    "header": {
+      "file": "peartube_native.h",
+      "sha256": ""
+    }
+  },
+  "engine": {
+    "android-tv": "js",
+    "android-app": "js",
+    "desktop": "js",
+    "ios": "js"
+  }
+}

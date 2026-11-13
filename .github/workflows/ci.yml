@@ -26,13 +26,37 @@ jobs:
       - run: npm run test:cast
 
   image:
-    # Publishes :main, :latest and :sha-<commit>. The live relay now runs the
-    # core, so :latest follows main.
+    # Publishes :main, :latest and :sha-<commit> using whichever relay engine (`js` or `rust`) `native.lock` selects.
     if: github.event_name == 'push'
     needs: test
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          path: peartube
+          fetch-depth: 0
+      - id: meta
+        working-directory: peartube
+        run: |
+          eng=$(node -p 'require("./native.lock").engine.relay || "js"')
+          commit=$(node -p 'require("./native.lock").commit')
+          [ "$eng" = "js" ] || python3 sync-native.py check --strict
+          echo "engine=$eng" >> "$GITHUB_OUTPUT"
+          echo "native_commit=$commit" >> "$GITHUB_OUTPUT"
+          echo "image=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/peartube-relay" >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@v4
+        if: steps.meta.outputs.engine == 'rust'
+        with:
+          repository: ${{ github.repository_owner }}/peartube-native
+          ref: ${{ steps.meta.outputs.native_commit }}
+          path: stack/peartube-native
+      - name: Checkout Rust stack crates at STACK.lock
+        if: steps.meta.outputs.engine == 'rust'
+        run: |
+          while read -r repo sha; do
+            git clone --quiet "https://github.com/${{ github.repository_owner }}/$repo.git" "stack/$repo"
+            git -C "stack/$repo" checkout --quiet "$sha"
+          done < stack/peartube-native/STACK.lock
       - uses: docker/setup-qemu-action@v3
       - uses: docker/setup-buildx-action@v3
       - uses: docker/login-action@v3
@@ -40,15 +64,14 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Image name
-        id: meta
-        run: echo "image=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/peartube-relay" >> "$GITHUB_OUTPUT"
       - uses: docker/build-push-action@v6
         with:
-          context: .
+          context: ${{ steps.meta.outputs.engine == 'rust' && '.' || 'peartube' }}
+          file: ${{ steps.meta.outputs.engine == 'rust' && 'stack/peartube-native/relay.Dockerfile' || 'peartube/Dockerfile' }}
           push: true
           platforms: linux/amd64,linux/arm64
           tags: |
             ${{ steps.meta.outputs.image }}:${{ github.ref_name }}
+            ${{ steps.meta.outputs.image }}:${{ steps.meta.outputs.engine }}
             ${{ steps.meta.outputs.image }}:latest
             ${{ steps.meta.outputs.image }}:sha-${{ github.sha }}

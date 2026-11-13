@@ -528,14 +528,13 @@ python3 sync-native.py check     # contract files changed since native.lock's js
 npm run app                      # macOS: builds and opens PearTube.app (npm run app:rust for Rust engine)
 sh desktop/bundle.sh [--engine js|rust|both] --zip # macOS: JS and/or Rust release zip(s)
 sh desktop/bundle.sh --receiver [--engine js|rust|both] --zip
-sh scripts/relay-engine.sh [status|rust|js]        # swap a relay host between Bare JS and native Rust engines
 ```
 
 CI runs the core and Cast suites on every push and pull request, publishes the multi-arch
-`ghcr.io/ayooooo123/peartube-relay:latest` image on `main`, builds the Android debug APKs
-when `android/`, `worklet/` or `src/` changes, and `.github/workflows/release.yml` publishes
-both JS and Rust release artifacts (`:js` + `:rust` relay images, macOS zips, Android APKs, and
-Linux x64 relay binary) on `v*` tags.
+`ghcr.io/ayooooo123/peartube-relay:latest` image on `main` using `native.lock`'s `engine.relay`
+(`js` or `rust`), builds the Android debug APKs when `android/`, `worklet/` or `src/` changes,
+and `.github/workflows/release.yml` builds and publishes whichever engine you choose on release
+(`js`, `rust`, `lock` per-surface defaults, or `both` side-by-side).
 ## History
 
 The previous platform (apps, channels, HRPC, transcoding, custody proofs) is tagged

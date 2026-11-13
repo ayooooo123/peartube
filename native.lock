@@ -1,7 +1,7 @@
 {
-  "release": "ffi-bd97faa3b",
-  "commit": "bd97faa3b4310a5676f16069bd75cb5081b3ab5d",
-  "jsRef": "8286e22f676a605ca27adae79355225efc0b6b77",
+  "release": "ffi-1caa5f5ca",
+  "commit": "1caa5f5cafa7be8e824323d06c57358fc8284640",
+  "jsRef": "8326afa2c3da8b4839eb241958a5eaf30ec669e5",
   "abiVersion": 1,
   "assets": {
     "android-arm64": {

@@ -245,10 +245,15 @@ export const page = `<!doctype html>
   .p-title { font-size: 18px; font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .p-badge { font-size: 12px; color: var(--p-dim); font-variant-numeric: tabular-nums; }
   .p-stage { position: relative; flex: 1; min-height: 0; display: flex; align-items: center; justify-content: center; background: #000; overflow: hidden; cursor: pointer; }
-  #pVideo, #pGlCanvas, #pCanvas { max-width: 100%; max-height: 100%; width: 100%; height: 100%; object-fit: contain; display: none; }
-  #pSubCanvas { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; pointer-events: none; }
-  #pSubText { position: absolute; left: 8%; right: 8%; bottom: 13%; text-align: center; font-size: clamp(16px, 2.2vw, 28px); font-weight: 600; color: var(--on-media); text-shadow: 0 2px 6px #000, 0 0 3px #000, 1px 1px 0 #000, -1px -1px 0 #000; white-space: pre-wrap; pointer-events: none; }
-  #pStatus { position: absolute; padding: 8px 14px; border-radius: var(--r-control); background: color-mix(in srgb, var(--p-surface) 88%, transparent); border: 1px solid var(--p-line); font-size: 13px; color: var(--p-text); pointer-events: none; }
+  #pBackdrop { position: absolute; inset: -32px; background: center / cover no-repeat; filter: blur(28px) brightness(.36); transform: scale(1.06); opacity: 0; transition: opacity .35s ease; pointer-events: none; }
+  #pBackdrop.vis { opacity: 1; }
+  #pVideo, #pGlCanvas, #pCanvas { position: relative; z-index: 1; max-width: 100%; max-height: 100%; width: 100%; height: 100%; object-fit: contain; display: none; }
+  #pSubCanvas { position: absolute; z-index: 2; inset: 0; width: 100%; height: 100%; object-fit: contain; pointer-events: none; }
+  #pSubText { position: absolute; z-index: 2; left: 8%; right: 8%; bottom: 13%; text-align: center; font-size: clamp(16px, 2.2vw, 28px); font-weight: 600; color: var(--on-media); text-shadow: 0 2px 6px #000, 0 0 3px #000, 1px 1px 0 #000, -1px -1px 0 #000; white-space: pre-wrap; pointer-events: none; }
+  @keyframes pSpin { to { transform: rotate(360deg); } }
+  #pStatus { position: absolute; z-index: 3; display: inline-flex; align-items: center; gap: 10px; padding: 10px 18px; border-radius: 999px; background: rgba(16,18,24,.84); backdrop-filter: blur(14px); border: 1px solid rgba(255,255,255,.14); box-shadow: 0 12px 32px rgba(0,0,0,.55); font-size: 13px; font-weight: 500; color: var(--p-text); pointer-events: none; }
+  #pStatus:not(.err)::before { content: ''; width: 14px; height: 14px; border-radius: 50%; border: 2px solid rgba(255,255,255,.22); border-top-color: var(--brand); animation: pSpin .7s linear infinite; flex-shrink: 0; }
+  #pStatus.err { border-color: rgba(255,95,95,.45); border-radius: var(--r-control); }
   .p-bar { position: absolute; z-index: 2; bottom: 0; left: 0; right: 0; padding: 32px 20px 16px; background: linear-gradient(0deg,rgba(0,0,0,.88),rgba(0,0,0,.60) 52%,transparent); transition: opacity .2s; }
   .p-bar .row { justify-content: space-between; }
   .p-bar .row .row { justify-content: flex-start; }
@@ -476,6 +481,7 @@ export const page = `<!doctype html>
     </div>
   </div>
   <div class="p-stage" id="pStage">
+    <div id="pBackdrop"></div>
     <video id="pVideo" muted playsinline></video>
     <canvas id="pGlCanvas"></canvas>
     <canvas id="pCanvas"></canvas>
@@ -1764,12 +1770,26 @@ function audioOutTime (ctx) {
 // One shared WASM Worker, compiled when a Play button is about to be used, so playback opens without a compile wait.
 const ASSET_VER = ${JSON.stringify(ASSET_VER)}
 let sharedWorker = null
+let workerWarm = false
 let streamBlockBytes = 0
+function showStatus (text, isErr = false) {
+  const el = $('pStatus')
+  el.classList.toggle('err', Boolean(isErr))
+  el.textContent = text
+  el.style.display = 'inline-flex'
+}
+function hideStatus () {
+  const el = $('pStatus')
+  el.classList.remove('err')
+  el.style.display = 'none'
+  $('pBackdrop')?.classList.remove('vis')
+}
 function nowWallMs () { return (performance.timeOrigin || 0) + performance.now() }
 function getWorker () {
   if (!sharedWorker) {
     sharedWorker = new Worker('/web/player-worker.js' + ASSET_VER)
     sharedWorker.onmessage = ev => {
+      if (ev.data?.type === 'warm') workerWarm = true
       if (ev.data?.streamBlock) streamBlockBytes = ev.data.streamBlock
     }
     // The Worker's OffscreenCanvas renderer dropped pictures on long titles (18 fps on Batman's
@@ -1778,10 +1798,10 @@ function getWorker () {
   }
   return sharedWorker
 }
-// The player is a 16 MB download: warm it on the way to a Play button, not on every visit.
-for (const evName of ['pointerover', 'focusin', 'touchstart']) {
+// Warm the WASM engine as soon as a title tile or Play button is approached so it's compiled before Play is clicked.
+for (const evName of ['pointerover', 'focusin', 'touchstart', 'click']) {
   addEventListener(evName, ev => {
-    if (!sharedWorker && ev.target.closest && ev.target.closest('[data-play]')) { try { getWorker() } catch {} }
+    if (!sharedWorker && ev.target.closest && ev.target.closest('[data-play], [data-tile]')) { try { getWorker() } catch {} }
   }, { passive: true })
 }
 
@@ -1833,6 +1853,8 @@ function closePlayer () {
   v.load()
   if (p.msUrl) { try { URL.revokeObjectURL(p.msUrl) } catch {} }
   $('pSubText').textContent = ''
+  $('pBackdrop').style.backgroundImage = ''
+  $('pBackdrop').classList.remove('vis')
   const sc = $('pSubCanvas')
   sc.getContext('2d').clearRect(0, 0, sc.width, sc.height)
   if (refreshQueued) { refreshQueued = false; setTimeout(refresh, 50) }
@@ -1845,10 +1867,15 @@ function openPlayer (entry, at = 0) {
   const worker = getWorker()
   $('pTitle').textContent = entry.title || entry.id
   $('pDownloadBtn').href = downloadHref(entry)
-  $('pBadge').textContent = 'Opening…'
+  $('pBadge').textContent = workerWarm ? 'Opening…' : 'Loading player…'
   $('pRawLink').href = streamUrl
-  $('pStatus').style.display = ''
-  $('pStatus').textContent = 'Buffering stream…'
+  showStatus(workerWarm ? 'Opening stream…' : 'Loading player…')
+  const imdbId = (entry.id && (entry.id.match(/^imdb:(tt[0-9]+)/) || [])[1]) || null
+  const cachedArt = imdbId ? [...document.querySelectorAll('#detail img.poster, #entries img.poster')].find(i => i.complete && i.naturalWidth > 0 && i.src.includes(imdbId)) : null
+  if (cachedArt?.currentSrc) {
+    $('pBackdrop').style.backgroundImage = 'url(' + JSON.stringify(cachedArt.currentSrc) + ')'
+    $('pBackdrop').classList.add('vis')
+  }
   $('pSubText').textContent = ''
   $('pPlayBtn').textContent = 'Pause'
   $('pSeek').value = '0'
@@ -2092,8 +2119,7 @@ function openPlayer (entry, at = 0) {
     video.pause()
     p.audioCtx?.suspend?.().catch(() => {})
     syncWorkerClock(hold, !p.paused)
-    $('pStatus').textContent = 'Buffering…'
-    $('pStatus').style.display = 'block'
+    showStatus('Buffering…')
     pumpPrefetch(p)
   }
   function maybeExitRebuffer () {
@@ -2103,7 +2129,7 @@ function openPlayer (entry, at = 0) {
   function applyRebufferExit (snapTo) {
     if (!p.rebuffering || player !== p) return
     p.rebuffering = false
-    $('pStatus').style.display = 'none'
+    hideStatus()
     p.freeBasePerf = performance.now()
     p.lastMseAdvanceWall = p.freeBasePerf
     if (typeof snapTo === 'number' && snapTo >= 0) {
@@ -2133,7 +2159,7 @@ function openPlayer (entry, at = 0) {
     const aReady = p.audioStream < 0 || pendingAudioSec() >= minAudioSec || p.eof
     if (!vReady || !aReady) return
     p.primed = true
-    $('pStatus').style.display = 'none'
+    hideStatus()
     p.freeBasePerf = performance.now()
     while (p.pendingAudio.length > 0) scheduleAudioChunk(p.pendingAudio.shift())
     if (p.useMse && !p.paused) {
@@ -2143,8 +2169,8 @@ function openPlayer (entry, at = 0) {
     syncWorkerClock(currentMediaTime(), !p.paused)
   }
 
-  video.onloadeddata = () => { if (player === p) tryPrime() }
-  video.oncanplay = () => { if (player === p) tryPrime() }
+  video.onloadeddata = () => { if (player === p) { $('pBackdrop')?.classList.remove('vis'); tryPrime() } }
+  video.oncanplay = () => { if (player === p) { $('pBackdrop')?.classList.remove('vis'); tryPrime() } }
 
   function resetMediaOutputs (targetSecs) {
     for (const s of p.audioNodes) { try { s.node.stop(); s.node.disconnect() } catch {} }
@@ -2332,17 +2358,19 @@ function openPlayer (entry, at = 0) {
 
   worker.onerror = err => {
     if (player !== p) return
-    $('pStatus').style.display = ''
-    $('pStatus').textContent = 'Worker error: ' + (err?.message || 'failed')
+    showStatus('Worker error: ' + (err?.message || 'failed'), true)
   }
   worker.onmessage = ev => {
     if (player !== p) return
     const m = ev.data || {}
-    if (m.type === 'warm') { if (m.streamBlock) streamBlockBytes = m.streamBlock; return }
+    if (m.type === 'warm') { workerWarm = true; if (m.streamBlock) streamBlockBytes = m.streamBlock; return }
     if (m.seq && m.seq !== p.seq) return
+    if (m.type === 'stage') {
+      if (!p.primed && m.status) showStatus(m.status)
+      return
+    }
     if (m.type === 'error') {
-      $('pStatus').style.display = ''
-      $('pStatus').textContent = 'Playback error: ' + m.error
+      showStatus('Playback error: ' + m.error, true)
       $('pBadge').textContent = 'Can’t play this file'
       return
     }
@@ -2351,6 +2379,12 @@ function openPlayer (entry, at = 0) {
       const mf = m.manifest
       p.manifest = mf
       p.duration = mf.duration || 0
+      if (p.duration > 0) {
+        const initClk = fmtClock(p.startAt) + ' / ' + fmtClock(p.duration)
+        $('pClock').textContent = initClk
+        $('pMiniClock').textContent = initClk
+      }
+      if (!p.primed) showStatus('Starting playback…')
       p.videoStream = mf.defaultVideo ?? -1
       p.audioStream = mf.defaultAudio ?? -1
       const subs = mf.tracks.filter(t => t.kind === 'subtitle')
@@ -2398,6 +2432,11 @@ function openPlayer (entry, at = 0) {
         p.prefetchInFlight.clear()
         p.prefetchDone.clear()
         p.lastReadBlock = -1
+      } else {
+        // probeStream already cached block 0 without HTTP/1.1 socket contention; now stream blocks 1..N ahead while start runs.
+        p.prefetchDone.add(0)
+        p.lastReadBlock = 1
+        pumpPrefetch(p)
       }
       worker.postMessage({ cmd: 'start', seq: p.seq, time: p.startAt, videoStream: p.videoStream, audioStream: p.audioStream, subStream: p.subStream, useMse: p.useMse, allowWebCodecs: p.allowWebCodecs })
     } else if (m.type === 'webCodecsError') {
@@ -2553,7 +2592,7 @@ function openPlayer (entry, at = 0) {
 
   function drawSwFrame (f) {
     p.lastDrawWall = performance.now()
-    if ($('pStatus').textContent === 'Buffering…') $('pStatus').style.display = 'none'
+    if ($('pStatus').textContent === 'Buffering…') hideStatus()
     const r = (f.yuv || f.hwFrame) ? getYuvGl() : false
     if (f.hwFrame) {
       const fw = f.w || f.hwFrame.displayWidth || f.hwFrame.codedWidth || 0
@@ -2736,8 +2775,7 @@ function openPlayer (entry, at = 0) {
         document.visibilityState === 'visible' && !p.windowOccluded &&
         p.lastDrawWall && pf - p.lastDrawWall > 1500 &&
         $('pStatus').style.display === 'none') {
-      $('pStatus').textContent = 'Buffering…'
-      $('pStatus').style.display = 'block'
+      showStatus('Buffering…')
     }
   }
   function stepCanvasFrames (now, draw) {
@@ -2798,17 +2836,11 @@ function openPlayer (entry, at = 0) {
       enterRebuffer()
     })
     vid.addEventListener('playing', () => {
-      if (player === p && !p.rebuffering && $('pStatus').textContent === 'Buffering…') $('pStatus').style.display = 'none'
+      if (player === p && !p.rebuffering && $('pStatus').textContent === 'Buffering…') hideStatus()
     })
   }
   const extMatch = (entry.streamUrl || '').split('?')[0].split('.').pop() || ''
   worker.postMessage({ cmd: 'open', seq: p.seq, streamUrl, wasmUrl: location.origin + '/web/peartube_web.wasm' + ASSET_VER, ext: extMatch.length <= 5 ? extMatch : '' })
-  // When starting from 0:00, warm the first 2 MiB blocks immediately; when resuming mid-film, wait for pt_seek's target block.
-  if (p.startAt === 0) {
-    p.lastReadBlock = 0
-    p.prefetchDone.clear()
-    pumpPrefetch(p)
-  }
   return p
 }
 
@@ -2862,14 +2894,12 @@ function seekTo (targetSecs) {
     player.startAt = clamped
     player.freeBaseMedia = clamped
     player.audioBaseMedia = clamped
-    $('pStatus').style.display = ''
-    $('pStatus').textContent = 'Seeking…'
+    showStatus('Seeking…')
     return
   }
   player.seq = ++openCounter
   player.eof = false
-  $('pStatus').style.display = ''
-  $('pStatus').textContent = 'Seeking…'
+  showStatus('Seeking…')
   player.drawnFrames = 0
   player.videoCrop = null
   for (const ctl of player.prefetchInFlight.values()) { try { ctl.abort() } catch {} }
@@ -2916,8 +2946,7 @@ function nudge (deltaSecs) {
   const liveNow = player.currentMediaTime ? player.currentMediaTime() : (player.freeBaseMedia || 0)
   const from = seekTarget ?? liveNow
   seekTarget = Math.max(0, player.duration > 0 ? Math.min(player.duration, from + deltaSecs) : from + deltaSecs)
-  $('pStatus').style.display = ''
-  $('pStatus').textContent = 'Seeking to ' + fmtClock(seekTarget)
+  showStatus('Seeking to ' + fmtClock(seekTarget))
   clearTimeout(seekTimer)
   seekTimer = setTimeout(() => { const t = seekTarget; seekTarget = null; seekTo(t) }, 350)
 }

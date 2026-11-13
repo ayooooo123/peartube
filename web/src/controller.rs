@@ -312,9 +312,10 @@ impl PlayerController {
     pub(crate) fn rules_json(duration_secs: f64) -> serde_json::Value {
         let long = duration_secs >= 120.0;
         serde_json::json!({
-            "minMsePrimeLeadSec": if long { 3.0 } else { 0.04 },
-            "minSwPrimeFrames": if long { 8 } else { 2 },
-            "minAudioPrimeSec": if long { 2.0 } else { 0.01 },
+            // Unpause on the first ~0.55 s GOP + ~0.25 s audio instead of stalling on 30 MiB of 4K pre-roll; background pump still builds the full 16 s / 6 s cushion.
+            "minMsePrimeLeadSec": if long { 0.55 } else { 0.04 },
+            "minSwPrimeFrames": if long { 3 } else { 2 },
+            "minAudioPrimeSec": if long { 0.25 } else { 0.01 },
             "rebufferVideoSec": if long { 2.2 } else { 0.5 },
             "rebufferAudioSec": if long { 1.2 } else { 0.2 },
             "prefetchInFlight": PREFETCH_IN_FLIGHT,

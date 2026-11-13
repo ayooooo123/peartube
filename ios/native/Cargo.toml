@@ -12,8 +12,8 @@ crate-type = ["staticlib"]
 libc = "0.2"
 serde_json = "1"
 oxideav-core = "*"
-player = { git = "https://github.com/ayooooo123/peartube-media", rev = "dce240d970416a9a89c68800d468dc9e0d4f1423" }
-codecs = { git = "https://github.com/ayooooo123/peartube-media", rev = "dce240d970416a9a89c68800d468dc9e0d4f1423" }
+player = { git = "https://github.com/ayooooo123/peartube-media", rev = "253af8911c0330f8465ae6c4a4dc1500ea70f59d" }
+codecs = { git = "https://github.com/ayooooo123/peartube-media", rev = "253af8911c0330f8465ae6c4a4dc1500ea70f59d" }
 
 [profile.release]
 strip = true
@@ -53,7 +53,7 @@ oxideav-mkv = { git = "https://github.com/ayooooo123/oxideav-mkv", rev = "a516f2
 oxideav-mov = { git = "https://github.com/ayooooo123/oxideav-mov", rev = "d6af48d7db0428583b60ae52b0f2bbc0901d4318" }
 oxideav-mp2 = { git = "https://github.com/ayooooo123/oxideav-mp2", rev = "503367c83790c2e6d9d41cc545bee26ea70d21b0" }
 oxideav-mp3 = { git = "https://github.com/ayooooo123/oxideav-mp3", rev = "9f353eabd1d7a7980c1fc8b5ef9fa1b5515f5bf4" }
-oxideav-mp4 = { git = "https://github.com/ayooooo123/oxideav-mp4", rev = "81312c1dd31907433d62adbc0bf72269b8fef4cd" }
+oxideav-mp4 = { git = "https://github.com/ayooooo123/oxideav-mp4", rev = "9324fce7ec5299f9fabd81e21708b0d37b5aa345" }
 oxideav-mpeg12video = { git = "https://github.com/ayooooo123/oxideav-mpeg12video", rev = "02de487a4b604640633b142d21fb6c5308b27b04" }
 oxideav-mpeg4video = { git = "https://github.com/ayooooo123/oxideav-mpeg4video", rev = "666e9915fa31dfb79dd841a4f6b28977e1e5cf71" }
 oxideav-mpegts = { git = "https://github.com/ayooooo123/oxideav-mpegts", rev = "cc1142280d1a3da64528887e5634ffe728a8395a" }

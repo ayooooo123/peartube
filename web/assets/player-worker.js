@@ -180,9 +180,12 @@ function readAtSync (offset, dstPtr, len) {
   const blockEnd = Math.min(streamLen, blockStart + STREAM_BLOCK)
   const wantFullBlock = streamingMode && bOff <= 262144
   const fetchStart = wantFullBlock ? blockStart : offset
+  // Swallow up to 4 MiB in one range read near the tail so multi-megabyte MKV Cues and trailing MP4 moovs don't stall behind 6-8 serial 512 KiB sync XHRs.
+  const nearTail = offset >= Math.max(0, streamLen - 8 * 1024 * 1024)
+  const probeSpan = nearTail ? 4 * 1024 * 1024 : 1024 * 1024
   const span = streamingMode
     ? (blockEnd - fetchStart)
-    : Math.min(Math.max(524288, maxLen), streamLen - offset)
+    : Math.min(Math.max(probeSpan, maxLen), streamLen - offset)
   const fetchEnd = Math.min(streamLen - 1, fetchStart + span - 1)
   for (let attempt = 0; attempt < 3; attempt++) {
     try {
@@ -614,8 +617,11 @@ async function handleCmd (msg) {
     useWebCodecs = false
     activeSeq = msg.seq || 1
     streamUrl = msg.streamUrl
+    if (!wasm) self.postMessage({ type: 'stage', seq: activeSeq, status: 'Loading player…' })
     await ensureWasm(msg.wasmUrl)
+    self.postMessage({ type: 'stage', seq: activeSeq, status: 'Opening stream…' })
     await probeStream(streamUrl)
+    self.postMessage({ type: 'stage', seq: activeSeq, status: 'Reading tracks…' })
     const extBytes = enc.encode(msg.ext || '')
     let ptr = 0
     if (extBytes.length > 0) {

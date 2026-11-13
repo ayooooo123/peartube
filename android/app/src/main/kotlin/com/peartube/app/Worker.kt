@@ -3,6 +3,7 @@ package com.peartube.app
 import android.content.Context
 import com.peartube.shared.EngineBridge
 import com.peartube.shared.IpcTransport
+import com.peartube.shared.NativeTransport
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -35,9 +36,10 @@ class Worker(context: Context) {
     private val lifecycle = Executors.newSingleThreadExecutor { Thread(it, "peartube-worklet") }.asCoroutineDispatcher()
     private val ready = CompletableDeferred<Ipc?>()
     private var worklet: Worklet? = null
+    private val native = BuildConfig.ENGINE == "rust"
 
     private val bridge = EngineBridge(
-        transport = IpcTransport(ready) { worklet },
+        transport = if (native) NativeTransport() else IpcTransport(ready) { worklet },
         onEvent = ::dispatchEvent,
         onFatal = { _events.tryEmit(Event.Exited) },
         stoppedMessage = "The P2P worker stopped",
@@ -45,25 +47,35 @@ class Worker(context: Context) {
     private val initialized = CompletableDeferred<Unit>()
 
     init {
-        scope.launch(lifecycle) {
-            try {
-                val bundle = context.assets.open("worker.bundle").use { it.readBytes() }
-                val worklet = Worklet(context)
-                val ipc = Ipc(worklet)
-                worklet.start("/worker.bundle", bundle)
-                this@Worker.worklet = worklet
-                ready.complete(ipc)
-                scope.launch { bridge.read() }
-                // Casting works before (and between) node starts once the worklet knows where pairings live.
-                scope.launch {
-                    runCatching { bridge.call("init", JSONObject().put("castStorage", File(storeDir, "cast").path)) }
+        if (native) {
+            // The Rust engine starts on read() (pt_init): this build ships no worker.bundle.
+            scope.launch(lifecycle) { bridge.read() }
+            afterStart()
+        } else {
+            scope.launch(lifecycle) {
+                try {
+                    val bundle = context.assets.open("worker.bundle").use { it.readBytes() }
+                    val worklet = Worklet(context)
+                    val ipc = Ipc(worklet)
+                    worklet.start("/worker.bundle", bundle)
+                    this@Worker.worklet = worklet
+                    ready.complete(ipc)
+                    scope.launch { bridge.read() }
+                    afterStart()
+                } catch (e: Throwable) {
+                    ready.complete(null)
                     initialized.complete(Unit)
+                    bridge.fail("The P2P worker did not start: ${e.message ?: e}")
                 }
-            } catch (e: Throwable) {
-                ready.complete(null)
-                initialized.complete(Unit)
-                bridge.fail("The P2P worker did not start: ${e.message ?: e}")
             }
+        }
+    }
+
+    /** Casting works before (and between) node starts once the engine knows where pairings live. */
+    private fun afterStart() {
+        scope.launch {
+            runCatching { bridge.call("init", JSONObject().put("castStorage", File(storeDir, "cast").path)) }
+            initialized.complete(Unit)
         }
     }
 

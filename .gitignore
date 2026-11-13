@@ -109,6 +109,8 @@ worklet/vendor/
 # Android app (Kotlin): Gradle state
 android/.gradle/
 android/.kotlin/
+android/buildSrc/.gradle/
+android/buildSrc/.kotlin/
 android/local.properties
 android/native/target/
 

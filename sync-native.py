@@ -10,7 +10,9 @@ the JS engine; `-Ppeartube.engine=rust` builds against these prebuilt libraries.
     python3 sync-native.py pin <release-tag>
     python3 sync-native.py check [--strict]
 
-Asset keys: android-arm64, darwin-arm64, header. `fetch` refuses an unpinned
+Asset keys: android-arm64, android-arm64-dev, darwin-arm64, header. The `-dev`
+asset is the dev cargo profile: the apps' debug builds link it so they never
+carry a release-speed engine. `fetch` refuses an unpinned
 lock, verifies every sha256 and caches downloads in `$XDG_CACHE_HOME` /
 `~/.cache/peartube-native/<release>/`. `--local` builds `ffi/build.sh <target>
 <dir>` from a checkout instead and checks no hash. `pin` rewrites `native.lock`
@@ -32,7 +34,7 @@ import urllib.request
 ROOT = pathlib.Path(__file__).resolve().parent
 LOCK = ROOT / "native.lock"
 REPO = "https://github.com/ayooooo123/peartube-native"
-ASSET_KEYS = ("android-arm64", "darwin-arm64", "header")
+ASSET_KEYS = ("android-arm64", "android-arm64-dev", "darwin-arm64", "header")
 HEADER = "peartube_native.h"
 ENGINES = {"android-tv": "js", "android-app": "js", "desktop": "js", "ios": "js"}
 
@@ -184,7 +186,8 @@ def cmd_pin(args):
         if key == "header":
             name = next((name for name in assets if name.endswith(".h")), None)
         else:
-            name = next((name for name in assets if key in name), None)
+            # Suffix, not substring: `android-arm64` must not claim the `-dev` asset.
+            name = next((name for name in assets if name.endswith(f"-{key}.so") or name.endswith(f"-{key}.dylib")), None)
         if name is None:
             fail(f"ffi-manifest.json has no asset for {key!r}: {', '.join(assets)}")
         digest = assets[name]

@@ -1,3 +1,5 @@
+import peartube.buildlogic.NativeEngineTask
+import peartube.buildlogic.registerNativeEngine
 import javax.inject.Inject
 
 plugins {
@@ -15,13 +17,10 @@ val appVersion = (groovy.json.JsonSlurper().parseText(File(checkout, "package.js
 
 // The P2P engine: -Ppeartube.engine=js|rust, else native.lock's default for this app.
 val nativeLock = groovy.json.JsonSlurper().parseText(File(checkout, "native.lock").readText()) as Map<*, *>
-val lockAssets = nativeLock["assets"] as Map<*, *>
 val lockEngine = (nativeLock["engine"] as Map<*, *>)["android-tv"] as String
 val engine = providers.gradleProperty("peartube.engine").orNull ?: lockEngine
 require(engine == "js" || engine == "rust") { "peartube.engine must be js or rust, not $engine" }
 val nativeLocal = providers.gradleProperty("peartube.nativeLocal").orNull
-val nativeLibFile = (lockAssets["android-arm64"] as Map<*, *>)["file"] as String
-val nativeHeaderFile = (lockAssets["header"] as Map<*, *>)["file"] as String
 
 abstract class TvWorkletTask @Inject constructor(private val exec: ExecOperations) : DefaultTask() {
     @get:InputFiles
@@ -93,85 +92,6 @@ abstract class TvCargoTask @Inject constructor(private val exec: ExecOperations)
         val built = crate.get().asFile.resolve("target/aarch64-linux-android/${if (profile.get() == "dev") "debug" else "release"}/libpeartube.so")
         val out = libsDir.get().asFile.resolve("arm64-v8a").apply { deleteRecursively(); mkdirs() }
         built.copyTo(out.resolve("libpeartube.so"))
-    }
-}
-
-abstract class TvNativeTask @Inject constructor(private val exec: ExecOperations) : DefaultTask() {
-    @get:InputFile
-    @get:PathSensitive(PathSensitivity.RELATIVE)
-    abstract val script: RegularFileProperty
-
-    @get:InputFile
-    @get:PathSensitive(PathSensitivity.RELATIVE)
-    abstract val lock: RegularFileProperty
-
-    @get:InputFile
-    @get:PathSensitive(PathSensitivity.RELATIVE)
-    abstract val jni: RegularFileProperty
-
-    /** A peartube-native checkout to build locally; empty fetches the pinned release. */
-    @get:Input
-    abstract val local: Property<String>
-
-    @get:Input
-    abstract val library: Property<String>
-
-    @get:Input
-    abstract val header: Property<String>
-
-    @get:Internal
-    abstract val repo: DirectoryProperty
-
-    @get:Internal
-    abstract val ndk: DirectoryProperty
-
-    @get:OutputDirectory
-    abstract val libsDir: DirectoryProperty
-
-    @get:OutputDirectory
-    abstract val fetchDir: DirectoryProperty
-
-    @TaskAction
-    fun run() {
-        // A pinned engine must match this checkout's engine contract; a local checkout is the developer's call.
-        if (local.get().isEmpty()) {
-            exec.exec {
-                workingDir = repo.get().asFile
-                commandLine("python3", script.get().asFile.path, "check", "--strict")
-            }
-        }
-        val fetched = fetchDir.get().asFile.apply { deleteRecursively(); mkdirs() }
-        val out = libsDir.get().asFile.resolve("arm64-v8a").apply { deleteRecursively(); mkdirs() }
-        exec.exec {
-            workingDir = repo.get().asFile
-            commandLine(
-                buildList {
-                    add("python3"); add(script.get().asFile.path); add("fetch")
-                    if (local.get().isNotEmpty()) { add("--local"); add(local.get()) }
-                    add("android-arm64"); add("header"); add(fetched.path)
-                },
-            )
-        }
-        val prefix = ndk.get().asFile.resolve("toolchains/llvm/prebuilt").listFiles()!!.single()
-        val bin = prefix.resolve("bin")
-        val clang = bin.resolve("aarch64-linux-android29-clang").path
-        if (!fetched.resolve(header.get()).isFile) {
-            throw GradleException("sync-native.py did not fetch ${header.get()}")
-        }
-        // The release's names become the ones the linker and System.loadLibrary() use.
-        val link = fetched.resolve("link").apply { mkdirs() }
-        fetched.resolve(library.get()).copyTo(link.resolve("libpeartube_native_ffi.so"), overwrite = true)
-        prefix.resolve("sysroot/usr/lib/aarch64-linux-android/libc++_shared.so")
-            .copyTo(out.resolve("libc++_shared.so"), overwrite = true)
-        exec.exec {
-            commandLine(
-                clang, "-shared", "-fPIC", "-O2", "-Wall", "-Werror",
-                "-o", out.resolve("libpeartube_jni.so").path, jni.get().asFile.path,
-                "-I${fetched.path}", "-L${link.path}", "-lpeartube_native_ffi",
-                "-Wl,-rpath-link,${link.path}", "-Wl,-z,max-page-size=16384",
-            )
-        }
-        link.resolve("libpeartube_native_ffi.so").copyTo(out.resolve("libpeartube_native_ffi.so"), overwrite = true)
     }
 }
 
@@ -258,22 +178,8 @@ androidComponents {
             variant.sources.assets?.addGeneratedSourceDirectory(workletTask, TvWorkletTask::assetsDir)
             variant.sources.jniLibs?.addGeneratedSourceDirectory(workletTask, TvWorkletTask::libsDir)
         } else {
-            val native = tasks.register<TvNativeTask>("native${variant.name.replaceFirstChar { it.uppercase() }}") {
-                script.set(File(checkout, "sync-native.py"))
-                lock.set(File(checkout, "native.lock"))
-                jni.set(File(checkout, "android/jni/peartube_jni.c"))
-                local.set(nativeLocal ?: "")
-                library.set(nativeLibFile)
-                header.set(nativeHeaderFile)
-                repo.set(checkout)
-                ndk.set(androidComponents.sdkComponents.ndkDirectory)
-                libsDir.set(layout.buildDirectory.dir("native/${variant.name}"))
-                fetchDir.set(layout.buildDirectory.dir("native-fetch/${variant.name}"))
-                // Runs every build: the contract check reads the app's sources, and a local checkout changes
-                // without its path changing. Pinned files come from the download cache, so this costs seconds.
-                outputs.upToDateWhen { false }
-            }
-            variant.sources.jniLibs?.addGeneratedSourceDirectory(native, TvNativeTask::libsDir)
+            val native = registerNativeEngine(variant.name, variant.buildType, nativeLocal, androidComponents.sdkComponents.ndkDirectory)
+            variant.sources.jniLibs?.addGeneratedSourceDirectory(native, NativeEngineTask::libsDir)
         }
         val cargo = tasks.register<TvCargoTask>("cargo${variant.name.replaceFirstChar { it.uppercase() }}") {
             crate.set(nativeCrate)

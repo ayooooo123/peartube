@@ -1,3 +1,5 @@
+import peartube.buildlogic.NativeEngineTask
+import peartube.buildlogic.registerNativeEngine
 import javax.inject.Inject
 
 plugins {
@@ -11,6 +13,13 @@ val checkout: File = rootDir.parentFile
 val worklet = File(checkout, "worklet")
 // Releases bump the version in package.json; both apps ship it.
 val appVersion = (groovy.json.JsonSlurper().parseText(File(checkout, "package.json").readText()) as Map<*, *>)["version"] as String
+
+// The P2P engine: -Ppeartube.engine=js|rust, else native.lock's default for this app.
+val nativeLock = groovy.json.JsonSlurper().parseText(File(checkout, "native.lock").readText()) as Map<*, *>
+val lockEngine = (nativeLock["engine"] as Map<*, *>)["android-app"] as String
+val engine = providers.gradleProperty("peartube.engine").orNull ?: lockEngine
+require(engine == "js" || engine == "rust") { "peartube.engine must be js or rust, not $engine" }
+val nativeLocal = providers.gradleProperty("peartube.nativeLocal").orNull
 
 /** Packs the P2P worklet and gathers the native libraries it loads (android/worklet.mjs). */
 abstract class WorkletTask @Inject constructor(private val exec: ExecOperations) : DefaultTask() {
@@ -108,6 +117,7 @@ android {
         versionCode = major * 10_000 + minor * 100 + patch
         versionName = appVersion
         ndk { abiFilters += "arm64-v8a" }
+        buildConfigField("String", "ENGINE", "\"$engine\"")
     }
     // The version CI installs; worklet/bare-kit.sh builds against the newest one.
     ndkVersion = "29.0.14206865"
@@ -151,6 +161,7 @@ android {
 
     buildFeatures {
         compose = true
+        buildConfig = true
     }
 
     packaging {
@@ -168,8 +179,13 @@ kotlin {
 
 androidComponents {
     onVariants { variant ->
-        variant.sources.assets?.addGeneratedSourceDirectory(workletTask, WorkletTask::assetsDir)
-        variant.sources.jniLibs?.addGeneratedSourceDirectory(workletTask, WorkletTask::libsDir)
+        if (engine == "js") {
+            variant.sources.assets?.addGeneratedSourceDirectory(workletTask, WorkletTask::assetsDir)
+            variant.sources.jniLibs?.addGeneratedSourceDirectory(workletTask, WorkletTask::libsDir)
+        } else {
+            val native = registerNativeEngine(variant.name, variant.buildType, nativeLocal, androidComponents.sdkComponents.ndkDirectory)
+            variant.sources.jniLibs?.addGeneratedSourceDirectory(native, NativeEngineTask::libsDir)
+        }
         val cargo = tasks.register<CargoTask>("cargo${variant.name.replaceFirstChar { it.uppercase() }}") {
             crate.set(nativeCrate)
             sources.from(fileTree(nativeCrate.resolve("src")), nativeCrate.resolve("Cargo.toml"), nativeCrate.resolve("Cargo.lock"), checkout.parentFile.resolve("peartube-media/crates").takeIf { it.isDirectory }?.let { fileTree(it) } ?: files())

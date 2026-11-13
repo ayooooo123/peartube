@@ -1,5 +1,6 @@
 //! The app's P2P stack without the UI, for test/desktop.e2e.js. Starts the real
-//! worklet, joins the tracker in PEARTUBE_STORAGE/settings.json, and prints one
+//! engine (the Bare worklet, or the Rust engine with `--features engine-rust`),
+//! joins the tracker in PEARTUBE_STORAGE/settings.json, and prints one
 //! JSON line per stage:
 //!   streamed  an entry for <id> appeared, and its stream URL read back; with
 //!             PEARTUBE_PLAY set, also played through the app's player with
@@ -38,7 +39,7 @@ fn main() {
         println!("{}", serde_json::json!({ "stage": "timeout", "waitingFor": waiting }));
         std::process::exit(1);
     });
-    let worker = worker().expect("start the worklet");
+    let worker = worker().expect("start the engine");
     let mut events = worker.subscribe();
     futures_executor::block_on(async {
         let started = Instant::now();

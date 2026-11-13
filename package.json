@@ -105,6 +105,7 @@
     "bare-path": "^3.0.1",
     "bare-process": "4.5.1",
     "bare-subprocess": "^6.2.2",
+    "bare-ubit": "github:ayooooo123/bare-ubit#fb19d67b4ec6746721c7632f6d40533323d66d02",
     "bonjour-service": "^1.4.4",
     "compact-encoding": "^3.6.0",
     "corestore": "github:ayooooo123/corestore#2edcbbefe23bd55bc711488b94a9f41e48632b5f",

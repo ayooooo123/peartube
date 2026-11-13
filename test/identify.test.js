@@ -43,10 +43,13 @@ test('an opaque debrid path is a file when the name is in the query or headers',
     assert.equal(disposed.link.kind, 'file')
     assert.equal(disposed.link.name, NAME)
 
-    // A page that happens to name a media file in its query stays a page: without
-    // ubit installed this rejects instead of importing an HTML body as the film.
-    const page = await identify(`${base}/page?filename=${ENCODED}`, { cinemetaUrl: '' }).then(r => r.link.kind, () => 'rejected')
-    assert.notEqual(page, 'file')
+    // A page that happens to name a media file in its query stays a page: bundled
+    // bare-ubit refuses the loopback host rather than swallowing an HTML body as the film,
+    // and never cries UBIT_MISSING now that the jailed WASM throat is always mounted.
+    const pageErr = await identify(`${base}/page?filename=${ENCODED}`, { cinemetaUrl: '' }).then(() => null, err => err)
+    assert.ok(pageErr)
+    assert.notEqual(pageErr.code, 'UBIT_MISSING')
+    await assert.rejects(() => identify(`${base}/page?filename=${ENCODED}`, { cinemetaUrl: '', ubit: '/nonexistent/ubit' }), { status: 501, code: 'UBIT_MISSING' })
   })
 })
 

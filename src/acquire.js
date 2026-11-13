@@ -40,6 +40,7 @@ export function createAcquirer (node, file, {
   maxAttempts = 4,
   defaultChannel = false,
   ubitConfigDir = join(dirname(file), 'ubit'),
+  ubit = '',
   onDone = null
 } = {}) {
   const workRoot = dirname(file)
@@ -202,6 +203,7 @@ export function createAcquirer (node, file, {
             job.bytes = 0
             const dl = await downloadPage(job.source.url, tmpDir, {
               configDir: ubitConfigDir,
+              ubit,
               stallTimeout,
               controller,
               onProgress ({ bytes, total }) {

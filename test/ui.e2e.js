@@ -3,7 +3,7 @@
 //      round-trip from the UI with every change applied in the running relay, and the Restart relay action.
 //   2. Every plugin as a user intent from the first screen, counting clicks: add from URL, import a folder,
 //      follow a feed, copy a channel, keep copies, ask a HiveRelay to seed; legacy migration hidden when there is none.
-//   3. Content identification against a stubbed Cinemeta and a stub `ubit` on PATH: an exact match is
+//   3. Content identification against a stubbed Cinemeta and a stub `ubit` (`UBIT_BIN`): an exact match is
 //      published as `imdb:tt…` (the id MediaStorm searches by), an unknown file as a plain clip, a page link
 //      through ubit's metadata and NDJSON downloader.
 //   4. Taste gates on every tab at 1440×900 and 390×844 in light and dark: no console errors or warnings, no
@@ -244,6 +244,7 @@ test('relay web UI: settings, plugins as intents, identification, and taste gate
   writeFileSync(join(storage, 'settings.json'), JSON.stringify({ acquireConcurrency: 2 }), { mode: 0o600 })
   const env = {
     PATH: binDir + ':' + process.env.PATH,
+    UBIT_BIN: join(binDir, 'ubit'),
     HOME: process.env.HOME,
     PEARTUBE_STORAGE: storage,
     PEARTUBE_API_PORT: String(apiPort),

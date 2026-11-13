@@ -1,5 +1,7 @@
 import { spawn } from 'node:child_process'
 import { createHash } from 'node:crypto'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import b4a from 'b4a'
 import { send } from './art.js'
 import { MEDIA_FILE } from './protocol.js'
@@ -56,10 +58,35 @@ function tagStatus (msg) {
   return m ? { status: Number(m[1]) } : {}
 }
 
-function ubitInfo (url, { configDir = '', timeoutMs = 45_000 } = {}) {
+let bareBin = null
+let bareUbitCli = null
+
+function fromFileUrl (u) {
+  const p = decodeURIComponent(new URL(u).pathname)
+  return process.platform === 'win32' && /^\/[a-z]:/i.test(p) ? p.slice(1) : p
+}
+
+// Collars every page job inside `bare-ubit`'s jailed WASM throat (stripped env, `/config` + `/out` only, public-IP SSRF guard)
+// unless Master explicitly names an override binary via `ubit` / `UBIT_BIN`.
+async function resolveUbit (args, { configDir = '', ubit = '' } = {}) {
+  const bin = ubit || process.env.UBIT_BIN || ''
+  if (bin) return { file: bin, args, env: ubitEnv(configDir) }
+  try {
+    bareBin ||= globalThis.Bare ? process.execPath : (await import('bare-runtime')).default()
+    bareUbitCli ||= fromFileUrl(import.meta.resolve('bare-ubit/bin.js'))
+    const cfg = configDir || process.env.UBIT_CONFIG_DIR || join(tmpdir(), 'peartube-ubit')
+    const env = process.platform === 'win32' && process.env.SystemRoot ? { SystemRoot: process.env.SystemRoot } : {}
+    return { file: bareBin, args: [bareUbitCli, '--config', cfg, ...args], env }
+  } catch {
+    throw missing()
+  }
+}
+
+async function ubitInfo (url, { configDir = '', ubit = '', timeoutMs = 45_000 } = {}) {
+  const cmd = await resolveUbit(['info', url, '--json'], { configDir, ubit })
   return new Promise((resolve, reject) => {
     let child
-    try { child = spawn('ubit', ['info', url, '--json'], { env: ubitEnv(configDir), stdio: ['ignore', 'pipe', 'pipe'] }) } catch { return reject(missing()) }
+    try { child = spawn(cmd.file, cmd.args, { env: cmd.env, stdio: ['ignore', 'pipe', 'pipe'] }) } catch { return reject(missing()) }
     const out = []
     const err = []
     let exited = null
@@ -89,12 +116,13 @@ function ubitInfo (url, { configDir = '', timeoutMs = 45_000 } = {}) {
 }
 
 // Drains a page link through `ubit get` into a private scratch hole, muxing split DASH/HLS streams natively with live NDJSON progress.
-export function downloadPage (pageUrl, outDir, { configDir = '', stallTimeout = 30_000, controller = null, onProgress = null } = {}) {
+export async function downloadPage (pageUrl, outDir, { configDir = '', ubit = '', stallTimeout = 30_000, controller = null, onProgress = null } = {}) {
+  if (controller?.aborted) throw new Error('Cancelled')
+  const cmd = await resolveUbit(['get', pageUrl, '--no-library', '--no-playlist', '--json', '-o', outDir], { configDir, ubit })
   return new Promise((resolve, reject) => {
     if (controller?.aborted) return reject(new Error('Cancelled'))
     let child
-    const args = ['get', pageUrl, '--no-library', '--no-playlist', '--json', '-o', outDir]
-    try { child = spawn('ubit', args, { env: ubitEnv(configDir), stdio: ['ignore', 'pipe', 'pipe'] }) } catch { return reject(missing()) }
+    try { child = spawn(cmd.file, cmd.args, { env: cmd.env, stdio: ['ignore', 'pipe', 'pipe'] }) } catch { return reject(missing()) }
     const err = []
     let buf = ''
     let donePath = null
@@ -250,8 +278,8 @@ export function candidateEntry (c, parsed) {
   return { id: `imdb:${c.imdb}`, title: c.year ? `${c.name} ${c.year}` : c.name }
 }
 
-export async function identify (url, { cinemetaUrl = '', configDir = '' } = {}) {
-  const link = await probe(url, { configDir })
+export async function identify (url, { cinemetaUrl = '', configDir = '', ubit = '' } = {}) {
+  const link = await probe(url, { configDir, ubit })
   const parsed = parseName(link.name)
   if (link.resolution) parsed.resolution = link.resolution
   // Page titles are free text; only ones that read like a release (a year or an episode) get movie suggestions.

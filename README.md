@@ -83,8 +83,8 @@ publishes; followers have read-only copies and still help seed the catalog and t
    HiveRelay seeding) yields to viewers through `peartube/bulk-busy` instead of pausing
    connections; a relay honors that signal only from peers that serve it blocks.
 4. **Acquisition.** Imports are a private job queue (`jobs.json`): fetch, store, announce, append durably.
-   Page links download and mux natively on every attempt through `ubit get --json`, so adaptive DASH/HLS streams
-   never depend on expiring media URLs. `ubit` is only needed for page links, and only on the relay — the apps never run an HTTP acquirer.
+   Page links download and mux on every attempt through bundled [`bare-ubit`](https://github.com/ayooooo123/bare-ubit) (`ubit.wasm` jailed to the config and scratch folders, with a stripped environment and public-IP SSRF guard; `UBIT_BIN` overrides the binary), so adaptive DASH/HLS streams
+   never depend on expiring media URLs or host-installed tools. Only relays run the HTTP acquirer.
 5. **Privacy.** The Corestore holds public data only. Source URLs, headers, feed tokens,
    HiveRelay keys and relay settings never leave private files in the data directory.
 
@@ -321,6 +321,8 @@ silently replace the relay's own library. A `settings.json` from before channels
 | `PEARTUBE_PLUGINS_DIR` | `<PEARTUBE_STORAGE>/plugins` | Directory scanned on startup for `*.mjs`/`*.js` import plugins |
 | `PEARTUBE_ACQUIRE_CONCURRENCY` | `4` | Maximum concurrent HTTP acquisition downloads |
 | `PEARTUBE_CINEMETA_URL` | `https://v3-cinemeta.strem.io` | Cinemeta-compatible title service; empty turns lookups off |
+| `UBIT_CONFIG_DIR` | `<PEARTUBE_STORAGE>/ubit` | Config and scratch folder passed to `bare-ubit` / `ubit` |
+| `UBIT_BIN` | bundled `bare-ubit` | Override path or binary name for page link metadata and downloads |
 | `PEARTUBE_ALLOWED_PEERS` | none | Comma-separated 64-hex Noise public keys allowed through the swarm firewall |
 | `PEARTUBE_API_TOKEN` | none | Bearer token required on mutating `/v1/*` routes and `/v1/settings` |
 

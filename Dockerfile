@@ -27,7 +27,7 @@ COPY bin ./bin
 COPY web/assets ./web/assets
 # Load every native add-on the relay uses, so a dependency update that needs a library this base lacks (as
 # rocksdb-native 3.18 needed libatomic) fails the build instead of the relay's first start.
-RUN ["/usr/local/bin/bare", "-e", "import('bare-process/global').then(() => import('./src/index.js')).then(() => import('./src/lan.js')).then(() => import('./src/private-overlay.js')).then(() => import('./src/http.js')).then(() => console.log('native add-ons load'), err => { console.error(err); Bare.exitCode = 1 })"]
+RUN ["/usr/local/bin/bare", "-e", "import('bare-process/global').then(() => import('./src/index.js')).then(() => import('./src/lan.js')).then(() => import('./src/private-overlay.js')).then(() => import('./src/http.js')).then(() => import('./src/identify.js')).then(() => import('bare-ubit')).then(() => console.log('native add-ons load'), err => { console.error(err); Bare.exitCode = 1 })"]
 ENV PEARTUBE_STORAGE=/data UV_THREADPOOL_SIZE=16
 VOLUME /data
 EXPOSE 8174 8443

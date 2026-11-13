@@ -1,20 +1,20 @@
 {
-  "release": "ffi-187a1f4e5",
-  "commit": "187a1f4e55126caa85bc1d1ec45a127b2dd5cfb0",
+  "release": "ffi-feabdd1f3",
+  "commit": "feabdd1f39e58423d91b7c98a3f894b3aa03f982",
   "jsRef": "8286e22f676a605ca27adae79355225efc0b6b77",
   "abiVersion": 1,
   "assets": {
     "android-arm64": {
       "file": "peartube_native_ffi-android-arm64.so",
-      "sha256": "0e050330ce4d0a2340601209dd65a93b0f451ad571e90b895053e0070552e53d"
+      "sha256": "8fbb957b3afd542f6e394f726e42ea78644e9360b4dd86331dc86f92eb1ccae8"
     },
     "android-arm64-dev": {
       "file": "peartube_native_ffi-android-arm64-dev.so",
-      "sha256": "41c5f11e1ac1a54630a866ef88e146f2635ae5ba4e7cf5e4affeb90208066c9c"
+      "sha256": "e8f84948b8fde2610751224db6305536249f9f9f6e438b796e37fb3d3c0a4cd9"
     },
     "darwin-arm64": {
       "file": "peartube_native_ffi-darwin-arm64.dylib",
-      "sha256": "216dba22e44bc8242ec5dc070bf1b31fe8e66197c2809b54eb91639ebc0fe52c"
+      "sha256": "68280eb75323b894fda404ee38ed0007849ade98a97974f2c4e05caab9f2c0e1"
     },
     "header": {
       "file": "peartube_native.h",

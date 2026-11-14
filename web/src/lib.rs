@@ -3262,10 +3262,7 @@ impl WebSession {
         }
 
         let info = FrameInfo::new(fmt, w, h);
-        let opts = ConvertOptions {
-            color_space: frame_color.pixfmt_color_space(),
-            ..Default::default()
-        };
+        let opts = ConvertOptions::new().with_color_space(frame_color.pixfmt_color_space());
         let converted = oxideav_pixfmt::convert(vf, info, PixelFormat::Rgba, &opts);
         if let Ok(rgba_frame) = converted
             && let Some(plane) = rgba_frame.planes.first()

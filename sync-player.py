@@ -30,6 +30,14 @@ if not block:
 pattern = re.compile(r"# BEGIN pin-oxideav\n.*?# END pin-oxideav\n", re.S)
 
 if local_mode:
+    def rewrite_patch_paths(patch_text, manifest_dir):
+        def repl(m):
+            p = pathlib.Path(m.group(1))
+            abs_p = (media / p).resolve() if not p.is_absolute() else p
+            rel_p = os.path.relpath(abs_p, manifest_dir).replace("\\", "/")
+            return f'path = "{rel_p}"'
+        return re.sub(r'path\s*=\s*"([^"]+)"', repl, patch_text)
+
     for manifest in manifests:
         text = manifest.read_text()
         rel_crates = os.path.relpath(media / "crates", manifest.parent).replace("\\", "/")
@@ -40,7 +48,8 @@ if local_mode:
                 text,
                 flags=re.M,
             )
-        text = pattern.sub(lambda _: block.group(0), text) if pattern.search(text) else text.rstrip("\n") + "\n\n" + block.group(0)
+        rewritten = rewrite_patch_paths(block.group(0), manifest.parent)
+        text = pattern.sub(lambda _: rewritten, text) if pattern.search(text) else text.rstrip("\n") + "\n\n" + rewritten
         manifest.write_text(text)
     print(f"player wired locally to {media}")
 else:

@@ -91,7 +91,7 @@ abstract class CargoTask @Inject constructor(private val exec: ExecOperations) :
             // Android 15+ devices with 16 KiB pages need aligned ELF load segments. The remap
             // keeps this machine's home directory out of the panic messages in the library.
             val home = System.getProperty("user.home")
-            environment("CARGO_ENCODED_RUSTFLAGS", listOf("-Clink-arg=-Wl,-z,max-page-size=16384", "--remap-path-prefix=$home=~").joinToString("\u001f"))
+            environment("CARGO_ENCODED_RUSTFLAGS", listOf("-Cllvm-args=-vectorize-loops", "-Cllvm-args=-vectorize-slp", "-Clink-arg=-Wl,-z,max-page-size=16384,--icf=all,--gc-sections,--pack-dyn-relocs=relr,--strip-all", "--remap-path-prefix=$home/.cargo/git/checkouts/=", "--remap-path-prefix=$home/.cargo/registry/src/=", "--remap-path-prefix=$home/projects/=", "--remap-path-prefix=$home=~").joinToString("\u001f"))
         }
         val built = crate.get().asFile.resolve("target/aarch64-linux-android/${if (profile.get() == "dev") "debug" else "release"}/libpeartube.so")
         val out = libsDir.get().asFile.resolve("arm64-v8a").apply { deleteRecursively(); mkdirs() }

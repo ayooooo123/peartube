@@ -1,6 +1,7 @@
 [target.wasm32-unknown-unknown]
 rustflags = [
   "-C", "target-feature=+simd128,+bulk-memory,+nontrapping-fptoint,+sign-ext,+mutable-globals",
-  "-C", "llvm-args=-inline-threshold=600",
-  "-C", "llvm-args=-unroll-threshold=450",
+  "-C", "llvm-args=-vectorize-loops",
+  "-C", "llvm-args=-vectorize-slp",
+  "-C", "link-arg=--strip-all",
 ]

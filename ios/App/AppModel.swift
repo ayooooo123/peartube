@@ -14,6 +14,12 @@ final class AppModel: ObservableObject {
     @Published var pendingCast: MediaEntry?
     @Published var pendingCastPosition: Double = 0
     @Published var query = ""
+    /// A search across relays the app does not follow (src/search.js): the query asked, its rows and when.
+    @Published var globalQuery = ""
+    @Published var globalRows: [[String: Any]] = []
+    @Published var globalBusy = false
+    @Published var globalError: String?
+    private var globalAskedAt = Date.distantPast
     @Published var filter = "All"
     @Published var sourceFilter = ""
     @Published var showSettings = false
@@ -145,7 +151,11 @@ final class AppModel: ObservableObject {
     }
     private func receive(_ event: [String: Any]) {
         switch event.string("event") {
-        case "update": Task { await refresh() }
+        case "update": Task {
+            await refresh()
+            // Later answers to a recent global search arrive as updates: ask the same query again.
+            if !globalBusy && Date().timeIntervalSince(globalAskedAt) < 60 { await fetchGlobal() }
+        }
         case "cast": cast = event.object("cast"); recordProgress(); reconcileBackground()
         case "sources":
             settings.sources = event.objects("sources").map(SourceSpec.init)
@@ -259,6 +269,24 @@ final class AppModel: ObservableObject {
             }
             query = ""; await refresh()
         } catch { self.error = error.localizedDescription }
+    }
+    /// Asks relays the app does not follow for `raw`. Later answers come back with the next minute's updates.
+    func searchGlobal(_ raw: String) async {
+        let q = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard q.count >= 2 else { return }
+        if globalQuery != q { globalRows = [] }
+        globalQuery = q; globalError = nil; globalAskedAt = Date()
+        await fetchGlobal()
+    }
+    private func fetchGlobal() async {
+        let q = globalQuery
+        globalBusy = true
+        defer { if globalQuery == q { globalBusy = false } }
+        do {
+            guard let worker else { throw AppFailure("The embedded worker is unavailable.") }
+            let rows = try await worker.request("searchGlobal", ["query": q]) as? [[String: Any]] ?? []
+            if globalQuery == q { globalRows = rows }
+        } catch { if globalQuery == q { globalError = error.localizedDescription } }
     }
     func addSource(_ spec: SourceSpec) async {
         do {

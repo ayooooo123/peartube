@@ -47,6 +47,7 @@ class AppModel(private val app: Application) {
     val entries = MutableStateFlow<List<Entry>>(emptyList())
     val error = MutableStateFlow<String?>(null)
     val query = MutableStateFlow("")
+    val global = MutableStateFlow(GlobalSearch())
     val screen = MutableStateFlow<Screen>(if (!settings.value.hasSources) Screen.Settings else Screen.List)
 
     val cast = MutableStateFlow(CastStatus())
@@ -187,6 +188,8 @@ class AppModel(private val app: Application) {
         scope.launch {
             for (unit in refreshes) {
                 refresh()
+                // Later answers to a recent global search arrive as updates: ask the same query again.
+                if (globalLive) fetchGlobal()
                 kotlinx.coroutines.delay(250)
             }
         }
@@ -285,6 +288,31 @@ class AppModel(private val app: Application) {
             }
         }
     }
+
+    /** Asks relays the app does not follow for [query]. Later answers come back with the next minute's updates. */
+    fun searchGlobal(query: String) {
+        val q = query.trim()
+        if (q.length < 2) return
+        val prev = global.value
+        global.value = GlobalSearch(query = q, rows = if (prev.query == q) prev.rows else emptyList(), askedAt = System.currentTimeMillis())
+        fetchGlobal()
+    }
+
+    private fun fetchGlobal() {
+        val q = global.value.query
+        global.value = global.value.copy(busy = true)
+        scope.launch {
+            val res = runCatching { worker.searchGlobal(q) }
+            if (global.value.query != q) return@launch
+            global.value = res.fold(
+                { global.value.copy(rows = it, busy = false, error = null) },
+                { global.value.copy(busy = false, error = it.message) },
+            )
+        }
+    }
+
+    private val globalLive: Boolean
+        get() = global.value.let { !it.busy && it.askedAt > 0 && System.currentTimeMillis() - it.askedAt < 60_000 }
 
     fun castEntryOrSheet(entry: Entry, startPositionMs: Long = 0L) {
         val activeId = cast.value.session?.receiverId ?: selectedCastReceiver.value?.id

@@ -24,6 +24,8 @@ const SPEC = {
   allowedPeers: { env: 'PEARTUBE_ALLOWED_PEERS', type: 'keys', def: [], live: true },
   publishChannel: { env: 'PEARTUBE_PUBLISH_CHANNEL', type: 'bool', def: true, fromEnv: s => s !== '0' },
   directory: { env: 'PEARTUBE_DIRECTORY', type: 'bool', def: false, live: true, fromEnv: s => Boolean(s) },
+  // Answer other nodes' global searches (src/search.js) with the media this relay holds.
+  globalSearch: { env: 'PEARTUBE_GLOBAL_SEARCH', type: 'bool', def: false, live: true, fromEnv: flag },
   acquireConcurrency: { env: 'PEARTUBE_ACQUIRE_CONCURRENCY', type: 'number', def: 4, min: 1, max: 32, live: true },
   watchDir: { env: 'PEARTUBE_WATCH_DIR', type: 'path', def: '', live: true },
   feeds: { env: 'PEARTUBE_MIRROR_FEEDS', type: 'urls', def: [], live: true },

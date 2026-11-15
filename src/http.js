@@ -4,7 +4,7 @@ import { join } from 'node:path'
 import b4a from 'b4a'
 import { page } from './ui.js'
 import { videoSize, resolutionLabel } from './resolution.js'
-import { MEDIA_FILE, parseUri } from './protocol.js'
+import { MEDIA_FILE, mediaFormat, parseUri } from './protocol.js'
 
 const MAX_BODY = 64 * 1024
 // Loopback, RFC 1918, CGNAT/Tailscale (100.64/10), link-local, and IPv6 ULA/link-local, plain or IPv4-mapped.
@@ -74,24 +74,26 @@ function readStream (host, port, search, start, end) {
   })
 }
 
+// The name and type a download is saved with, from the container its first bytes name (mediaFormat).
+const DOWNLOAD_FORMATS = {
+  mkv: { ext: '.mkv', mime: 'video/x-matroska' },
+  webm: { ext: '.webm', mime: 'video/webm' },
+  mp4: { ext: '.mp4', mime: 'video/mp4' },
+  mov: { ext: '.mov', mime: 'video/quicktime' },
+  avi: { ext: '.avi', mime: 'video/x-msvideo' },
+  wav: { ext: '.wav', mime: 'audio/wav' },
+  ogg: { ext: '.ogv', mime: 'video/ogg' },
+  flac: { ext: '.flac', mime: 'audio/flac' },
+  mp3: { ext: '.mp3', mime: 'audio/mpeg' },
+  aac: { ext: '.aac', mime: 'audio/aac' },
+  flv: { ext: '.flv', mime: 'video/x-flv' },
+  wmv: { ext: '.wmv', mime: 'video/x-ms-wmv' },
+  mpg: { ext: '.mpg', mime: 'video/mpeg' },
+  ts: { ext: '.ts', mime: 'video/mp2t' },
+  m2ts: { ext: '.m2ts', mime: 'video/mp2t' }
+}
 function sniffDownloadFormat (head) {
-  if (!head || head.length < 4) return { ext: '.mkv', mime: 'application/octet-stream' }
-  const magic = ((head[0] << 24) >>> 0) + (head[1] << 16) + (head[2] << 8) + head[3]
-  const ascii4 = off => off + 4 <= head.length ? String.fromCharCode(head[off], head[off + 1], head[off + 2], head[off + 3]) : ''
-  if (magic === 0x1a45dfa3) {
-    return b4a.toString(head.subarray(0, Math.min(head.length, 128)), 'latin1').toLowerCase().includes('webm')
-      ? { ext: '.webm', mime: 'video/webm' }
-      : { ext: '.mkv', mime: 'video/x-matroska' }
-  }
-  if (['ftyp', 'moov', 'mdat', 'free', 'wide', 'skip'].includes(ascii4(4))) {
-    return ascii4(8) === 'qt  ' ? { ext: '.mov', mime: 'video/quicktime' } : { ext: '.mp4', mime: 'video/mp4' }
-  }
-  if (ascii4(0) === 'RIFF' && ascii4(8) === 'AVI ') return { ext: '.avi', mime: 'video/x-msvideo' }
-  if (ascii4(0) === 'OggS') return { ext: '.ogv', mime: 'video/ogg' }
-  if (ascii4(0) === 'fLaC') return { ext: '.flac', mime: 'audio/flac' }
-  if (head[0] === 0x49 && head[1] === 0x44 && head[2] === 0x33) return { ext: '.mp3', mime: 'audio/mpeg' }
-  if (head[0] === 0x47 && (head.length < 189 || head[188] === 0x47)) return { ext: '.ts', mime: 'video/mp2t' }
-  return { ext: '.mkv', mime: 'application/octet-stream' }
+  return DOWNLOAD_FORMATS[mediaFormat(head)] || { ext: '.mkv', mime: 'application/octet-stream' }
 }
 
 function contentDispositionFor (rawTitle, ext) {
@@ -109,6 +111,7 @@ export function createApi (state) {
   // 10 minutes: its header may not have been reachable yet.
   const resolutions = new Map()
   const downloadFormats = new Map()
+  const globalSearches = new Map() // client address -> { key, at } of its newest global search
   // The blob server binds the interface the node gave it (loopback on a relay), so the /v1/blob proxy dials that.
   const blobHost = () => {
     const h = state.node?.blobServer?.host
@@ -227,6 +230,29 @@ export function createApi (state) {
       const { url: link } = await body(req)
       if (typeof link !== 'string' || !/^https?:\/\//i.test(link.trim())) throw Object.assign(new Error('Paste an http(s) link'), { status: 400 })
       return state.identify(link.trim())
+    }
+    // Global search asks relays across the network (src/search.js), so only the relay's owner starts one: the token
+    // when one is set, else a private address, and only from the relay's own page. A new query at most every 3 s per
+    // address; asking the same query again returns the answers that arrived since, without asking anyone again.
+    if (req.method === 'POST' && path === '/v1/search/global') {
+      if (!settingsOpen) throw Object.assign(new Error('Set PEARTUBE_API_TOKEN to search all relays over the internet'), { status: 403 })
+      const origin = req.headers.origin
+      if (origin && (() => { try { return new URL(origin).host !== req.headers.host } catch { return true } })()) {
+        throw Object.assign(new Error('Search all relays from the relay’s own page'), { status: 403 })
+      }
+      const n = requireNode(node)
+      const { query = '', id = null, limit = 0 } = await body(req)
+      const addr = remoteAddr(req)
+      const key = `${query}\n${id || ''}`
+      const last = globalSearches.get(addr)
+      if (last && last.key !== key && Date.now() - last.at < 3000) throw Object.assign(new Error('Wait a moment before the next search'), { status: 429 })
+      if (globalSearches.size >= 256) globalSearches.clear()
+      globalSearches.set(addr, { key, at: last?.key === key ? last.at : Date.now() })
+      try {
+        return { results: await n.searchGlobal({ query, id, limit }) }
+      } catch (err) {
+        throw Object.assign(err, { status: err.status || 400 })
+      }
     }
     if (req.method === 'GET' && path === '/v1/search') {
       const id = url.searchParams.get('id')

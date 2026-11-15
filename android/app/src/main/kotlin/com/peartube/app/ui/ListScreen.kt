@@ -49,6 +49,7 @@ fun ListScreen(model: AppModel) {
     val query by model.query.collectAsState()
     val history by model.watchHistory.collectAsState()
     val downloads by model.downloads.collectAsState()
+    val global by model.global.collectAsState()
     var hood by remember { mutableStateOf(false) }
     var scanner by remember { mutableStateOf(false) }
     var filter by remember { mutableStateOf("All") }
@@ -60,7 +61,8 @@ fun ListScreen(model: AppModel) {
     val glow by pulse.animateFloat(.45f, 1f, infiniteRepeatable(tween(1800), RepeatMode.Reverse), label = "Connection glow")
     val contextual = query.trim().let { it.startsWith("peartube://", true) || Regex("[a-fA-F0-9]{64}").matches(it) }
     val connect = {
-        if (contextual) { model.openUriOrKey(query); model.query.value = "" }
+        // A link opens; any other text filters the library as it is typed, and Search also asks other relays.
+        if (contextual) { model.openUriOrKey(query); model.query.value = "" } else model.searchGlobal(query)
         focus.clearFocus()
     }
     val rows = remember(entries, query, filter, source, contextual) {
@@ -134,11 +136,37 @@ fun ListScreen(model: AppModel) {
                     else SeriesCard(model, episodes, history, downloads, query.isNotBlank() && !contextual)
                 }
             }
+            if (query.isNotBlank() && !contextual) item(key = "global") { GlobalResults(model, query.trim(), global) }
         }
         CastRemoteBar(model)
     }
     if (hood) UnderTheHood(model, onClose = { hood = false }, onAdd = { hood = false; model.screen.value = Screen.Settings })
     if (scanner) QrScannerSheet(onScanned = { scanner = false; if (it.startsWith("peartube:", true)) model.openUriOrKey(it) else model.pairCastByUriOrHost(it) }, onClose = { scanner = false })
+}
+
+/** What relays the app does not follow hold for the text in the search box. The keyboard's Search asks them. */
+@Composable
+private fun GlobalResults(model: AppModel, typed: String, global: GlobalSearch) {
+    val asked = global.query == typed
+    val note = when {
+        !asked -> "Press Search to look on relays you do not follow."
+        global.error != null -> global.error
+        global.rows.isEmpty() -> if (global.busy) "Asking relays…" else "No relay has it yet. Answers can take a few seconds."
+        else -> null
+    }
+    Column(Modifier.fillMaxWidth().padding(top = 12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Text("On other relays", color = Ink, fontSize = 19.sp, fontWeight = FontWeight.Bold)
+        if (note != null) Text(note, color = Dim)
+        if (asked) global.rows.forEach { row ->
+            Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)).background(CardElevated).padding(start = 16.dp), verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f).padding(vertical = 10.dp)) {
+                    Text(row.title, color = Ink, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                    Text("${formatBytes(row.size)} · ${row.relays} ${if (row.relays == 1) "relay" else "relays"}", color = Dim, fontSize = 13.sp)
+                }
+                TextButton(onClick = { model.openUriOrKey(row.magnetUrl) }) { Text("Play", color = Brand) }
+            }
+        }
+    }
 }
 
 @Composable

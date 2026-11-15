@@ -32,7 +32,7 @@ struct LibraryScreen: View {
                 TextField("Title, ID, key or PearTube URI", text: $model.query)
                     .textInputAutocapitalization(.never).autocorrectionDisabled().submitLabel(model.contextualQuery ? .go : .search)
                     .accessibilityIdentifier("search.field")
-                    .onSubmit { if model.contextualQuery { Task { await model.openURI(model.query) } } }
+                    .onSubmit { Task { if model.contextualQuery { await model.openURI(model.query) } else { await model.searchGlobal(model.query) } } }
                 if !model.query.isEmpty { IconButton(title: "Clear search", icon: "xmark.circle.fill", identifier: "search.clear") { model.query = "" } }
                 IconButton(title: "Scan QR code", icon: "qrcode.viewfinder", identifier: "search.scan") { model.showScanner = true }
             }.padding(.leading, 14).background(.white.opacity(0.07), in: RoundedRectangle(cornerRadius: 22)).padding(.horizontal).padding(.vertical, 8)
@@ -83,6 +83,7 @@ struct LibraryScreen: View {
                         if group.entries.first?.episode != nil { SeriesCard(model: model, entries: group.entries, onInfo: { info = $0 }) }
                         else if let entry = group.entries.first { EntryCard(model: model, entry: entry, formats: group.entries, onInfo: { info = entry }) }
                     }
+                    if !model.query.isEmpty && !model.contextualQuery { GlobalResults(model: model) }
                 }.padding()
             }.refreshable { await model.refresh() }
         }
@@ -93,6 +94,39 @@ struct LibraryScreen: View {
             Text(name).font(.subheadline.weight(.medium)).padding(.horizontal, 14).padding(.vertical, 9)
                 .background(model.filter == name ? Color.mint.opacity(0.25) : .white.opacity(0.06), in: Capsule())
         }.accessibilityIdentifier("filters.\(id)").accessibilityAddTraits(model.filter == name ? .isSelected : [])
+    }
+}
+
+/// What relays the app does not follow hold for the text in the search field. Search on the keyboard asks them.
+@MainActor
+struct GlobalResults: View {
+    @ObservedObject var model: AppModel
+    var body: some View {
+        let typed = model.query.trimmingCharacters(in: .whitespacesAndNewlines)
+        let asked = model.globalQuery == typed
+        VStack(alignment: .leading, spacing: 8) {
+            Text("On other relays").font(.headline)
+            if !asked {
+                Text("Press Search to look on relays you do not follow.").foregroundStyle(.secondary)
+            } else if let err = model.globalError {
+                Text(err).foregroundStyle(.secondary)
+            } else if model.globalRows.isEmpty {
+                Text(model.globalBusy ? "Asking relays…" : "No relay has it yet. Answers can take a few seconds.").foregroundStyle(.secondary)
+            }
+            if asked {
+                ForEach(model.globalRows, id: \.selfKey) { row in
+                    let relays = Int(row.number("relays"))
+                    HStack {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(row.string("title")).lineLimit(2)
+                            Text("\(bytes(row.number("size"))) · \(relays) \(relays == 1 ? "relay" : "relays")").font(.caption).foregroundStyle(.secondary)
+                        }
+                        Spacer()
+                        Button("Play") { Task { await model.openURI(row.string("magnetUrl")) } }.accessibilityIdentifier("global.play.\(row.selfKey)")
+                    }.padding().background(.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 16))
+                }
+            }
+        }.padding(.top, 12)
     }
 }
 

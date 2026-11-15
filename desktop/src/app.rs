@@ -7,7 +7,7 @@ use std::net::TcpStream;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use futures_channel::mpsc::UnboundedReceiver;
 use futures_util::StreamExt;
@@ -18,7 +18,7 @@ use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use peartube::settings::{Settings, SourceSpec};
 use peartube::soundfont;
-use peartube::worker::{CastStatus, DATA_DIR, DiscoveredSource, Entry, Event, Status, worker};
+use peartube::worker::{CastStatus, DATA_DIR, DiscoveredSource, Entry, Event, GlobalHit, Status, worker};
 use serde::{Deserialize, Serialize};
 
 use crate::cast_screen::CastSheetForm;
@@ -70,6 +70,16 @@ pub struct DownloadNotice {
     pub saved_path: Option<PathBuf>,
 }
 
+/// A search across relays the app does not follow (src/search.js): the query, its rows, and when it was last asked.
+#[derive(Default)]
+pub struct GlobalSearch {
+    pub query: String,
+    pub rows: Vec<GlobalHit>,
+    pub busy: bool,
+    pub error: Option<SharedString>,
+    pub asked_at: Option<Instant>,
+}
+
 pub struct PearTube {
     pub settings: Settings,
     pub status: Option<Status>,
@@ -90,6 +100,7 @@ pub struct PearTube {
     pub watch_history: HashMap<String, WatchProgress>,
     pub downloads: HashMap<String, ActiveDownload>,
     pub notice: Option<DownloadNotice>,
+    pub global: GlobalSearch,
     pending_watch: Option<(Entry, u64)>,
     start: Option<Task<()>>,
     player_events: Option<Subscription>,
@@ -130,12 +141,15 @@ impl PearTube {
             InputEvent::PressEnter { .. } => {
                 let raw = state.read(cx).value().to_string();
                 let trimmed = raw.trim();
-                // Links and keys open; any other text is a search, already filtering as it is typed.
+                // Links and keys open; any other text filters the library as it is typed, and Enter also asks
+                // relays the app does not follow.
                 let is_key = trimmed.len() == 64 && trimmed.bytes().all(|b| b.is_ascii_hexdigit());
                 if trimmed.to_ascii_lowercase().starts_with("peartube:") || is_key {
                     let uri = trimmed.to_string();
                     state.update(cx, |inp, cx| inp.set_value("", window, cx));
                     this.open_uri_or_key(uri, cx);
+                } else {
+                    this.search_global(trimmed.to_string(), cx);
                 }
             }
             _ => {}
@@ -165,6 +179,7 @@ impl PearTube {
             watch_history,
             downloads: HashMap::new(),
             notice: None,
+            global: GlobalSearch::default(),
             pending_watch: None,
             start: None,
             player_events: None,
@@ -312,6 +327,49 @@ impl PearTube {
             }
         })
         .detach();
+    }
+
+    /// Asks relays the app does not follow for `query`; rows replace the last ones for the same query. Answers that
+    /// arrive later come back with the update events of the next minute (see `follow`).
+    pub fn search_global(&mut self, query: String, cx: &mut Context<Self>) {
+        let query = query.trim().to_string();
+        if query.chars().count() < 2 {
+            return;
+        }
+        if self.global.query != query {
+            self.global.rows.clear();
+        }
+        self.global.query = query;
+        self.global.error = None;
+        self.global.asked_at = Some(Instant::now());
+        self.fetch_global(cx);
+    }
+
+    fn fetch_global(&mut self, cx: &mut Context<Self>) {
+        let query = self.global.query.clone();
+        self.global.busy = true;
+        cx.notify();
+        cx.spawn(async move |this, cx| {
+            let Ok(w) = worker() else { return };
+            let res = w.search_global(&query).await;
+            let _ = this.update(cx, |this, cx| {
+                if this.global.query != query {
+                    return;
+                }
+                this.global.busy = false;
+                match res {
+                    Ok(rows) => this.global.rows = rows,
+                    Err(err) => this.global.error = Some(err.into()),
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    /// A global search asked under a minute ago and not waiting on an answer: worth asking again on an update.
+    fn global_search_live(&self) -> bool {
+        !self.global.busy && self.global.asked_at.is_some_and(|at| at.elapsed() < Duration::from_secs(60))
     }
 
     pub fn clear_cache(&mut self, key: Option<String>, cx: &mut Context<Self>) {
@@ -815,6 +873,10 @@ async fn follow(this: WeakEntity<PearTube>, cx: &mut AsyncApp) {
         }
         if needs_refresh {
             refresh(&this, cx).await;
+            // Later answers to a recent global search arrive as updates: ask the same query again.
+            if this.read_with(cx, |this, _| this.global_search_live()).unwrap_or(false) {
+                let _ = this.update(cx, |this, cx| this.fetch_global(cx));
+            }
         }
     }
 }

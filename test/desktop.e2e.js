@@ -48,8 +48,13 @@ test('the app worklet streams a relay entry and follows the tracker live', async
   // DNS lookup, as it does for the public DHT whenever the nodes' listed IPs
   // do not answer. On QuickJS that lookup once freed its own request mid-call.
   const bootstrap = testnet.bootstrap.map(node => `localhost:${node.port}`)
+  // The relay answers global searches (src/search.js); the media check is the relay plugin's job, not this test's.
+  relay.serveSearch({ isMedia: () => true })
   const { stages, secondKey } = await drive(t, relay, published, { bootstrap }, { PEARTUBE_PLAY: '1' })
   verify(stages, relay, published, bytes, secondKey)
+  const hits = stages.streamed.globalSearch.hits || []
+  assert.deepEqual(hits.map(h => h.id), [published.id], `the worklet's global search found the relay's film: ${JSON.stringify(stages.streamed.globalSearch)}`)
+  assert.ok(hits[0].magnetUrl.includes(published.sha256) && !hits[0].magnetUrl.includes('source='), 'a hit is a watch link without a channel')
   verifyPlayed(stages.streamed.played, bytes)
   assert.deepEqual(stages.streamed.titles.toSorted(), ['Desktop E2E', 'Hostile \ufffd'], 'the whole tracker lists, the bad title repaired')
   save('result.json', { test: 'app worklet streams a relay entry and follows the tracker live', published, relay, stages })

@@ -5,8 +5,10 @@ import { applied } from './channel.js'
 
 export function createCatalog (ctx) {
   const ephemeralWatches = new Map()
+  const MAX_WATCHES = 32
 
-  async function search (id = null, { source: filterSource = null, query = null, limit = 0, offset = 0 } = {}) {
+  // Every catalog record the node knows, one per file (id + hash), with its raw announce as `entry`.
+  async function collect (id = null, { source: filterSource = null } = {}) {
     if (filterSource && ctx.sources.extraSources.has(filterSource)) {
       await ctx.sources.wakeSource(filterSource, { touch: true })
     }
@@ -168,7 +170,11 @@ export function createCatalog (ctx) {
       if (!files.has(fk) || better(rec, files.get(fk))) files.set(fk, rec)
     }
 
-    let list = [...files.values()]
+    return [...files.values()]
+  }
+
+  async function search (id = null, { source = null, query = null, limit = 0, offset = 0 } = {}) {
+    let list = await collect(id, { source })
     const q = typeof query === 'string' ? query.trim().toLowerCase() : ''
     if (q) {
       list = list.filter(r => r.title.toLowerCase().includes(q) || r.id.toLowerCase().includes(q))
@@ -179,6 +185,16 @@ export function createCatalog (ctx) {
       list = lim > 0 ? list.slice(off, off + lim) : list.slice(off)
     }
     return list.map(entryView)
+  }
+
+  // The announces global search may offer (src/search.js): public, from a channel, and held whole by this node, so
+  // whoever finds one can read it from this node over the connection the search came on. Whether a file is media is
+  // the relay's `media-check` plugin's call, not the catalog's.
+  async function publicEntries () {
+    const list = await collect()
+    return list
+      .filter(r => r.sourceKind === 'channel' && !r.entry.wrappedKey && !r.entry.epoch && r.size > 0 && r.cachedBytes >= r.size)
+      .map(r => r.entry)
   }
 
   // A catalog record as every view shows it: its fields, what the title/id say it is, and how to play or share it.
@@ -266,7 +282,13 @@ export function createCatalog (ctx) {
     }
     const { entry } = parsed
     const key = `watch/${entry.blobs}:${entry.blob.blockOffset}`
+    // Newest last; an opened link that nothing plays any more leaves once 32 are held.
+    ephemeralWatches.delete(key)
     ephemeralWatches.set(key, { entry, source: parsed.sourceKey || 'direct', sourceKind: 'watch' })
+    for (const [k, item] of ephemeralWatches) {
+      if (ephemeralWatches.size <= MAX_WATCHES) break
+      if (k !== key && !ctx.blobs.blobCores.has(item.entry.blobs)) ephemeralWatches.delete(k)
+    }
     await ctx.blobs.warm(entry)
     ctx.update()
     return {
@@ -292,6 +314,7 @@ export function createCatalog (ctx) {
   return {
     ephemeralWatches,
     search,
+    publicEntries,
     discoveredSources,
     findEntry,
     openUri

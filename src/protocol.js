@@ -33,6 +33,32 @@ export function describeEntry (id, title) {
     year: year ? year[2] + year[3] : null
   }
 }
+
+// The container a file's first bytes name, or null when they name none of the formats MEDIA_FILE lists. A file's
+// name and title are a publisher's claim; these bytes are what a relay holds. `head` needs at least 4 bytes; MPEG-TS
+// and M2TS are checked at their second packet when `head` reaches it.
+export function mediaFormat (head) {
+  if (!head || head.length < 4) return null
+  const at = (off, text) => off + text.length <= head.length && b4a.toString(head.subarray(off, off + text.length), 'latin1') === text
+  if (head[0] === 0x1a && head[1] === 0x45 && head[2] === 0xdf && head[3] === 0xa3) {
+    return b4a.toString(head.subarray(0, Math.min(head.length, 128)), 'latin1').toLowerCase().includes('webm') ? 'webm' : 'mkv'
+  }
+  if (['ftyp', 'moov', 'mdat', 'free', 'wide', 'skip'].some(box => at(4, box))) return at(8, 'qt  ') ? 'mov' : 'mp4'
+  if (at(0, 'RIFF') && at(8, 'AVI ')) return 'avi'
+  if (at(0, 'RIFF') && at(8, 'WAVE')) return 'wav'
+  if (at(0, 'OggS')) return 'ogg'
+  if (at(0, 'fLaC')) return 'flac'
+  if (at(0, 'ID3')) return 'mp3'
+  if (at(0, 'FLV') && head[3] === 0x01) return 'flv'
+  if (head[0] === 0x30 && head[1] === 0x26 && head[2] === 0xb2 && head[3] === 0x75) return 'wmv'
+  if (head[0] === 0x00 && head[1] === 0x00 && head[2] === 0x01 && head[3] === 0xba) return 'mpg'
+  if (head[0] === 0x47 && (head.length < 189 || head[188] === 0x47)) return 'ts'
+  if (head.length >= 5 && head[4] === 0x47 && (head.length < 197 || head[196] === 0x47)) return 'm2ts'
+  // An MPEG audio frame header: an ADTS AAC frame has layer bits 00, an MP3 frame does not.
+  if (head[0] === 0xff && (head[1] & 0xe0) === 0xe0) return (head[1] & 0x06) === 0 ? 'aac' : 'mp3'
+  return null
+}
+
 // Where peers and the apps reach a node: its HTTP API and a TV receiver's pairing/command server.
 export const API_PORT = 8174
 export const RECEIVER_PORT = 8176

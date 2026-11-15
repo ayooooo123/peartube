@@ -132,6 +132,12 @@ class Worker(context: Context) {
     suspend fun openUri(uri: String): OpenUriResult =
         OpenUriResult.from(call("openUri", JSONObject().put("uri", uri)) as JSONObject)
 
+    /** Relays this app does not follow, searched by words in any order. The same query again returns later answers. */
+    suspend fun searchGlobal(query: String): List<GlobalHit> {
+        val list = call("searchGlobal", JSONObject().put("query", query)) as JSONArray
+        return List(list.length()) { GlobalHit.from(list.getJSONObject(it)) }
+    }
+
     suspend fun removeEntry(key: String) {
         call("remove", JSONObject().put("key", key))
     }

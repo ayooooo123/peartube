@@ -341,6 +341,36 @@ data class OpenUriResult(
     }
 }
 
+/** One global search row (src/search.js): a file a relay this app does not follow holds whole. Play it with openUri. */
+data class GlobalHit(
+    val key: String,
+    val id: String,
+    val title: String,
+    val size: Long,
+    val relays: Int,
+    val magnetUrl: String,
+) {
+    companion object {
+        fun from(json: JSONObject) = GlobalHit(
+            key = json.optString("key"),
+            id = json.optString("id"),
+            title = json.optString("title", json.optString("id")),
+            size = json.optLong("size"),
+            relays = json.optInt("relays", 1),
+            magnetUrl = json.optString("magnetUrl"),
+        )
+    }
+}
+
+/** A search across relays the app does not follow: its query, rows, and when it was last asked. */
+data class GlobalSearch(
+    val query: String = "",
+    val rows: List<GlobalHit> = emptyList(),
+    val busy: Boolean = false,
+    val error: String? = null,
+    val askedAt: Long = 0L,
+)
+
 data class PendingCast(val entryKey: String, val title: String, val startPositionMs: Long)
 
 data class WatchProgress(

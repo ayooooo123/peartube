@@ -107,6 +107,11 @@ fn main() {
             DEADLINE.fetch_add(300, Ordering::SeqCst);
             play(&entry.stream_url)
         });
+        // Global search through the engine (src/search.js on QuickJS): the connected relay answers when it serves.
+        let global = match worker.search_global(&entry.title).await {
+            Ok(hits) => serde_json::json!({ "hits": hits.iter().map(|hit| serde_json::json!({ "id": hit.id, "title": hit.title, "magnetUrl": hit.magnet_url, "relays": hit.relays })).collect::<Vec<_>>() }),
+            Err(error) => serde_json::json!({ "error": error }),
+        };
         // Whatever arrived so far predates the next change.
         while events.try_recv().is_ok() {}
         emit(serde_json::json!({
@@ -126,6 +131,7 @@ fn main() {
             "fullBytes": full.len(),
             "fullSha256": hex(&Sha256::digest(&full)),
             "titles": titles,
+            "globalSearch": global,
             "played": played,
         }));
 

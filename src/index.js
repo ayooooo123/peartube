@@ -7,6 +7,7 @@ import { createBlobs } from './node/blobs.js'
 import { createNetwork } from './node/network.js'
 import { createSources } from './node/sources.js'
 import { createCatalog } from './node/catalog.js'
+import { createGlobalSearch } from './search.js'
 
 // What status() reports before a node exists (an app can ask while a start is still queued). Same fields as status().
 export function idleStatus () {
@@ -113,6 +114,17 @@ async function openNode ({
   await ctx.net.initLan(createLan)
   await ctx.blobs.startServer()
   ctx.catalog = createCatalog(ctx)
+  ctx.search = createGlobalSearch({
+    swarm: ctx.net.swarm,
+    peerConnections: () => ctx.net.peerConns,
+    connListeners: ctx.net.connListeners,
+    isPrivate: () => Boolean(ctx.net.dht),
+    isLan: conn => ctx.net.lanPeers.has(conn),
+    isSourcePeer: hex => ctx.blobs.sourcePeers.has(hex),
+    publicEntries: ctx.catalog.publicEntries,
+    onUpdate: ctx.update
+  })
+  undo.push(() => ctx.search.close())
 
   // Tit-for-tat reciprocity: seeders holding cached/published blocks earn wider inflight windows than empty leechers.
   function applyReciprocity (seededBytes, txBytes, rxBytes, contributingPeers) {
@@ -235,6 +247,7 @@ async function openNode ({
   async function suspend () {
     if (ctx.life.closing || ctx.life.suspended) return
     ctx.life.suspended = true
+    ctx.search.suspend()
     await ctx.net.swarm.suspend()
     await ctx.storage.store.suspend()
   }
@@ -250,6 +263,7 @@ async function openNode ({
   function close () {
     if (closingPromise) return closingPromise
     ctx.life.closing = true
+    ctx.search.close()
     closingPromise = (async () => {
       clearInterval(ctx.net.refreshTimer)
       clearInterval(ctx.net.rotateTimer)
@@ -346,6 +360,10 @@ async function openNode ({
     peerConnections: () => ctx.net.peerConns,
     onConnection: fn => { ctx.net.connListeners.add(fn); return () => ctx.net.connListeners.delete(fn) },
     search: ctx.catalog.search,
+    // Global search (src/search.js): ask relays this node does not follow, and, on a relay, answer them.
+    searchGlobal: ctx.search.searchGlobal,
+    serveSearch: ctx.search.serve,
+    publicEntries: ctx.catalog.publicEntries,
     put: ctx.blobs.put,
     dropStore: ctx.blobs.dropStore,
     append: ctx.channel.append,

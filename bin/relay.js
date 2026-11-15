@@ -177,8 +177,11 @@ const mirrorConfig = () => ({
   feeds: cfg('feeds'),
   replicate: replicateValue(),
   replicateMinFreeBytes: Math.max(0, cfg('replicateFreeGb')) * 1024 * 1024 * 1024,
-  replicateMbps: Math.max(0, cfg('replicateMbps'))
+  replicateMbps: Math.max(0, cfg('replicateMbps')),
+  mediaCheck: cfg('globalSearch')
 })
+// Global search answers (src/search.js) offer only files the `media-check` plugin found to be media.
+const searchServe = () => cfg('globalSearch') ? { isMedia: key => Boolean(state.mirror?.isMedia(key)) } : null
 
 // The node, its jobs, plugins and cast stack open from the current settings; a reopen closes them and opens them
 // again in this process, so settings that shape the node apply without restarting the relay. The API stays up.
@@ -212,6 +215,7 @@ async function start () {
   }
   state.fallbackStatus.tracker = node.status().tracker
   state.node = node
+  node.serveSearch(searchServe())
   await syncDirectory(node.listSources()).catch(err => console.error(JSON.stringify({ msg: 'directory sync failed', error: err.message })))
   state.acquirer = createAcquirer(node, jobsFile, {
     concurrency: cfg('acquireConcurrency'),
@@ -361,10 +365,11 @@ state.applySettings = changed => serial(async () => {
       await mirrorStarting
       state.mirror?.run('blob-rechunk').catch(() => {})
     }
-    if (has('watchDir', 'feeds', 'replicate', 'replicateSources', 'replicateFreeGb', 'replicateMbps')) {
+    if (has('watchDir', 'feeds', 'replicate', 'replicateSources', 'replicateFreeGb', 'replicateMbps', 'globalSearch')) {
       await mirrorStarting
       state.mirror?.configure(mirrorConfig())
     }
+    if (has('globalSearch')) node.serveSearch(searchServe())
     if (has('lan', 'lanHost')) {
       await state.cast.setLanHost(lanHost()).catch(() => {})
       await node.setLan(lanFactory())

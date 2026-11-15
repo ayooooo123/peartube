@@ -290,6 +290,9 @@ const methods = {
   // (Content-Disposition), so the apps save with the right extension without sniffing bytes themselves.
   search: async ({ id = null, source = null, query = null, limit = 0, offset = 0 } = {}) =>
     (await (await current()).search(id, { source, query, limit, offset })).map(withDownload),
+  // Relays this device does not follow, searched by words in any order and/or a media id (src/search.js). Rows carry
+  // `magnetUrl`: play one with openUri. Asking the same query again returns the answers that arrived since.
+  searchGlobal: async ({ query = '', id = null, limit = 0 } = {}) => (await current()).searchGlobal({ query, id, limit }),
   focusSource: async ({ key }) => ({ ok: await (await current()).focusSource(key) }),
   setPlayerActive: async ({ active }) => (await current()).setPlayerActive(active),
   warm: async ({ key }) => {

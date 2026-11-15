@@ -5,11 +5,13 @@
 //   - Mirrors remote JSON manifests or peer relay `/v1/entries` catalogs (`feed-mirror`)
 //   - Greedy P2P Hyperblobs block replication (`p2p-replicate`) to stuff a replica disk full without duplicating catalog ops
 //   - Recruits existing HiveRelays (`hiverelay-seed`) via HTTP `/seed-core` and P2P `hiverelay-seed` DHT as supplemental seeders
+//   - Checks that held public files are media before global search offers them (`media-check`)
 //   - Dynamically loads custom user plugins dropped into `/data/plugins/*.mjs` or `*.js`
 import { createReadStream, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, statSync, statfsSync, writeFileSync } from 'node:fs'
 import { basename, extname, join, resolve } from 'node:path'
 import { createHash } from 'node:crypto'
-import { ID, MAX_TITLE, MEDIA_FILE, parseUri } from './protocol.js'
+import b4a from 'b4a'
+import { ID, MAX_TITLE, MEDIA_FILE, mediaFormat, parseUri } from './protocol.js'
 import { createHiverelaySeeder } from './hiverelay.js'
 import { createTrafficGate } from './traffic.js'
 import { send } from './art.js'
@@ -59,6 +61,8 @@ export async function createMirrorHost ({
   replicateStallMs = 20_000,
   replicateMbps = 0,
   hiverelay = null,
+  // Global search is on (src/search.js): check held files with `media-check`.
+  mediaCheck = false,
   pluginsDir = join(storage, 'plugins'),
   pollIntervalMs = 60_000,
   onchange = null,
@@ -717,6 +721,75 @@ export async function createMirrorHost ({
     onchange
   }))
 
+  // Global search offers only files whose first bytes are media (src/search.js). Each held public file is read once,
+  // its first block from local disk, and the verdict kept in media-checked.json, keyed by `<blobs>:<blockOffset>` (the
+  // bytes at a pointer never change). It reads 2 files a second at most, and one every 5 s while viewers are served.
+  const mediaCheckedFile = join(storage, 'media-checked.json')
+  const mediaChecked = new Map()
+  try {
+    const saved = JSON.parse(readFileSync(mediaCheckedFile, 'utf8'))
+    if (saved?.version === 1 && saved.checked && typeof saved.checked === 'object') {
+      for (const [k, v] of Object.entries(saved.checked)) if (typeof v === 'boolean') mediaChecked.set(k, v)
+    }
+  } catch {}
+  let mediaCheckEnabled = Boolean(mediaCheck)
+  let mediaChecking = false
+  function saveMediaChecked () {
+    const tmp = `${mediaCheckedFile}.tmp`
+    writeFileSync(tmp, JSON.stringify({ version: 1, checked: Object.fromEntries(mediaChecked) }), { mode: 0o600 })
+    renameSync(tmp, mediaCheckedFile)
+  }
+  async function readFirstBlock (entry) {
+    const core = node.store.get({ key: b4a.from(entry.blobs, 'hex'), active: false })
+    try {
+      await core.ready()
+      return await core.get(entry.blob.blockOffset, { wait: false })
+    } finally {
+      await core.close().catch(() => {})
+    }
+  }
+  register({
+    name: 'media-check',
+    description: 'Checks once that each held public file is media, so global search can offer it',
+    async run () {
+      if (!mediaCheckEnabled || mediaChecking) return { busy: mediaChecking }
+      mediaChecking = true
+      let checked = 0
+      try {
+        const held = new Set()
+        let whole = true
+        let savedAt = Date.now()
+        for (const entry of await node.publicEntries()) {
+          const key = `${entry.blobs}:${entry.blob.blockOffset}`
+          held.add(key)
+          if (mediaChecked.has(key)) continue
+          await new Promise(resolve => setTimeout(resolve, traffic.info().servingViewers ? 5000 : 500))
+          if (closed || !mediaCheckEnabled) { whole = false; break }
+          const head = await readFirstBlock(entry).catch(() => null)
+          if (!head) continue // not on this disk after all: the next run tries again
+          mediaChecked.set(key, Boolean(mediaFormat(head)))
+          checked++
+          if (Date.now() - savedAt > 10_000) { saveMediaChecked(); savedAt = Date.now() }
+        }
+        let dropped = 0
+        if (whole) for (const key of mediaChecked.keys()) if (!held.has(key)) { mediaChecked.delete(key); dropped++ }
+        if (checked || dropped) saveMediaChecked()
+        return { checked, dropped }
+      } finally {
+        mediaChecking = false
+      }
+    },
+    async poll () {
+      if (!mediaCheckEnabled || mediaChecking) return null
+      return this.run()
+    },
+    info () {
+      let media = 0
+      for (const v of mediaChecked.values()) if (v) media++
+      return { enabled: mediaCheckEnabled, checking: mediaChecking, checkedFiles: mediaChecked.size, mediaFiles: media }
+    }
+  })
+
   if (pluginsDir && existsSync(pluginsDir)) {
     for (const file of readdirSync(pluginsDir).sort()) {
       if (!file.endsWith('.mjs') && !file.endsWith('.js')) continue
@@ -757,6 +830,9 @@ export async function createMirrorHost ({
   if (hiverelayPlugin.enabled() && !closed) {
     run('hiverelay-seed').catch(() => {})
   }
+  if (mediaCheckEnabled && !closed) {
+    run('media-check').catch(() => {})
+  }
 
   timer = pollIntervalMs > 0 && !closed
     ? setInterval(async () => {
@@ -789,7 +865,11 @@ export async function createMirrorHost ({
   }
 
   // Live settings: the watch folder, followed feeds, and replication take effect without a restart.
-  function configure ({ watchDir: dir, feeds: nextFeeds, replicate: rep, replicateMinFreeBytes: minFree, replicateMbps: mbps } = {}) {
+  function configure ({ watchDir: dir, feeds: nextFeeds, replicate: rep, replicateMinFreeBytes: minFree, replicateMbps: mbps, mediaCheck: check } = {}) {
+    if (check !== undefined && Boolean(check) !== mediaCheckEnabled) {
+      mediaCheckEnabled = Boolean(check)
+      if (mediaCheckEnabled) run('media-check').catch(() => {})
+    }
     if (dir !== undefined && dir !== watchDir) {
       watchDir = dir || null
       if (watchDir) {
@@ -823,5 +903,8 @@ export async function createMirrorHost ({
     traffic.stop()
   }
 
-  return { register, run, list, configure, close }
+  // Whether the file at `<blobs>:<blockOffset>` has been checked and is media (src/search.js offers only those).
+  const isMedia = key => mediaChecked.get(key) === true
+
+  return { register, run, list, configure, close, isMedia }
 }

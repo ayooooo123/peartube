@@ -356,9 +356,59 @@ impl PearTube {
                                 );
                             }
                             cards
-                        }),
+                        })
+                        .when(!query.is_empty(), |this| this.child(self.render_global(raw_input.trim(), cx))),
                 ),
             )
+    }
+
+    /// What relays the app does not follow hold for the text in the search box. Enter asks them (`search_global`).
+    fn render_global(&self, typed: &str, cx: &mut Context<Self>) -> impl IntoElement {
+        let g = &self.global;
+        let asked = g.query == typed;
+        let note: Option<String> = if !asked {
+            Some("Press Enter to search relays you do not follow.".into())
+        } else if let Some(err) = &g.error {
+            Some(err.to_string())
+        } else if g.rows.is_empty() {
+            Some(if g.busy { "Asking relays…" } else { "No relay has it yet. Answers can take a few seconds." }.into())
+        } else {
+            None
+        };
+        v_flex()
+            .gap_2()
+            .pt_4()
+            .child(div().text_lg().font_weight(FontWeight::BOLD).child("On other relays"))
+            .when_some(note, |this, note| this.child(div().text_sm().text_color(rgb(DIM)).child(note)))
+            .when(asked, |this| {
+                this.children(g.rows.iter().map(|row| {
+                    let uri = row.magnet_url.clone();
+                    let meta = format!("{} · {} relay{}", format_bytes(row.size), row.relays, if row.relays == 1 { "" } else { "s" });
+                    h_flex()
+                        .id(SharedString::from(format!("global-{}", row.key)))
+                        .justify_between()
+                        .items_center()
+                        .gap_3()
+                        .p_3()
+                        .rounded(px(12.))
+                        .bg(rgb(CARD))
+                        .border_1()
+                        .border_color(rgb(LINE))
+                        .child(
+                            v_flex()
+                                .min_w_0()
+                                .child(div().font_weight(FontWeight::SEMIBOLD).child(row.title.clone()))
+                                .child(div().text_xs().text_color(rgb(DIM)).child(meta)),
+                        )
+                        .child(
+                            Button::new(SharedString::from(format!("global-play-{}", row.key)))
+                                .primary()
+                                .small()
+                                .label("Play")
+                                .on_click(cx.listener(move |this, _, _, cx| this.open_uri_or_key(uri.clone(), cx))),
+                        )
+                }))
+            })
     }
 
     fn filter_pill(&self, id: &str, label: &str, target: LibraryFilter, cx: &mut Context<Self>) -> AnyElement {

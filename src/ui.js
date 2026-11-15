@@ -363,6 +363,16 @@ export const page = `<!doctype html>
       <input id="libFilter" type="search" aria-label="Search library" placeholder="Big Buck Bunny">
     </div>
     <div class="grid" id="entries"></div>
+    <h2>Search all relays</h2>
+    <form id="globalForm" class="card">
+      <div class="field">
+        <label for="globalInput">Title or IMDb id</label>
+        <div class="row"><input class="grow" id="globalInput" type="search" spellcheck="false" placeholder="Stalker 1979" required><button class="btn primary" type="submit" id="globalBtn">Search</button></div>
+        <span class="hint">Asks relays you do not follow; results play from them.</span>
+      </div>
+      <div class="msg" id="globalMsg" role="status"></div>
+      <div class="list" id="globalResults"></div>
+    </form>
   </section>
 
   <section id="tab-channels" data-panel="channels" hidden>
@@ -422,6 +432,8 @@ export const page = `<!doctype html>
     <div class="card" id="netCard"></div>
     <h2>Keep copies</h2>
     <div class="card" id="copiesCard"></div>
+    <h2>Answer searches</h2>
+    <div class="card" id="globalCard"></div>
     <h2>HiveRelays</h2>
     <div class="card">
       <div id="hiveStatus"></div>
@@ -1063,6 +1075,40 @@ function renderLibrary (force) {
 function showMore () { libShown += 60; renderLibrary() }
 $('libFilter').oninput = () => { libShown = 60; renderLibrary() }
 
+// ---- Library: search all relays (POST /v1/search/global). Answers that arrive later come with an update event,
+// which asks the same query again for 60 s.
+let globalAsk = null
+function globalBody (val) {
+  const tt = val.toLowerCase().match(/^(imdb:)?(tt[0-9]+)$/)
+  return tt ? { id: 'imdb:' + tt[2] } : { query: val }
+}
+async function askGlobal () {
+  if (!globalAsk || Date.now() - globalAsk.at > 60000) return
+  const r = await api('/v1/search/global', { body: globalAsk.body })
+  renderGlobal(r.results || [])
+}
+function renderGlobal (rows) {
+  say('globalMsg', rows.length ? '' : 'No relay has it yet. Answers can take a few seconds.')
+  $('globalResults').replaceChildren(...rows.map(row => h('div', { class: 'item' },
+    h('div', { class: 'info' },
+      h('div', { class: 'name' }, row.title || row.id),
+      h('div', { class: 'meta' }, [size(row.size), plural(row.relays, 'relay', 'relays')].filter(Boolean).join(' · '))),
+    h('div', { class: 'acts' },
+      h('button', { class: 'btn primary', onclick: e => act(e.currentTarget, async () => {
+        const r = await api('/v1/open', { body: { uri: row.magnetUrl } })
+        refresh()
+        play(r.entry, 0)
+      }, 'globalMsg') }, 'Play'),
+      copyBtn('Copy link', row.magnetUrl)))))
+}
+$('globalForm').onsubmit = ev => {
+  ev.preventDefault()
+  const val = $('globalInput').value.trim()
+  globalAsk = { body: globalBody(val), at: Date.now() }
+  say('globalMsg', 'Asking relays…')
+  act($('globalBtn'), askGlobal, 'globalMsg')
+}
+
 // ---- Library: details sheet (play, cast, copy; a show's episodes by season)
 let detailKey = null
 let detailSeason = null
@@ -1321,6 +1367,17 @@ function renderSharing () {
     ...copyLines,
     h('div', { class: 'hint', style: 'margin-top:8px' }, 'Disk and speed limits are in ', h('a', { href: '#settings' }, 'Settings'), '.'))
 
+  const mc = plugin('media-check')
+  $('globalCard').replaceChildren(
+    S.settings
+      ? switchRow('Answer searches from other nodes', sval('globalSearch'), on => saveSettings({ globalSearch: on }), { note: envNote('globalSearch'), disabled: Boolean(st.privateRouting) })
+      : h('div', { class: 'hint' }, 'Sign in to change sharing.'),
+    mc.enabled && !st.privateRouting
+      ? h('div', { class: 'stats' }, stat(String(mc.mediaFiles || 0), 'files offered'), stat(String(mc.checkedFiles || 0), 'files checked'))
+      : null,
+    st.privateRouting ? h('div', { class: 'hint' }, 'Off while private routing is on.') : null,
+    h('div', { class: 'hint', style: 'margin-top:8px' }, 'Offers media this relay holds; each file is checked once.'))
+
   const hr = plugin('hiverelay-seed')
   const relays = sval('hiverelays') || []
   const lines = []
@@ -1439,6 +1496,7 @@ const GROUPS = [
     { key: 'replicate', label: 'Keep copies of what I follow', hint: 'Seeds followed content until the free-space floor is hit.' },
     { key: 'replicateFreeGb', label: 'Keep this much disk free (GB)', hint: 'Replication stops when free space reaches this.', ph: '20' },
     { key: 'replicateMbps', label: 'Copy speed limit (Mbps)', hint: '0 removes the limit; applies immediately.', ph: '80' },
+    { key: 'globalSearch', label: 'Answer searches from other nodes', hint: 'Offers checked media this relay holds to global search.' },
     { key: 'hiverelayDiscover', label: 'Find HiveRelays automatically', hint: 'Uses a public discovery topic to recruit seeders.' },
     { key: 'hiverelays', label: 'HiveRelays', hint: 'Base URLs of seeding helpers that keep copies.', ph: 'http://192.168.1.50:9100' },
     { key: 'hiverelayApiKey', label: 'HiveRelay access key', hint: 'One key for every HiveRelay listed above.', ph: 'hr_4f1c2a9b7d' },
@@ -1667,7 +1725,10 @@ events.onmessage = ev => {
   let event = 'update'
   try { event = JSON.parse(ev.data).event } catch {}
   if (event === 'cast') loadCast()
-  else soon()
+  else {
+    soon()
+    askGlobal().catch(() => {})
+  }
 }
 setInterval(() => {
   const busy = S.jobs.some(j => j.status === 'running' || j.status === 'queued' || j.status === 'announcing') || plugin('p2p-replicate').replicating || plugin('blob-rechunk').running

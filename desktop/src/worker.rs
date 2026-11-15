@@ -212,6 +212,18 @@ pub struct OpenUriResult {
     pub receiver: Option<Value>,
 }
 
+/// One global search row (src/search.js): a file a relay this app does not follow holds whole. Play it with `open_uri`.
+#[derive(Clone, Debug, Default, PartialEq, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct GlobalHit {
+    pub key: String,
+    pub id: String,
+    pub title: String,
+    pub size: u64,
+    pub relays: u32,
+    pub magnet_url: String,
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CastReceiver {
@@ -798,6 +810,12 @@ impl Worker {
 
     pub async fn open_uri(&self, uri: &str) -> Result<OpenUriResult, String> {
         parse(self.call("openUri", json!({ "uri": uri })).await?)
+    }
+
+    /// Relays this app does not follow, searched by words in any order. Asking the same query again returns the
+    /// answers that arrived since.
+    pub async fn search_global(&self, query: &str) -> Result<Vec<GlobalHit>, String> {
+        parse(self.call("searchGlobal", json!({ "query": query })).await?)
     }
 
 

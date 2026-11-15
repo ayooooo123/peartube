@@ -98,6 +98,18 @@ test('global search finds, checks, plays and tears down', { timeout: 420_000 }, 
   assert.equal(rows[0].magnetUrl.includes('source='), false, 'a hit never names a channel')
   assert.equal((await searcher.searchGlobal({ id: 'imdb:tt0079944' })).length, 1, 'a media id finds it too')
 
+  // A file the relay gets after a search that missed it shows up when the same search is asked again.
+  assert.deepEqual(await searcher.searchGlobal({ query: 'solaris' }), [], 'nothing matches yet')
+  const lateOp = await publish(relay, 'imdb:tt0069293', 'Solaris (1972)', mkv(800 * 1024))
+  await until(async () => { await mirror.run('media-check'); return mirror.isMedia(keyOf(lateOp)) }, 30_000)
+  const t1 = Date.now()
+  const late = await until(async () => {
+    const r = await searcher.searchGlobal({ query: 'solaris' })
+    return r.length && r
+  }, 60_000)
+  result.lateHitMs = Date.now() - t1
+  assert.deepEqual(late.map(r => r.id), ['imdb:tt0069293'], 'the same search finds the file published after it')
+
   // It plays from the relay that answered.
   const played = await searcher.openUri(rows[0].magnetUrl)
   const bytes = Buffer.from(await (await fetch(played.entry.streamUrl)).arrayBuffer())

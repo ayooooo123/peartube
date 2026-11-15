@@ -812,8 +812,8 @@ impl Worker {
         parse(self.call("openUri", json!({ "uri": uri })).await?)
     }
 
-    /// Relays this app does not follow, searched by words in any order. Asking the same query again returns the
-    /// answers that arrived since.
+    /// Relays this app does not follow, searched by words in any order. The same query again within 10 s returns
+    /// the answers that arrived since; after that it asks the relays again.
     pub async fn search_global(&self, query: &str) -> Result<Vec<GlobalHit>, String> {
         parse(self.call("searchGlobal", json!({ "query": query })).await?)
     }

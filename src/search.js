@@ -25,6 +25,7 @@ const COLLECT_MS = 1200 // a search returns what arrived by then; later answers 
 const ASK_TIMEOUT_MS = 3000
 const IDLE_MS = 60_000 // after the last search the lookup ends and search-only connections close
 const KEEP_RUNS = 8
+const FRESH_MS = 10_000 // the same search asked again after this asks every relay again, so newer files show up
 const LIST_MS = 15_000 // a relay rebuilds its list of offered files at most this often
 const SERVE_CHANNELS = 64
 const WINDOW_MS = 10_000
@@ -65,7 +66,7 @@ export function createGlobalSearch ({ swarm, peerConnections, connListeners, isP
   const topicConns = new Map() // conn -> peerInfo, for connections the search lookup dialed
   const served = new Map() // control -> { at: [] }, oldest first
   const unpairs = new Map() // conn -> stop answering
-  let nodeHits = []
+  const nodeHits = []
 
   // ---- answering (relay) ----
 
@@ -252,7 +253,8 @@ export function createGlobalSearch ({ swarm, peerConnections, connListeners, isP
     topicConns.clear()
   }
 
-  // Rows for `query` (words in any order) and/or `id`, after COLLECT_MS. Asking again returns the fuller list.
+  // Rows for `query` (words in any order) and/or `id`, after COLLECT_MS. Asked again within FRESH_MS it returns the
+  // answers that arrived since; after that it is a new search, so a file published or removed since is seen.
   async function searchGlobal ({ query = '', id = null, limit = MAX_HITS } = {}) {
     if (closed) throw new Error('Node is closing')
     if (isPrivate()) throw new Error('Global search is off while traffic is routed privately')
@@ -263,7 +265,9 @@ export function createGlobalSearch ({ swarm, peerConnections, connListeners, isP
     const runKey = `${q}\n${mid || ''}`
     let run = runs.get(runKey)
     runs.delete(runKey)
-    if (!run) run = { q, mid, rows: new Map(), asked: new Set(), buckets: new Map(), topicAsked: 0, returned: false }
+    if (!run || Date.now() - run.at > FRESH_MS) {
+      run = { q, mid, at: Date.now(), rows: new Map(), asked: new Set(), buckets: new Map(), topicAsked: 0, returned: false }
+    }
     runs.set(runKey, run)
     for (const k of runs.keys()) { if (runs.size <= KEEP_RUNS) break; runs.delete(k) }
     current = run

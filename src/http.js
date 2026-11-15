@@ -233,7 +233,7 @@ export function createApi (state) {
     }
     // Global search asks relays across the network (src/search.js), so only the relay's owner starts one: the token
     // when one is set, else a private address, and only from the relay's own page. A new query at most every 3 s per
-    // address; asking the same query again returns the answers that arrived since, without asking anyone again.
+    // address; the same query again within 10 s returns the answers that arrived since, and after that asks again.
     if (req.method === 'POST' && path === '/v1/search/global') {
       if (!settingsOpen) throw Object.assign(new Error('Set PEARTUBE_API_TOKEN to search all relays over the internet'), { status: 403 })
       const origin = req.headers.origin

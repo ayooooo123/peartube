@@ -308,6 +308,7 @@ silently replace the relay's own library. A `settings.json` from before channels
 | `PEARTUBE_SOURCES` | none | Extra channel keys or `peartube://` URIs to follow |
 | `PEARTUBE_PUBLISH_CHANNEL` | `1` on relays | List this relay's saved videos in its own channel without duplicating media (`0` disables) |
 | `PEARTUBE_DIRECTORY` | off | `1`: publish a list of subscribed channels so peers can discover them. Turning it off unlists the ones it listed (kept in private `directory.json`); sources added with **Add to directory** stay |
+| `PEARTUBE_GLOBAL_SEARCH` | off | `1`: answer other nodes' global searches with the public media this relay holds whole. The `media-check` plugin reads each held file's first block once (1 MiB/s at most, 0.1 MiB/s while viewers are served) and keeps the verdict in private `media-checked.json`; a file is offered only once it is checked |
 | `PEARTUBE_WATCH_DIR` | none | Folder (e.g. `/data/import`) imported once per file |
 | `PEARTUBE_MIRROR_FEEDS` | none | Comma-separated JSON feed or peer `/v1/entries` URLs to import |
 | `PEARTUBE_REPLICATE` | off | `1` (or keys) to P2P-replicate remote blobs without duplicating catalog entries |
@@ -362,6 +363,7 @@ and control) and **Settings**. Plugins appear only as user intents.
 | `GET /v1/identity`, `POST /v1/identity/{writers,epoch,recover}`, `DELETE /v1/identity/writers/:key` | Channel writer ACL, 12-word recovery phrase (`?reveal=1` / `recover`), and paid subscriber epoch pass rotation; same token and origin gate as `/v1/settings` |
 | `POST /v1/restart` | Reopens the node, jobs, plugins and cast stack in the running process; same auth and origin rules as settings |
 | `POST /v1/identify` `{url}` | Link contents: parsed name, Cinemeta `candidates` and `match`, or a plain `clip:` fallback |
+| `POST /v1/search/global` `{query, id}` | Search relays this relay does not follow (`peartube/search/v1`): rows with `magnetUrl`, `relays` and the title fields, after about 1.2 s; the same query again returns the answers that arrived since. Token when one is set, else private addresses only, and only from the relay's own page; a new query at most every 3 s per address |
 | `GET /v1/search?id=imdb:tt…`, `GET /v1/entries`, `POST /v1/entries/remove` | Channel entries with `streamUrl` (on this port's `/v1/blob`); one result per file (`id` + `sha256`), or owner/mod entry removal + unreferenced core purge |
 | `POST /v1/acquire` `{id, title, private, source}` | Fetch, store (optionally epoch-encrypted) and announce; `page: true` downloads and muxes a page through `ubit` on every attempt |
 | `GET/DELETE /v1/jobs[/:id]` | Acquire jobs; sources are never returned. `DELETE` cancels or removes |
@@ -371,7 +373,7 @@ and control) and **Settings**. Plugins appear only as user intents.
 | `POST /v1/cache/clear`, `GET /v1/events` | Clear cached pieces; live SSE updates |
 | `GET /manifest.json`, `/catalog/…`, `/stream/…` | Stremio v3 addon |
 | `GET /v1/playlist.m3u` | M3U8 playlist |
-| `GET /v1/plugins`, `POST /v1/plugins/:name/run`, `POST /v1/mirror` | Import and seeder plugins (`http-acquire`, `channel-backfill`, `blob-rechunk`, `watch-dir`, `feed-mirror`, `p2p-replicate`, `hiverelay-seed`, plus `/data/plugins/*.mjs`) |
+| `GET /v1/plugins`, `POST /v1/plugins/:name/run`, `POST /v1/mirror` | Import and seeder plugins (`http-acquire`, `channel-backfill`, `blob-rechunk`, `watch-dir`, `feed-mirror`, `p2p-replicate`, `hiverelay-seed`, `media-check`, plus `/data/plugins/*.mjs`) |
 | `/v1/cast/*` | Pair, play, attach, control and stop TVs; start or manage a local receiver |
 
 Job states: `queued` → `running` (`bytes` of `total`) → `announcing` → `done`, or `failed`/`cancelled`.
@@ -512,6 +514,7 @@ The suite prefers E2E and writes repeatable artifacts under `desktop/target/e2e/
 
 ```sh
 npm test                         # core + network + cast tests on a local testnet
+node --test --test-force-exit test/global-search.e2e.js   # global search: find, check, play, rate limit, idle teardown
 npm run test:desktop             # Mac worklet E2E: exact bytes, live publish/remove, LAN-only run
 npm run test:cast                # test receiver in its own process, LAN and DHT casts, initiator loss, private-routing TV
 node test/ui.e2e.js              # web UI in headless Brave at 1440×900 and 390×844, light/dark

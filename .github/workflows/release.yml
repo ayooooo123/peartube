@@ -58,7 +58,7 @@ jobs:
 
           pick () {
             if [ "$mode" = "lock" ]; then
-              node -p "require('./native.lock').engine['$1'] || 'js'"
+              node -p "JSON.parse(fs.readFileSync('./native.lock', 'utf8')).engine['$1'] || 'js'"
             else
               echo "$mode"
             fi
@@ -176,8 +176,8 @@ jobs:
         working-directory: peartube
         run: |
           ver=$(node -p 'require("./package.json").version')
-          commit=$(node -p 'require("./native.lock").commit')
-          def_eng=$(node -p 'require("./native.lock").engine.relay || "js"')
+          commit=$(node -p 'JSON.parse(fs.readFileSync("./native.lock", "utf8")).commit')
+          def_eng=$(node -p 'JSON.parse(fs.readFileSync("./native.lock", "utf8")).engine.relay || "js"')
           echo "ver=$ver" >> "$GITHUB_OUTPUT"
           echo "native_commit=$commit" >> "$GITHUB_OUTPUT"
           echo "default_engine=$def_eng" >> "$GITHUB_OUTPUT"

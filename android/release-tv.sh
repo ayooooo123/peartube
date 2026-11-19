@@ -15,7 +15,7 @@ while [ $# -gt 0 ]; do
   esac
   shift
 done
-[ -n "$engine" ] || engine=$(node -p 'require("../native.lock").engine["android-tv"]')
+[ -n "$engine" ] || engine=$(node -p 'JSON.parse(fs.readFileSync("../native.lock", "utf8")).engine["android-tv"]')
 if [ "$engine" = "both" ]; then
   sh "$self" --engine js ${native_local:+--native-local "$native_local"}
   sh "$self" --engine rust ${native_local:+--native-local "$native_local"}

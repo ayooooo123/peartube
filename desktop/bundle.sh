@@ -36,7 +36,7 @@ while [ $# -gt 0 ]; do
   esac
   shift
 done
-[ -n "$engine" ] || engine=$(node -p 'require("../native.lock").engine.desktop')
+[ -n "$engine" ] || engine=$(node -p 'JSON.parse(fs.readFileSync("../native.lock", "utf8")).engine.desktop')
 if [ "$engine" = "both" ]; then
   [ "$action" != "--open" ] || { echo "--open cannot open both engines at once" >&2; exit 2; }
   rec_arg=""

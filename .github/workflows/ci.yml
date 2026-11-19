@@ -25,11 +25,19 @@ jobs:
       - run: python3 sync-native.py check
       - run: npm run test:cast
 
-  image:
-    # Publishes :main, :latest and :sha-<commit> using whichever relay engine (`js` or `rust`) `native.lock` selects.
+  image-build:
+    # Builds linux/amd64 and linux/arm64 on native runners (no QEMU: bare-tls's BoringSSL SIGILLs and hangs under qemu-aarch64).
     if: github.event_name == 'push'
     needs: test
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux/amd64
+            runner: ubuntu-latest
+          - platform: linux/arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -57,21 +65,67 @@ jobs:
             git clone --quiet "https://github.com/${{ github.repository_owner }}/$repo.git" "stack/$repo"
             git -C "stack/$repo" checkout --quiet "$sha"
           done < stack/peartube-native/STACK.lock
-      - uses: docker/setup-qemu-action@v3
       - uses: docker/setup-buildx-action@v3
       - uses: docker/login-action@v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - uses: docker/build-push-action@v6
+      - id: push
+        uses: docker/build-push-action@v6
         with:
           context: ${{ steps.meta.outputs.engine == 'rust' && '.' || 'peartube' }}
           file: ${{ steps.meta.outputs.engine == 'rust' && 'stack/peartube-native/relay.Dockerfile' || 'peartube/Dockerfile' }}
-          push: true
-          platforms: linux/amd64,linux/arm64
-          tags: |
-            ${{ steps.meta.outputs.image }}:${{ github.ref_name }}
-            ${{ steps.meta.outputs.image }}:${{ steps.meta.outputs.engine }}
-            ${{ steps.meta.outputs.image }}:latest
-            ${{ steps.meta.outputs.image }}:sha-${{ github.sha }}
+          platforms: ${{ matrix.platform }}
+          outputs: type=image,name=${{ steps.meta.outputs.image }},push-by-digest=true,name-canonical=true,push=true
+      - name: Export digest
+        run: |
+          mkdir -p digests
+          printf '%s\n' "${{ steps.push.outputs.digest }}" > "digests/${{ runner.arch }}.txt"
+        working-directory: ${{ github.workspace }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: digests-${{ runner.arch }}
+          path: digests/*.txt
+          if-no-files-found: error
+          retention-days: 1
+
+  image:
+    # Joins the native amd64 and arm64 digests into the multi-arch :main, :latest, :<engine> and :sha-<commit> tags.
+    if: github.event_name == 'push'
+    needs: image-build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: native.lock
+          sparse-checkout-cone-mode: false
+      - id: meta
+        run: |
+          eng=$(node -p 'JSON.parse(fs.readFileSync("./native.lock", "utf8")).engine.relay || "js"')
+          echo "engine=$eng" >> "$GITHUB_OUTPUT"
+          echo "image=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/peartube-relay" >> "$GITHUB_OUTPUT"
+      - uses: actions/download-artifact@v4
+        with:
+          path: digests
+          pattern: digests-*
+          merge-multiple: true
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Create manifest list and push
+        working-directory: digests
+        run: |
+          sources=""
+          for f in *.txt; do
+            sources="$sources ${{ steps.meta.outputs.image }}@$(cat "$f")"
+          done
+          docker buildx imagetools create \
+            -t "${{ steps.meta.outputs.image }}:${{ github.ref_name }}" \
+            -t "${{ steps.meta.outputs.image }}:${{ steps.meta.outputs.engine }}" \
+            -t "${{ steps.meta.outputs.image }}:latest" \
+            -t "${{ steps.meta.outputs.image }}:sha-${{ github.sha }}" \
+            $sources

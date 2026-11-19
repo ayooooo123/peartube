@@ -163,9 +163,17 @@ jobs:
           path: dist-android/*.apk
           if-no-files-found: error
 
-  relay:
+  relay-build:
     needs: plan
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux/amd64
+            runner: ubuntu-latest
+          - platform: linux/arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
@@ -183,20 +191,20 @@ jobs:
           echo "default_engine=$def_eng" >> "$GITHUB_OUTPUT"
           echo "image=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/peartube-relay" >> "$GITHUB_OUTPUT"
       - uses: actions/checkout@v4
-        if: needs.plan.outputs.relay == 'rust' || needs.plan.outputs.relay == 'both'
+        if: (needs.plan.outputs.relay == 'rust' || needs.plan.outputs.relay == 'both') && (matrix.platform == 'linux/amd64' || needs.plan.outputs.release_tag != '')
         with:
           repository: ${{ github.repository_owner }}/peartube-native
           ref: ${{ steps.meta.outputs.native_commit }}
           path: stack/peartube-native
       - name: Checkout Rust stack crates at STACK.lock
-        if: needs.plan.outputs.relay == 'rust' || needs.plan.outputs.relay == 'both'
+        if: (needs.plan.outputs.relay == 'rust' || needs.plan.outputs.relay == 'both') && (matrix.platform == 'linux/amd64' || needs.plan.outputs.release_tag != '')
         run: |
           while read -r repo sha; do
             git clone --quiet "https://github.com/${{ github.repository_owner }}/$repo.git" "stack/$repo"
             git -C "stack/$repo" checkout --quiet "$sha"
           done < stack/peartube-native/STACK.lock
       - name: Build Linux x86_64 Rust relay binary tarball
-        if: needs.plan.outputs.relay == 'rust' || needs.plan.outputs.relay == 'both'
+        if: matrix.platform == 'linux/amd64' && (needs.plan.outputs.relay == 'rust' || needs.plan.outputs.relay == 'both')
         run: |
           sudo apt-get update && sudo apt-get install -y --no-install-recommends clang libclang-dev
           cargo build --manifest-path stack/peartube-native/Cargo.toml --release --locked --bin peartube-relay
@@ -206,13 +214,11 @@ jobs:
           cp stack/peartube-native/target/release/peartube-relay relay-pkg/
           tar -C relay-pkg -czf "dist-relay/peartube-relay-${{ steps.meta.outputs.ver }}-rust-linux-x64.tar.gz" .
       - uses: actions/upload-artifact@v4
-        if: needs.plan.outputs.relay == 'rust' || needs.plan.outputs.relay == 'both'
+        if: matrix.platform == 'linux/amd64' && (needs.plan.outputs.relay == 'rust' || needs.plan.outputs.relay == 'both')
         with:
           name: relay-linux-x64
           path: dist-relay/*.tar.gz
           if-no-files-found: error
-      - uses: docker/setup-qemu-action@v3
-        if: needs.plan.outputs.release_tag != ''
       - uses: docker/setup-buildx-action@v3
         if: needs.plan.outputs.release_tag != ''
       - uses: docker/login-action@v3
@@ -221,31 +227,90 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Push JS Relay Image
+      - id: push-js
+        name: Push JS Relay Image Digest
         if: needs.plan.outputs.release_tag != '' && (needs.plan.outputs.relay == 'js' || needs.plan.outputs.relay == 'both')
         uses: docker/build-push-action@v6
         with:
           context: peartube
-          push: true
-          platforms: linux/amd64,linux/arm64
-          tags: |
-            ${{ steps.meta.outputs.image }}:js
-            ${{ steps.meta.outputs.image }}:${{ needs.plan.outputs.release_tag }}-js
-            ${{ (needs.plan.outputs.relay == 'js' || steps.meta.outputs.default_engine == 'js') && format('{0}:{1}', steps.meta.outputs.image, needs.plan.outputs.release_tag) || '' }}
-            ${{ (needs.plan.outputs.relay == 'js' || steps.meta.outputs.default_engine == 'js') && format('{0}:latest', steps.meta.outputs.image) || '' }}
-      - name: Push Rust Relay Image
+          platforms: ${{ matrix.platform }}
+          outputs: type=image,name=${{ steps.meta.outputs.image }},push-by-digest=true,name-canonical=true,push=true
+      - id: push-rust
+        name: Push Rust Relay Image Digest
         if: needs.plan.outputs.release_tag != '' && (needs.plan.outputs.relay == 'rust' || needs.plan.outputs.relay == 'both')
         uses: docker/build-push-action@v6
         with:
           context: .
           file: stack/peartube-native/relay.Dockerfile
-          push: true
-          platforms: linux/amd64,linux/arm64
-          tags: |
-            ${{ steps.meta.outputs.image }}:rust
-            ${{ steps.meta.outputs.image }}:${{ needs.plan.outputs.release_tag }}-rust
-            ${{ (needs.plan.outputs.relay == 'rust' || (needs.plan.outputs.relay == 'both' && steps.meta.outputs.default_engine == 'rust')) && format('{0}:{1}', steps.meta.outputs.image, needs.plan.outputs.release_tag) || '' }}
-            ${{ (needs.plan.outputs.relay == 'rust' || (needs.plan.outputs.relay == 'both' && steps.meta.outputs.default_engine == 'rust')) && format('{0}:latest', steps.meta.outputs.image) || '' }}
+          platforms: ${{ matrix.platform }}
+          outputs: type=image,name=${{ steps.meta.outputs.image }},push-by-digest=true,name-canonical=true,push=true
+      - name: Export digests
+        if: needs.plan.outputs.release_tag != ''
+        run: |
+          mkdir -p relay-digests
+          [ -z "${{ steps.push-js.outputs.digest }}" ] || printf '%s\n' "${{ steps.push-js.outputs.digest }}" > "relay-digests/js-${{ runner.arch }}.txt"
+          [ -z "${{ steps.push-rust.outputs.digest }}" ] || printf '%s\n' "${{ steps.push-rust.outputs.digest }}" > "relay-digests/rust-${{ runner.arch }}.txt"
+      - uses: actions/upload-artifact@v4
+        if: needs.plan.outputs.release_tag != ''
+        with:
+          name: relay-digests-${{ runner.arch }}
+          path: relay-digests/*.txt
+          if-no-files-found: error
+          retention-days: 1
+
+  relay:
+    needs: [plan, relay-build]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        if: needs.plan.outputs.release_tag != ''
+        with:
+          sparse-checkout: native.lock
+          sparse-checkout-cone-mode: false
+      - id: meta
+        if: needs.plan.outputs.release_tag != ''
+        run: |
+          def_eng=$(node -p 'JSON.parse(fs.readFileSync("./native.lock", "utf8")).engine.relay || "js"')
+          echo "default_engine=$def_eng" >> "$GITHUB_OUTPUT"
+          echo "image=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/peartube-relay" >> "$GITHUB_OUTPUT"
+      - uses: actions/download-artifact@v4
+        if: needs.plan.outputs.release_tag != ''
+        with:
+          path: relay-digests
+          pattern: relay-digests-*
+          merge-multiple: true
+      - uses: docker/setup-buildx-action@v3
+        if: needs.plan.outputs.release_tag != ''
+      - uses: docker/login-action@v3
+        if: needs.plan.outputs.release_tag != ''
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Create JS Relay Manifest
+        if: needs.plan.outputs.release_tag != '' && (needs.plan.outputs.relay == 'js' || needs.plan.outputs.relay == 'both')
+        working-directory: relay-digests
+        run: |
+          img="${{ steps.meta.outputs.image }}"
+          tag="${{ needs.plan.outputs.release_tag }}"
+          set -- -t "$img:js" -t "$img:$tag-js"
+          if [ "${{ needs.plan.outputs.relay }}" = "js" ] || [ "${{ steps.meta.outputs.default_engine }}" = "js" ]; then
+            set -- "$@" -t "$img:$tag" -t "$img:latest"
+          fi
+          for f in js-*.txt; do set -- "$@" "$img@$(cat "$f")"; done
+          docker buildx imagetools create "$@"
+      - name: Create Rust Relay Manifest
+        if: needs.plan.outputs.release_tag != '' && (needs.plan.outputs.relay == 'rust' || needs.plan.outputs.relay == 'both')
+        working-directory: relay-digests
+        run: |
+          img="${{ steps.meta.outputs.image }}"
+          tag="${{ needs.plan.outputs.release_tag }}"
+          set -- -t "$img:rust" -t "$img:$tag-rust"
+          if [ "${{ needs.plan.outputs.relay }}" = "rust" ] || { [ "${{ needs.plan.outputs.relay }}" = "both" ] && [ "${{ steps.meta.outputs.default_engine }}" = "rust" ]; }; then
+            set -- "$@" -t "$img:$tag" -t "$img:latest"
+          fi
+          for f in rust-*.txt; do set -- "$@" "$img@$(cat "$f")"; done
+          docker buildx imagetools create "$@"
 
   publish:
     if: needs.plan.outputs.release_tag != ''

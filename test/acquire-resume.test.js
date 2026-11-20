@@ -187,7 +187,9 @@ test('a rotated source is fetched again, never stitched to the old half', { time
     acq = createAcquirer(pub, jobsFile, { concurrency: 1, defaultChannel: true, retryDelay: 20 })
     const done = await until(() => {
       const job = acq.list()[0]
-      if (job?.status === 'failed') throw new Error(`rotation handling failed: ${job.error}`)
+      // The rotation fails one attempt on purpose (the old half is thrown away) and the job is queued again 20 ms later.
+      // Failing on that state too made the test close the node under the retry whenever a poll landed in between.
+      if (job?.status === 'failed' && job.attempts > 1) throw new Error(`rotation handling failed: ${job.error}`)
       return job?.status === 'done' ? job : null
     }, 120_000, 'the rotated source to land intact')
 

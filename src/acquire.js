@@ -249,7 +249,11 @@ export function createAcquirer (node, file, {
               // The bytes on disk only belong to this film if the source still serves the same file from that offset;
               // a rotated ETag means a different encode, and stitching two encodes would make a corrupt film.
               const rotated = job.etag && typeof first.headers.etag === 'string' && first.headers.etag !== job.etag
-              if (rotated || first.statusCode !== 206 || !m || Number(m[1]) !== start) throw Object.assign(new Error(`Source changed while resuming ${job.id}`), { restart: true })
+              if (rotated || first.statusCode !== 206 || !m || Number(m[1]) !== start) {
+                // Nothing reads this body: left open, it holds the connection, and the source keeps sending into it.
+                first.destroy()
+                throw Object.assign(new Error(`Source changed while resuming ${job.id}`), { restart: true })
+              }
               job.bytes = start
             } else {
               const cl = Number(first.headers['content-length'])

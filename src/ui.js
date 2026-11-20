@@ -267,7 +267,16 @@ export const page = `<!doctype html>
   #pSeek { width: 100%; accent-color: var(--brand); padding: 0; cursor: pointer; }
   .clock { font-variant-numeric: tabular-nums; font-size: 12.5px; color: var(--p-dim); min-width: 96px; }
   #playerModal.chrome-hidden .p-top, #playerModal.chrome-hidden .p-bar { opacity: 0; pointer-events: none; }
-  #playerModal .p-mini-controls, #pMiniRestore { display: none; }
+  #playerModal .now-playing{position:sticky;bottom:0;z-index:40;display:flex;align-items:center;gap:12px;padding:10px 16px;background:var(--surface);border-top:1px solid var(--border);backdrop-filter:blur(12px)}
+.now-playing .np-art{flex:none;width:44px;height:44px;border-radius:8px;border:1px solid var(--border);background:color-mix(in oklab,var(--brand) 22%,transparent);color:var(--fg);font-weight:700;font-size:19px;cursor:pointer}
+.now-playing .np-info{min-width:0;flex:1}
+.now-playing .np-title{font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.now-playing .np-meta{color:var(--muted);font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.now-playing .np-acts{flex:none;display:flex;gap:6px}
+.rows .row-item.now{background:color-mix(in oklab,var(--brand) 12%,transparent)}
+.track-play{flex:none;width:34px;height:34px;border-radius:50%;border:1px solid var(--border);background:transparent;color:var(--fg);cursor:pointer;font-size:12px}
+.track-play:hover{background:color-mix(in oklab,var(--brand) 20%,transparent)}
+.p-mini-controls, #pMiniRestore { display: none; }
   #playerModal.mini { inset: auto 18px 18px auto; width: min(380px, calc(100vw - 24px)); height: 280px; border-radius: 16px;
     border: 1px solid rgba(255,255,255,.18); box-shadow: 0 18px 65px rgba(0,0,0,.7); }
   #playerModal.mini .p-stage { flex: 1; }
@@ -312,6 +321,7 @@ export const page = `<!doctype html>
     <a href="#settings" data-tab="settings">Settings</a>
   </nav>
 </header>
+<div class="now-playing" id="nowPlaying" hidden aria-live="polite"></div>
 <main>
   <form id="authForm" class="card" hidden>
     <div class="field">
@@ -1197,6 +1207,110 @@ function fileRow (label, e, withHealth) {
   shown ? infoPanel(e) : null)
 }
 
+// ---- Music
+// A track is a track, not one of a film's versions: the row shows the number it is addressed by (its disc and track
+// from the id's ':sNNeMM' suffix) and the name the announce carries in 'music.title'. The announce title is the album
+// on every track, so without 'music' an album's rows would all read the same.
+const trackName = e => (e.music && e.music.title) || (e.id.split(':').pop() || '').toUpperCase() || e.title || 'Track'
+const trackNo = e => e.season != null && e.episode != null
+  ? (e.season > 1 ? e.season + '-' : '') + String(e.episode).padStart(2, '0')
+  : ''
+function trackRow (i, t) {
+  const e = i.e
+  const n = String(i.episode).padStart(2, '0')
+  const disc = t.items.some(x => x.season !== i.season) ? i.season + '·' : ''
+  const playing = queue.length && queue[queueIndex] && queue[queueIndex].key === e.key
+  return h('div', { class: 'row-item' + (playing ? ' now' : ''), 'data-track': e.key },
+    h('button', { class: 'track-play', 'aria-label': 'Play ' + trackName(e), onclick: () => queueUp(t.items.map(x => x.e), t.items.indexOf(i)) }, playing ? '❚❚' : '▶'),
+    h('div', { class: 'grow', style: 'min-width:0' },
+      h('div', { class: 'label' }, trackName(e)),
+      h('div', { class: 'meta' }, [disc + n, e.music && e.music.artist, size(e.size), where(e)].filter(Boolean).join(' · '))),
+    h('div', { class: 'acts' },
+      downloadBtn(e, true, (trackNo(e) ? trackNo(e) + ' ' : '') + trackName(e) + ' — ' + (e.music && e.music.artist ? e.music.artist + ' — ' : '') + t.title),
+      h('button', { class: 'btn quiet', title: e.magnetUrl, onclick: () => copyText(e.magnetUrl) }, 'Copy link')))
+}
+
+// The queue is what plays next. Starting one replaces it, so an album plays through and a single track plays once.
+let queue = []
+let queueIndex = 0
+let shuffle = false
+function queueUp (list, start = 0) {
+  queue = list.filter(e => !e.locked)
+  queueIndex = Math.max(0, Math.min(start, queue.length - 1))
+  if (!queue.length) return
+  $('detail').close()
+  playInQueue(queueIndex)
+}
+function shuffleUp (list) {
+  const pool = list.filter(e => !e.locked)
+  for (let i = pool.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [pool[i], pool[j]] = [pool[j], pool[i]] }
+  queue = pool
+  queueIndex = 0
+  shuffle = true
+  $('detail').close()
+  playInQueue(0)
+}
+function playInQueue (i) {
+  if (!queue.length) return
+  queueIndex = (i + queue.length) % queue.length
+  const e = queue[queueIndex]
+  renderNowPlaying()
+  // A track has no picture to show, so it plays in a bare audio element: the video player would spend its time
+  // finding a video track that is not there. Anything with a picture still goes to the normal player.
+  if (isMusic(e)) openAudioPlayer(e)
+  else openPlayer(e)
+}
+const isMusic = e => Boolean(e.music) || (e.id ? !/^imdb:/.test(e.id) && e.season != null : false)
+
+// One audio element for the whole session: the queue swaps its source, so playback never restarts the decoder.
+let audioEl = null
+function openAudioPlayer (e) {
+  // The video player is not used for a track at all, so it is closed rather than left half-open.
+  closePlayer()
+  if (!audioEl) {
+    // Attached, not floating: a detached media element has no document to schedule playback against, and its
+    // events are the only thing that keeps the bar honest about what is playing.
+    audioEl = el('audio')
+    audioEl.preload = 'auto'
+    audioEl.hidden = true
+    document.body.append(audioEl)
+    audioEl.addEventListener('ended', () => { if (queue.length > 1) nextTrack(); else renderNowPlaying() })
+    audioEl.addEventListener('play', () => renderNowPlaying())
+    audioEl.addEventListener('pause', () => renderNowPlaying())
+    audioEl.addEventListener('error', () => toast('This track could not be played'))
+  }
+  playerEntry = e
+  audioEl.src = resolveStreamUrl(e.streamUrl)
+  audioEl.play().catch(() => {})
+  renderNowPlaying()
+}
+function nextTrack () {
+  if (!queue.length) return
+  if (shuffle && queue.length > 1) { let n = queueIndex; while (n === queueIndex) n = Math.floor(Math.random() * queue.length); playInQueue(n); return }
+  if (queueIndex + 1 >= queue.length) { queue = []; queueIndex = 0; renderNowPlaying(); return }
+  playInQueue(queueIndex + 1)
+}
+function prevTrack () {
+  if (!queue.length) return
+  playInQueue(queueIndex - 1)
+}
+function renderNowPlaying () {
+  const bar = $('nowPlaying')
+  if (!bar) return
+  const e = queue[queueIndex]
+  bar.hidden = !e
+  if (!e) return
+  const t = e.music && e.music.title
+  bar.replaceChildren(
+    h('button', { class: 'np-art', 'aria-label': 'Open player', onclick: () => playInQueue(queueIndex) }, (t || e.title || '?').trim().charAt(0).toUpperCase()),
+    h('div', { class: 'np-info' },
+      h('div', { class: 'np-title' }, trackName(e)),
+      h('div', { class: 'np-meta' }, [e.music && e.music.artist, queue.length > 1 ? (queueIndex + 1) + ' of ' + queue.length : ''].filter(Boolean).join(' · '))),
+    h('div', { class: 'np-acts' },
+      h('button', { class: 'btn quiet', 'aria-label': 'Previous track', onclick: prevTrack }, '⏮'),
+      h('button', { class: 'btn quiet', 'aria-label': 'Next track', onclick: nextTrack }, '⏭')))
+}
+
 // ---- Library: what a file holds and how well it streams here now (GET /v1/entries/info), redrawn every 3 s while
 // the sheet is open. Episodes and versions open theirs with File info; a single file shows it at once, and each
 // version of a film carries its verdict on its row. The relay reads a header only for files it holds or has open;
@@ -1311,7 +1425,25 @@ function renderDetail () {
     posterBox(t.imdb ? '/v1/poster/' + t.imdb : null, t.title),
     h('div', { class: 'grow' }, h('h3', { id: 'detailTitle' }, t.title), h('div', { class: 'meta' }, tileLine(t) + ' · ' + tileState(t)[0])))
   let body
-  if (t.kind === 'show') {
+  if (t.kind === 'album') {
+    // An album lists its tracks by name, in disc and track order, the way a show lists its episodes. The row label
+    // is the track number a track is addressed by; the row's own name is what the announce carries in 'music.title',
+    // since the announce title is the album on every track.
+    const discs = [...new Set(t.items.map(i => i.season))].sort((a, b) => a - b)
+    if (detailSeason == null || !discs.includes(detailSeason)) detailSeason = discs[0]
+    const pick = discs.length > 1
+      ? h('div', { class: 'field' }, h('label', { for: 'seasonPick' }, 'Disc'), h('select', { id: 'seasonPick', onchange: ev => { detailSeason = Number(ev.target.value); renderDetail() } },
+      discs.map(d => h('option', { value: String(d), selected: d === detailSeason }, 'Disc ' + d + ' (' + t.items.filter(i => i.season === d).length + ' tracks)'))))
+      : null
+    const shown = t.items.filter(i => i.season === detailSeason)
+    const playable = (t.saved === t.items.length ? t.items : shown).map(i => i.e).filter(e => !e.locked)
+    body = [
+      pick,
+      h('div', { class: 'row', style: 'margin-bottom:12px;flex-wrap:wrap' },
+        playable.length ? h('button', { class: 'btn primary', onclick: () => queueUp(playable) }, 'Play all') : null,
+        playable.length > 1 ? h('button', { class: 'btn', onclick: () => shuffleUp(playable) }, 'Shuffle') : null),
+      h('div', { class: 'rows' }, shown.map(i => trackRow(i, t)))]
+  } else if (t.kind === 'show') {
     const seasons = [...new Set(t.items.map(i => i.season))]
     if (detailSeason == null || !seasons.includes(detailSeason)) detailSeason = seasons[0]
     const pick = seasons.length > 1
@@ -2607,7 +2739,9 @@ function openPlayer (entry, at = 0) {
 
       p.webCodecsSupported = Boolean(m.webCodecsSupported)
       const MS = window.MediaSource || window.ManagedMediaSource
-      p.mseSupported = Boolean(p.videoStream >= 0 && mf.mseType && MS && MS.isTypeSupported(mf.mseType))
+      // A music file has no video track, so the fast path is gated on the manifest's own MIME type, not on a
+      // video stream: an audio-only manifest still plays through MSE, while a video one needs its video track.
+      p.mseSupported = Boolean(mf.mseType && MS && MS.isTypeSupported(mf.mseType) && (p.videoStream >= 0 || mf.defaultAudio >= 0))
       // Prefer MSE (<video>) first whenever supported so macOS/iOS promote directly to AVSampleBufferDisplayLayer
       // (native BT.709/BT.1886 colors, 10-bit P010/HDR, zero per-frame JS copy). Fall back to WebCodecs -> WASM+GPU.
       p.useMse = Boolean(p.mseSupported)
@@ -2901,6 +3035,8 @@ function openPlayer (entry, at = 0) {
         syncWorkerClock(now, false)
         $('pPlayBtn').textContent = 'Replay'
         $('pMiniPlay').textContent = 'Replay'
+        // A queued track hands over to the next one, the way an album plays through; a lone track stays on Replay.
+        if (queue.length > 1) setTimeout(() => { if (player === p && p.ended) nextTrack() }, 350)
       }
     }
 

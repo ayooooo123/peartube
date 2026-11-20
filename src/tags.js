@@ -57,23 +57,28 @@ function year (v) {
 }
 
 // MusicBrainz ids appear in several spellings across taggers: ffmpeg writes `MUSICBRAINZ_ALBUMID` as a TXXX
-// description, Picard writes `MusicBrainz Album Id`, and some FLAC tools write `MUSICBRAINZ_RELEASEGROUPID`.
-// A release id is what a track id needs to resolve against, so any of them is accepted; hyphens are stripped
-// because the channel's id shape is lowercase alphanumeric. Descriptions are compared with spaces and
-// underscores removed, since each tagger spells the separator differently.
-const MB_KEYS = new Set([
+// description, Picard writes `MusicBrainz Album Id`, and a file may carry only `MUSICBRAINZ_RELEASEGROUPID`.
+// A release id is what a track id needs to resolve against, so it wins whatever order the tags are stored in. A
+// release-group id is deliberately NOT accepted: it names every edition of an album at once, so using it as a
+// release id splits one album into two whenever two rips carry different tag kinds.
+// Hyphens are stripped because the channel's id shape is lowercase alphanumeric. Descriptions are compared with
+// spaces and underscores removed, since each tagger spells the separator differently.
+const MB_RELEASE_KEYS = new Set([
   'MUSICBRAINZALBUMID',
   'MUSICBRAINZRELEASEID',
-  'MUSICBRAINZALBUMRELEASEID',
-  'MUSICBRAINZRELEASEGROUPID'
+  'MUSICBRAINZALBUMRELEASEID'
 ])
+const MB_ID = /([0-9a-f]{8}-?[0-9a-f]{4}-?[0-9a-f]{4}-?[0-9a-f]{4}-?[0-9a-f]{12}|[0-9a-f]{32})/i
 
 function mbid (map) {
   for (const [key, value] of map) {
-    if (!MB_KEYS.has(key.replace(/[\s_]+/g, ''))) continue
-    const m = /([0-9a-f]{8}-?[0-9a-f]{4}-?[0-9a-f]{4}-?[0-9a-f]{4}-?[0-9a-f]{12}|[0-9a-f]{32})/i.exec(value)
+    if (!MB_RELEASE_KEYS.has(key.replace(/[\s_]+/g, ''))) continue
+    const m = MB_ID.exec(value)
     if (m) return m[1].toLowerCase().replace(/-/g, '')
   }
+  // A release-GROUP id names every edition of an album at once, so it is NOT a release id and must not be used as
+  // one: a file carrying only `MUSICBRAINZ_RELEASEGROUPID` used to be stamped with that id, which made the same
+  // album appear twice under two ids. No release id is the honest answer; the caller falls back to the album hash.
   return null
 }
 

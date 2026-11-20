@@ -7,8 +7,8 @@
 //   - Recruits existing HiveRelays (`hiverelay-seed`) via HTTP `/seed-core` and P2P `hiverelay-seed` DHT as supplemental seeders
 //   - Checks that held public files are media before global search offers them (`media-check`)
 //   - Dynamically loads custom user plugins dropped into `/data/plugins/*.mjs` or `*.js`
-import { closeSync, createReadStream, existsSync, fstatSync, mkdirSync, openSync, readSync, readdirSync, readFileSync, renameSync, statSync, statfsSync, writeFileSync } from 'node:fs'
-import { basename, extname, join, resolve } from 'node:path'
+import { closeSync, createReadStream, existsSync, fstatSync, mkdirSync, openSync, readSync, readdirSync, readFileSync, renameSync, rmdirSync, statSync, statfsSync, unlinkSync, writeFileSync } from 'node:fs'
+import { basename, dirname, extname, join, resolve, sep } from 'node:path'
 import { createHash } from 'node:crypto'
 import b4a from 'b4a'
 import { ID, MAX_TITLE, MEDIA_FILE, mediaFormat, parseUri } from './protocol.js'
@@ -16,7 +16,7 @@ import { albumKey, parseTags } from './tags.js'
 import { createHiverelaySeeder } from './hiverelay.js'
 import { createTrafficGate } from './traffic.js'
 import { send } from './art.js'
-import { createSoulseekPlugin } from './providers/soulseek.js'
+import { ALBUM_PIN, MIRRORED_LIST, RELEASE_ID, createSoulseekPlugin } from './providers/soulseek.js'
 
 async function fetchJson (url, headers = {}) {
   const res = await send(url, { headers: { accept: 'application/json', ...headers }, timeoutMs: 60_000, maxBytes: 8 * 1024 * 1024 })
@@ -43,8 +43,9 @@ function inferMediaMeta (filePath, sidecar = null, tags = null, album = null) {
   }
   // A file in an album folder joins that album even when its own tags are missing or partial: its track number is
   // its own, else the leading number in its name ("03 - ..."), else the caller passes the position it sits at. A
-  // folder of untagged rips is exactly the case tags exist to rescue, so it must not fall through to `clip:`.
-  if (album && (tags || album.tracks > 1)) {
+  // folder of untagged rips is exactly the case tags exist to rescue, so it must not fall through to `clip:`; nor
+  // must a lone untagged track in a folder pinned to its album (a single-track mirror).
+  if (album && (tags || album.tracks > 1 || album.pinned)) {
     const fromName = /^(\d{1,3})\b/.exec(stem)
     const track = clamp(tags?.track, 1, 999) || clamp(fromName && Number(fromName[1]), 1, 999) || clamp(album.position, 1, 999)
     if (track) {
@@ -88,10 +89,12 @@ function albumIdentity (files) {
   let mbid = null
   let discogs = null
   const names = new Map()
+  // Every tagged file names the album, numbered or not (a vinyl rip tags no track numbers); only a numbered one, or
+  // a file already announced under a release, vouches for a release id.
   for (const t of files) {
-    if (!t || !t.track) continue
-    if (!mbid && t.mbid) mbid = t.mbid
-    if (!discogs && t.discogs) discogs = t.discogs
+    if (!t) continue
+    if (!mbid && t.track && t.mbid) mbid = t.mbid
+    if (!discogs && t.track && t.discogs) discogs = t.discogs
     if (t.album) {
       const artist = t.albumArtist || t.artist || ''
       const key = albumKey({ albumArtist: artist, album: t.album, year: t.year })
@@ -116,6 +119,31 @@ function albumIdentity (files) {
   }
 }
 
+// The release a folder is pinned to (`<folder>/.peartube-album.json` `{ release, title? }`), or null. Dot names are
+// skipped by the media walk, so the pin is never itself imported.
+function readAlbumPin (folder) {
+  try {
+    const pin = JSON.parse(readFileSync(join(folder, ALBUM_PIN), 'utf8'))
+    if (typeof pin?.release !== 'string' || !RELEASE_ID.test(pin.release)) return null
+    return { release: pin.release, title: typeof pin.title === 'string' ? pin.title.slice(0, MAX_TITLE) : '' }
+  } catch {
+    return null
+  }
+}
+
+// Whether files can be created in `dir` (made if missing): a read-only bind mount reports as present but refuses writes.
+function writableDir (dir) {
+  const probe = join(dir, `.peartube-write-${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`)
+  try {
+    mkdirSync(dir, { recursive: true })
+    writeFileSync(probe, '')
+    unlinkSync(probe)
+    return true
+  } catch {
+    return false
+  }
+}
+
 export async function createMirrorHost ({
   node,
   storage,
@@ -135,6 +163,7 @@ export async function createMirrorHost ({
   slskUser = '',
   slskPass = '',
   slskServer = 'vps.slsknet.org:2271',
+  slskListenPort = 50300,
   soulseekOpts = null,
   pluginsDir = join(storage, 'plugins'),
   pollIntervalMs = 60_000,
@@ -344,7 +373,9 @@ export async function createMirrorHost ({
 
   // One album's identity per folder, decided from every file in it that has tags, before the first track is read.
   // Files already imported contribute the id they were stored with, so adding a track to an album that is already on
-  // the channel does not renumber its neighbours when the new file's tags read differently.
+  // the channel does not renumber its neighbours when the new file's tags read differently. A folder pinned to a
+  // release (`.peartube-album.json`, written by a mirror that was told which album it fills) takes that release
+  // over anything its files' tags say.
   async function albumFor (group, root, ledgerKeyOf) {
     const tags = []
     for (const f of group) {
@@ -353,7 +384,10 @@ export async function createMirrorHost ({
       if (hit) tags.push({ track: 1, mbid: hit[1].startsWith('mb:') ? hit[1].slice(3) : null, discogs: hit[1].startsWith('discogs:r') ? hit[1].slice(10) : null })
       else tags.push(readTags(f.full))
     }
-    return albumIdentity(tags.map((t, i) => (t ? { ...t, file: group[i].full } : null)))
+    const identity = albumIdentity(tags.map((t, i) => (t ? { ...t, file: group[i].full } : null)))
+    const pinned = readAlbumPin(join(root, group[0].dir))
+    if (!pinned) return identity
+    return { release: pinned.release, title: pinned.title || identity?.title || group[0].dir, tracks: group.length, pinned: true }
   }
 
   const stagingDir = join(storage, 'staging')
@@ -989,12 +1023,21 @@ export async function createMirrorHost ({
     }
   })
 
+  // Soulseek mirrors land in the import folder the relay already sweeps, so a mirrored album sits beside (and joins)
+  // the albums imported from there, under the same ledger keys. A read-only import folder (a `:ro` Docker mount)
+  // cannot take them; they go to `<storage>/staging`, which `watch-dir` sweeps too under the `staging:` prefix.
+  const slskStaging = watchDir && writableDir(watchDir) ? resolve(watchDir) : stagingDir
+  const slskStagingLabel = slskStaging === stagingDir ? (watchDir ? 'storage (import folder is read-only)' : 'storage') : 'import folder'
+  console.error(JSON.stringify({ msg: 'soulseek staging root', root: slskStaging, sweptAs: slskStaging === stagingDir ? 'staging:' : 'watch-dir' }))
   const soulseekPlugin = register(createSoulseekPlugin({
     storage,
+    stagingRoot: slskStaging,
+    stagingLabel: slskStagingLabel,
     scanStaging: (dir, ctx) => scanFolder(dir, ctx, watchDir && resolve(watchDir) === resolve(dir) ? '' : 'staging:'),
     slskUser,
     slskPass,
     slskServer,
+    slskListenPort,
     onchange,
     ...soulseekOpts
   }))
@@ -1114,6 +1157,67 @@ export async function createMirrorHost ({
   // Whether the file at `<blobs>:<blockOffset>` has been checked and is media (src/search.js offers only those).
   const isMedia = key => mediaChecked.get(key) === true
 
+  // After the owner removed announces (POST /v1/entries/remove): each `{ id, sha256 }` this relay imported from a
+  // folder loses its file and its mirror-watch.json row when this relay mirrored that file, so the next scan has
+  // nothing to import again. Mirrored means: it sits in `<storage>/staging`, or its album folder's MIRRORED_LIST
+  // names it, or that folder carries an ALBUM_PIN (only a mirror writes one; mirrors made before MIRRORED_LIST
+  // existed have the pin and no list). A file the owner put in the import folder stays, and so does its row: the
+  // row matches the untouched file, which keeps the scan from importing it again until the file changes. An album
+  // folder left with no files is removed with its pin. Scans wait while this runs. Returns `id/sha256` ->
+  // 'deleted' | 'kept' for each file it found.
+  function mirroredHere (full, root) {
+    const folder = dirname(full)
+    if (resolve(folder) === resolve(root)) return false
+    try { if (JSON.parse(readFileSync(join(folder, MIRRORED_LIST), 'utf8')).includes(basename(full))) return true } catch {}
+    return existsSync(join(folder, ALBUM_PIN))
+  }
+  function dropEmptyAlbumFolder (folder, root) {
+    if (resolve(folder) === resolve(root)) return
+    try {
+      const list = join(folder, MIRRORED_LIST)
+      const left = readdirSync(folder)
+      if (left.some(n => n !== ALBUM_PIN && n !== MIRRORED_LIST)) {
+        if (left.includes(MIRRORED_LIST)) writeFileSync(list, JSON.stringify(JSON.parse(readFileSync(list, 'utf8')).filter(n => left.includes(n))) + '\n')
+        return
+      }
+      for (const n of left) unlinkSync(join(folder, n))
+      rmdirSync(folder)
+    } catch {}
+  }
+  async function forgetImported (gone) {
+    const want = new Set(gone.map(g => `${g.id}/${g.sha256}`))
+    const out = new Map()
+    for (let i = 0; scanningWatchDir && i < 600; i++) await new Promise(resolve => setTimeout(resolve, 100))
+    scanningWatchDir = true
+    try {
+      let changed = false
+      for (const [ledgerKey, row] of Object.entries(watchLedger)) {
+        const fk = `${row.id}/${row.sha256}`
+        if (!want.has(fk)) continue
+        const staged = ledgerKey.startsWith('staging:')
+        const root = staged ? stagingDir : watchDir
+        const full = root ? resolve(root, staged ? ledgerKey.slice(8) : ledgerKey) : ''
+        const inside = full && full.startsWith(resolve(root) + sep)
+        if (!inside || !(staged || mirroredHere(full, root))) {
+          if (!out.has(fk)) out.set(fk, 'kept')
+          continue
+        }
+        try { unlinkSync(full) } catch (err) {
+          if (err?.code !== 'ENOENT') { if (!out.has(fk)) out.set(fk, 'kept'); continue }
+        }
+        try { unlinkSync(`${full}.json`) } catch {}
+        delete watchLedger[ledgerKey]
+        changed = true
+        dropEmptyAlbumFolder(dirname(full), root)
+        out.set(fk, 'deleted')
+      }
+      if (changed) saveWatchLedger()
+    } finally {
+      scanningWatchDir = false
+    }
+    return out
+  }
+
   return {
     register,
     run,
@@ -1121,10 +1225,16 @@ export async function createMirrorHost ({
     configure,
     close,
     isMedia,
+    forgetImported,
     searchProvider (name, payload) {
       const p = plugins.get(name)
       if (!p || typeof p.search !== 'function') throw Object.assign(new Error(`Unknown provider: ${name}`), { status: 404 })
       return p.search(payload, ctxFor(name))
+    },
+    browseProvider (name, payload) {
+      const p = plugins.get(name)
+      if (!p || typeof p.browse !== 'function') throw Object.assign(new Error(`Unknown provider: ${name}`), { status: 404 })
+      return p.browse(payload, ctxFor(name))
     },
     mirrorProvider (name, payload) {
       const p = plugins.get(name)

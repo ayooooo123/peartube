@@ -4,8 +4,8 @@
 //   3. Search against a loopback Soulseek server + peers normalises candidates, ranks `slots && queue === 0` first,
 //      then ascending `queue`, then bit depth/sample rate, and enforces `SOULSEEK_SEARCH_CAP`.
 //   4. Mirror downloads tracks into `<storage>/staging/<Artist> - <Album> (<Year>)/` one level deep, reports progress
-//      through `/v1/jobs`, prefers peer MusicBrainz tags when present and stamps caller-supplied `MUSICBRAINZ_ALBUMID`
-//      onto untagged FLACs when absent, and triggers the importer to announce `mb:<release>:s01eNN` tracks.
+//      through `/v1/jobs`, stores peer bytes unmodified, announces the peer's own release tag when the caller names no
+//      album, and pins the folder to a caller-supplied release id (which wins over the peer's tags).
 //   5. Credentials (`slskUser`, `slskPass`) never appear in `/v1/plugins`, `/v1/settings`, `/v1/jobs`, `/v1/entries`,
 //      or stdout/stderr logs.
 // Writes `desktop/target/e2e/soulseek-plugin-result.json`.
@@ -14,14 +14,34 @@ import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
 import { createServer } from 'node:net'
 import { deflateSync } from 'node:zlib'
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, statSync, writeFileSync, rmSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, statSync, writeFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
+import { createHash } from 'node:crypto'
 import { join, dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { createInterface } from 'node:readline'
 import createTestnet from 'hyperdht/testnet.js'
-import { parseTags } from '../src/tags.js'
-import { SOULSEEK_SEARCH_CAP, createSoulseekPlugin, injectMusicBrainzAlbumId, normalizeSoulseekCandidates } from '../src/providers/soulseek.js'
+import { albumKey, parseTags } from '../src/tags.js'
+import { SOULSEEK_SEARCH_CAP, createSoulseekPlugin, normalizeSoulseekCandidates, placeSingleTrack } from '../src/providers/soulseek.js'
+import { removeEntries } from '../src/http.js'
+
+test('a lone track is placed in its album folder as NN - Title, or refused with the reason', () => {
+  const tagged = placeSingleTrack({ tags: { album: 'Giant Steps', albumArtist: 'John Coltrane', title: 'Naima', year: 1960, track: 6 }, filename: '@@m\\x\\y\\zz.flac' })
+  assert.equal(tagged.folder, 'John Coltrane - Giant Steps (1960)')
+  assert.equal(tagged.file, '06 - Naima.flac')
+  assert.equal(tagged.from, 'tags')
+  assert.equal(tagged.release, `album:${createHash('sha256').update(albumKey({ albumArtist: 'John Coltrane', album: 'Giant Steps', year: 1960 })).digest('hex').slice(0, 20)}`)
+  // A disc folder is a disc of the album above it; a year-first folder names its album after the year.
+  const disc = placeSingleTrack({ tags: null, filename: '@@m\\Bill Evans - Sunday at the Village Vanguard (1961)\\CD2\\04. Jade Visions.flac' })
+  assert.deepEqual([disc.folder, disc.file, disc.from], ['Bill Evans - Sunday at the Village Vanguard (1961)', '04 - Jade Visions.flac', 'peer folder'])
+  const yearFirst = placeSingleTrack({ tags: null, filename: '@@m\\John Coltrane\\1958 - Blue Train\\02 Moment\'s Notice.mp3' })
+  assert.deepEqual([yearFirst.folder, yearFirst.file], ['John Coltrane - Blue Train (1958)', '02 - Moment\'s Notice.mp3'])
+  // A caller that names the track gives a number to a file with none; a release id alone still gets its own folder.
+  const named = placeSingleTrack({ tags: null, filename: '@@m\\Mix\\tune.flac', release: 'mb:0123456789abcdef0123456789abcdef', track: 9 })
+  assert.deepEqual([named.file, named.release, named.from], ['09 - tune.flac', 'mb:0123456789abcdef0123456789abcdef', 'release'])
+  assert.match(placeSingleTrack({ tags: null, filename: '@@share\\untitled.flac' }).error, /no album tag/)
+  assert.match(placeSingleTrack({ tags: { album: 'A', artist: 'B' }, filename: '@@m\\B - A\\intro.flac' }).error, /track number/)
+})
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const artifact = join(root, 'desktop/target/e2e/soulseek-plugin-result.json')
@@ -264,7 +284,7 @@ async function startStubSoulseekNetwork ({ filesByPeer, searchPeers }) {
   }
 }
 
-test('ranking, search cap, MBID tag injection, and graceful unavailable addon fallback', async () => {
+test('ranking, search cap, release-id precedence, and graceful unavailable addon fallback', async () => {
   // 1. Candidate ranking and cap enforcement
   const noisy = Array.from({ length: SOULSEEK_SEARCH_CAP + 35 }, (_, i) => ({
     username: `peer_${i}`,
@@ -311,21 +331,109 @@ test('ranking, search cap, MBID tag injection, and graceful unavailable addon fa
     rmSync(tmp, { recursive: true, force: true })
   }
 
-  // 3. Caller-supplied MusicBrainz release ID injection only when peer file has none
-  const tagTmp = mkdtempSync(join(tmpdir(), 'slsk-mbid-'))
-  try {
-    const untaggedPath = join(tagTmp, 'untagged.flac')
-    writeFileSync(untaggedPath, buildFlac({ ALBUM: 'Kind of Blue', ALBUMARTIST: 'Miles Davis', TRACKNUMBER: '1', DATE: '1959' }, 4096))
-    assert.equal(injectMusicBrainzAlbumId(untaggedPath, 'mb:fedcba98-7654-3210-fedc-ba9876543210'), true)
-    assert.equal(parseTags(Buffer.from(await import('node:fs').then(fs => fs.readFileSync(untaggedPath)))).mbid, 'fedcba9876543210fedcba9876543210')
+  // 3. A release id wins whatever order the tags are stored in; a release-group id is never taken as a release id.
+  const both = parseTags(buildFlac({ MUSICBRAINZ_RELEASEGROUPID: '8d18c070-adea-353f-a089-cbd2543342dd', MUSICBRAINZ_ALBUMID: 'd10b1dbb-ebdc-3f66-b8f8-5685fd5ba5d5', TRACKNUMBER: '2' }, 64))
+  assert.equal(both.mbid, 'd10b1dbbebdc3f66b8f85685fd5ba5d5')
+  const groupOnly = parseTags(buildFlac({ MUSICBRAINZ_RELEASEGROUPID: '8d18c070-adea-353f-a089-cbd2543342dd', TRACKNUMBER: '2' }, 64))
+  assert.equal(groupOnly.mbid, null)
+  results.checks.releaseOutranksGroup = true
+})
 
-    const taggedPath = join(tagTmp, 'tagged.flac')
-    writeFileSync(taggedPath, buildFlac({ ALBUM: 'Blue Train', TRACKNUMBER: '1', MUSICBRAINZ_ALBUMID: '11111111222222223333333344444444' }, 4096))
-    assert.equal(injectMusicBrainzAlbumId(taggedPath, '99999999888888887777777766666666'), false, 'existing peer MBID is preserved')
-    assert.equal(parseTags(Buffer.from(await import('node:fs').then(fs => fs.readFileSync(taggedPath)))).mbid, '11111111222222223333333344444444')
-    results.checks.mbidPreference = true
+// A stand-in for the native addon: browse returns a share list, and download behaves like a peer that never answers
+// (no queue place, no bytes), a peer that answers and then sends, or a firewalled pair the server cannot bridge.
+function fakeAddon (calls) {
+  class Soulseek {
+    constructor (opts) { calls.created.push(opts) }
+    state () { return { connected: true, logged_in: true, listen_port: 50300 } }
+    async login () { return { logged_in: true } }
+    async search () { return [] }
+    async browse (user) {
+      calls.browse++
+      await sleep(20)
+      if (user === 'ghost') throw new Error('browse ghost timed out')
+      // A vinyl rip: files named by side and place, no number of their own, no track tag.
+      if (user === 'vinyl') {
+        return ['B1 Five', 'A10 Four', 'A2 Two', 'A3 Three', 'A1 One'].map(n => ({ username: user, slots: true, queue: 0, filename: `@@v\\Artist - Record (2005)\\${n}.flac`, size: 100 }))
+      }
+      return [
+        { username: user, slots: true, queue: 0, filename: '@@m\\Artist\\Album (2001)\\02 - Two.flac', size: 200, bitrate: 900, sample_rate: 96000, bit_depth: 24, length_secs: 61 },
+        { username: user, slots: true, queue: 0, filename: '@@m\\Artist\\Album (2001)\\01 - One.flac', size: 100, bitrate: 900, sample_rate: 96000, bit_depth: 24, length_secs: 60 },
+        { username: user, slots: true, queue: 0, filename: '@@m\\Artist\\Album (2001)\\cover.jpg', size: 50 }
+      ]
+    }
+    download (user, filename, dest, onProgress) {
+      onProgress({ phase: 'queued', bytes: 0, total: 100, speed: 0, queue: null })
+      if (user === 'silent') return new Promise(() => {})
+      if (user === 'walled') return Promise.reject(new Error('disconnected: peer could not establish indirect connection'))
+      return (async () => {
+        await sleep(10)
+        onProgress({ phase: 'queued', bytes: 0, total: 100, speed: 0, queue: 3 })
+        await sleep(10)
+        onProgress({ phase: 'transferring', bytes: 50, total: 100, speed: 5000, queue: null })
+        await sleep(40)
+        writeFileSync(dest, buildFlac(user === 'vinyl' ? { ALBUM: 'Record', ARTIST: 'Artist', DATE: '2005' } : { TRACKNUMBER: '1', ALBUM: 'Album', ARTIST: 'Artist' }, 100))
+        return { path: dest, size: statSync(dest).size }
+      })()
+    }
+    close () {}
+  }
+  return { Soulseek }
+}
+
+test('browse cache, listen port, and legible queued/transferring/failed jobs (fake addon)', async () => {
+  const tmp = mkdtempSync(join(tmpdir(), 'slsk-fake-'))
+  const calls = { created: [], browse: 0 }
+  const plug = createSoulseekPlugin({
+    storage: tmp,
+    slskUser: 'alice',
+    slskPass: 'secret',
+    slskListenPort: 50300,
+    noAnswerMs: 300,
+    loadAddon: async () => fakeAddon(calls)
+  })
+  try {
+    const first = await plug.browse({ username: 'bob' })
+    assert.deepEqual(calls.created, [{ listenPort: 50300 }], 'the configured listen port reaches the addon')
+    assert.equal(first.tracks, 2, 'browse keeps media files only')
+    assert.equal(first.size, 300)
+    assert.equal(first.cached, false)
+    assert.deepEqual(first.files.map(f => f.filename.split('\\').pop()), ['01 - One.flac', '02 - Two.flac'], 'files ordered by path')
+    assert.deepEqual(Object.keys(first.files[0]), ['username', 'slots', 'queue', 'filename', 'size', 'bitrate', 'sample_rate', 'bit_depth', 'length'])
+    const again = await plug.browse({ username: 'bob' })
+    assert.equal(again.cached, true)
+    assert.equal(calls.browse, 1, 'a second browse within the TTL is served from memory')
+    await assert.rejects(() => plug.browse({ username: 'ghost' }), /ghost did not answer.*port 50300/)
+    assert.equal(plug.info().listenPort, 50300)
+    assert.equal(plug.info().inboundFailures, 1)
+
+    const seen = []
+    const ok = await plug.mirror({ username: 'bob', files: [{ filename: '@@m\\Artist\\Album (2001)\\01 - One.flac', size: 100 }] })
+    for (let i = 0; i < 100 && plug.getJob(ok.job.jobId).status !== 'done'; i++) {
+      const s = plug.getJob(ok.job.jobId)
+      if (seen.at(-1) !== s.status) seen.push(s.status)
+      await sleep(2)
+    }
+    seen.push(plug.getJob(ok.job.jobId).status)
+    assert.equal(seen[0], 'queued')
+    assert.ok(seen.includes('transferring'), `job reports transferring: ${seen}`)
+    assert.equal(seen.at(-1), 'done')
+    assert.equal(plug.getJob(ok.job.jobId).peer, 'bob')
+
+    await assert.rejects(() => plug.mirror({ username: 'silent', files: ['@@m\\A\\B\\01.flac'], wait: true }), /silent never answered.*port 50300/)
+    const silentJob = plug.listJobs().find(j => j.peer === 'silent')
+    assert.equal(silentJob.status, 'failed')
+    assert.equal(silentJob.bytes, 0)
+    await assert.rejects(() => plug.mirror({ username: 'walled', files: ['@@m\\A\\B\\01.flac'], wait: true }), /behind a firewall.*port 50300/)
+    assert.equal(plug.info().inboundFailures, 3)
+
+    // A vinyl side name ("B1") gives no number; its place in the peer's folder does (A1 A2 A3 A10 B1 -> 5).
+    const vinyl = await plug.mirror({ username: 'vinyl', files: [{ filename: '@@v\\Artist - Record (2005)\\B1 Five.flac', size: 100 }], wait: true })
+    assert.equal(vinyl.folder, 'Artist - Record (2005)')
+    assert.equal(vinyl.placed.file, '05 - Five.flac')
+    results.checks.browseAndLegibleJobs = { transitions: seen, silent: silentJob.error }
   } finally {
-    rmSync(tagTmp, { recursive: true, force: true })
+    await plug.stop()
+    rmSync(tmp, { recursive: true, force: true })
   }
 })
 
@@ -339,10 +447,27 @@ test('relay E2E: unconfigured inert, stub search+mirror one-level staging, mb: a
   const SECRET_PASS = 'slsk_super_secret_pw_8842'
   const PEER_MBID = '0123456789abcdef0123456789abcdef'
   const CALLER_MBID = 'abcdef0123456789abcdef0123456789'
+  // The peer's copy names its own release and release group; a caller-supplied id must win over both.
+  const MILES_PEER_MBID = '11112222333344445555666677778888'
+  const MILES_GROUP_MBID = '99990000aaaabbbbccccddddeeeeffff'
 
   const track1Path = '@@lossless\\Music\\John Coltrane\\1958 - Blue Train\\01 - Blue Train.flac'
   const track2Path = '@@lossless\\Music\\John Coltrane\\1958 - Blue Train\\02 - Moment\'s Notice.flac'
   const untaggedPath = '@@lossless\\Music\\Miles Davis\\Kind of Blue (1959)\\01 - So What.flac'
+  const giantPath = '@@music\\Jazz\\Coltrane\\Giant Steps\\track02.flac'
+  const rollinsPath = '@@music\\Sonny Rollins - Saxophone Colossus (1956)\\03 Strode Rode.flac'
+  const loosePath = '@@share\\untitled.flac'
+  const milesBytes = buildFlac({
+    ALBUM: 'Kind of Blue',
+    ALBUMARTIST: 'Miles Davis',
+    ARTIST: 'Miles Davis',
+    TITLE: 'So What',
+    DATE: '1959',
+    DISCNUMBER: '1',
+    TRACKNUMBER: '1',
+    MUSICBRAINZ_RELEASEGROUPID: MILES_GROUP_MBID,
+    MUSICBRAINZ_ALBUMID: MILES_PEER_MBID
+  }, 128 * 1024)
 
   const stub = await startStubSoulseekNetwork({
     filesByPeer: {
@@ -369,15 +494,19 @@ test('relay E2E: unconfigured inert, stub search+mirror one-level staging, mb: a
         }, 160 * 1024)
       },
       miles_peer: {
-        [untaggedPath]: buildFlac({
-          ALBUM: 'Kind of Blue',
-          ALBUMARTIST: 'Miles Davis',
-          ARTIST: 'Miles Davis',
-          TITLE: 'So What',
-          DATE: '1959',
-          DISCNUMBER: '1',
-          TRACKNUMBER: '1'
-        }, 128 * 1024)
+        [untaggedPath]: milesBytes
+      },
+      // A lone track whose name says nothing (`track02`); its tags name the album and the track.
+      giant_peer: {
+        [giantPath]: buildFlac({ ALBUM: 'Giant Steps', ALBUMARTIST: 'John Coltrane', ARTIST: 'John Coltrane', TITLE: 'Cousin Mary', DATE: '1960', TRACKNUMBER: '2' }, 96 * 1024)
+      },
+      // A lone track with no tags at all: its folder on the peer names the album, its file name the track.
+      rollins_peer: {
+        [rollinsPath]: buildFlac({}, 96 * 1024)
+      },
+      // A lone untagged track in no named folder: nothing says which album it belongs to.
+      loose_peer: {
+        [loosePath]: buildFlac({}, 64 * 1024)
       }
     },
     searchPeers: [
@@ -411,7 +540,9 @@ test('relay E2E: unconfigured inert, stub search+mirror one-level staging, mb: a
       PEARTUBE_STORAGE: storage,
       PEARTUBE_API_PORT: String(apiPort),
       PEARTUBE_API_HOST: '127.0.0.1',
-      PEARTUBE_BOOTSTRAP: testnet.bootstrap.map(b => `${b.host}:${b.port}`).join(',')
+      PEARTUBE_BOOTSTRAP: testnet.bootstrap.map(b => `${b.host}:${b.port}`).join(','),
+      // An OS-assigned port, so this test never collides with a relay already bound to the default 50300.
+      PEARTUBE_SLSK_LISTEN_PORT: '0'
     },
     stdio: ['ignore', 'pipe', 'pipe']
   })
@@ -494,10 +625,9 @@ test('relay E2E: unconfigured inert, stub search+mirror one-level staging, mb: a
   assert.equal(cands[2].username, 'busy_peer', 'queued peer ranked after free peer')
   results.checks.searchRanked = cands.map(c => ({ username: c.username, slots: c.slots, queue: c.queue, bit_depth: c.bit_depth }))
 
-  // 4. Mirror album with peer tags carrying MusicBrainz ID (must prefer peer's PEER_MBID over caller's id)
+  // 4. Mirror an album with no caller id: the peer's own MusicBrainz release tag names it
   const mirrorStart = await call('POST', '/v1/providers/soulseek/mirror', {
     username: 'coltrane_peer',
-    id: `mb:${CALLER_MBID}`,
     title: 'John Coltrane - Blue Train',
     files: [
       { filename: track1Path, size: 164_000 },
@@ -527,8 +657,10 @@ test('relay E2E: unconfigured inert, stub search+mirror one-level staging, mb: a
   assert.equal(existsSync(stagingRoot), true)
   const stagingDirs = readdirSync(stagingRoot)
   assert.deepEqual(stagingDirs, ['John Coltrane - Blue Train (1958)'], 'placed one level deep under staging/<Artist> - <Album> (<Year>)/')
-  const stagedFiles = readdirSync(join(stagingRoot, stagingDirs[0])).sort()
+  // Dot files are the relay's own notes (which files it mirrored); the media walk skips them.
+  const stagedFiles = readdirSync(join(stagingRoot, stagingDirs[0])).filter(n => !n.startsWith('.')).sort()
   assert.deepEqual(stagedFiles, ['01 - Blue Train.flac', '02 - Moment\'s Notice.flac'])
+  assert.deepEqual(JSON.parse(readFileSync(join(stagingRoot, stagingDirs[0], '.peartube-mirrored.json'), 'utf8')).sort(), stagedFiles, 'the relay notes which files it mirrored')
   for (const f of stagedFiles) {
     assert.equal(statSync(join(stagingRoot, stagingDirs[0], f)).isFile(), true, 'one level deep files only, no nested subdirectories')
   }
@@ -540,7 +672,8 @@ test('relay E2E: unconfigured inert, stub search+mirror one-level staging, mb: a
   assert.deepEqual(coltraneRows.map(r => r.episode).sort((a, b) => a - b), [1, 2])
   assert.equal(coltraneRows[0].title, 'John Coltrane · Blue Train')
 
-  // 5. Mirror untagged-MBID album with caller-supplied release id -> stamps MUSICBRAINZ_ALBUMID and announces caller's `mb:` id
+  // 5. Mirror with a caller-supplied release id: it wins over the peer's own release and release-group tags, and the
+  //    stored file is byte-for-byte what the peer served (the announce carries the id; the bytes are not rewritten)
   const mirrorUntagged = await call('POST', '/v1/providers/soulseek/mirror', {
     username: 'miles_peer',
     id: `mb:${CALLER_MBID}`,
@@ -552,14 +685,74 @@ test('relay E2E: unconfigured inert, stub search+mirror one-level staging, mb: a
 
   const entries2 = (await call('GET', '/v1/entries')).data.results
   const milesRows = entries2.filter(e => e.id.startsWith(`mb:${CALLER_MBID}:`))
-  assert.equal(milesRows.length, 1, `caller release id written and announced as mb:${CALLER_MBID}:s01e01`)
+  assert.equal(milesRows.length, 1, `caller release id announced as mb:${CALLER_MBID}:s01e01: ${JSON.stringify(entries2.map(e => e.id))}`)
   assert.equal(milesRows[0].id, `mb:${CALLER_MBID}:s01e01`)
+  assert.equal(entries2.some(e => e.id.includes(MILES_PEER_MBID) || e.id.includes(MILES_GROUP_MBID)), false, 'peer tag ids are not announced')
+  assert.equal(milesRows[0].sha256, createHash('sha256').update(milesBytes).digest('hex'), 'stored bytes are exactly what the peer served')
   results.checks.mirrorAndImport = {
     stagedFolders: readdirSync(stagingRoot).sort(),
     announcedIds: entries2.map(e => e.id).sort()
   }
 
-  // 6. Security check: no credentials in /v1/plugins, /v1/jobs, /v1/entries, or relay stdout/stderr logs
+  // 6. A single track is a track of its album, never a clip. Tagged: its tags name the folder and the file
+  //    (`NN - Title.ext`), whatever the peer called it. Untagged: its folder on the peer names the album, its file
+  //    name the track, and the job says so. Neither: a plain error, and nothing is announced.
+  const releaseOf = (albumArtist, album, year) => `album:${createHash('sha256').update(albumKey({ albumArtist, album, year })).digest('hex').slice(0, 20)}`
+  const giant = await call('POST', '/v1/providers/soulseek/mirror', { username: 'giant_peer', files: [{ filename: giantPath, size: 98_400 }], wait: true })
+  assert.equal(giant.status, 200, JSON.stringify(giant.data))
+  assert.equal(giant.data.folder, 'John Coltrane - Giant Steps (1960)')
+  assert.deepEqual(readdirSync(join(stagingRoot, giant.data.folder)).filter(n => !n.startsWith('.')), ['02 - Cousin Mary.flac'])
+  assert.equal(giant.data.placed.from, 'tags')
+  const rollins = await call('POST', '/v1/providers/soulseek/mirror', { username: 'rollins_peer', files: [{ filename: rollinsPath, size: 98_400 }], wait: true })
+  assert.equal(rollins.status, 200, JSON.stringify(rollins.data))
+  assert.equal(rollins.data.folder, 'Sonny Rollins - Saxophone Colossus (1956)')
+  assert.deepEqual(readdirSync(join(stagingRoot, rollins.data.folder)).filter(n => !n.startsWith('.')), ['03 - Strode Rode.flac'])
+  assert.equal(rollins.data.placed.from, 'peer folder')
+  assert.match(rollins.data.placed.note, /from the peer's folder name/)
+  const loose = await call('POST', '/v1/providers/soulseek/mirror', { username: 'loose_peer', files: [{ filename: loosePath, size: 66_000 }], wait: true })
+  assert.equal(loose.status, 422, JSON.stringify(loose.data))
+  assert.match(loose.data.error, /Could not place “untitled\.flac”: it has no album tag/)
+  assert.equal(readdirSync(stagingRoot).some(n => /untitled/i.test(n)), false, 'an unplaced track is not staged')
+  const entries3 = (await call('GET', '/v1/entries')).data.results
+  const giantRow = entries3.find(e => e.id === `${releaseOf('John Coltrane', 'Giant Steps', 1960)}:s01e02`)
+  assert.ok(giantRow, `tagged lone track announced as track 2 of its album: ${JSON.stringify(entries3.map(e => e.id))}`)
+  assert.equal(giantRow.title, 'John Coltrane · Giant Steps')
+  assert.equal(giantRow.music.title, 'Cousin Mary')
+  const rollinsRow = entries3.find(e => e.id === `${releaseOf('Sonny Rollins', 'Saxophone Colossus', '1956')}:s01e03`)
+  assert.ok(rollinsRow, `untagged lone track announced as track 3 of the folder's album: ${JSON.stringify(entries3.map(e => e.id))}`)
+  assert.equal(rollinsRow.title, 'Sonny Rollins · Saxophone Colossus')
+  assert.equal(entries3.some(e => e.id.startsWith('clip:')), false, 'no lone track lands as a clip')
+  results.checks.singleTrackMirror = { giant: giantRow.id, rollins: rollinsRow.id, loose: loose.data.error }
+
+  // 7. Deleting a whole album is one call: every row of its release goes, its staged files and their ledger rows
+  //    with it, other albums stay, and a scan afterwards imports nothing again.
+  const seriesKey = `mb:${PEER_MBID}`
+  const ledgerKeys = () => Object.keys(JSON.parse(readFileSync(join(storage, 'mirror-watch.json'), 'utf8')))
+  assert.equal(ledgerKeys().filter(k => k.includes('Blue Train')).length, 2)
+  const del = await call('POST', '/v1/entries/remove', { seriesKey })
+  assert.equal(del.status, 200, JSON.stringify(del.data))
+  assert.equal(del.data.removed.length, 2)
+  assert.deepEqual(del.data.removed.map(r => r.file), ['deleted', 'deleted'])
+  assert.equal(del.data.filesDeleted, 2)
+  assert.deepEqual(del.data.notRemoved, [])
+  const entries4 = (await call('GET', '/v1/entries')).data.results
+  assert.equal(entries4.filter(e => e.seriesKey === seriesKey).length, 0, 'no row of the deleted album is left')
+  for (const id of [milesRows[0].id, giantRow.id, rollinsRow.id]) assert.ok(entries4.some(e => e.id === id), `${id} untouched`)
+  assert.equal(existsSync(join(stagingRoot, 'John Coltrane - Blue Train (1958)')), false, 'the emptied album folder is gone')
+  assert.equal(ledgerKeys().filter(k => k.includes('Blue Train')).length, 0, 'their mirror-watch.json rows are gone')
+  const rescan = await call('POST', '/v1/plugins/watch-dir/run', {})
+  assert.equal(rescan.status, 200, JSON.stringify(rescan.data))
+  assert.equal(rescan.data.ingested, 0, `a scan after the delete imports nothing: ${JSON.stringify(rescan.data)}`)
+  assert.equal((await call('GET', '/v1/entries')).data.results.filter(e => e.seriesKey === seriesKey).length, 0)
+  // One track by key: its file goes, and with it the folder it was alone in.
+  const one = await call('POST', '/v1/entries/remove', { key: rollinsRow.key })
+  assert.equal(one.status, 200, JSON.stringify(one.data))
+  assert.deepEqual(one.data.removed.map(r => [r.id, r.file]), [[rollinsRow.id, 'deleted']])
+  assert.equal(existsSync(join(stagingRoot, 'Sonny Rollins - Saxophone Colossus (1956)')), false)
+  assert.equal((await call('POST', '/v1/entries/remove', {})).status, 400, 'a remove names what to remove')
+  results.checks.albumDelete = { removed: del.data.removed.map(r => r.id), rescan: rescan.data.ingested, kept: entries4.map(e => e.id).sort() }
+
+  // 8. Security check: no credentials in /v1/plugins, /v1/jobs, /v1/entries, or relay stdout/stderr logs
   const pluginsBody = JSON.stringify((await call('GET', '/v1/plugins')).data)
   const jobsBody = JSON.stringify((await call('GET', '/v1/jobs')).data)
   const entriesBody = JSON.stringify((await call('GET', '/v1/entries')).data)
@@ -574,4 +767,31 @@ test('relay E2E: unconfigured inert, stub search+mirror one-level staging, mb: a
     assert.ok(!surface[1].includes(SECRET_USER), `${surface[0]} must never contain slskUser`)
   }
   results.checks.credentialsRedacted = true
+})
+
+// A merged album tile folds every release of one artist+album, while `catalog.search` returns one record per
+// id+sha256. A delete driven by the tile's own key list must still remove an announce the listing never showed, or
+// the tile regroups from that survivor and the album reappears.
+test('album delete removes announces the listing collapses away', async () => {
+  const CH = 'aa'.repeat(32)
+  const removed = []
+  const node = {
+    status: () => ({ channel: CH }),
+    search: async () => [{
+      key: 'k-shown',
+      id: 'mb:0123456789abcdef0123456789abcdef:s01e01',
+      sha256: 'bb'.repeat(32),
+      seriesKey: 'mb:0123456789abcdef0123456789abcdef',
+      source: CH,
+      title: 'Shown',
+      music: null,
+      size: 1
+    }],
+    remove: async key => { removed.push(key) }
+  }
+  const srv = { notify: () => {} }
+  const res = await removeEntries(node, {}, srv, { keys: ['k-shown', 'k-hidden'] })
+  assert.deepEqual([...removed].sort(), ['k-hidden', 'k-shown'], 'the unseen announce must be removed too')
+  assert.equal(res.notRemoved.length, 0)
+  assert.equal(res.removed.length, 2)
 })

@@ -44,7 +44,9 @@ const SPEC = {
   cinemetaUrl: { env: 'PEARTUBE_CINEMETA_URL', type: 'url', def: CINEMETA_URL, live: true, empty: true },
   slskUser: { env: 'PEARTUBE_SLSK_USER', type: 'text', def: '', live: true },
   slskPass: { env: 'PEARTUBE_SLSK_PASS', type: 'secret', def: '', live: true },
-  slskServer: { env: 'PEARTUBE_SLSK_SERVER', type: 'hostport', def: 'vps.slsknet.org:2271', live: true }
+  slskServer: { env: 'PEARTUBE_SLSK_SERVER', type: 'hostport', def: 'vps.slsknet.org:2271', live: true },
+  // Peers connect back to this TCP port to send files; a bound socket cannot move, so a change reopens the node.
+  slskListenPort: { env: 'PEARTUBE_SLSK_LISTEN_PORT', type: 'port', def: 50300 }
 }
 
 function parseEnv (spec, raw) {

@@ -250,6 +250,7 @@ async function start () {
     rechunk: cfg('rechunk'),
     watchDir,
     ...mirrorConfig(),
+    slskListenPort: cfg('slskListenPort'),
     hiverelay,
     pluginsDir: env.PEARTUBE_PLUGINS_DIR || join(storage, 'plugins'),
     onchange: () => api.notify('update'),

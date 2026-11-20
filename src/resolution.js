@@ -15,7 +15,90 @@ export async function mediaInfo (read) {
   if (container === 'mkv' || container === 'webm') found = await matroska(read, head)
   else if (container === 'mp4' || container === 'mov') found = await mp4(read, head)
   else if (container === 'avi' && text(head, 24, 28) === 'avih') found = avi(head)
+  else if (container === 'flac') found = flac(head)
+  else if (container === 'mp3') found = mp3(head)
   return { container, duration: null, video: [], audio: [], subtitles: [], ...found }
+}
+
+// FLAC: "fLaC", then metadata blocks. STREAMINFO (type 0) carries sample rate, channel count, bits per sample and
+// the total sample count in a packed 34-byte field, which is the whole truth about a lossless file's quality: its
+// rate is the rate, and there is no bitrate to guess at. Duration is samples over rate.
+function flac (head) {
+  const out = { duration: null, video: [], audio: [], subtitles: [] }
+  let p = 4
+  let guard = 0
+  while (p + 4 <= head.length && guard++ < 64) {
+    const last = (head[p] & 0x80) !== 0
+    const type = head[p] & 0x7f
+    const len = (head[p + 1] << 16) | (head[p + 2] << 8) | head[p + 3]
+    if (type === 0 && len >= 18 && p + 4 + 18 <= head.length) {
+      const b = head.subarray(p + 4, p + 22)
+      // 20 bits rate, 3 bits channels-1, 5 bits depth-1, 36 bits samples.
+      const rate = (b[10] << 12) | (b[11] << 4) | (b[12] >> 4)
+      const channels = ((b[12] >> 1) & 0x07) + 1
+      const depth = (((b[12] & 0x01) << 4) | (b[13] >> 4)) + 1
+      const samples = ((b[13] & 0x0f) * 2 ** 32) + ((b[14] << 24) >>> 0) + (b[15] << 16) + (b[16] << 8) + b[17]
+      if (rate > 0) out.duration = samples / rate
+      out.audio.push({ codec: 'FLAC', channels, language: null, name: null, rate, depth })
+      return out
+    }
+    p += 4 + len
+    if (last) break
+  }
+  return out
+}
+
+// MP3/MPEG audio: the first frame header names the layer, rate, channels and bitrate, and a Xing/Info or VBRI
+// header (in the first frame's padding, where an encoder writes it) carries the frame count, which is the duration.
+const MP3_RATES = { 3: [44100, 48000, 32000], 2: [22050, 24000, 16000], 0: [11025, 12000, 8000] }
+const MP3_BR = {
+  3: { 1: [0, 32, 40, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320], 2: [0, 32, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320, 384] },
+  2: { 1: [0, 32, 48, 56, 64, 80, 96, 112, 128, 144, 160, 176, 192, 224, 256], 2: [0, 8, 16, 24, 32, 40, 48, 56, 64, 80, 96, 112, 128, 144, 160] },
+  0: { 1: [0, 32, 48, 56, 64, 80, 96, 112, 128, 144, 160, 176, 192, 224, 256], 2: [0, 8, 16, 24, 32, 40, 48, 56, 64, 80, 96, 112, 128, 144, 160] }
+}
+function mp3 (head) {
+  const out = { duration: null, video: [], audio: [], subtitles: [] }
+  // Skip a leading ID3v2 tag, whose synchsafe size is what makes a naive search read tag bytes as frames.
+  let p = 0
+  if (head.length > 10 && text(head, 0, 3) === 'ID3') {
+    const ss = b => b & 0x7f
+    p = 10 + ((ss(head[6]) << 21) | (ss(head[7]) << 14) | (ss(head[8]) << 7) | ss(head[9]))
+  }
+  let guard = 0
+  while (p + 4 <= head.length && guard++ < 8192) {
+    if (head[p] !== 0xff || (head[p + 1] & 0xe0) !== 0xe0) { p++; continue }
+    const v = (head[p + 1] >> 3) & 0x03
+    const layer = (head[p + 1] >> 1) & 0x03
+    const brIdx = (head[p + 2] >> 4) & 0x0f
+    const srIdx = (head[p + 2] >> 2) & 0x03
+    if (v === 1 || layer === 0 || brIdx === 0 || brIdx === 15 || srIdx === 3) { p++; continue }
+    const rate = MP3_RATES[Math.min(v, 3)]?.[srIdx]
+    const kbps = MP3_BR[Math.min(v, 3)]?.[layer === 3 ? 1 : 2]?.[brIdx]
+    if (!rate || !kbps) { p++; continue }
+    const channels = ((head[p + 3] >> 6) & 0x03) === 3 ? 1 : 2
+    const mono = channels === 1
+    // The frame length, from the layer, is where the encoder's own header sits.
+    const l3 = layer === 1
+    const pad = (head[p + 2] >> 1) & 0x01
+    const frameLen = l3 ? Math.floor((144000 * kbps) / rate) + pad : Math.floor(((layer === 3 ? 12000 : 72000) * kbps) / rate) + pad
+    let frames = null
+    const x = p + 4 + (mono ? 17 : 32)
+    if (frameLen > 0 && x + 12 <= head.length) {
+      const tag = text(head, x, x + 4)
+      if (tag === 'Xing' || tag === 'Info') {
+        const flags = (head[x + 4] << 24) | (head[x + 5] << 16) | (head[x + 6] << 8) | head[x + 7]
+        if (flags & 0x01) {
+          const off = x + 8
+          if (off + 4 <= head.length) frames = (head[off] << 24) | (head[off + 1] << 16) | (head[off + 2] << 8) | head[off + 3]
+        }
+      }
+    }
+    const spf = l3 ? 1152 : layer === 3 ? 384 : 576
+    if (frames > 0) out.duration = (frames * spf) / rate
+    out.audio.push({ codec: layer === 3 ? 'MP2' : 'MP3', channels, language: null, name: null, rate, kbps })
+    return out
+  }
+  return out
 }
 
 // The usual release-name tier, judged by width first so letterboxed pictures (1920x800) keep their tier.

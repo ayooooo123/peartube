@@ -1215,16 +1215,32 @@ const trackName = e => (e.music && e.music.title) || (e.id.split(':').pop() || '
 const trackNo = e => e.season != null && e.episode != null
   ? (e.season > 1 ? e.season + '-' : '') + String(e.episode).padStart(2, '0')
   : ''
+// What a track is, in the terms a listener judges a copy by: the sample rate and depth of a lossless file, or the
+// bitrate of a lossy one, plus the bitrate the file's own size works out to. The header is read once per file and
+// cached; until it arrives the cell is empty rather than a guess.
+function qualityOf (e, d) {
+  if (!d || !d.media) return ''
+  const secs = d.media.duration
+  const a = (d.media.audio || [])[0]
+  const bits = a && a.depth ? a.depth + '-bit ' : ''
+  const lossless = d.media.container === 'flac' || d.media.container === 'wav' || (a && a.codec === 'FLAC')
+  const base = a ? bits + (a.rate ? (a.rate / 1000) + ' kHz' : '') : ''
+  const br = bitrate(e.size, secs)
+  return [a && a.codec, base, lossless ? 'lossless' : br, lossless ? br + ' file' : ''].filter(Boolean).join(' · ')
+}
 function trackRow (i, t) {
   const e = i.e
   const n = String(i.episode).padStart(2, '0')
   const disc = t.items.some(x => x.season !== i.season) ? i.season + '·' : ''
   const playing = queue.length && queue[queueIndex] && queue[queueIndex].key === e.key
+  const d = infoData.get(e.key)
+  infoEntries.set(e.key, e)
+  if (!d) loadInfo(e.key)
   return h('div', { class: 'row-item' + (playing ? ' now' : ''), 'data-track': e.key },
     h('button', { class: 'track-play', 'aria-label': 'Play ' + trackName(e), onclick: () => queueUp(t.items.map(x => x.e), t.items.indexOf(i)) }, playing ? '❚❚' : '▶'),
     h('div', { class: 'grow', style: 'min-width:0' },
       h('div', { class: 'label' }, trackName(e)),
-      h('div', { class: 'meta' }, [disc + n, e.music && e.music.artist, size(e.size), where(e)].filter(Boolean).join(' · '))),
+      h('div', { class: 'meta', 'data-q': e.key }, [disc + n, e.music && e.music.artist, qualityOf(e, d), size(e.size), where(e)].filter(Boolean).join(' · '))),
     h('div', { class: 'acts' },
       downloadBtn(e, true, (trackNo(e) ? trackNo(e) + ' ' : '') + trackName(e) + ' — ' + (e.music && e.music.artist ? e.music.artist + ' — ' : '') + t.title),
       h('button', { class: 'btn quiet', title: e.magnetUrl, onclick: () => copyText(e.magnetUrl) }, 'Copy link')))
@@ -1410,6 +1426,12 @@ async function loadInfo (key, read) {
   }
   for (const tag of $('detailBody').querySelectorAll('[data-health]')) {
     if (tag.dataset.health === key) paintTag(tag, e, infoData.get(key))
+  }
+  // A track row's quality line is built from the same read, so it is redrawn when the header lands.
+  for (const line of $('detailBody').querySelectorAll('[data-q]')) {
+    if (line.dataset.q !== key || !e) continue
+    const item = { e }
+    line.textContent = [e.season != null && e.episode != null ? (e.season > 1 ? e.season + '·' : '') + String(e.episode).padStart(2, '0') : '', e.music && e.music.artist, qualityOf(e, infoData.get(key)), size(e.size), where(e)].filter(Boolean).join(' · ')
   }
 }
 function pollInfo () {

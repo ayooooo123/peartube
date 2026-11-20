@@ -1223,10 +1223,13 @@ function qualityOf (e, d) {
   const secs = d.media.duration
   const a = (d.media.audio || [])[0]
   const bits = a && a.depth ? a.depth + '-bit ' : ''
-  const lossless = d.media.container === 'flac' || d.media.container === 'wav' || (a && a.codec === 'FLAC')
+  // "Lossless container", never "lossless": FLAC stores whatever it was given without further loss, and a file
+  // transcoded from a lossy source is still a lossless container of lossy audio. The word on its own invites the
+  // reader to believe the recording is lossless, which only the source can decide.
+  const containerLossless = d.media.container === 'flac' || d.media.container === 'wav' || (a && a.codec === 'FLAC')
   const base = a ? bits + (a.rate ? (a.rate / 1000) + ' kHz' : '') : ''
   const br = bitrate(e.size, secs)
-  return [a && a.codec, base, lossless ? 'lossless' : br, lossless ? br + ' file' : ''].filter(Boolean).join(' · ')
+  return [a && a.codec, base, containerLossless ? 'lossless container' : br, containerLossless ? br + ' file' : ''].filter(Boolean).join(' · ')
 }
 function trackRow (i, t) {
   const e = i.e

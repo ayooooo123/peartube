@@ -166,7 +166,7 @@ export function createApi (state) {
     // Clients from public addresses need the token: settings can point the relay at folders on its disk.
     const settingsOpen = Boolean(state.apiToken) || PRIVATE_ADDR.test(remoteAddr(req))
     if (req.method === 'GET' && path === '/v1/status') {
-      const st = node ? { ...node.status(), ...(state.extraStatus?.() || {}) } : state.fallbackStatus
+      const st = node ? { ...node.status(), ...state.extraStatus?.() } : state.fallbackStatus
       return { ...st, tokenRequired: Boolean(state.apiToken), settingsOpen }
     }
     if (state.settings && (path === '/v1/settings' || path === '/v1/restart')) {

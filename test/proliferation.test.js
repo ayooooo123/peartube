@@ -47,7 +47,7 @@ test('channels, gossip discovery, cross-channel magnet seeding, reciprocity, Str
   const movieBytes = randomBytes(700 * 1024 + 13)
   const epBytes = randomBytes(540 * 1024 + 9)
   const pubMovie = await creator.publishChannel({ id: 'imdb:tt0111161', title: 'Shawshank Channel Cut' }, Readable.from([movieBytes]))
-  const pubEp = await creator.publishChannel({ id: 'imdb:tt0944947:s01e02', title: 'Thrones Channel Cut' }, Readable.from([epBytes]))
+  await creator.publishChannel({ id: 'imdb:tt0944947:s01e02', title: 'Thrones Channel Cut' }, Readable.from([epBytes]))
   const creatorChannel = creator.status().channel
 
   // Main relay acts as the Directory Hub (advertising Creator A's channel in BOTH its tracker and channel, plus temporary listing/unlisting).

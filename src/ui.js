@@ -1161,7 +1161,7 @@ function deleteBtn (e, quiet) {
 }
 function fileRow (label, e) {
   const from = sourceName(e.source)
-  const dlName = /^S\d+E\d+$/i.test(label) && e.title && !/s\d+e\d+/i.test(e.title) ? e.title + ' ' + label : (e.title || label)
+  const dlName = /^S\\d+E\\d+$/i.test(label) && e.title && !/s\\d+e\\d+/i.test(e.title) ? e.title + ' ' + label : (e.title || label)
   const accessNote = e.locked ? 'Subscriber pass needed' : (e.private ? 'Subscribers only' : '')
   return h('div', { class: 'row-item' },
     h('div', { class: 'grow' }, h('div', { class: 'label' }, label), h('div', { class: 'meta' }, [size(e.size), where(e), accessNote, from && 'from ' + from].filter(Boolean).join(' · '))),

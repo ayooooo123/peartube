@@ -273,7 +273,7 @@ export async function createMirrorHost ({
       const job = ctx.enqueue({
         id,
         title: item.title || id,
-        source: { url, headers: { ...headers, ...(item.source?.headers || item.headers || {}) } },
+        source: { url, headers: { ...headers, ...(item.source?.headers || item.headers) } },
         channel: mirrorChannel
       })
       enqueued++

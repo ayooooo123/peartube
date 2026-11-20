@@ -9,26 +9,65 @@ permissions:
   contents: read
   packages: write
 
+# A newer commit on a PR cancels the older run. Each push to main gets its own group, so every commit gets its
+# checks and image: GitHub drops a pending run from a shared group even with cancel-in-progress off.
+concurrency:
+  group: ci-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
+  cancel-in-progress: true
+
+# Every check is its own job, in parallel. timeout-minutes is each job's budget: a job past it fails.
 jobs:
   test:
     runs-on: ubuntu-latest
+    timeout-minutes: 4
     steps:
       - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
       - uses: actions/setup-node@v4
         with:
           node-version: 22.x
           cache: npm
       - run: npm ci
       - run: npm test
-      - run: python3 sync-native.py check
+
+  cast:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.x
+          cache: npm
+      - run: npm ci
       - run: npm run test:cast
+
+  lint:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.x
+          cache: npm
+      - run: npm ci
+      - run: npm run lint
+
+  # Lists contract files changed since native.lock's jsRef: needs history, not file contents, so a blobless clone.
+  contract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          filter: blob:none
+      - run: python3 sync-native.py check
 
   image-build:
     # Builds linux/amd64 and linux/arm64 on native runners (no QEMU: bare-tls's BoringSSL SIGILLs and hangs under qemu-aarch64).
+    # Runs beside the checks: it pushes only untagged digests, and `image` tags them once every check passed.
     if: github.event_name == 'push'
-    needs: test
     strategy:
       fail-fast: false
       matrix:
@@ -93,7 +132,7 @@ jobs:
   image:
     # Joins the native amd64 and arm64 digests into the multi-arch :main, :latest, :<engine> and :sha-<commit> tags.
     if: github.event_name == 'push'
-    needs: image-build
+    needs: [test, cast, lint, contract, image-build]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

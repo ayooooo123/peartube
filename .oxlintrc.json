@@ -1,0 +1,20 @@
+{
+  "$schema": "./node_modules/oxlint/configuration_schema.json",
+  "env": { "node": true, "browser": true, "es2024": true },
+  "globals": { "Bare": "readonly" },
+  "categories": { "correctness": "error" },
+  "rules": {
+    "no-undef": "error",
+    // Leaving out keys by destructuring them into a rest object (publicJob, redirect auth stripping) is how this code omits fields.
+    "no-unused-vars": ["error", { "ignoreRestSiblings": true, "argsIgnorePattern": "^_", "varsIgnorePattern": "^_" }],
+    // Every flagged spread copies a collection before a loop whose close/destroy handlers delete from it.
+    "unicorn/no-useless-spread": "off",
+    // `cond ? a() : b()` as a statement is house style.
+    "no-unused-expressions": "off",
+    // Sized arrays (QR modules, block maps) are filled right after.
+    "unicorn/no-new-array": "off",
+    // Filenames are scrubbed of control characters on purpose.
+    "no-control-regex": "off"
+  },
+  "ignorePatterns": ["desktop/target/**", "android/build/**", "android/**/build/**", "worklet/vendor/**"]
+}

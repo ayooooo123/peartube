@@ -1,6 +1,5 @@
 import Corestore from 'corestore'
 import CoreStorage from 'hypercore-storage'
-import b4a from 'b4a'
 import os from 'node:os'
 import { join } from 'node:path'
 import { unlinkSync } from 'node:fs'

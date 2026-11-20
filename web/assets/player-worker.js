@@ -9,7 +9,6 @@ let streamLen = 0
 let streamingMode = false
 let watchdog = null
 let hasVideo = false
-let hasAudio = false
 let useMse = false
 let useWebCodecs = false
 let wcConfig = null
@@ -648,7 +647,6 @@ async function handleCmd (msg) {
     if (msg.seq && msg.seq < latestQueuedSeq) return
     activeSeq = msg.seq || activeSeq
     hasVideo = msg.videoStream >= 0
-    hasAudio = msg.audioStream >= 0
     useMse = Boolean(msg.useMse)
     const startAt = Math.max(0, Number(msg.time) || 0)
     closeWebCodecs()
@@ -674,7 +672,6 @@ async function handleCmd (msg) {
     if (msg.seq && msg.seq < latestQueuedSeq) return
     activeSeq = msg.seq
     hasVideo = msg.videoStream >= 0
-    hasAudio = msg.audioStream >= 0
     useMse = Boolean(msg.useMse)
     abortHiddenPrefetch()
     closeWebCodecs()

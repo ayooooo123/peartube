@@ -12,7 +12,7 @@ RUN npm ci --omit=dev --no-audit --no-fund \
   && rm -rf node_modules/bare-runtime-$PLATFORM node_modules/.bin \
   && find node_modules -type d -name prebuilds -prune -exec sh -c 'for d in "$1"/*; do [ "$(basename "$d")" = "$2" ] || rm -rf "$d"; done' _ {} "$PLATFORM" \; \
   && find node_modules -path '*/prebuilds/*' -name '*.node' -delete \
-  && ln -sfn bare-events node_modules/events && ln -sfn bare-dgram node_modules/dgram && ln -sfn bare-os node_modules/os && ln -sfn bare-net node_modules/net && ln -sfn peartube-crypto node_modules/crypto && ln -sfn bare-buffer node_modules/buffer
+  && ln -sfn bare-events node_modules/events && ln -sfn bare-dgram node_modules/dgram && ln -sfn bare-os node_modules/os && ln -sfn bare-buffer node_modules/buffer
 
 # The lightest base that runs these binaries: `bare` and the add-ons need only glibc, libm, libstdc++ and libgcc_s,
 # which distroless/cc carries with CA certificates and nothing else (no shell, no package manager).

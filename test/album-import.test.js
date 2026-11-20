@@ -163,6 +163,15 @@ test('a folder becomes one album through a relay', { timeout: 240_000 }, async (
   // Untagged, named so nothing about it says Blue Train: it must still join the album the others named.
   // Untagged: a bare FLAC header with an empty comment block, so only its place in the folder names it.
   writeFileSync(join(albumDir, '03.flac'), flac({}))
+  // Tagged with an album but no track numbers (ffmpeg rips commonly are): one album, numbered by folder position.
+  const noNumDir = join(watch, 'NoNum')
+  mkdirSync(noNumDir)
+  for (const name of ['Intro', 'Outro']) writeFileSync(join(noNumDir, `${name}.flac`), flac({ ALBUM: 'No Numbers', ARTIST: 'B', TITLE: name }))
+  // A Discogs release that gains a track after its first import must keep its release id.
+  const discogsDir = join(watch, 'Discogs')
+  mkdirSync(discogsDir)
+  const discogsTrack = n => flac({ ALBUM: 'D', ALBUMARTIST: 'A', TITLE: `T${n}`, TRACKNUMBER: String(n), DISCOGS_RELEASE_ID: '12345' })
+  for (const n of [1, 2]) writeFileSync(join(discogsDir, `0${n} - T${n}.flac`), discogsTrack(n))
 
   const port = 8300 + Math.floor(Math.random() * 400)
   const proc = spawn(join(root, 'node_modules/.bin/bare'), [join(root, 'bin/relay.js')], {
@@ -187,30 +196,41 @@ test('a folder becomes one album through a relay', { timeout: 240_000 }, async (
       const res = await fetch(`http://127.0.0.1:${port}/v1/entries`).catch(() => null)
       if (res?.ok) {
         rows = (await res.json()).results || []
-        if (rows.length >= 2) break
+        if (rows.length >= 7) break
       }
       await sleep(1000)
     }
-    assert.ok(rows.length >= 3, `expected the album's tracks, got ${rows.length}: ${errors.slice(-3).join(' ')}`)
+    assert.equal(rows.length, 7, `expected every folder's tracks, got ${rows.length}: ${errors.slice(-3).join(' ')}`)
+    assert.ok(rows.every(r => !r.id.startsWith('undefined')), 'no track lands on an "undefined" release')
 
-    const ids = rows.map(r => r.id)
-    for (const id of ids) assert.match(id, /^mb:0123456789abcdef0123456789abcdef:s01e\d{2}$/, id)
-    assert.equal(rows[0].title, 'John Coltrane · Blue Train', 'every track carries the album as its title')
-    assert.equal(new Set(rows.map(r => r.seriesKey)).size, 1, 'one album')
-    assert.equal(new Set(rows.map(r => r.season)).size, 1, 'one disc')
+    const noNum = rows.filter(r => r.title === 'B · No Numbers')
+    assert.deepEqual(noNum.map(r => r.id.replace(/^album:[0-9a-f]{20}:/, '')).sort(), ['s01e01', 's01e02'], 'numbered by folder position')
+    assert.equal(new Set(noNum.map(r => r.seriesKey)).size, 1, 'one album')
+
+    const discogs = rows.filter(r => r.id.startsWith('discogs:'))
+    assert.deepEqual(discogs.map(r => r.id).sort(), ['discogs:r12345:s01e01', 'discogs:r12345:s01e02'])
+    writeFileSync(join(discogsDir, '03 - T3.flac'), discogsTrack(3))
+    const rescan = await (await fetch(`http://127.0.0.1:${port}/v1/plugins/watch-dir/run`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' })).json()
+    assert.deepEqual(rescan.items.map(i => i.id), ['discogs:r12345:s01e03'], 'an added track keeps its release id')
+
+    const blue = rows.filter(r => r.id.startsWith('mb:'))
+    for (const r of blue) assert.match(r.id, /^mb:0123456789abcdef0123456789abcdef:s01e\d{2}$/, r.id)
+    assert.equal(blue[0].title, 'John Coltrane · Blue Train', 'every track carries the album as its title')
+    assert.equal(new Set(blue.map(r => r.seriesKey)).size, 1, 'one album')
+    assert.equal(new Set(blue.map(r => r.season)).size, 1, 'one disc')
     // Two tagged tracks and one untagged file (the untagged one is named "03", so it is track 3): an untagged file
     // in an album folder is a track of that album, not a clip of its own.
-    assert.deepEqual([...new Set(rows.map(r => r.episode))].sort((a, b) => a - b), [1, 2, 3])
+    assert.deepEqual([...new Set(blue.map(r => r.episode))].sort((a, b) => a - b), [1, 2, 3])
 
-    const first = rows.find(r => r.episode === 1)
+    const first = blue.find(r => r.episode === 1)
     assert.equal(first.music?.title, 'Blue Train', 'the track says its own name')
     assert.equal(first.music?.artist, 'John Coltrane')
 
-    // The M3U is in track order and names the album.
+    // The M3U lists every track, the one added by the rescan included.
     const m3u = await (await fetch(`http://127.0.0.1:${port}/v1/playlist.m3u`)).text()
     const lines = m3u.split('\n').filter(l => l.startsWith('#EXTINF'))
-    assert.equal(lines.length, rows.length)
-    assert.match(lines[0], /Blue Train/)
+    assert.equal(lines.length, rows.length + 1)
+    assert.ok(lines.some(l => /Blue Train/.test(l)))
 
     // Nothing internal leaked: the staging folder and the socket address stay out of the channel.
     const json = JSON.stringify(rows)

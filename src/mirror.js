@@ -45,7 +45,8 @@ function inferMediaMeta (filePath, sidecar = null, tags = null, album = null) {
   // its own, else the leading number in its name ("03 - ..."), else the caller passes the position it sits at. A
   // folder of untagged rips is exactly the case tags exist to rescue, so it must not fall through to `clip:`; nor
   // must a lone untagged track in a folder pinned to its album (a single-track mirror).
-  if (album && (tags || album.tracks > 1 || album.pinned)) {
+  // No release means no album identity (no tag in the folder names one): `album.release` would print as "undefined".
+  if (album?.release && (tags || album.tracks > 1 || album.pinned)) {
     const fromName = /^(\d{1,3})\b/.exec(stem)
     const track = clamp(tags?.track, 1, 999) || clamp(fromName && Number(fromName[1]), 1, 999) || clamp(album.position, 1, 999)
     if (track) {
@@ -381,7 +382,7 @@ export async function createMirrorHost ({
     for (const f of group) {
       const prev = watchLedger[ledgerKeyOf(f)]
       const hit = prev?.id?.match(/^(mb:[0-9a-f]{32}|discogs:r\d{1,12}|album:[0-9a-f]{20}):s\d{2}e\d{2,3}$/)
-      if (hit) tags.push({ track: 1, mbid: hit[1].startsWith('mb:') ? hit[1].slice(3) : null, discogs: hit[1].startsWith('discogs:r') ? hit[1].slice(10) : null })
+      if (hit) tags.push({ track: 1, mbid: hit[1].startsWith('mb:') ? hit[1].slice(3) : null, discogs: hit[1].startsWith('discogs:r') ? hit[1].slice('discogs:r'.length) : null })
       else tags.push(readTags(f.full))
     }
     const identity = albumIdentity(tags.map((t, i) => (t ? { ...t, file: group[i].full } : null)))

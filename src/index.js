@@ -150,7 +150,7 @@ async function openNode ({
   function status () {
     const { routes, rxBytes, txBytes, downBps, upBps, contributingPeers, rtt, retransmits } = ctx.net.sample()
     let inflightBlocks = 0
-    for (const [k, c] of ctx.blobs.blobCores) {
+    for (const c of ctx.blobs.blobCores.values()) {
       // Display only: Hypercore has no public in-flight count, so read it off the documented `core.peers`.
       for (const p of c.peers) inflightBlocks += p.inflight || 0
     }
@@ -288,8 +288,7 @@ async function openNode ({
       ctx.channel.landedCores.clear()
       ctx.channel.wakeup.destroy()
       await ctx.net.lan?.destroy()
-      if (ctx.net.dht) await ctx.net.swarm.clear()
-      await ctx.net.swarm.destroy({ force: true })
+      await ctx.net.destroySwarm()
       for (const s of ctx.sources.extraSources.values()) {
         if (s.opening) await s.opening.catch(() => {})
         if (s.closing) await s.closing.catch(() => {})

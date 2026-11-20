@@ -90,6 +90,14 @@ function opus (tags) {
   return Buffer.concat([page(0, head), page(1, Buffer.concat([Buffer.from('OpusTags', 'latin1'), comment])), Buffer.alloc(2048, 0x33)])
 }
 
+// One MPEG audio frame header, then (Layer III) the side information an encoder leaves empty in its first frame and a
+// Xing header with a frame count. The side information is 32 bytes for MPEG-1 stereo and 9 for MPEG-2 mono.
+function mpegFrame (header, sideInfo, frames) {
+  const xing = frames ? Buffer.concat([Buffer.from('Xing', 'latin1'), Buffer.from([0, 0, 0, 1]), Buffer.alloc(4)]) : Buffer.alloc(0)
+  if (frames) xing.writeUInt32BE(frames, 8)
+  return Buffer.concat([Buffer.from(header), Buffer.alloc(sideInfo), xing, Buffer.alloc(2048)])
+}
+
 test('a FLAC with Vorbis comments names its release, disc and track', () => {
   const tags = parseTags(flac({
     ALBUM: 'Blue Train',
@@ -192,6 +200,13 @@ test('a folder becomes one album through a relay', { timeout: 240_000 }, async (
   const opusDir = join(watch, 'Opus')
   mkdirSync(opusDir)
   for (const n of [1, 2]) writeFileSync(join(opusDir, `track${n}.opus`), opus({ ALBUM: 'Opus Album', ARTIST: 'C', TITLE: `O${n}`, TRACKNUMBER: String(n) }))
+  // MPEG audio: MPEG-1 Layer III 128 kbps 44.1 kHz stereo, MPEG-2 Layer III 64 kbps 22.05 kHz mono, and MPEG-1 Layer II.
+  const mpegDir = join(watch, 'Mpeg')
+  mkdirSync(mpegDir)
+  const tagged = n => mp3({ frames: { TALB: 'Mpeg Album', TPE1: 'E', TIT2: `M${n}`, TRCK: String(n) } }).subarray(0, -4)
+  writeFileSync(join(mpegDir, '1.mp3'), Buffer.concat([tagged(1), mpegFrame([0xff, 0xfb, 0x90, 0x00], 32, 1000)]))
+  writeFileSync(join(mpegDir, '2.mp3'), Buffer.concat([tagged(2), mpegFrame([0xff, 0xf3, 0x80, 0xc0], 9, 500)]))
+  writeFileSync(join(mpegDir, '3.mp3'), Buffer.concat([tagged(3), mpegFrame([0xff, 0xfd, 0x90, 0x00], 0, 0)]))
 
   const port = 8300 + Math.floor(Math.random() * 400)
   const proc = spawn(join(root, 'node_modules/.bin/bare'), [join(root, 'bin/relay.js')], {
@@ -216,14 +231,30 @@ test('a folder becomes one album through a relay', { timeout: 240_000 }, async (
       const res = await fetch(`http://127.0.0.1:${port}/v1/entries`).catch(() => null)
       if (res?.ok) {
         rows = (await res.json()).results || []
-        if (rows.length >= 9) break
+        if (rows.length >= 12) break
       }
       await sleep(1000)
     }
-    assert.equal(rows.length, 9, `expected every folder's tracks, got ${rows.length}: ${errors.slice(-3).join(' ')}`)
+    assert.equal(rows.length, 12, `expected every folder's tracks, got ${rows.length}: ${errors.slice(-3).join(' ')}`)
     const opusRows = rows.filter(r => r.title === 'C · Opus Album')
     assert.deepEqual(opusRows.map(r => r.music?.title).sort(), ['O1', 'O2'], 'Opus tags are read')
     assert.equal(new Set(opusRows.map(r => r.seriesKey)).size, 1, 'one Opus album')
+
+    // What the relay says each MPEG file holds, read from the header it stored.
+    const audioOf = async r => {
+      for (let i = 0; i < 10; i++) {
+        const info = await (await fetch(`http://127.0.0.1:${port}/v1/entries/info?key=${encodeURIComponent(r.key)}`)).json()
+        if (info.media) return { codec: info.media.audio[0]?.codec, rate: info.media.audio[0]?.rate, channels: info.media.audio[0]?.channels, duration: info.media.duration && Math.round(info.media.duration * 1000) / 1000 }
+        await sleep(500)
+      }
+      return null
+    }
+    const mpeg = Object.fromEntries(await Promise.all(rows.filter(r => r.title === 'E · Mpeg Album').map(async r => [r.music?.title, await audioOf(r)])))
+    assert.deepEqual(mpeg, {
+      M1: { codec: 'MP3', rate: 44100, channels: 2, duration: Math.round(1000 * 1152 / 44100 * 1000) / 1000 },
+      M2: { codec: 'MP3', rate: 22050, channels: 1, duration: Math.round(500 * 576 / 22050 * 1000) / 1000 },
+      M3: { codec: 'MP2', rate: 44100, channels: 2, duration: null }
+    })
     assert.ok(rows.every(r => !r.id.startsWith('undefined')), 'no track lands on an "undefined" release')
 
     const noNum = rows.filter(r => r.title === 'B · No Numbers')

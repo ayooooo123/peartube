@@ -3,7 +3,7 @@
 #   sh android/release-tv.sh --engine js|rust|both
 set -eu
 
-self="$0"
+self="./$(basename "$0")"
 cd "$(dirname "$0")"
 engine="${PEARTUBE_ENGINE:-}"
 native_local=""

@@ -23,7 +23,7 @@ host=darwin-$(uname -m | sed 's/x86_64/x64/')
 engine="${PEARTUBE_ENGINE:-}"
 receiver=0
 action=""
-self="$0"
+self="./$(basename "$0")"
 while [ $# -gt 0 ]; do
   case "$1" in
     --receiver) receiver=1 ;;

@@ -83,7 +83,15 @@ export async function createNetwork (ctx) {
     trackConn(conn, dht ? traffic.private : traffic.public)
     if (dht) ctx.channel.channel.update().catch(() => {})
   })
-  ctx.undo.push(() => swarm.destroy({ force: true }))
+  // destroy({ force: true }) skips clear(), so every topic's discovery and its ~10-min refresh timer outlived the
+  // node and kept its process up. clear() destroys them; its unannounces end with the forced DHT destroy, except
+  // the private overlay's, which withdraws rendezvous routes so readers stop dialing a dead peer and is awaited.
+  const destroySwarm = async () => {
+    const cleared = swarm.clear()
+    if (dht) await cleared
+    await swarm.destroy({ force: true })
+  }
+  ctx.undo.push(destroySwarm)
   ctx.undo.push(() => {
     ctx.life.closing = true
     ctx.channel.wakeup.destroy()
@@ -331,6 +339,7 @@ export async function createNetwork (ctx) {
 
   return {
     swarm,
+    destroySwarm,
     dht,
     get lan () { return lan },
     hasLanPeer,

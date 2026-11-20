@@ -24,7 +24,7 @@ import { createInterface } from 'node:readline'
 const root = new URL('..', import.meta.url).pathname
 const outDir = join(root, 'desktop/target/e2e')
 const shotDir = join(outDir, 'ui-audit/after')
-const PLUGIN_IDS = ['http-acquire', 'channel-backfill', 'blob-rechunk', 'watch-dir', 'feed-mirror', 'p2p-replicate', 'hiverelay-seed']
+const PLUGIN_IDS = ['http-acquire', 'channel-backfill', 'blob-rechunk', 'watch-dir', 'feed-mirror', 'p2p-replicate', 'hiverelay-seed', 'soulseek']
 const TOKEN = randomBytes(16).toString('hex')
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms))
 
@@ -368,7 +368,7 @@ test('relay web UI: settings, plugins as intents, identification, and taste gate
     await evaluate(`document.querySelector('#set-dhtPort').value = ''`)
     await type('#set-dhtPort', String(otherPort))
     await clickText('Save changes', '.card:has(#set-dhtPort)')
-    const overridden = await waitApi(async () => { const s = await settingsNow(); return s.settings.dhtPort.value === otherPort && s }, 'env value overridden from the UI')
+    const overridden = await waitApi(async () => { const s = await settingsNow(); return s.settings.dhtPort.value === otherPort && !s.restartNeeded.length && s }, 'env value overridden from the UI')
     assert.deepEqual([overridden.settings.dhtPort.source, overridden.restartNeeded], ['file', []], 'settings.json wins over the env var, applied at once')
     // Nothing on the Settings tab applies before Save: the env reset, a switch and a list edit all wait.
     await clickText('Use PEARTUBE_DHT_PORT', '.card:has(#set-dhtPort)')
@@ -380,7 +380,7 @@ test('relay web UI: settings, plugins as intents, identification, and taste gate
     assert.deepEqual([held.settings.dhtPort.value, held.settings.directory.value, held.settings.allowedPeers.value], [otherPort, false, []], 'nothing applied before Save')
     await clickText('Remove', '.setting:has(#set-allowedPeers)')
     await clickText('Save changes', '.card:has(#set-dhtPort)')
-    await waitApi(async () => { const s = await settingsNow(); return s.settings.dhtPort.source === 'env' && s.settings.dhtPort.value === dhtPort }, 'env value back after Save')
+    await waitApi(async () => { const s = await settingsNow(); return s.settings.dhtPort.source === 'env' && s.settings.dhtPort.value === dhtPort && !s.restartNeeded.length }, 'env value back after Save')
     assert.deepEqual((await settingsNow()).settings.allowedPeers.value, [], 'a list entry added then removed is never saved')
     held = await settingsNow()
     assert.equal(held.settings.directory.value, false, 'the Library card keeps its own unsaved switch')
@@ -395,18 +395,18 @@ test('relay web UI: settings, plugins as intents, identification, and taste gate
     await evaluate(`document.querySelector('#set-dhtPort').value = ''`)
     await type('#set-dhtPort', String(firstPort))
     await clickText('Save changes', '.card:has(#set-dhtPort)')
-    await waitApi(async () => (await settingsNow()).settings.dhtPort.value === firstPort, 'port overridden again')
+    await waitApi(async () => { const s = await settingsNow(); return s.settings.dhtPort.value === firstPort && !s.restartNeeded.length }, 'port overridden again')
     await clickText('Use PEARTUBE_DHT_PORT', '.card:has(#set-dhtPort)')
     const typedPort = await freePort()
     await evaluate(`document.querySelector('#set-dhtPort').value = ''`)
     await type('#set-dhtPort', String(typedPort))
     assert.equal(await evaluate(`[...document.querySelectorAll('.card:has(#set-dhtPort) .tag')].some(t => t.textContent.includes('after saving'))`), false, 'typing drops the pending env reset')
     await clickText('Save changes', '.card:has(#set-dhtPort)')
-    const typed = await waitApi(async () => { const s = await settingsNow(); return s.settings.dhtPort.value === typedPort && s }, 'the typed port is saved')
+    const typed = await waitApi(async () => { const s = await settingsNow(); return s.settings.dhtPort.value === typedPort && !s.restartNeeded.length && s }, 'the typed port is saved')
     assert.equal(typed.settings.dhtPort.source, 'file')
     await clickText('Use PEARTUBE_DHT_PORT', '.card:has(#set-dhtPort)')
     await clickText('Save changes', '.card:has(#set-dhtPort)')
-    await waitApi(async () => (await settingsNow()).settings.dhtPort.source === 'env', 'env value back again')
+    await waitApi(async () => { const s = await settingsNow(); return s.settings.dhtPort.source === 'env' && !s.restartNeeded.length }, 'env value back again')
     result.checks.typingCancelsEnvReset = true
     await type('#set-lanHost', '192.0.2.10')
     await clickText('Save changes', '.card:has(#set-lanHost)')

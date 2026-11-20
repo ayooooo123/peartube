@@ -123,6 +123,7 @@
     "hyperdht": "^6.36.0",
     "hyperswarm": "^4.17.2",
     "peartube-crypto": "file:worklet/crypto",
+    "peartube-soulseek-bare": "github:ayooooo123/peartube-soulseek-bare#1cf4f20ab052111625f2c01372f8d02c04077d4a",
     "protomux": "^3.13.0",
     "protomux-wakeup": "^2.9.0",
     "sodium-native": "5.1.0",

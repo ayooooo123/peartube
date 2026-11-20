@@ -16,6 +16,7 @@ import { albumKey, parseTags } from './tags.js'
 import { createHiverelaySeeder } from './hiverelay.js'
 import { createTrafficGate } from './traffic.js'
 import { send } from './art.js'
+import { createSoulseekPlugin } from './providers/soulseek.js'
 
 async function fetchJson (url, headers = {}) {
   const res = await send(url, { headers: { accept: 'application/json', ...headers }, timeoutMs: 60_000, maxBytes: 8 * 1024 * 1024 })
@@ -131,6 +132,10 @@ export async function createMirrorHost ({
   hiverelay = null,
   // Global search is on (src/search.js): check held files with `media-check`.
   mediaCheck = false,
+  slskUser = '',
+  slskPass = '',
+  slskServer = 'vps.slsknet.org:2271',
+  soulseekOpts = null,
   pluginsDir = join(storage, 'plugins'),
   pollIntervalMs = 60_000,
   onchange = null,
@@ -351,8 +356,9 @@ export async function createMirrorHost ({
     return albumIdentity(tags.map((t, i) => (t ? { ...t, file: group[i].full } : null)))
   }
 
+  const stagingDir = join(storage, 'staging')
   let scanningWatchDir = false
-  async function scanFolder (dir, ctx) {
+  async function scanFolder (dir, ctx, prefix = '') {
     if (!dir || !existsSync(dir)) return { scanned: 0, ingested: 0, items: [] }
     if (scanningWatchDir) return { scanned: 0, ingested: 0, busy: true, items: [] }
     scanningWatchDir = true
@@ -363,7 +369,7 @@ export async function createMirrorHost ({
       for (const f of files) if (f.dir && !albums.has(f.dir)) albums.set(f.dir, [])
       for (const f of files) if (f.dir) albums.get(f.dir).push(f)
       const identities = new Map()
-      for (const [name, group] of albums) identities.set(name, await albumFor(group, resolve(dir), f => f.rel))
+      for (const [name, group] of albums) identities.set(name, await albumFor(group, resolve(dir), f => prefix + f.rel))
       let scanned = 0
       const ingested = []
       const failed = []
@@ -373,7 +379,8 @@ export async function createMirrorHost ({
         // A file already recorded under its base name (every import before this change) keeps that key, so an existing
         // mirror-watch.json is not invalidated and nothing already imported is ingested a second time.
         const legacyKey = basename(rel)
-        const prev = watchLedger[rel] || (album ? null : watchLedger[legacyKey])
+        const ledgerKey = prefix + rel
+        const prev = watchLedger[ledgerKey] || (album || prefix ? null : watchLedger[legacyKey])
         if (prev && prev.size === st.size && prev.mtimeMs === Math.trunc(st.mtimeMs)) continue
         let sidecar = null
         const sidecarPath = `${full}.json`
@@ -389,7 +396,7 @@ export async function createMirrorHost ({
           const position = album ? albums.get(album).findIndex(f => f.rel === rel) + 1 : 0
           const meta = inferMediaMeta(full, sidecar, tags, album ? { ...identities.get(album), position } : null)
           const op = await ctx.ingestStream({ id: meta.id, title: meta.title, stream: createReadStream(full), channel: mirrorChannel, music: meta.music || null })
-          watchLedger[rel] = { size: st.size, mtimeMs: Math.trunc(st.mtimeMs), id: op.id, blobs: op.blobs, sha256: op.sha256, ingestedAt: Date.now() }
+          watchLedger[ledgerKey] = { size: st.size, mtimeMs: Math.trunc(st.mtimeMs), id: op.id, blobs: op.blobs, sha256: op.sha256, ingestedAt: Date.now() }
           saveWatchLedger()
           ingested.push({ file: basename(rel), id: op.id, title: op.title, size: op.size, sha256: op.sha256 })
         } catch (err) {
@@ -408,12 +415,28 @@ export async function createMirrorHost ({
     name: 'watch-dir',
     description: 'Ingests media files dropped into the import folder (PEARTUBE_WATCH_DIR) once, tracking fingerprints in mirror-watch.json',
     async run (_payload, ctx) {
-      if (!watchDir) return { skipped: true, reason: 'watch_dir_not_configured', scanned: 0, ingested: 0, items: [] }
-      return scanFolder(watchDir, ctx)
+      const hasStaging = existsSync(stagingDir) && resolve(stagingDir) !== (watchDir ? resolve(watchDir) : '')
+      if (!watchDir && !hasStaging) return { skipped: true, reason: 'watch_dir_not_configured', scanned: 0, ingested: 0, items: [] }
+      const a = watchDir ? await scanFolder(watchDir, ctx) : { scanned: 0, ingested: 0, items: [] }
+      const b = hasStaging ? await scanFolder(stagingDir, ctx, 'staging:') : { scanned: 0, ingested: 0, items: [] }
+      return {
+        scanned: (a.scanned || 0) + (b.scanned || 0),
+        ingested: (a.ingested || 0) + (b.ingested || 0),
+        ...(a.busy || b.busy ? { busy: true } : {}),
+        items: [...(a.items || []), ...(b.items || [])]
+      }
     },
     async poll (ctx) {
-      if (watchDir) return scanFolder(watchDir, ctx)
-      return null
+      const hasStaging = existsSync(stagingDir) && resolve(stagingDir) !== (watchDir ? resolve(watchDir) : '')
+      if (!watchDir && !hasStaging) return null
+      const a = watchDir ? await scanFolder(watchDir, ctx) : null
+      const b = hasStaging ? await scanFolder(stagingDir, ctx, 'staging:') : null
+      if (!a && !b) return null
+      return {
+        scanned: (a?.scanned || 0) + (b?.scanned || 0),
+        ingested: (a?.ingested || 0) + (b?.ingested || 0),
+        items: [...(a?.items || []), ...(b?.items || [])]
+      }
     },
     // /v1/plugins is public: say whether a folder is watched, never which.
     info: () => ({ watching: Boolean(watchDir), trackedFiles: Object.keys(watchLedger).length })
@@ -966,6 +989,16 @@ export async function createMirrorHost ({
     }
   })
 
+  const soulseekPlugin = register(createSoulseekPlugin({
+    storage,
+    scanStaging: (dir, ctx) => scanFolder(dir, ctx, watchDir && resolve(watchDir) === resolve(dir) ? '' : 'staging:'),
+    slskUser,
+    slskPass,
+    slskServer,
+    onchange,
+    ...soulseekOpts
+  }))
+
   if (pluginsDir && existsSync(pluginsDir)) {
     for (const file of readdirSync(pluginsDir).sort()) {
       if (!file.endsWith('.mjs') && !file.endsWith('.js')) continue
@@ -996,6 +1029,9 @@ export async function createMirrorHost ({
   if (watchDir && !closed) {
     mkdirSync(watchDir, { recursive: true })
     await run('watch-dir').catch(() => {})
+  }
+  if (existsSync(stagingDir) && (!watchDir || resolve(watchDir) !== resolve(stagingDir)) && !closed) {
+    await scanFolder(stagingDir, ctxFor('watch-dir'), 'staging:').catch(() => {})
   }
   if (configuredFeeds.length && !closed) {
     run('feed-mirror').catch(() => {})
@@ -1041,7 +1077,7 @@ export async function createMirrorHost ({
   }
 
   // Live settings: followed feeds and replication take effect without a restart. The import folder is fixed at start.
-  function configure ({ feeds: nextFeeds, replicate: rep, replicateMinFreeBytes: minFree, replicateMbps: mbps, mediaCheck: check } = {}) {
+  function configure ({ feeds: nextFeeds, replicate: rep, replicateMinFreeBytes: minFree, replicateMbps: mbps, mediaCheck: check, slskUser: nextSlskUser, slskPass: nextSlskPass, slskServer: nextSlskServer } = {}) {
     if (check !== undefined && Boolean(check) !== mediaCheckEnabled) {
       mediaCheckEnabled = Boolean(check)
       if (mediaCheckEnabled) run('media-check').catch(() => {})
@@ -1062,6 +1098,9 @@ export async function createMirrorHost ({
       }
       if (replicateEnabled) run('p2p-replicate').catch(() => {})
     }
+    if (nextSlskUser !== undefined || nextSlskPass !== undefined || nextSlskServer !== undefined) {
+      soulseekPlugin.configure({ slskUser: nextSlskUser, slskPass: nextSlskPass, slskServer: nextSlskServer })
+    }
     onchange?.()
   }
 
@@ -1075,5 +1114,43 @@ export async function createMirrorHost ({
   // Whether the file at `<blobs>:<blockOffset>` has been checked and is media (src/search.js offers only those).
   const isMedia = key => mediaChecked.get(key) === true
 
-  return { register, run, list, configure, close, isMedia }
+  return {
+    register,
+    run,
+    list,
+    configure,
+    close,
+    isMedia,
+    searchProvider (name, payload) {
+      const p = plugins.get(name)
+      if (!p || typeof p.search !== 'function') throw Object.assign(new Error(`Unknown provider: ${name}`), { status: 404 })
+      return p.search(payload, ctxFor(name))
+    },
+    mirrorProvider (name, payload) {
+      const p = plugins.get(name)
+      if (!p || typeof p.mirror !== 'function') throw Object.assign(new Error(`Unknown provider: ${name}`), { status: 404 })
+      return p.mirror(payload, ctxFor(name))
+    },
+    listProviderJobs () {
+      const out = []
+      for (const p of plugins.values()) {
+        if (typeof p.listJobs === 'function') out.push(...p.listJobs())
+      }
+      return out
+    },
+    getProviderJob (jobId) {
+      for (const p of plugins.values()) {
+        const j = p.getJob?.(jobId)
+        if (j) return j
+      }
+      return null
+    },
+    cancelProviderJob (jobId) {
+      for (const p of plugins.values()) {
+        const j = p.cancelJob?.(jobId)
+        if (j) return j
+      }
+      return null
+    }
+  }
 }

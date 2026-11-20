@@ -385,10 +385,19 @@ export function createApi (state) {
       const { id, title, source, channel, private: isPrivate = false } = await body(req)
       return acquirer.add({ id, title, source, channel, private: isPrivate })
     }
-    if (req.method === 'GET' && path === '/v1/jobs') return { jobs: acquirer ? acquirer.list() : (state.fallbackJobs?.() || []) }
+    if (req.method === 'GET' && path === '/v1/jobs') {
+      const base = acquirer ? acquirer.list() : (state.fallbackJobs?.() || [])
+      const extra = state.mirror?.listProviderJobs?.() || []
+      return { jobs: extra.length ? [...base, ...extra] : base }
+    }
     const match = path.match(/^\/v1\/jobs\/([0-9a-f-]{36})$/)
-    if (match && req.method === 'GET') return acquirer ? acquirer.get(match[1]) : (state.fallbackJobs?.().find(j => j.jobId === match[1]) || null)
-    if (match && req.method === 'DELETE') return acquirer ? acquirer.cancel(match[1]) : null
+    if (match && req.method === 'GET') {
+      return (acquirer ? acquirer.get(match[1]) : (state.fallbackJobs?.().find(j => j.jobId === match[1]) || null)) ||
+        state.mirror?.getProviderJob?.(match[1]) || null
+    }
+    if (match && req.method === 'DELETE') {
+      return (acquirer ? acquirer.cancel(match[1]) : null) || state.mirror?.cancelProviderJob?.(match[1]) || null
+    }
     if (req.method === 'GET' && path === '/v1/plugins') {
       return { plugins: state.mirror ? state.mirror.list() : [] }
     }
@@ -401,6 +410,15 @@ export function createApi (state) {
       if (!state.mirror) throw Object.assign(new Error('Mirror host unavailable on read-only peer'), { status: 404 })
       const { plugin = 'http-acquire', ...payload } = await body(req)
       return state.mirror.run(plugin, payload)
+    }
+    const provMatch = req.method === 'POST' && path.match(/^\/v1\/providers\/([^/]+)\/(search|mirror)$/)
+    if (provMatch) {
+      if (!state.mirror) throw Object.assign(new Error('Mirror host unavailable on read-only peer'), { status: 404 })
+      const name = decodeURIComponent(provMatch[1])
+      const action = provMatch[2]
+      const payload = await body(req)
+      if (action === 'search') return state.mirror.searchProvider(name, payload)
+      return state.mirror.mirrorProvider(name, payload)
     }
 
     if (state.cast && path.startsWith('/v1/cast/')) {

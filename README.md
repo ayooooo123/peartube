@@ -328,6 +328,9 @@ A saved `watchDir` is dropped too: the import folder is set only by `PEARTUBE_WA
 | `PEARTUBE_PLUGINS_DIR` | `<PEARTUBE_STORAGE>/plugins` | Directory scanned on startup for `*.mjs`/`*.js` import plugins |
 | `PEARTUBE_ACQUIRE_CONCURRENCY` | `4` | Maximum concurrent HTTP acquisition downloads |
 | `PEARTUBE_CINEMETA_URL` | `https://v3-cinemeta.strem.io` | Cinemeta-compatible title service; empty turns lookups off |
+| `PEARTUBE_SLSK_USER` | none | Soulseek account username for the `soulseek` album provider plugin (empty leaves the plugin inert) |
+| `PEARTUBE_SLSK_PASS` | none | Soulseek account password (`0600` in `settings.json`, write-only in `/v1/settings`, never logged) |
+| `PEARTUBE_SLSK_SERVER` | `vps.slsknet.org:2271` | Soulseek central server `host:port` |
 | `UBIT_CONFIG_DIR` | `<PEARTUBE_STORAGE>/ubit` | Config and scratch folder passed to `bare-ubit` / `ubit` |
 | `UBIT_BIN` | bundled `bare-ubit` | Override path or binary name for page link metadata and downloads |
 | `PEARTUBE_ALLOWED_PEERS` | none | Comma-separated 64-hex Noise public keys allowed through the swarm firewall |
@@ -508,7 +511,7 @@ no bank is bundled. Subtitles use platform fonts and fonts attached to the media
 | `src/http.js`, `src/ui.js` | The one-port server and the relay web UI |
 | `src/acquire.js`, `src/settings.js`, `src/identify.js` | Private job queue, settings store, link identification and Cinemeta matching |
 | `src/lan.js`, `src/cast.js`, `src/cast-control.js` | LAN discovery, Cast & TV receiver stack, its control channel |
-| `src/mirror.js`, `src/hiverelay.js` | Plugin host and HiveRelay recruitment/seeding |
+| `src/mirror.js`, `src/providers/soulseek.js`, `src/hiverelay.js` | Plugin host, Soulseek album provider (`SOULSEEK_SEARCH_CAP = 200`), and HiveRelay recruitment/seeding |
 | `src/private-overlay.js`, `bin/private-relay.js` | Stateless 2-hop guard overlay and guard forwarders |
 | `bin/relay.js` | Relay daemon |
 | `worklet/` | The worklet the apps run (`worker.js`), its crypto and the QuickJS bare-kit build |

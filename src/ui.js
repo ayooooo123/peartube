@@ -387,6 +387,16 @@ export const page = `<!doctype html>
       <div class="msg" id="globalMsg" role="status"></div>
       <div class="list" id="globalResults"></div>
     </form>
+    <h2>Sources</h2>
+    <form id="slskForm" class="card">
+      <div class="field">
+        <label for="slskInput">Artist or album</label>
+        <div class="row"><input class="grow" id="slskInput" type="search" spellcheck="false" placeholder="John Coltrane Blue Train" required><button class="btn primary" type="submit" id="slskBtn">Search</button></div>
+        <span class="hint" id="slskHint">Finds albums on peers and mirrors them here.</span>
+      </div>
+      <div class="msg" id="slskMsg" role="status"></div>
+      <div class="list" id="slskResults"></div>
+    </form>
   </section>
 
   <section id="tab-channels" data-panel="channels" hidden>
@@ -1062,6 +1072,12 @@ function renderLibrary (force) {
     $('folderForm').hidden = true
     $('folderChip').setAttribute('aria-expanded', 'false')
   }
+  const slsk = plugin('soulseek')
+  $('slskHint').textContent = slsk.status === 'unavailable'
+    ? 'Unavailable on this device.'
+    : slsk.configured
+      ? 'Finds albums on peers and mirrors them here.'
+      : 'Add your account in Settings to search.'
   const all = libraryTiles()
   const resume = resumeTiles(all)
   renderHero(resume)
@@ -1137,6 +1153,79 @@ $('globalForm').onsubmit = ev => {
   globalAsk = { body: globalBody(val), at: Date.now() }
   say('globalMsg', 'Asking relays…')
   act($('globalBtn'), askGlobal, 'globalMsg')
+}
+
+// ---- Library: Sources (POST /v1/providers/soulseek/search and /mirror)
+function groupSourceAlbums (candidates) {
+  const groups = new Map()
+  for (const c of candidates) {
+    const norm = String(c.filename || '').split('\\\\').join('/')
+    const parts = norm.split('/').filter(Boolean)
+    const dir = parts.length > 1 ? parts.slice(0, -1).join('/') : norm
+    const key = c.username + '\\n' + dir.toLowerCase()
+    let g = groups.get(key)
+    if (!g) {
+      const label = (parts.length > 1 ? parts[parts.length - 2] : parts[0] || 'Album').replace(/^@@/, '')
+      groups.set(key, g = {
+        username: c.username,
+        title: label,
+        slots: Boolean(c.slots),
+        queue: Number(c.queue) || 0,
+        bitDepth: c.bit_depth || null,
+        sampleRate: c.sample_rate || null,
+        bitrate: c.bitrate || null,
+        bytes: 0,
+        files: []
+      })
+    }
+    g.bytes += Number(c.size) || 0
+    if (!g.bitDepth && c.bit_depth) g.bitDepth = c.bit_depth
+    if (!g.sampleRate && c.sample_rate) g.sampleRate = c.sample_rate
+    if (!g.bitrate && c.bitrate) g.bitrate = c.bitrate
+    g.files.push({ filename: c.filename, size: c.size || 0 })
+  }
+  return [...groups.values()]
+}
+function sourceFacts (g) {
+  const slotFact = g.slots ? 'Slots open' : 'Slots full'
+  const queueFact = 'Queue ' + g.queue
+  const rateFact = g.bitDepth && g.sampleRate
+    ? g.bitDepth + '-bit/' + (g.sampleRate / 1000) + ' kHz'
+    : g.sampleRate
+      ? (g.sampleRate / 1000) + ' kHz'
+      : (g.bitrate ? g.bitrate + ' kbps' : 'Rate unknown')
+  return [
+    slotFact,
+    queueFact,
+    rateFact,
+    size(g.bytes),
+    plural(g.files.length, 'track', 'tracks'),
+    g.username
+  ].filter(Boolean).join(' · ')
+}
+function renderSourceResults (candidates) {
+  const albums = groupSourceAlbums(candidates)
+  say('slskMsg', albums.length ? '' : 'No matching albums found.')
+  $('slskResults').replaceChildren(...albums.map(g => h('div', { class: 'item' },
+    h('div', { class: 'info' },
+      h('div', { class: 'name' }, g.title),
+      h('div', { class: 'meta' }, sourceFacts(g))),
+    h('div', { class: 'acts' },
+      h('button', { class: 'btn primary', onclick: ev => act(ev.currentTarget, async () => {
+        await api('/v1/providers/soulseek/mirror', { body: { username: g.username, title: g.title, files: g.files } })
+        say('slskMsg', 'Mirroring “' + g.title + '”.')
+        refresh()
+      }, 'slskMsg') }, 'Mirror')))))
+}
+$('slskForm').onsubmit = ev => {
+  ev.preventDefault()
+  const query = $('slskInput').value.trim()
+  if (!query) return
+  say('slskMsg', 'Searching peers…')
+  act($('slskBtn'), async () => {
+    const r = await api('/v1/providers/soulseek/search', { body: { query } })
+    renderSourceResults(r.candidates || [])
+  }, 'slskMsg')
 }
 
 // ---- Library: details sheet (play, cast, copy; a show's episodes by season)
@@ -1792,10 +1881,15 @@ const GROUPS = [
     { key: 'hiverelayApiKey', label: 'HiveRelay access key', hint: 'One key for every HiveRelay listed above.', ph: 'hr_4f1c2a9b7d' },
     { key: 'hiverelayReplicas', label: 'Copies per video on HiveRelays', hint: 'How many HiveRelays hold each video.', ph: '3' },
     { key: 'hiverelayUploadMbps', label: 'HiveRelay upload limit (Mbps)', hint: 'Caps seeding speed to helpers.', ph: '50' }
+  ] },
+  { title: 'Sources', hint: 'Music network account for album search.', items: [
+    { key: 'slskUser', label: 'Account username', hint: 'Username used to sign in and search.', ph: 'coltrane_fan' },
+    { key: 'slskPass', label: 'Account password', hint: 'Saved privately on this relay; never logged.', ph: 'correct-horse-battery' },
+    { key: 'slskServer', label: 'Server address', hint: 'Host and port of the central server.', ph: 'vps.slsknet.org:2271' }
   ] }
 ]
 
-const INPUT_TYPE = { host: 'text', port: 'number', number: 'number', key: 'text', path: 'text', url: 'url', secret: 'password' }
+const INPUT_TYPE = { host: 'text', hostport: 'text', text: 'text', port: 'number', number: 'number', key: 'text', path: 'text', url: 'url', secret: 'password' }
 // Settings cards with unsaved edits, by title: redraws leave them alone, and saving one card redraws only that card.
 const dirtyCards = new Set()
 

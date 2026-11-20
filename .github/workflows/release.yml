@@ -364,6 +364,7 @@ jobs:
       - name: Checksums & GitHub Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
         run: |
           cd artifacts
           tag="${{ needs.plan.outputs.release_tag }}"

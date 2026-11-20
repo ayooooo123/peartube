@@ -403,20 +403,26 @@ export async function createMirrorHost ({
       const albums = new Map()
       for (const f of files) if (f.dir && !albums.has(f.dir)) albums.set(f.dir, [])
       for (const f of files) if (f.dir) albums.get(f.dir).push(f)
+      // A file already recorded under its base name (every import before this change) keeps that key, so an existing
+      // mirror-watch.json is not invalidated and nothing already imported is ingested a second time.
+      const ledgerKey = f => prefix + f.rel
+      const unchanged = f => {
+        const prev = watchLedger[ledgerKey(f)] || (f.dir || prefix ? null : watchLedger[basename(f.rel)])
+        return Boolean(prev && prev.size === f.st.size && prev.mtimeMs === Math.trunc(f.st.mtimeMs))
+      }
+      // An album is identified only when it has a file to import: reading every imported album's tags on each 60 s
+      // poll read 1 MiB per file, synchronously, for nothing.
       const identities = new Map()
-      for (const [name, group] of albums) identities.set(name, await albumFor(group, resolve(dir), f => prefix + f.rel))
+      for (const [name, group] of albums) if (!group.every(unchanged)) identities.set(name, await albumFor(group, resolve(dir), ledgerKey))
       let scanned = 0
       const ingested = []
       const failed = []
-      for (const { rel, dir: album, full, st } of files) {
+      for (const f of files) {
+        const { rel, dir: album, full, st } = f
         if (closed) break
         scanned++
-        // A file already recorded under its base name (every import before this change) keeps that key, so an existing
-        // mirror-watch.json is not invalidated and nothing already imported is ingested a second time.
-        const legacyKey = basename(rel)
-        const ledgerKey = prefix + rel
-        const prev = watchLedger[ledgerKey] || (album || prefix ? null : watchLedger[legacyKey])
-        if (prev && prev.size === st.size && prev.mtimeMs === Math.trunc(st.mtimeMs)) continue
+        if (unchanged(f)) continue
+        const key = ledgerKey(f)
         let sidecar = null
         const sidecarPath = `${full}.json`
         if (existsSync(sidecarPath)) {
@@ -431,7 +437,7 @@ export async function createMirrorHost ({
           const position = album ? albums.get(album).findIndex(f => f.rel === rel) + 1 : 0
           const meta = inferMediaMeta(full, sidecar, tags, album ? { ...identities.get(album), position } : null)
           const op = await ctx.ingestStream({ id: meta.id, title: meta.title, stream: createReadStream(full), channel: mirrorChannel, music: meta.music || null })
-          watchLedger[ledgerKey] = { size: st.size, mtimeMs: Math.trunc(st.mtimeMs), id: op.id, blobs: op.blobs, sha256: op.sha256, ingestedAt: Date.now() }
+          watchLedger[key] = { size: st.size, mtimeMs: Math.trunc(st.mtimeMs), id: op.id, blobs: op.blobs, sha256: op.sha256, ingestedAt: Date.now() }
           saveWatchLedger()
           ingested.push({ file: basename(rel), id: op.id, title: op.title, size: op.size, sha256: op.sha256 })
         } catch (err) {

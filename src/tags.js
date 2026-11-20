@@ -82,8 +82,36 @@ function mbid (map) {
   return null
 }
 
-// FLAC and Ogg: "fLaC" then metadata blocks, each a 4-byte header (last flag, 7-bit type, 24-bit length).
-// Type 4 is the Vorbis comment: a vendor string and a list of KEY=value, both little-endian 32-bit lengths.
+// The Vorbis comment structure FLAC, Ogg Vorbis and Opus share: a vendor string and a list of KEY=value, each with a
+// little-endian 32-bit length. A body cut short (the read stopped inside it) keeps the entries read so far.
+function vorbisComment (body, map) {
+  let o = 0
+  const rd = () => {
+    if (o + 4 > body.length) return null
+    const n = body[o] | (body[o + 1] << 8) | (body[o + 2] << 16) | (body[o + 3] << 24)
+    o += 4
+    if (n < 0 || o + n > body.length) return null
+    const s = body.subarray(o, o + n)
+    o += n
+    return s
+  }
+  if (!rd()) return
+  // The count is a bare little-endian 32-bit integer, not a length-prefixed string like the vendor.
+  if (o + 4 > body.length) return
+  const count = body[o] | (body[o + 1] << 8) | (body[o + 2] << 16) | (body[o + 3] << 24)
+  o += 4
+  for (let i = 0; i < count && i < 512; i++) {
+    const kv = rd()
+    if (!kv) break
+    const text = b4a.toString(kv, 'utf8')
+    const eq = text.indexOf('=')
+    if (eq <= 0) continue
+    map.set(text.slice(0, eq).toUpperCase(), text.slice(eq + 1).slice(0, MAX_TEXT))
+  }
+}
+
+// FLAC: "fLaC" then metadata blocks, each a 4-byte header (last flag, 7-bit type, 24-bit length). Type 4 is the
+// Vorbis comment.
 function flacComments (buf) {
   const map = new Map()
   let p = 4
@@ -95,38 +123,47 @@ function flacComments (buf) {
     const len = (buf[p + 1] << 16) | (buf[p + 2] << 8) | buf[p + 3]
     if (p + 4 + len > buf.length) break
     if (type === 4) {
-      const body = buf.subarray(p + 4, p + 4 + len)
-      try {
-        let o = 0
-        const rd = () => {
-          if (o + 4 > body.length) return null
-          const n = body[o] | (body[o + 1] << 8) | (body[o + 2] << 16) | (body[o + 3] << 24)
-          o += 4
-          if (n < 0 || o + n > body.length) return null
-          const s = body.subarray(o, o + n)
-          o += n
-          return s
-        }
-        if (!rd()) break
-        // The count is a bare little-endian 32-bit integer, not a length-prefixed string like the vendor.
-        if (o + 4 > body.length) break
-        const count = body[o] | (body[o + 1] << 8) | (body[o + 2] << 16) | (body[o + 3] << 24)
-        o += 4
-        for (let i = 0; i < count && i < 512; i++) {
-          const kv = rd()
-          if (!kv) break
-          const text = b4a.toString(kv, 'utf8')
-          const eq = text.indexOf('=')
-          if (eq <= 0) continue
-          map.set(text.slice(0, eq).toUpperCase(), text.slice(eq + 1).slice(0, MAX_TEXT))
-        }
-      } catch {}
+      vorbisComment(buf.subarray(p + 4, p + 4 + len), map)
       break
     }
     p += 4 + len
     if (last) break
   }
   return map
+}
+
+// Ogg Vorbis and Opus: pages ("OggS", a 27-byte header, then a segment table). A packet is a run of segments ending in
+// one shorter than 255 bytes, and may go on over the next page. The second packet is the comment header:
+// "\x03vorbis" or "OpusTags", then the Vorbis comment structure. Cover art can make it longer than the bytes read, so a
+// packet cut short is parsed as far as it goes.
+function oggComments (buf) {
+  const map = new Map()
+  let segments = []
+  let done = 0
+  const comment = () => {
+    const pk = b4a.concat(segments)
+    if (b4a.toString(pk.subarray(0, 8), 'latin1') === 'OpusTags') vorbisComment(pk.subarray(8), map)
+    else if (pk[0] === 3 && b4a.toString(pk.subarray(1, 7), 'latin1') === 'vorbis') vorbisComment(pk.subarray(7), map)
+    return map
+  }
+  let p = 0
+  let guard = 0
+  while (p + 27 <= buf.length && guard++ < 1024 && b4a.toString(buf.subarray(p, p + 4), 'latin1') === 'OggS') {
+    const count = buf[p + 26]
+    let o = p + 27 + count
+    if (o > buf.length) break
+    for (let i = 0; i < count; i++) {
+      const len = buf[p + 27 + i]
+      if (o + len > buf.length) return done === 1 ? comment() : map
+      segments.push(buf.subarray(o, o + len))
+      o += len
+      if (len === 255) continue
+      if (++done === 2) return comment()
+      segments = []
+    }
+    p = o
+  }
+  return done === 1 ? comment() : map
 }
 
 // ID3v2: a 10-byte header, then frames of a 4-character id and a size. v2.2 uses 3-character ids we do not read.
@@ -176,7 +213,8 @@ export function parseTags (buf) {
   if (!buf || buf.length < 4) return null
   const container = mediaFormat(buf)
   let map = null
-  if (container === 'flac' || container === 'ogg') map = flacComments(buf)
+  if (container === 'flac') map = flacComments(buf)
+  else if (container === 'ogg') map = oggComments(buf)
   else if (container === 'mp3' || b4a.toString(buf.subarray(0, 3), 'latin1') === 'ID3') map = id3Frames(buf)
   if (!map || map.size === 0) return null
   // FLAC spells these in the comment; ID3 has dedicated frames (TPOS is a disc, TRCK a track), and both write them

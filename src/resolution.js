@@ -48,14 +48,11 @@ function flac (head) {
   return out
 }
 
-// MP3/MPEG audio: the first frame header names the layer, rate, channels and bitrate, and a Xing/Info or VBRI
-// header (in the first frame's padding, where an encoder writes it) carries the frame count, which is the duration.
+// MPEG audio: the first frame header names the layer, rate and channels, and a Xing/Info header (right after the
+// side information of the first frame, where an encoder writes it) carries the frame count, which is the duration.
+// No bitrate is reported: the first frame's is not the file's in a VBR file, and the UI works it out from size and
+// duration instead. Version bits: 3 MPEG-1, 2 MPEG-2, 0 MPEG-2.5. Layer bits: 3 Layer I, 2 Layer II, 1 Layer III.
 const MP3_RATES = { 3: [44100, 48000, 32000], 2: [22050, 24000, 16000], 0: [11025, 12000, 8000] }
-const MP3_BR = {
-  3: { 1: [0, 32, 40, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320], 2: [0, 32, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320, 384] },
-  2: { 1: [0, 32, 48, 56, 64, 80, 96, 112, 128, 144, 160, 176, 192, 224, 256], 2: [0, 8, 16, 24, 32, 40, 48, 56, 64, 80, 96, 112, 128, 144, 160] },
-  0: { 1: [0, 32, 48, 56, 64, 80, 96, 112, 128, 144, 160, 176, 192, 224, 256], 2: [0, 8, 16, 24, 32, 40, 48, 56, 64, 80, 96, 112, 128, 144, 160] }
-}
 function mp3 (head) {
   const out = { duration: null, video: [], audio: [], subtitles: [] }
   // Skip a leading ID3v2 tag, whose synchsafe size is what makes a naive search read tag bytes as frames.
@@ -72,30 +69,21 @@ function mp3 (head) {
     const brIdx = (head[p + 2] >> 4) & 0x0f
     const srIdx = (head[p + 2] >> 2) & 0x03
     if (v === 1 || layer === 0 || brIdx === 0 || brIdx === 15 || srIdx === 3) { p++; continue }
-    const rate = MP3_RATES[Math.min(v, 3)]?.[srIdx]
-    const kbps = MP3_BR[Math.min(v, 3)]?.[layer === 3 ? 1 : 2]?.[brIdx]
-    if (!rate || !kbps) { p++; continue }
+    const rate = MP3_RATES[v][srIdx]
+    const mpeg1 = v === 3
     const channels = ((head[p + 3] >> 6) & 0x03) === 3 ? 1 : 2
-    const mono = channels === 1
-    // The frame length, from the layer, is where the encoder's own header sits.
-    const l3 = layer === 1
-    const pad = (head[p + 2] >> 1) & 0x01
-    const frameLen = l3 ? Math.floor((144000 * kbps) / rate) + pad : Math.floor(((layer === 3 ? 12000 : 72000) * kbps) / rate) + pad
+    // Layer III side information is 17/32 bytes (mono/stereo) in MPEG-1 and 9/17 in MPEG-2 and 2.5.
+    const x = p + 4 + (mpeg1 ? (channels === 1 ? 17 : 32) : (channels === 1 ? 9 : 17))
     let frames = null
-    const x = p + 4 + (mono ? 17 : 32)
-    if (frameLen > 0 && x + 12 <= head.length) {
+    if (layer === 1 && x + 12 <= head.length) {
       const tag = text(head, x, x + 4)
-      if (tag === 'Xing' || tag === 'Info') {
-        const flags = (head[x + 4] << 24) | (head[x + 5] << 16) | (head[x + 6] << 8) | head[x + 7]
-        if (flags & 0x01) {
-          const off = x + 8
-          if (off + 4 <= head.length) frames = (head[off] << 24) | (head[off + 1] << 16) | (head[off + 2] << 8) | head[off + 3]
-        }
+      if ((tag === 'Xing' || tag === 'Info') && (head[x + 7] & 0x01)) {
+        frames = ((head[x + 8] << 24) >>> 0) + (head[x + 9] << 16) + (head[x + 10] << 8) + head[x + 11]
       }
     }
-    const spf = l3 ? 1152 : layer === 3 ? 384 : 576
+    const spf = layer === 3 ? 384 : layer === 2 || mpeg1 ? 1152 : 576
     if (frames > 0) out.duration = (frames * spf) / rate
-    out.audio.push({ codec: layer === 3 ? 'MP2' : 'MP3', channels, language: null, name: null, rate, kbps })
+    out.audio.push({ codec: layer === 3 ? 'MP1' : layer === 2 ? 'MP2' : 'MP3', channels, language: null, name: null, rate })
     return out
   }
   return out

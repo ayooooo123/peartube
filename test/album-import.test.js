@@ -74,6 +74,22 @@ function mp3 ({ frames = {}, txxx = {}, version = 4 }) {
   return Buffer.concat([header, framesBuf, Buffer.alloc(1024, 0x22), Buffer.from([0xff, 0xfb, 0x90, 0x00])])
 }
 
+// An Opus file's first two Ogg pages: the `OpusHead` packet, then `OpusTags` with the same comment structure FLAC uses.
+// A long comment makes the tags packet span several 255-byte lacing segments. The CRC is left zero: tag reading does
+// not check it.
+function opus (tags) {
+  const page = (seq, packet) => {
+    const lacing = []
+    for (let left = packet.length; ; left -= 255) { lacing.push(Math.min(left, 255)); if (left < 255) break }
+    const h = Buffer.alloc(27)
+    h.write('OggS', 0, 'latin1'); h[5] = seq === 0 ? 2 : 0; h.writeUInt32LE(1, 14); h.writeUInt32LE(seq, 18); h[26] = lacing.length
+    return Buffer.concat([h, Buffer.from(lacing), packet])
+  }
+  const head = Buffer.concat([Buffer.from('OpusHead', 'latin1'), Buffer.from([1, 2, 0x38, 0x01, 0x80, 0xbb, 0, 0, 0, 0, 0])])
+  const comment = flac({ ...tags, COMMENT: 'x'.repeat(700) }).subarray(8, -4096)
+  return Buffer.concat([page(0, head), page(1, Buffer.concat([Buffer.from('OpusTags', 'latin1'), comment])), Buffer.alloc(2048, 0x33)])
+}
+
 test('a FLAC with Vorbis comments names its release, disc and track', () => {
   const tags = parseTags(flac({
     ALBUM: 'Blue Train',
@@ -172,6 +188,10 @@ test('a folder becomes one album through a relay', { timeout: 240_000 }, async (
   mkdirSync(discogsDir)
   const discogsTrack = n => flac({ ALBUM: 'D', ALBUMARTIST: 'A', TITLE: `T${n}`, TRACKNUMBER: String(n), DISCOGS_RELEASE_ID: '12345' })
   for (const n of [1, 2]) writeFileSync(join(discogsDir, `0${n} - T${n}.flac`), discogsTrack(n))
+  // Ogg Opus tags name their album too.
+  const opusDir = join(watch, 'Opus')
+  mkdirSync(opusDir)
+  for (const n of [1, 2]) writeFileSync(join(opusDir, `track${n}.opus`), opus({ ALBUM: 'Opus Album', ARTIST: 'C', TITLE: `O${n}`, TRACKNUMBER: String(n) }))
 
   const port = 8300 + Math.floor(Math.random() * 400)
   const proc = spawn(join(root, 'node_modules/.bin/bare'), [join(root, 'bin/relay.js')], {
@@ -196,11 +216,14 @@ test('a folder becomes one album through a relay', { timeout: 240_000 }, async (
       const res = await fetch(`http://127.0.0.1:${port}/v1/entries`).catch(() => null)
       if (res?.ok) {
         rows = (await res.json()).results || []
-        if (rows.length >= 7) break
+        if (rows.length >= 9) break
       }
       await sleep(1000)
     }
-    assert.equal(rows.length, 7, `expected every folder's tracks, got ${rows.length}: ${errors.slice(-3).join(' ')}`)
+    assert.equal(rows.length, 9, `expected every folder's tracks, got ${rows.length}: ${errors.slice(-3).join(' ')}`)
+    const opusRows = rows.filter(r => r.title === 'C · Opus Album')
+    assert.deepEqual(opusRows.map(r => r.music?.title).sort(), ['O1', 'O2'], 'Opus tags are read')
+    assert.equal(new Set(opusRows.map(r => r.seriesKey)).size, 1, 'one Opus album')
     assert.ok(rows.every(r => !r.id.startsWith('undefined')), 'no track lands on an "undefined" release')
 
     const noNum = rows.filter(r => r.title === 'B · No Numbers')

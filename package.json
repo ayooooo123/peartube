@@ -78,7 +78,7 @@
   "scripts": {
     "postinstall": "node -e \"const fs=require('fs'),p=require('path');if(fs.existsSync('node_modules')){for(const[k,v]of[['events','bare-events'],['dgram','bare-dgram'],['os','bare-os'],['net','bare-net'],['crypto','peartube-crypto'],['buffer','bare-buffer']])if(fs.existsSync(p.join('node_modules',v))){const t=p.join('node_modules',k);fs.rmSync(t,{recursive:true,force:true});fs.symlinkSync(v,t)}try{const b=require('bare-runtime')();fs.chmodSync(b,0o755);fs.mkdirSync('node_modules/.bin',{recursive:true});fs.rmSync('node_modules/.bin/bare',{force:true});fs.symlinkSync(p.relative('node_modules/.bin',b),'node_modules/.bin/bare')}catch{}}\"",
     "start": "./node_modules/.bin/bare bin/relay.js",
-    "test": "node --test --test-force-exit --test-concurrency=32 test/*.test.js",
+    "test": "node --test --test-force-exit test/*.test.js",
     "lint": "oxlint",
     "test:desktop": "node --test --test-force-exit test/desktop.e2e.js",
     "test:cast": "node --test test/cast.e2e.js",

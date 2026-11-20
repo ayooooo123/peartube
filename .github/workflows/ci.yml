@@ -17,9 +17,15 @@ concurrency:
 
 # Every check is its own job, in parallel. timeout-minutes is each job's budget: a job past it fails.
 jobs:
+  # npm test split over three runners by Node's --test-shard. All files at once on one 4-vCPU runner took 129 s,
+  # slower than three at a time (84 s): the runner, not the waiting, was the limit.
   test:
     runs-on: ubuntu-latest
     timeout-minutes: 4
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -27,7 +33,7 @@ jobs:
           node-version: 22.x
           cache: npm
       - run: npm ci
-      - run: npm test
+      - run: node --test --test-force-exit --test-shard=${{ matrix.shard }}/3 test/*.test.js
 
   cast:
     runs-on: ubuntu-latest

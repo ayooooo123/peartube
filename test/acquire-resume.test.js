@@ -16,6 +16,9 @@ import b4a from 'b4a'
 import { createNode } from '../src/index.js'
 import { createAcquirer } from '../src/acquire.js'
 
+// The sources are loopback HTTP servers: opt in to private URLs (src/ssrf.js).
+process.env.PEARTUBE_ALLOW_PRIVATE_URLS = '1'
+
 const BLOCK = 512 * 1024
 // hyperblobs appends only once 16 blocks are buffered, so a fixture smaller than that never lands one on disk.
 const BATCH = 16 * BLOCK

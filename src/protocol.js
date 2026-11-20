@@ -66,6 +66,36 @@ export const RECEIVER_PORT = 8176
 // Every peer value is untrusted until decodeOp blesses it; typeof guards every regex.
 export const str = (v, re) => typeof v === 'string' && re.test(v)
 export const cleanText = (v, fallback = '') => String(v || fallback).slice(0, MAX_TITLE).toWellFormed()
+
+// Constant-time comparison of two secrets (tokens, pairing codes): the time taken does not depend on where they differ.
+export function safeEqual (a, b) {
+  const ba = b4a.from(String(a || ''))
+  const bb = b4a.from(String(b || ''))
+  if (ba.length === 0 || ba.length !== bb.length) return false
+  let diff = 0
+  for (let i = 0; i < ba.length; i++) diff |= ba[i] ^ bb[i]
+  return diff === 0
+}
+// An IPv6 address as eight numbers: `::` expanded, brackets and zone dropped, a trailing dotted IPv4 folded into the
+// last two. Null if it is not an IPv6 address. Every spelling of one address gives the same groups.
+export function ipv6Groups (ip) {
+  let s = String(ip).toLowerCase().replace(/^\[|\]$/g, '').replace(/%.*$/, '')
+  if (!s.includes(':')) return null
+  const tail = s.match(/^(.*:)(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/)
+  if (tail) {
+    const o = tail.slice(2).map(Number)
+    if (o.some(n => n > 255)) return null
+    s = tail[1] + ((o[0] << 8) | o[1]).toString(16) + ':' + ((o[2] << 8) | o[3]).toString(16)
+  }
+  const halves = s.split('::')
+  if (halves.length > 2) return null
+  const head = halves[0] ? halves[0].split(':') : []
+  const rest = halves.length === 2 && halves[1] ? halves[1].split(':') : []
+  const missing = 8 - head.length - rest.length
+  if (halves.length === 2 ? missing < 1 : missing !== 0) return null
+  const groups = [...head, ...Array(halves.length === 2 ? missing : 0).fill('0'), ...rest]
+  return groups.every(g => /^[0-9a-f]{1,4}$/.test(g)) ? groups.map(g => parseInt(g, 16)) : null
+}
 function parseQuery (raw) {
   const out = {}
   if (!raw) return out

@@ -73,16 +73,34 @@ test('cache ceiling evicts oldest-served, spares the playing film, and 0 is unli
     await viewer.enforceCacheCeiling({ keepHex: survivor })
     assert.equal(await blocksOf(survivor), beforePlaying, 'the playing film kept every block')
 
-    // 0 means unlimited: nothing else is touched.
+    // A kept copy (16 MiB = 32 blocks, so clearTo = 16 > headGuard 8) neither counts toward cachedBytes nor gets trimmed.
+    const bigAnnounced = await pub.put({ id: 'imdb:tt9100099', title: 'Kept Film' }, Readable.from([randomBytes(16 * MiB)]))
+    const keptHex = bigAnnounced.blobs
+    await fill(keptHex)
+    const keptBlocks = await blocksOf(keptHex)
+    assert.equal(keptBlocks, 32, 'kept film has 32 blocks (clearTo 16 > headGuard 8)')
+    viewer.keepCopy(keptHex, true)
+    assert.equal(viewer.status().cachedBytes, VIDEO_BYTES, 'kept copy does not count toward cache budget')
+    await viewer.evictBehind(keptHex, { blockOffset: 0, blockLength: keptBlocks, byteLength: 16 * MiB }, { playheadByte: 16 * MiB, keepBehindBytes: 0 })
+    assert.equal(await blocksOf(keptHex), keptBlocks, 'evictBehind never trims blocks of a kept copy')
+    // Put `survivor` over a 512 KiB budget so `total > target` holds, then pass `keepHex: keptHex` to exercise `!kept.has(playing)`.
+    viewer.setCacheMaxBytes(512 * 1024)
+    await viewer.enforceCacheCeiling({ keepHex: keptHex })
+    assert.equal(await blocksOf(keptHex), keptBlocks, 'enforceCacheCeiling never trims a playing kept copy')
     viewer.setCacheMaxBytes(0)
+    await fill(survivor)
     const beforeUnlimited = viewer.status().cachedBytes
     await viewer.enforceCacheCeiling()
     assert.equal(viewer.status().cachedBytes, beforeUnlimited, 'unlimited budget evicts nothing')
 
-    // The bulk clear now shares the ceiling's per-hex body.
+    // The bulk clear now shares the ceiling's per-hex body and spares kept copies until un-kept.
     const cleared = await viewer.clearCache()
     assert.ok(cleared.clearedBytes > 0, 'bulk clear evicts through the shared body')
     assert.equal(viewer.status().cachedBytes, 0, 'nothing cached after a full clear')
+    assert.equal(await blocksOf(keptHex), keptBlocks, 'kept copy survives clearCache()')
+    viewer.keepCopy(keptHex, false)
+    await viewer.clearCache()
+    assert.equal(await blocksOf(keptHex), 0, 'once un-kept, clearCache() clears it')
   } finally {
     if (viewer) await viewer.close().catch(() => {})
     await pub.close().catch(() => {})

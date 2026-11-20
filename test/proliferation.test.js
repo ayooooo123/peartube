@@ -19,6 +19,8 @@ import { createAcquirer } from '../src/acquire.js'
 import { createMirrorHost } from '../src/mirror.js'
 import { createApi } from '../src/http.js'
 const tmp = name => mkdtempSync(join(tmpdir(), `peartube-prolif-${name}-`))
+// Acquire sources and feeds are loopback HTTP servers: opt in to private URLs (src/ssrf.js).
+process.env.PEARTUBE_ALLOW_PRIVATE_URLS = '1'
 const sha256 = buf => createHash('sha256').update(buf).digest('hex')
 
 async function until (fn, ms = 90000, label = 'condition') {

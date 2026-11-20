@@ -21,32 +21,40 @@ export function createIdentity (ctx) {
   }
   let idVault = currentMnemonic ? deriveIdentity(currentMnemonic) : null
   let foundedKey = typeof savedIdentity.founded === 'string' && HEX64.test(savedIdentity.founded) ? savedIdentity.founded : ''
-
+  const savedMnemonic = savedIdentity.mnemonic ? normalizeMnemonic(savedIdentity.mnemonic) : ''
+  let dirty = Boolean(mnemonicOpt && currentMnemonic && currentMnemonic !== savedMnemonic)
+  // Throws when identity.json cannot be written: a phrase or pass the caller believes is saved must be.
   function saveIdentity () {
-    try {
-      const payload = {
-        mnemonic: currentMnemonic || '',
-        founded: foundedKey || '',
-        accessKeys: Object.fromEntries(accessKeys)
-      }
-      writeFileSync(identityFile + '.tmp', JSON.stringify(payload, null, 2), { mode: 0o600 })
-      renameSync(identityFile + '.tmp', identityFile)
-    } catch {}
+    const payload = {
+      mnemonic: currentMnemonic || '',
+      founded: foundedKey || '',
+      accessKeys: Object.fromEntries(accessKeys)
+    }
+    writeFileSync(identityFile + '.tmp', JSON.stringify(payload, null, 2), { mode: 0o600 })
+    renameSync(identityFile + '.tmp', identityFile)
+    dirty = false
   }
 
   function ensureVault () {
     if (!idVault) {
       currentMnemonic = generateMnemonic(12)
       idVault = deriveIdentity(currentMnemonic)
+      dirty = true
     }
     return idVault
   }
 
   async function claimWithMnemonic (phrase, { alias = '' } = {}) {
     const nextVault = deriveIdentity(phrase)
+    const before = { currentMnemonic, idVault }
     currentMnemonic = nextVault.mnemonic
     idVault = nextVault
-    saveIdentity()
+    try {
+      saveIdentity()
+    } catch (err) {
+      ({ currentMnemonic, idVault } = before)
+      throw err
+    }
     if (nextVault.channelKey !== ctx.channel.primaryKey) {
       return { claimed: false, reopenNeeded: true, channel: nextVault.channelKey }
     }
@@ -74,8 +82,16 @@ export function createIdentity (ctx) {
     if (!HEX64.test(c) || !HEX64.test(k) || !Number.isSafeInteger(ep) || ep < 1) {
       throw new Error('Invalid subscriber access key')
     }
-    accessKeys.set(`${c}:${ep}`, k)
-    saveIdentity()
+    const id = `${c}:${ep}`
+    const before = accessKeys.get(id)
+    accessKeys.set(id, k)
+    try {
+      saveIdentity()
+    } catch (err) {
+      if (before === undefined) accessKeys.delete(id)
+      else accessKeys.set(id, before)
+      throw err
+    }
     ctx.update()
     return { channel: c, epoch: ep }
   }
@@ -102,7 +118,8 @@ export function createIdentity (ctx) {
     get idVault () { return idVault },
     ensureVault,
     foundedKey: () => foundedKey,
-    markFounded: key => { foundedKey = key },
+    markFounded: key => { if (foundedKey !== key) { foundedKey = key; dirty = true } },
+    isDirty: () => dirty,
     accessKeys,
     saveIdentity,
     claimWithMnemonic,

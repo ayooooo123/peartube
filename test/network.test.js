@@ -13,6 +13,8 @@ import { createApi } from '../src/http.js'
 import { createPrivateGuard } from '../src/private-overlay.js'
 
 const tmp = () => mkdtempSync(join(tmpdir(), 'peartube-test-'))
+// Acquire sources are loopback HTTP servers: opt in to private URLs (src/ssrf.js).
+process.env.PEARTUBE_ALLOW_PRIVATE_URLS = '1'
 
 async function until (fn, ms = 120000) {
   const end = Date.now() + ms

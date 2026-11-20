@@ -8,6 +8,9 @@ import assert from 'node:assert/strict'
 import { createServer } from 'node:http'
 import { identify } from '../src/identify.js'
 
+// The links are on a loopback HTTP server: opt in to private URLs (src/ssrf.js).
+process.env.PEARTUBE_ALLOW_PRIVATE_URLS = '1'
+
 const ENCODED = 'Dune-%20Part%20Two%20(2024)%202160p%20REMUX.mkv'
 const NAME = 'Dune- Part Two (2024) 2160p REMUX.mkv'
 

@@ -5,14 +5,20 @@
  * a global ref for the line consumer, a daemon attach on the output thread,
  * bytes copied during each call, and the global ref released after shutdown.
  *
- * One backend per process: a second pt_init replaces the first handle's
- * consumer ref, since the apps create one engine.
+ * One backend per process: a second pt_init while one is live is refused
+ * (returns 0) until it is shut down, so the consumer ref an output thread
+ * may be delivering to is never released under it. pt_lock serializes
+ * init and shutdown; pt_deliver takes no lock, since pt_vm and pt_accept
+ * are set once before the first output thread exists and its consumer ref
+ * lives until pt_shutdown has stopped that thread.
  */
 #include <jni.h>
+#include <pthread.h>
 #include <stdlib.h>
 
 #include "peartube_native.h"
 
+static pthread_mutex_t pt_lock = PTHREAD_MUTEX_INITIALIZER;
 static JavaVM *pt_vm;
 static jmethodID pt_accept;
 static jobject pt_consumer;
@@ -63,34 +69,38 @@ Java_com_peartube_shared_PearTubeNative_ptInit(JNIEnv *env, jobject self, jbyteA
 {
   (void)self;
   if (on == NULL) return 0;
-  if (pt_vm == NULL && (*env)->GetJavaVM(env, &pt_vm) != JNI_OK) return 0;
+  jlong result = 0;
+  pthread_mutex_lock(&pt_lock);
+  if (pt_handle != NULL) goto done;
+  if (pt_vm == NULL && (*env)->GetJavaVM(env, &pt_vm) != JNI_OK) goto done;
   if (pt_accept == NULL) {
     jclass consumer = (*env)->FindClass(env, "java/util/function/Consumer");
-    if (consumer == NULL) return 0;
+    if (consumer == NULL) goto done;
     pt_accept = (*env)->GetMethodID(env, consumer, "accept", "(Ljava/lang/Object;)V");
     (*env)->DeleteLocalRef(env, consumer);
-    if (pt_accept == NULL) return 0;
+    if (pt_accept == NULL) goto done;
   }
   size_t len = 0;
   uint8_t *bytes = pt_copy(env, config, &len);
-  if (len > 0 && bytes == NULL) return 0;
+  if (len > 0 && bytes == NULL) goto done;
   jobject ref = (*env)->NewGlobalRef(env, on);
   if (ref == NULL) {
     free(bytes);
-    return 0;
+    goto done;
   }
   void *handle = NULL;
   pt_status status = pt_init(bytes, len, pt_deliver, ref, &handle);
   free(bytes);
   if (status != PT_OK || handle == NULL) {
     (*env)->DeleteGlobalRef(env, ref);
-    return 0;
+    goto done;
   }
-  jobject previous = pt_consumer;
   pt_consumer = ref;
   pt_handle = handle;
-  if (previous != NULL) (*env)->DeleteGlobalRef(env, previous);
-  return (jlong)(intptr_t)handle;
+  result = (jlong)(intptr_t)handle;
+done:
+  pthread_mutex_unlock(&pt_lock);
+  return result;
 }
 
 JNIEXPORT jint JNICALL
@@ -126,10 +136,12 @@ Java_com_peartube_shared_PearTubeNative_ptShutdown(JNIEnv *env, jobject self, jl
 {
   (void)self;
   void *raw = (void *)(intptr_t)handle;
+  pthread_mutex_lock(&pt_lock);
   pt_shutdown(raw);
-  if (pt_consumer != NULL && (pt_handle == NULL || pt_handle == raw)) {
+  if (raw != NULL && raw == pt_handle) {
     (*env)->DeleteGlobalRef(env, pt_consumer);
     pt_consumer = NULL;
     pt_handle = NULL;
   }
+  pthread_mutex_unlock(&pt_lock);
 }

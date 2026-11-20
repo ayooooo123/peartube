@@ -309,10 +309,15 @@ async function openNode ({
     const key = b4a.from(keyHex, 'hex')
     if (b4a.equals(key, ctx.net.swarm.keyPair.publicKey)) return
     const join = () => { try { ctx.net.swarm.joinPeer(key) } catch {} }
-    if (!lanFirst || ctx.net.dht || !ctx.net.lan) return join()
-    setTimeout(() => { if (!ctx.life.closing && !ctx.net.hasLanPeer(key)) join() }, 1500).unref?.()
+    if (!lanFirst || ctx.net.dht || !ctx.net.lan) { join(); return () => {} }
+    const t = setTimeout(() => { if (!ctx.life.closing && !ctx.net.hasLanPeer(key)) join() }, 1500)
+    t.unref?.()
+    return () => clearTimeout(t)
   }
-
+  function leavePeer (keyHex) {
+    if (!str(keyHex, HEX64)) return
+    try { ctx.net.swarm.leavePeer?.(b4a.from(keyHex, 'hex')) } catch {}
+  }
   // The connection to a peer: the open one, else a new one. `lan` is the peer's LAN endpoint when mDNS showed it
   // ({host, port}); that address is dialed first.
   function connectPeer (keyHex, { lan = null, timeoutMs = 30_000 } = {}) {
@@ -322,11 +327,17 @@ async function openNode ({
       if (!conn.destroyed && conn.remotePublicKey && b4a.equals(conn.remotePublicKey, key)) return Promise.resolve(conn)
     }
     return new Promise((resolve, reject) => {
+      let cancelLanFirst = null
       const settle = (err, conn) => {
         clearTimeout(timer)
+        cancelLanFirst?.()
         ctx.net.connListeners.delete(onconn)
-        if (err) reject(err)
-        else resolve(conn)
+        if (err) {
+          leavePeer(keyHex)
+          reject(err)
+        } else {
+          resolve(conn)
+        }
       }
       const onconn = conn => { if (conn.remotePublicKey && b4a.equals(conn.remotePublicKey, key)) settle(null, conn) }
       const timer = setTimeout(() => settle(new Error('The peer did not connect')), timeoutMs)
@@ -334,10 +345,9 @@ async function openNode ({
       ctx.net.connListeners.add(onconn)
       const dialed = Boolean(lan?.host && lan?.port && ctx.net.lan?.dialDirect)
       if (dialed) ctx.net.lan.dialDirect(keyHex, lan.host, lan.port)
-      joinPeer(keyHex, { lanFirst: dialed })
+      cancelLanFirst = joinPeer(keyHex, { lanFirst: dialed })
     })
   }
-
   return {
     store: ctx.storage.store,
     findEntry: ctx.catalog.findEntry,
@@ -349,6 +359,7 @@ async function openNode ({
     // This node's peer key, hex, as other peers and TV receivers name it.
     peerKey: b4a.toString(ctx.net.swarm.keyPair.publicKey, 'hex'),
     joinPeer,
+    leavePeer,
     connectPeer,
     isLanConnection: conn => ctx.net.lanPeers.has(conn),
     joinLanTopic: ctx.net.joinLanTopic,
@@ -384,6 +395,10 @@ async function openNode ({
     discoveredSources: ctx.catalog.discoveredSources,
     openUri: ctx.catalog.openUri,
     warm: ctx.blobs.warm,
+    entryHealth: ctx.blobs.entryHealth,
+    // Bytes of a file this node holds now, without asking any peer.
+    heldBytes: async entry => ctx.blobs.isOwnedBlob(entry.blobs) ? entry.size : ctx.blobs.entryCachedBytes(ctx.blobs.blobCores.get(entry.blobs), entry),
+    keepCopy: ctx.blobs.keepCopy,
     identity: ctx.identity.identity,
     grantWriter: ctx.channel.grantWriter,
     revokeWriter: ctx.channel.revokeWriter,

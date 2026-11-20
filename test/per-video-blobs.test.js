@@ -29,6 +29,8 @@ import { createAcquirer } from '../src/acquire.js'
 import { createMirrorHost } from '../src/mirror.js'
 
 const tmp = label => mkdtempSync(join(tmpdir(), `peartube-pvb-${label}-`))
+// Acquire sources are loopback HTTP servers: opt in to private URLs (src/ssrf.js).
+process.env.PEARTUBE_ALLOW_PRIVATE_URLS = '1'
 const sha256 = buf => createHash('sha256').update(buf).digest('hex')
 
 const RELAY_DISCOVERY_TOPIC = (() => {

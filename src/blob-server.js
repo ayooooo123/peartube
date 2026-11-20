@@ -211,6 +211,8 @@ export function createBlobRangeServer (store, opts = {}) {
     sock.once('close', () => connections.delete(sock))
   })
 
+  // `resolve` may answer with another core holding the same file (`blob` names where in that core): the bytes are
+  // the same, so the request is served from there.
   async function serveBlob (info, req, res) {
     let resolved = null
     let core = null
@@ -222,7 +224,9 @@ export function createBlobRangeServer (store, opts = {}) {
         return
       }
       if (res.destroyed) return
-      core = store.get(resolved)
+      const { blob: copyBlob, ...open } = resolved
+      if (copyBlob) info = { ...info, key: open.key, blob: copyBlob }
+      core = store.get(open)
       onEarlyClose = () => core.close().catch(noop)
       res.once('close', onEarlyClose)
       await core.ready()

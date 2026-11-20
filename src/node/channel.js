@@ -139,7 +139,9 @@ export async function createChannel (ctx) {
   let usePrimaryChannel = Boolean(targetKey) || initialSources.length === 0
   let channelHasEntries = false
   if (channel.bootstrap.writable && !ctx.identity.foundedKey()) ctx.identity.markFounded(primaryKey)
-  ctx.identity.saveIdentity()
+  if (ctx.identity.isDirty()) {
+    try { ctx.identity.saveIdentity() } catch {}
+  }
 
   if (!targetKey && channel.local.length === 0 && channel.bootstrap.writable) {
     await channel.append(b4a.from(JSON.stringify({ type: 'init', owner: ctx.identity.idVault?.ownerPublicKey || undefined, epoch: 1 })))
@@ -256,6 +258,8 @@ export async function createChannel (ctx) {
     const prev = await ctx.catalog.findEntry(cleanKey).catch(() => null)
     await append({ type: 'remove', key: cleanKey })
     await ctx.blobs.gcUnreferencedSlotBlob(prev).catch(() => {})
+    // A copy kept for this entry (src/acquire.js copying another channel's core) is cache again once it is gone.
+    if (prev?.blobs) ctx.blobs.keepCopy(prev.blobs, false)
     ctx.update()
   }
 

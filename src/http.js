@@ -1,10 +1,11 @@
 import { createServer, request as httpRequest } from 'node:http'
+import { createHash } from 'node:crypto'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import b4a from 'b4a'
 import { page } from './ui.js'
-import { videoSize, resolutionLabel } from './resolution.js'
-import { MEDIA_FILE, mediaFormat, parseUri } from './protocol.js'
+import { mediaInfo, resolutionLabel } from './resolution.js'
+import { MEDIA_FILE, ipv6Groups, mediaFormat, parseUri, safeEqual } from './protocol.js'
 
 const MAX_BODY = 64 * 1024
 // Loopback, RFC 1918, CGNAT/Tailscale (100.64/10), link-local, and IPv6 ULA/link-local, plain or IPv4-mapped.
@@ -12,16 +13,42 @@ const PRIVATE_ADDR = /^(::ffff:)?(127\.|10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\
 // bare-https wraps bare-tcp in HTTPSSocket without forwarding remoteAddress; unwrap .socket so LAN settings work over TLS.
 const remoteAddr = req => req.socket?.remoteAddress || req.socket?.socket?.remoteAddress || ''
 const reqProto = req => (req.socket?.encrypted || (PRIVATE_ADDR.test(remoteAddr(req)) && req.headers['x-forwarded-proto'] === 'https')) ? 'https' : 'http'
+// Players, Stremio clients and M3U readers on other origins may read (GET/HEAD); nothing else crosses origins. Writes
+// and the owner's routes (settings, identity) answer without Access-Control-Allow-Origin, and a preflight for any
+// other method fails, so another site's page can neither drive the relay nor read those replies.
+const CORP = { 'cross-origin-resource-policy': 'cross-origin' }
 const CORS = {
+  ...CORP,
   'access-control-allow-origin': '*',
-  'access-control-allow-methods': 'GET, HEAD, POST, PUT, DELETE, OPTIONS',
+  'access-control-allow-methods': 'GET, HEAD, OPTIONS',
   'access-control-allow-headers': 'content-type, authorization, range',
-  'access-control-expose-headers': 'content-length, content-range, accept-ranges, content-disposition',
-  'cross-origin-resource-policy': 'cross-origin'
+  'access-control-expose-headers': 'content-length, content-range, accept-ranges, content-disposition'
+}
+const ownerPath = path => path === '/v1/settings' || path === '/v1/restart' || path.startsWith('/v1/identity')
+const isWrite = req => req.method === 'POST' || req.method === 'PUT' || req.method === 'DELETE'
+// On an open LAN relay (no token), a DNS-rebound page can send matching `Host` and `Origin` (`evil.example:8174`)
+// to `127.0.0.1` or `10.x`. Only an IP literal, `localhost` or `.local` counts as the relay's own host without a token.
+const ipv4Literal = h => {
+  const p = h.split('.')
+  return p.length === 4 && p.every(s => /^\d{1,3}$/.test(s) && Number(s) <= 255)
+}
+const localHost = raw => {
+  if (!raw) return false
+  try {
+    const h = new URL(`http://${raw}`).hostname.replace(/^\[|\]$/g, '').toLowerCase()
+    return h === 'localhost' || h.endsWith('.local') || ipv4Literal(h) || Boolean(ipv6Groups(h))
+  } catch { return false }
+}
+// A request from no page (curl, apps) or from the relay's own page; anything else is another site's page.
+const sameOrigin = req => {
+  const origin = req.headers.origin
+  if (!origin) return true
+  try { return new URL(origin).host === req.headers.host } catch { return false }
 }
 const ISOLATION = { 'cross-origin-opener-policy': 'same-origin', 'cross-origin-embedder-policy': 'credentialless' }
 
 // Caches compiled WASM player flesh in memory on first lick so browser streams open instantly on relays and daemons.
+// The ETag is the bytes' SHA-256, so a rebuilt asset of the same size never answers 304.
 const webCache = new Map()
 function readWebAsset (name) {
   if (webCache.has(name)) return webCache.get(name)
@@ -29,11 +56,11 @@ function readWebAsset (name) {
   try { candidates.push(decodeURIComponent(new URL('../web/assets/' + name, import.meta.url).pathname)) } catch {}
   candidates.push(join('web', 'assets', name))
   for (const file of candidates) {
-    try {
-      const buf = readFileSync(file)
-      webCache.set(name, buf)
-      return buf
-    } catch {}
+    let buf
+    try { buf = readFileSync(file) } catch { continue }
+    const asset = { buf, etag: '"' + createHash('sha256').update(buf).digest('hex').slice(0, 32) + '"' }
+    webCache.set(name, asset)
+    return asset
   }
   return null
 }
@@ -107,9 +134,9 @@ function contentDispositionFor (rawTitle, ext) {
 // Single HTTP surface for relays AND local client daemons: /v1 API, SSE events, Stremio v3 addon, and M3U playlist.
 export function createApi (state) {
   const sse = new Set()
-  // Resolution labels by stream, read once from each file's header. A file that gave none is tried again after
-  // 10 minutes: its header may not have been reachable yet.
-  const resolutions = new Map()
+  // What each stream holds (container, duration, tracks), read once from its header. A header that could not be
+  // read is tried again after 10 minutes: it may not have been reachable yet. At most 512 streams; the oldest goes.
+  const mediaInfos = new Map()
   const downloadFormats = new Map()
   const globalSearches = new Map() // client address -> { key, at } of its newest global search
   // The blob server binds the interface the node gave it (loopback on a relay), so the /v1/blob proxy dials that.
@@ -122,18 +149,23 @@ export function createApi (state) {
   const viaApi = (req, e) => req.headers.host && state.node?.blobServer && e.streamUrl
     ? { ...e, streamUrl: `${reqProto(req)}://${req.headers.host}/v1/blob${new URL(e.streamUrl).search}` }
     : e
-  function resolutionOf (entry) {
+  function mediaOf (streamUrl) {
     const port = state.node?.blobServer?.port
-    if (!port) return null
-    const search = new URL(entry.streamUrl).search
-    const known = resolutions.get(search)
-    if (known && (known.label !== null || Date.now() - known.at < 600000)) return known.promise
-    const record = { at: Date.now(), label: undefined }
-    record.promise = videoSize((start, end) => readStream(blobHost(), port, search, start, end))
-      .then(size => size && resolutionLabel(size), () => null)
-      .then(label => { record.label = label; return label })
-    resolutions.set(search, record)
+    if (!port) return Promise.resolve(null)
+    const search = new URL(streamUrl).search
+    const known = mediaInfos.get(search)
+    if (known && (known.info || Date.now() - known.at < 600000)) return known.promise
+    const record = { at: Date.now(), info: undefined }
+    record.promise = mediaInfo((start, end) => readStream(blobHost(), port, search, start, end))
+      .catch(() => null)
+      .then(info => { record.info = info; return info })
+    if (mediaInfos.size >= 512) mediaInfos.delete(mediaInfos.keys().next().value)
+    mediaInfos.set(search, record)
     return record.promise
+  }
+  async function resolutionOf (entry) {
+    const picture = (await mediaOf(entry.streamUrl))?.video.find(v => v.width && v.height)
+    return picture ? resolutionLabel(picture) : null
   }
 
   async function body (req) {
@@ -153,29 +185,37 @@ export function createApi (state) {
     return node
   }
 
+  const hasToken = req => safeEqual(req.headers.authorization, `Bearer ${state.apiToken}`)
+  const isOwner = req => sameOrigin(req) && (
+    state.apiToken
+      ? hasToken(req)
+      : PRIVATE_ADDR.test(remoteAddr(req)) && localHost(req.headers.host)
+  )
+  // The owner's routes: every write, plus settings and identity. With a token set, the token; without one, a private
+  // address whose `Host` is local (`localhost`, `.local`, or an IP literal, never a DNS-rebound public domain). Either
+  // way only from no page or the relay's own page: reads are open to players on other origins, writes never are.
+  function requireOwner (req) {
+    if (state.apiToken) {
+      if (!hasToken(req)) throw Object.assign(new Error('Unauthorized'), { status: 401 })
+    } else if (!PRIVATE_ADDR.test(remoteAddr(req))) {
+      throw Object.assign(new Error('Set PEARTUBE_API_TOKEN to change this relay over the internet'), { status: 403 })
+    } else if (!localHost(req.headers.host)) {
+      throw Object.assign(new Error('Open this relay by its IP address or .local name, or set PEARTUBE_API_TOKEN'), { status: 403 })
+    }
+    if (!sameOrigin(req)) throw Object.assign(new Error('This relay can only be changed from its own page'), { status: 403 })
+  }
+
   async function route (req, url) {
     const { node, acquirer } = state
     const path = url.pathname
-    // Writes, and the settings themselves, need the token; reads of public state do not.
-    if (state.apiToken && (req.method === 'POST' || req.method === 'PUT' || req.method === 'DELETE' || path === '/v1/settings' || path.startsWith('/v1/identity'))) {
-      if (req.headers.authorization !== `Bearer ${state.apiToken}`) {
-        throw Object.assign(new Error('Unauthorized'), { status: 401 })
-      }
-    }
-    // An open relay already trusts its local network (anyone there can queue downloads), so its settings do too.
-    // Clients from public addresses need the token: settings can point the relay at folders on its disk.
-    const settingsOpen = Boolean(state.apiToken) || PRIVATE_ADDR.test(remoteAddr(req))
+    if (isWrite(req) || ownerPath(path)) requireOwner(req)
+    // Whether this client may manage the relay without a token (the UI asks before showing settings).
+    const settingsOpen = Boolean(state.apiToken) || (PRIVATE_ADDR.test(remoteAddr(req)) && localHost(req.headers.host))
     if (req.method === 'GET' && path === '/v1/status') {
       const st = node ? { ...node.status(), ...state.extraStatus?.() } : state.fallbackStatus
       return { ...st, tokenRequired: Boolean(state.apiToken), settingsOpen }
     }
     if (state.settings && (path === '/v1/settings' || path === '/v1/restart')) {
-      if (!settingsOpen) throw Object.assign(new Error('Set PEARTUBE_API_TOKEN to change settings over the internet'), { status: 403 })
-      // Other websites can reach a LAN relay through the visitor's browser (CORS is open for players); settings only from its own page.
-      const origin = req.headers.origin
-      if (origin && (() => { try { return new URL(origin).host !== req.headers.host } catch { return true } })()) {
-        throw Object.assign(new Error('Settings can only be changed from the relay’s own page'), { status: 403 })
-      }
       if (req.method === 'GET' && path === '/v1/settings') return state.settings.view()
       // Changes apply before the reply: live ones in place, the rest by reopening the node in this process.
       if (req.method === 'PUT' && path === '/v1/settings') {
@@ -192,11 +232,6 @@ export function createApi (state) {
       }
     }
     if (path === '/v1/identity' || path.startsWith('/v1/identity/')) {
-      if (!settingsOpen) throw Object.assign(new Error('Set PEARTUBE_API_TOKEN to manage channel identity over the internet'), { status: 403 })
-      const origin = req.headers.origin
-      if (origin && (() => { try { return new URL(origin).host !== req.headers.host } catch { return true } })()) {
-        throw Object.assign(new Error('Channel identity can only be managed from the relay’s own page'), { status: 403 })
-      }
       const n = requireNode(node)
       if (req.method === 'GET' && path === '/v1/identity') {
         return n.identity({ revealMnemonic: url.searchParams.get('reveal') === '1' })
@@ -231,15 +266,10 @@ export function createApi (state) {
       if (typeof link !== 'string' || !/^https?:\/\//i.test(link.trim())) throw Object.assign(new Error('Paste an http(s) link'), { status: 400 })
       return state.identify(link.trim())
     }
-    // Global search asks relays across the network (src/search.js), so only the relay's owner starts one: the token
-    // when one is set, else a private address, and only from the relay's own page. A new query at most every 3 s per
-    // address; the same query again within 10 s returns the answers that arrived since, and after that asks again.
+    // Global search asks relays across the network (src/search.js), so only the relay's owner starts one
+    // (requireOwner). A new query at most every 3 s per address; the same query again within 10 s returns the
+    // answers that arrived since, and after that asks again.
     if (req.method === 'POST' && path === '/v1/search/global') {
-      if (!settingsOpen) throw Object.assign(new Error('Set PEARTUBE_API_TOKEN to search all relays over the internet'), { status: 403 })
-      const origin = req.headers.origin
-      if (origin && (() => { try { return new URL(origin).host !== req.headers.host } catch { return true } })()) {
-        throw Object.assign(new Error('Search all relays from the relay’s own page'), { status: 403 })
-      }
       const n = requireNode(node)
       const { query = '', id = null, limit = 0 } = await body(req)
       const addr = remoteAddr(req)
@@ -268,6 +298,31 @@ export function createApi (state) {
       const limit = Number(url.searchParams.get('limit')) || 0
       const offset = Number(url.searchParams.get('offset')) || 0
       return { results: node ? (await node.search(null, { source, query, limit, offset })).map(e => viaApi(req, e)) : [] }
+    }
+    // What a file holds (container, duration, tracks) and how well it streams here now. Privacy rules:
+    // - The header is read only when this node holds the whole file, already has its core open (it is playing or
+    //   being served), or read it before. Otherwise reading it would open the core, which tells every connected peer
+    //   and the DHT that this node wants the title, so `mediaDeferred` says so and `read=1` does it on purpose.
+    // - Live numbers (`health`) and `read=1` only for the relay's owner: the token when one is set, else a LAN
+    //   address, and never a request from another site's page. They are counts, never peer keys.
+    // A header still on its way over the network after 3 s leaves `media` out; the next call finds it.
+    if (req.method === 'GET' && path === '/v1/entries/info') {
+      const n = requireNode(node)
+      const key = url.searchParams.get('key') || ''
+      const entry = key ? await n.findEntry(key) : null
+      if (!entry?.blobs || !entry.blob) throw Object.assign(new Error('No such entry'), { status: 404 })
+      const trusted = isOwner(req)
+      const health = n.entryHealth(entry)
+      const streamUrl = n.streamUrl(entry)
+      const readable = health.open || Boolean(mediaInfos.get(new URL(streamUrl).search)?.info) ||
+        (await n.heldBytes(entry)) >= entry.size || (trusted && url.searchParams.get('read') === '1')
+      let media
+      if (readable) {
+        let timer
+        media = await Promise.race([mediaOf(streamUrl), new Promise(resolve => { timer = setTimeout(resolve, 3000) })])
+        clearTimeout(timer)
+      }
+      return { media, mediaDeferred: !readable, ...(trusted ? { health: n.entryHealth(entry) } : {}) }
     }
     if (req.method === 'POST' && path === '/v1/entries/remove') {
       const n = requireNode(node)
@@ -308,8 +363,10 @@ export function createApi (state) {
     if (unpubMatch && req.method === 'DELETE') {
       return requireNode(node).unpublishSource(unpubMatch[1])
     }
-    if ((req.method === 'POST' && path === '/v1/open') || (req.method === 'GET' && path === '/v1/resolve')) {
-      const uri = req.method === 'GET' ? url.searchParams.get('uri') : (await body(req)).uri
+    // What a link asks for, without doing it: no follow, no pairing, no pass saved, no warmup. Opening is POST /v1/open.
+    if (req.method === 'GET' && path === '/v1/resolve') return parseUri(url.searchParams.get('uri'))
+    if (req.method === 'POST' && path === '/v1/open') {
+      const { uri } = await body(req)
       if (state.cast && parseUri(uri).action === 'receiver') {
         return { action: 'receiver', receiver: await state.cast.pairReceiver({ uri }) }
       }
@@ -431,17 +488,17 @@ export function createApi (state) {
       const gzAsset = acceptsGzip ? readWebAsset(name + '.gz') : null
       const asset = gzAsset || readWebAsset(name)
       if (!asset) { res.writeHead(404, CORS); res.end('not found'); return }
-      const etag = '"' + asset.byteLength + '-' + asset[0] + '-' + asset[asset.byteLength - 1] + (gzAsset ? '-gz' : '') + '"'
+      const { buf, etag } = asset
       if (req.headers['if-none-match'] === etag) {
         res.writeHead(304, { ...CORS, ...ISOLATION, etag, 'cache-control': 'no-cache' })
         res.end()
         return
       }
       const mime = name.endsWith('.wasm') ? 'application/wasm' : 'text/javascript; charset=utf-8'
-      const headers = { ...CORS, ...ISOLATION, 'content-type': mime, 'content-length': String(asset.byteLength), 'cache-control': 'no-cache', vary: 'accept-encoding', etag }
+      const headers = { ...CORS, ...ISOLATION, 'content-type': mime, 'content-length': String(buf.byteLength), 'cache-control': 'no-cache', vary: 'accept-encoding', etag }
       if (gzAsset) headers['content-encoding'] = 'gzip'
       res.writeHead(200, headers)
-      res.end(req.method === 'HEAD' ? undefined : asset)
+      res.end(req.method === 'HEAD' ? undefined : buf)
       return
     }
     if ((req.method === 'GET' || req.method === 'HEAD') && url.pathname === '/v1/blob' && state.node?.blobServer) {
@@ -523,14 +580,20 @@ export function createApi (state) {
       status = err.status || 400
       payload = { error: err.message }
     }
-    res.writeHead(status, { ...CORS, 'content-type': 'application/json' })
+    // Reads of public state are open to players on other origins; writes and the owner's routes are not.
+    const cors = isWrite(req) || ownerPath(url.pathname) ? CORP : CORS
+    res.writeHead(status, { ...cors, 'content-type': 'application/json' })
     res.end(JSON.stringify(payload))
   }
   const srv = createServer(handle)
 
+  // One closed or broken client must not stop the others' notifications.
   srv.notify = (event = 'update') => {
     const frame = `data: ${JSON.stringify({ event })}\n\n`
-    for (const res of sse) res.write(frame)
+    for (const res of sse) {
+      if (res.destroyed || res.writableEnded) { sse.delete(res); continue }
+      try { res.write(frame) } catch { sse.delete(res) }
+    }
   }
   srv.once('close', () => {
     for (const res of sse) res.end()

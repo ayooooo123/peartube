@@ -1,6 +1,6 @@
 import b4a from 'b4a'
 import hypercoreCrypto from 'hypercore-crypto'
-import { cleanText, decodeOp, describeEntry, formatWatchUri, isSystemViewKey, parseUri } from '../protocol.js'
+import { HEX64, cleanText, decodeOp, describeEntry, formatWatchUri, isSystemViewKey, parseUri, str } from '../protocol.js'
 import { applied } from './channel.js'
 
 export function createCatalog (ctx) {
@@ -125,6 +125,9 @@ export function createCatalog (ctx) {
     // Deduplicate across channels/writers synchronously for the 99.9% uncached/per-video fast path,
     // only awaiting legacy shared-slot slice counts when actually present on disk.
     const files = new Map()
+    // The same bytes in separate cores (two uploads of one file), public ones only: the blob server can read any of
+    // them for the others (`setAlternates`).
+    const copies = new Map() // `sha256:size` -> Map<blobsHex, { blobs, blob }>
     const rank = r => {
       const p = r.key.split('/')
       return [!r.locked ? 1 : 0, r.local ? 1 : 0, r.cachedBytes, r.key.endsWith(':0') ? 1 : 0, p[p.length - 2] === r.source ? 1 : 0]
@@ -158,7 +161,7 @@ export function createCatalog (ctx) {
         title: cleanText(entry.title, entry.id),
         size: entry.size,
         sha256: entry.sha256,
-        local: Boolean(owned) || (ctx.blobs.slotSet.has(entry.blobs) && cached >= entry.size),
+        local: Boolean(owned) || ((ctx.blobs.slotSet.has(entry.blobs) || ctx.blobs.isKept(entry.blobs)) && cached >= entry.size),
         cachedBytes: cached,
         private: isPrivateEntry,
         epoch: entry.epoch || 0,
@@ -168,6 +171,15 @@ export function createCatalog (ctx) {
       }
       const fk = `${rec.id}/${rec.sha256}`
       if (!files.has(fk) || better(rec, files.get(fk))) files.set(fk, rec)
+      if (!isPrivateEntry && !entry.epoch && str(entry.sha256, HEX64)) {
+        const ck = `${entry.sha256}:${entry.size}`
+        if (!copies.has(ck)) copies.set(ck, new Map())
+        const group = copies.get(ck)
+        if (group.size < 8 || group.has(entry.blobs)) group.set(entry.blobs, { blobs: entry.blobs, blob: entry.blob })
+      }
+    }
+    for (const group of copies.values()) {
+      if (group.size > 1) ctx.blobs.setAlternates([...group.values()])
     }
 
     return [...files.values()]

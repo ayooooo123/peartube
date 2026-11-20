@@ -161,6 +161,13 @@ export const page = `<!doctype html>
   .rows { display: flex; flex-direction: column; }
   .row-item { display: flex; gap: 12px; align-items: center; padding: 12px 0; border-top: 1px solid var(--line); }
   #detail .meta { white-space: normal; font-size: 13px; line-height: 1.5; }
+  .file-info { display: grid; gap: 6px; margin-top: 16px; padding-top: 12px; border-top: 1px solid var(--line); font-size: 13px; line-height: 1.5; }
+  .rows .file-info { margin-top: 0; padding: 0 0 12px; border-top: 0; }
+  .info-row { display: grid; grid-template-columns: 88px minmax(0, 1fr); gap: 12px; }
+  .info-row > :first-child { color: var(--dim); }
+  .info-row > :last-child { overflow-wrap: anywhere; }
+  .info-peer { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .info-peer code { font-family: ui-monospace, Menlo, monospace; font-size: 12px; color: var(--dim); }
   .bar-track { height: 3px; background: var(--raised); border-radius: 2px; margin-top: 10px; overflow: hidden; }
   .bar-track > div { height: 100%; background: var(--brand); border-radius: 2px; transition: width var(--t-base) var(--ease); }
   .tag { font-size: 11.5px; padding: 3px 9px; border-radius: var(--r-pill); background: var(--raised); color: var(--dim); white-space: nowrap; font-weight: 600; letter-spacing: .01em; }
@@ -327,16 +334,13 @@ export const page = `<!doctype html>
         </div>
       </form>
       <div class="chips" role="group" aria-label="More ways to add">
-        <button class="chip" type="button" data-opens="folderForm" aria-expanded="false">Import a folder</button>
+        <button class="chip" type="button" id="folderChip" data-opens="folderForm" aria-expanded="false" hidden>Import folder</button>
         <button class="chip" type="button" data-opens="feedForm" aria-expanded="false">Mirror a catalog</button>
         <button class="chip" type="button" data-opens="copyForm" aria-expanded="false">Copy a channel</button>
       </div>
       <form id="folderForm" class="panel" hidden>
-        <div class="field">
-          <label for="folderInput">Folder on the relay</label>
-          <div class="row"><input class="grow" id="folderInput" type="text" spellcheck="false" placeholder="/data/import" required><button class="btn primary" type="submit">Import</button></div>
-          <span class="hint" id="folderHint">New videos in this folder are added automatically.</span>
-        </div>
+        <div class="row"><button class="btn primary" type="submit">Scan import folder</button></div>
+        <span class="hint">New videos in the relay’s import folder are added automatically.</span>
       </form>
       <form id="feedForm" class="panel" hidden>
         <div class="field">
@@ -736,7 +740,7 @@ for (const chip of document.querySelectorAll('[data-opens]')) {
       const open = other === chip && other.getAttribute('aria-expanded') !== 'true'
       other.setAttribute('aria-expanded', String(open))
       $(other.dataset.opens).hidden = !open
-      if (open) $(other.dataset.opens).querySelector('input').focus()
+      if (open) $(other.dataset.opens).querySelector('input, button').focus()
     }
     $('preview').hidden = true
     say('addMsg', '')
@@ -828,13 +832,12 @@ function renderPreview (url, r) {
   p.hidden = false
 }
 
+// The import folder is the relay host's (PEARTUBE_WATCH_DIR); the page only asks for a scan and never sees its path.
 $('folderForm').onsubmit = async ev => {
   ev.preventDefault()
-  const dir = $('folderInput').value.trim()
   await act(ev.submitter, async () => {
-    if (sval('watchDir') !== dir) await saveSettings({ watchDir: dir })
-    await api('/v1/plugins/watch-dir/run', { body: { dir } })
-    say('addMsg', 'Importing from ' + dir + '. New files there are added automatically.')
+    const r = await api('/v1/plugins/watch-dir/run', { body: {} })
+    say('addMsg', r.skipped ? 'This relay has no import folder.' : r.busy ? 'A scan is already running.' : 'Scanned the import folder: ' + plural(r.ingested || 0, 'new video', 'new videos') + '.')
     refresh()
   }, 'addMsg')
 }
@@ -852,8 +855,6 @@ function renderFeeds () {
   const feeds = sval('feeds') || []
   $('feedList').replaceChildren(...feeds.map(f => h('div', { class: 'entry' }, h('span', null, f.label),
     h('button', { class: 'btn quiet', onclick: e => act(e.currentTarget, async () => { await saveSettings({ feeds: feeds.filter(x => x !== f).map(x => x.ref) }); renderFeeds() }) }, 'Unfollow'))))
-  const dir = sval('watchDir')
-  if (dir && !$('folderInput').value) $('folderInput').value = dir
 }
 $('copyForm').onsubmit = async ev => {
   ev.preventDefault()
@@ -868,23 +869,26 @@ $('copyForm').onsubmit = async ev => {
 }
 
 // ---- Library: jobs and entries
-const JOB_TEXT = { queued: 'Waiting', running: 'Downloading', announcing: 'Publishing', done: 'Added', failed: 'Failed', cancelled: 'Cancelled' }
+// Copying: the file is already in a followed channel, so the relay takes that copy from peers instead of downloading.
+const JOB_TEXT = { queued: 'Waiting', copying: 'Copying from peers', running: 'Downloading', announcing: 'Publishing', done: 'Added', failed: 'Failed', cancelled: 'Cancelled' }
 function renderJobs () {
   const recent = Date.now() - 6 * 3600_000
   const jobs = S.jobs.filter(j => j.status !== 'done' || j.created > recent).sort((a, b) => b.created - a.created).slice(0, 20)
   $('jobsWrap').hidden = !jobs.length
   $('jobCount').textContent = jobs.length ? String(jobs.length) : ''
   $('jobs').replaceChildren(...jobs.map(j => {
-    const active = j.status === 'queued' || j.status === 'running' || j.status === 'announcing'
+    const active = j.status === 'queued' || j.status === 'copying' || j.status === 'running' || j.status === 'announcing'
+    const moving = j.status === 'running' || j.status === 'copying'
     const pct = j.total ? Math.min(100, Math.round((j.bytes || 0) / j.total * 100)) : null
-    const status = j.status === 'running' && j.bytes != null ? (pct != null ? 'Downloading ' + pct + '% of ' + size(j.total) : 'Downloading · ' + size(j.bytes)) : JOB_TEXT[j.status] || j.status
+    const verb = j.status === 'copying' ? 'Copying from peers' : 'Downloading'
+    const status = moving && j.bytes != null ? (pct != null ? verb + ' ' + pct + '% of ' + size(j.total) : verb + ' · ' + size(j.bytes)) : JOB_TEXT[j.status] || j.status
     const tagClass = j.status === 'done' ? 'tag ok' : j.status === 'failed' ? 'tag bad' : 'tag'
     return h('div', { class: 'item job' },
       h('div', { class: 'info' },
         h('div', { class: 'name' }, j.title || 'Untitled'),
         h('div', { class: 'meta' }, h('span', { class: tagClass }, status), j.status === 'done' && j.size ? ' ' + size(j.size) : ''),
         j.error && j.status === 'failed' ? h('div', { class: 'meta err' }, j.error) : null,
-        j.status === 'running' ? h('div', { class: 'bar-track' }, h('div', { style: 'width:' + (pct == null ? 100 : pct) + '%' })) : null),
+        moving ? h('div', { class: 'bar-track' }, h('div', { style: 'width:' + (pct == null ? 100 : pct) + '%' })) : null),
       h('div', { class: 'acts' }, h('button', { class: 'btn quiet', onclick: e => act(e.currentTarget, async () => { await api('/v1/jobs/' + j.jobId, { method: 'DELETE' }); refresh() }) }, active ? 'Cancel' : 'Dismiss')))
   }))
 }
@@ -1032,6 +1036,13 @@ let libSignature = ''
 const KINDS = [['all', 'All'], ['movie', 'Movies'], ['show', 'Shows'], ['video', 'Videos']]
 function renderLibrary (force) {
   renderJobs()
+  // The scan is offered only on a relay whose host set an import folder.
+  const watching = Boolean(plugin('watch-dir').watching)
+  $('folderChip').hidden = !watching
+  if (!watching && !$('folderForm').hidden) {
+    $('folderForm').hidden = true
+    $('folderChip').setAttribute('aria-expanded', 'false')
+  }
   const all = libraryTiles()
   const resume = resumeTiles(all)
   renderHero(resume)
@@ -1117,6 +1128,7 @@ function openDetail (key) {
   detailSeason = null
   renderDetail()
   if (!$('detail').open) $('detail').showModal()
+  if (!infoTimer) infoTimer = setInterval(pollInfo, 3000)
 }
 function castButton (e) {
   const tvs = (S.cast && S.cast.receivers) || []
@@ -1159,22 +1171,132 @@ function deleteBtn (e, quiet) {
     await refresh()
   }) }, 'Delete')
 }
-function fileRow (label, e) {
+function fileRow (label, e, withHealth) {
   const from = sourceName(e.source)
   const dlName = /^S\\d+E\\d+$/i.test(label) && e.title && !/s\\d+e\\d+/i.test(e.title) ? e.title + ' ' + label : (e.title || label)
   const accessNote = e.locked ? 'Subscriber pass needed' : (e.private ? 'Subscribers only' : '')
-  return h('div', { class: 'row-item' },
-    h('div', { class: 'grow' }, h('div', { class: 'label' }, label), h('div', { class: 'meta' }, [size(e.size), where(e), accessNote, from && 'from ' + from].filter(Boolean).join(' · '))),
+  const shown = infoShown.has(e.key)
+  return h('div', null, h('div', { class: 'row-item' },
+    h('div', { class: 'grow' }, h('div', { class: 'label' }, label, withHealth ? healthTag(e) : null), h('div', { class: 'meta' }, [size(e.size), where(e), accessNote, from && 'from ' + from].filter(Boolean).join(' · '))),
     h('div', { class: 'acts' },
       e.locked ? null : h('button', { class: 'btn primary', 'data-play': true, onclick: () => play(e) }, 'Play'),
       e.locked ? null : castButton(e),
       e.locked ? null : downloadBtn(e, true, dlName),
       h('button', { class: 'btn quiet', title: e.magnetUrl, onclick: () => copyText(e.magnetUrl) }, 'Copy link'),
-      deleteBtn(e, true)))
+      h('button', { class: 'btn quiet', 'aria-expanded': String(shown), onclick: () => { shown ? infoShown.delete(e.key) : infoShown.add(e.key); renderDetail() } }, 'File info'),
+      deleteBtn(e, true))),
+  shown ? infoPanel(e) : null)
+}
+
+// ---- Library: what a file holds and how well it streams here now (GET /v1/entries/info), redrawn every 3 s while
+// the sheet is open. Episodes and versions open theirs with File info; a single file shows it at once, and each
+// version of a film carries its verdict on its row. The relay reads a header only for files it holds or has open;
+// for any other, Check sources asks the network on purpose, which tells peers the title is wanted, as Play does.
+const infoData = new Map() // entry key -> last reply, or { error }
+const infoEntries = new Map() // entry key -> the entry it describes
+const infoBusy = new Set()
+const infoShown = new Set()
+const infoWatched = new Set() // entry keys polled while the sheet is open: open panels and a film's versions
+let infoTimer = 0
+const CHANNELS = { 1: 'Mono', 2: 'Stereo', 6: '5.1', 8: '7.1' }
+function langName (code) {
+  if (!code) return ''
+  try { return new Intl.DisplayNames([navigator.language || 'en'], { type: 'language' }).of(code) || code } catch { return code }
+}
+const trackLine = t => [t.codec, t.channels ? CHANNELS[t.channels] || t.channels + ' channels' : '', langName(t.language), t.name].filter(Boolean).join(' · ')
+function bitrate (bytes, secs) {
+  const kbps = secs > 0 ? bytes * 8 / secs / 1000 : 0
+  return !kbps ? '' : kbps >= 1000 ? (kbps / 1000).toFixed(1) + ' Mbps' : Math.round(kbps) + ' kbps'
+}
+// Download speed over the file's own bitrate: 1.5 or more keeps ahead of playback.
+function headroom (e, d) {
+  const secs = d.media && d.media.duration
+  return d.health && d.health.rateBps > 0 && secs > 0 ? d.health.rateBps / (e.size / secs) : 0
+}
+function verdict (e, d) {
+  const x = d && d.health
+  if (!x) return null
+  if (saved(e)) return ['Plays from this relay', 'ok']
+  const r = headroom(e, d)
+  if (r) return r >= 1.5 ? ['Plays smoothly', 'ok'] : r >= 1 ? ['May buffer', 'warn'] : ['Too slow to play', 'bad']
+  if (x.wholePeers) return ['Full copy on ' + plural(x.wholePeers, 'peer', 'peers'), 'ok']
+  if (x.peers) return ['Only partial copies connected', 'warn']
+  if (x.open) return ['No peers for this copy', 'bad']
+  return ['Not checked', '']
+}
+function healthTag (e) {
+  infoEntries.set(e.key, e)
+  infoWatched.add(e.key)
+  const tag = h('span', { class: 'tag', 'data-health': e.key, style: 'margin-left:8px' })
+  paintTag(tag, e, infoData.get(e.key))
+  if (!infoData.has(e.key)) loadInfo(e.key)
+  return tag
+}
+function paintTag (tag, e, d) {
+  const v = verdict(e, d)
+  tag.hidden = !v
+  if (v) { tag.textContent = v[0]; tag.className = 'tag' + (v[1] ? ' ' + v[1] : '') }
+}
+function infoRows (e, d) {
+  if (!d) return [h('div', { class: 'meta' }, 'Reading file details…')]
+  if (d.error) return [h('div', { class: 'meta err' }, d.error)]
+  const rows = []
+  const row = (label, ...value) => rows.push(h('div', { class: 'info-row' }, h('span', null, label), h('span', null, ...value)))
+  const m = d.media
+  if (d.mediaDeferred) {
+    row('Format', 'Not read yet: this relay does not hold the file',
+      d.health ? h('button', { class: 'btn quiet', style: 'margin-left:8px', title: 'Tells peers this title is wanted, as Play does', onclick: ev => act(ev.currentTarget, () => loadInfo(e.key, true)) }, 'Check sources') : null)
+  } else if (m === undefined) row('Format', 'Reading the file header…')
+  else if (!m) row('Format', 'Not recognised')
+  else {
+    row('Format', [m.container.toUpperCase(), duration(m.duration), bitrate(e.size, m.duration)].filter(Boolean).join(' · '))
+    for (const v of m.video) row('Video', [v.codec, v.width && v.height ? v.width + '×' + v.height : '', v.hdr].filter(Boolean).join(' · '))
+    m.audio.forEach((a, i) => row(m.audio.length > 1 ? 'Audio ' + (i + 1) : 'Audio', trackLine(a)))
+    if (m.subtitles.length) row('Subtitles', m.subtitles.slice(0, 8).map(trackLine).join(', ') + (m.subtitles.length > 8 ? ', +' + (m.subtitles.length - 8) + ' more' : ''))
+  }
+  const x = d.health
+  if (!x) return rows
+  const v = verdict(e, d)
+  const r = headroom(e, d)
+  row('Health', h('span', { class: 'tag' + (v[1] ? ' ' + v[1] : '') }, v[0]),
+    x.rateBps ? ' ' + [rate(x.rateBps) + ' from ' + plural(x.sources, 'peer', 'peers'), r ? r.toFixed(1) + '× the bitrate' : ''].filter(Boolean).join(' · ') : '')
+  if (x.open) row('Peers', [x.peers + ' connected', x.wholePeers && x.wholePeers + ' with the whole file', x.lanPeers && x.lanPeers + ' on LAN', x.shared && 'counted on a shared older store'].filter(Boolean).join(' · '))
+  if (x.otherCopies) row('Copies', 'Same file in ' + plural(x.otherCopies, 'other swarm', 'other swarms') + (x.usingOtherCopy ? ' · playing from one now' : ' · used when this one has no peers'))
+  return rows
+}
+function infoPanel (e) {
+  infoEntries.set(e.key, e)
+  infoWatched.add(e.key)
+  const box = h('div', { class: 'file-info', 'data-info': e.key }, infoRows(e, infoData.get(e.key)))
+  if (!infoData.has(e.key)) loadInfo(e.key)
+  return box
+}
+async function loadInfo (key, read) {
+  if (infoBusy.has(key) && !read) return
+  infoBusy.add(key)
+  try {
+    infoData.set(key, await api('/v1/entries/info?key=' + encodeURIComponent(key) + (read ? '&read=1' : '')))
+  } catch (err) {
+    infoData.set(key, { error: err.message })
+  } finally {
+    infoBusy.delete(key)
+  }
+  const e = infoEntries.get(key)
+  for (const box of $('detailBody').querySelectorAll('[data-info]')) {
+    if (box.dataset.info === key) box.replaceChildren(...infoRows(e, infoData.get(key)))
+  }
+  for (const tag of $('detailBody').querySelectorAll('[data-health]')) {
+    if (tag.dataset.health === key) paintTag(tag, e, infoData.get(key))
+  }
+}
+function pollInfo () {
+  if (document.hidden) return
+  for (const key of infoWatched) loadInfo(key)
 }
 function renderDetail () {
   const t = libraryTiles().find(x => x.key === detailKey)
   const box = $('detailBody')
+  infoWatched.clear()
   if (!t) { box.replaceChildren(h('div', { class: 'empty' }, 'This title is no longer in the library.')); return }
   const head = h('div', { class: 'detail-head' },
     posterBox(t.imdb ? '/v1/poster/' + t.imdb : null, t.title),
@@ -1189,7 +1311,8 @@ function renderDetail () {
       : null
     body = [pick, h('div', { class: 'rows' }, t.items.filter(i => i.season === detailSeason).map(i => fileRow('S' + String(i.season).padStart(2, '0') + 'E' + String(i.episode).padStart(2, '0'), i.e)))]
   } else if (t.items.length > 1) {
-    body = [h('div', { class: 'rows' }, t.items.map((i, n) => fileRow('Version ' + (n + 1), i.e)))]
+    // A film's versions are few, so each row shows its verdict; a show's episodes check only under File info.
+    body = [h('div', { class: 'rows' }, t.items.map((i, n) => fileRow('Version ' + (n + 1), i.e, n < 8)))]
   } else {
     const e = t.items[0].e
     const from = sourceName(e.source)
@@ -1200,12 +1323,14 @@ function renderDetail () {
         e.locked ? null : castButton(e),
         e.locked ? null : downloadBtn(e),
         copyBtn('Copy link', e.magnetUrl),
-        deleteBtn(e, false))]
+        deleteBtn(e, false)),
+      infoPanel(e)]
   }
   box.replaceChildren(head, ...body)
 }
 $('detailClose').onclick = () => $('detail').close()
 $('detail').addEventListener('click', ev => { if (ev.target === $('detail')) $('detail').close() })
+$('detail').addEventListener('close', () => { clearInterval(infoTimer); infoTimer = 0; infoShown.clear(); infoWatched.clear() })
 
 // ---- Channels
 $('followForm').onsubmit = async ev => {
@@ -1487,7 +1612,6 @@ const GROUPS = [
     { key: 'directory', label: 'List followed channels in my directory', hint: 'Lets others discover the channels you follow.' },
     { key: 'acquireConcurrency', label: 'Concurrent downloads', hint: 'Each page download runs a ubit process; higher costs CPU.', ph: '4' },
     { key: 'cinemetaUrl', label: 'Title lookup service', hint: 'Matches titles to IMDb ids; supplies posters and backdrops.', ph: 'https://v3-cinemeta.strem.io' },
-    { key: 'watchDir', label: 'Import folder', hint: 'Absolute path on the relay; new files are added automatically.', ph: '/data/import' },
     { key: 'feeds', label: 'Mirrored catalogs (feeds)', hint: 'JSON list of titles and sources; another relay’s /v1/entries works.', ph: 'https://example.org/catalog.json' },
     // Only on relays with videos in the old format (or with the switch already on), like the Storage card.
     { key: 'rechunk', label: 'Convert old-format videos at every start', hint: 'Moves videos from the old shared storage into their own files.', when: () => plugin('blob-rechunk').running || plugin('blob-rechunk').remaining > 0 || sval('rechunk') }

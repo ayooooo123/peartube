@@ -89,7 +89,7 @@ export async function createMirrorHost ({
       async has ({ id = null, sha256 = null } = {}) {
         if (acquirer) {
           const active = acquirer.list().some(j =>
-            (j.status === 'queued' || j.status === 'running' || j.status === 'announcing' || j.status === 'done') &&
+            (j.status === 'queued' || j.status === 'copying' || j.status === 'running' || j.status === 'announcing' || j.status === 'done') &&
             ((id && j.id === id) || (sha256 && j.sha256 === sha256))
           )
           if (active) return true
@@ -97,9 +97,11 @@ export async function createMirrorHost ({
         const entries = await node.search(id || null)
         return entries.some(e => (id ? e.id === id : true) && (sha256 ? e.sha256 === sha256 : true) && (e.local || !sha256))
       },
-      enqueue ({ id, title, source, channel = mirrorChannel }) {
+      // `existing`: the announce of a public copy another followed channel already publishes; the job copies that
+      // core from peers and falls back to `source` (src/acquire.js `copyExisting`).
+      enqueue ({ id, title, source, channel = mirrorChannel, existing = null }) {
         if (!acquirer) throw new Error('HTTP acquirer unavailable on this peer')
-        const job = acquirer.add({ id, title, source, channel, plugin: pluginName })
+        const job = acquirer.add({ id, title, source, channel, plugin: pluginName, existing })
         onchange?.()
         return job
       },
@@ -165,7 +167,7 @@ export async function createMirrorHost ({
       const list = acquirer ? acquirer.list() : []
       return {
         totalJobs: list.length,
-        activeJobs: list.filter(j => j.status === 'queued' || j.status === 'running' || j.status === 'announcing').length,
+        activeJobs: list.filter(j => j.status === 'queued' || j.status === 'copying' || j.status === 'running' || j.status === 'announcing').length,
         doneJobs: list.filter(j => j.status === 'done').length
       }
     }
@@ -243,11 +245,14 @@ export async function createMirrorHost ({
     }
   }
 
+  // The folder comes only from the host (PEARTUBE_WATCH_DIR), never from a run's payload: the API must not be able to
+  // point the relay at another folder on its disk.
   register({
     name: 'watch-dir',
-    description: 'Ingests media files dropped into a local folder (PEARTUBE_WATCH_DIR) once, tracking fingerprints in mirror-watch.json',
-    async run (payload, ctx) {
-      return scanFolder(payload?.dir || watchDir, ctx)
+    description: 'Ingests media files dropped into the import folder (PEARTUBE_WATCH_DIR) once, tracking fingerprints in mirror-watch.json',
+    async run (_payload, ctx) {
+      if (!watchDir) return { skipped: true, reason: 'watch_dir_not_configured', scanned: 0, ingested: 0, items: [] }
+      return scanFolder(watchDir, ctx)
     },
     async poll (ctx) {
       if (watchDir) return scanFolder(watchDir, ctx)
@@ -262,6 +267,19 @@ export async function createMirrorHost ({
     let enqueued = 0
     let skipped = 0
     const jobs = []
+    // The same file claimed by a followed channel (same sha256): the copy job copies that core rather than
+    // downloading, and hashes it against this feed's digest before announcing it. `has` above answers only for
+    // copies this relay wrote or has a job for, never for another channel's claim.
+    let bySha = null
+    const copyOf = async sha256 => {
+      if (!bySha) {
+        bySha = new Map()
+        for (const e of await ctx.node.search(null)) if (e.sha256 && !e.private && !e.locked && !e.epoch) bySha.set(e.sha256, e)
+      }
+      const e = bySha.get(sha256)
+      const op = e ? await ctx.node.findEntry(e.key).catch(() => null) : null
+      return op?.blobs && op.blob && !op.wrappedKey && !op.epoch ? { ...op, key: e.key } : null
+    }
     for (const item of items) {
       if (!item || typeof item !== 'object') continue
       const id = String(item.id || '').toLowerCase()
@@ -274,7 +292,8 @@ export async function createMirrorHost ({
         id,
         title: item.title || id,
         source: { url, headers: { ...headers, ...(item.source?.headers || item.headers) } },
-        channel: mirrorChannel
+        channel: mirrorChannel,
+        existing: sha256 ? await copyOf(sha256) : null
       })
       enqueued++
       jobs.push(job)
@@ -864,18 +883,11 @@ export async function createMirrorHost ({
     }))
   }
 
-  // Live settings: the watch folder, followed feeds, and replication take effect without a restart.
-  function configure ({ watchDir: dir, feeds: nextFeeds, replicate: rep, replicateMinFreeBytes: minFree, replicateMbps: mbps, mediaCheck: check } = {}) {
+  // Live settings: followed feeds and replication take effect without a restart. The import folder is fixed at start.
+  function configure ({ feeds: nextFeeds, replicate: rep, replicateMinFreeBytes: minFree, replicateMbps: mbps, mediaCheck: check } = {}) {
     if (check !== undefined && Boolean(check) !== mediaCheckEnabled) {
       mediaCheckEnabled = Boolean(check)
       if (mediaCheckEnabled) run('media-check').catch(() => {})
-    }
-    if (dir !== undefined && dir !== watchDir) {
-      watchDir = dir || null
-      if (watchDir) {
-        mkdirSync(watchDir, { recursive: true })
-        run('watch-dir').catch(() => {})
-      }
     }
     if (Array.isArray(nextFeeds) && JSON.stringify(nextFeeds) !== JSON.stringify(configuredFeeds)) {
       const added = nextFeeds.filter(u => !configuredFeeds.includes(u))

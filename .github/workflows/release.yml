@@ -143,23 +143,62 @@ jobs:
       - if: needs.plan.outputs.android_app != 'rust' || needs.plan.outputs.android_tv != 'rust'
         run: sh worklet/bare-kit.sh arm64-v8a arm64-v8a-v8
       - name: Build Android Phone & TV APKs (app=${{ needs.plan.outputs.android_app }}, tv=${{ needs.plan.outputs.android_tv }})
+        id: apk
         working-directory: android
+        env:
+          KEYSTORE_B64: ${{ secrets.PEARTUBE_ANDROID_KEYSTORE_B64 }}
+          STORE_PW: ${{ secrets.PEARTUBE_ANDROID_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.PEARTUBE_ANDROID_KEY_ALIAS }}
+          KEY_PW: ${{ secrets.PEARTUBE_ANDROID_KEY_PASSWORD }}
+          RELEASE_TAG: ${{ needs.plan.outputs.release_tag }}
         run: |
           ver=$(node -p 'require("../package.json").version')
           mkdir -p ../dist-android
+          has_key=false
+          if [ -n "$KEYSTORE_B64" ] && [ -n "$STORE_PW" ] && [ -n "$KEY_ALIAS" ] && [ -n "$KEY_PW" ]; then
+            has_key=true
+            printf '%s' "$KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/release.jks"
+            mkdir -p "$HOME/.gradle"
+            umask 077
+            {
+              printf 'peartube.keystore=%s\n' "$RUNNER_TEMP/release.jks"
+              printf 'peartube.keystorePassword=%s\n' "$STORE_PW"
+              printf 'peartube.keyAlias=%s\n' "$KEY_ALIAS"
+              printf 'peartube.keyPassword=%s\n' "$KEY_PW"
+            } >> "$HOME/.gradle/gradle.properties"
+            tools=$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -n 1)
+          fi
+          echo "signed=$has_key" >> "$GITHUB_OUTPUT"
           for e in $( [ "${{ needs.plan.outputs.android_app }}" = "both" ] && echo "js rust" || echo "${{ needs.plan.outputs.android_app }}" ); do
             suf=""; [ "$e" = "rust" ] && suf="-rust"
-            ./gradlew --console=plain :app:assembleDebug "-Ppeartube.engine=$e"
-            cp app/build/outputs/apk/debug/app-debug.apk "../dist-android/PearTube-$ver$suf-arm64.apk"
+            if [ "$has_key" = "true" ]; then
+              out="../dist-android/PearTube-$ver$suf-arm64.apk"
+              ./gradlew --console=plain :app:assembleRelease "-Ppeartube.engine=$e"
+              cp app/build/outputs/apk/release/app-release.apk "$out"
+              "$tools/apksigner" verify "$out"
+            else
+              ./gradlew --console=plain :app:assembleDebug "-Ppeartube.engine=$e"
+              cp app/build/outputs/apk/debug/app-debug.apk "../dist-android/PearTube-$ver$suf-debug-arm64.apk"
+            fi
           done
           for e in $( [ "${{ needs.plan.outputs.android_tv }}" = "both" ] && echo "js rust" || echo "${{ needs.plan.outputs.android_tv }}" ); do
             suf=""; [ "$e" = "rust" ] && suf="-rust"
-            ./gradlew --console=plain :tv:assembleDebug "-Ppeartube.engine=$e"
-            cp tv/build/outputs/apk/debug/tv-debug.apk "../dist-android/PearTubeReceiver-$ver$suf-arm64.apk"
+            if [ "$has_key" = "true" ]; then
+              out="../dist-android/PearTubeReceiver-$ver$suf-arm64.apk"
+              ./gradlew --console=plain :tv:assembleRelease "-Ppeartube.engine=$e"
+              cp tv/build/outputs/apk/release/tv-release.apk "$out"
+              "$tools/apksigner" verify "$out"
+            else
+              ./gradlew --console=plain :tv:assembleDebug "-Ppeartube.engine=$e"
+              cp tv/build/outputs/apk/debug/tv-debug.apk "../dist-android/PearTubeReceiver-$ver$suf-debug-arm64.apk"
+            fi
           done
+          rm -f "$RUNNER_TEMP/release.jks" "$HOME/.gradle/gradle.properties"
+      # Debug (.dev) APKs cannot update installed release apps: upload under release-* only when signed, or on artifact-only dispatch.
       - uses: actions/upload-artifact@v4
+        if: steps.apk.outputs.signed == 'true' || needs.plan.outputs.release_tag == ''
         with:
-          name: release-android-arm64
+          name: ${{ steps.apk.outputs.signed == 'true' && 'release-android-arm64' || 'debug-android-arm64' }}
           path: dist-android/*.apk
           if-no-files-found: error
 
@@ -327,9 +366,15 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           cd artifacts
-          sha256sum * > SHA256SUMS
-          if gh release view "${{ needs.plan.outputs.release_tag }}" >/dev/null 2>&1; then
-            gh release upload "${{ needs.plan.outputs.release_tag }}" * --clobber
+          tag="${{ needs.plan.outputs.release_tag }}"
+          sums="SHA256SUMS-${tag#v}.txt"
+          if gh release view "$tag" >/dev/null 2>&1; then
+            gh release download "$tag" -D existing --clobber || true
+            cp -n existing/* . 2>/dev/null || true
+            rm -rf existing SHA256SUMS*
+            sha256sum * > "$sums"
+            gh release upload "$tag" * --clobber
           else
-            gh release create "${{ needs.plan.outputs.release_tag }}" * --generate-notes --verify-tag
+            sha256sum * > "$sums"
+            gh release create "$tag" * --generate-notes --verify-tag
           fi

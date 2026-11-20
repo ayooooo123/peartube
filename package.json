@@ -1,6 +1,6 @@
 {
   "name": "peartube",
-  "version": "0.4.43",
+  "version": "0.4.44",
   "description": "Decentralized CDN and debrid provider on the Holepunch stack",
   "license": "MIT",
   "type": "module",
@@ -13,6 +13,10 @@
     "node:child_process": {
       "bare": "bare-subprocess",
       "default": "node:child_process"
+    },
+    "node:dns": {
+      "bare": "bare-dns",
+      "default": "node:dns"
     },
     "node:events": {
       "bare": "bare-events",
@@ -97,6 +101,7 @@
     "bare": "1.36.0",
     "bare-buffer": "^3.7.1",
     "bare-dgram": "1.1.1",
+    "bare-dns": "^2.3.1",
     "bare-events": "^2.9.1",
     "bare-fs": "^4.7.2",
     "bare-http1": "^4.6.2",

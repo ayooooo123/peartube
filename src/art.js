@@ -3,19 +3,23 @@
 import { request as httpRequest } from 'node:http'
 import { request as httpsRequest } from 'node:https'
 import b4a from 'b4a'
+import { checkUrlHost, guardedLookup, privateUrlsAllowed } from './ssrf.js'
 
 export const CINEMETA_URL = 'https://v3-cinemeta.strem.io'
 
 // A small buffered http(s) request that follows redirects. `maxBytes` bounds what a remote server can make us hold.
-export function send (url, { method = 'GET', headers = {}, timeoutMs = 10_000, maxBytes = Infinity, redirects = 0 } = {}) {
+// Every hop's host is checked (src/ssrf.js); `allowPrivate` defaults to PEARTUBE_ALLOW_PRIVATE_URLS.
+export function send (url, { method = 'GET', headers = {}, timeoutMs = 10_000, maxBytes = Infinity, redirects = 0, allowPrivate = privateUrlsAllowed() } = {}) {
   return new Promise((resolve, reject) => {
     let u
     try { u = new URL(url) } catch { return reject(new Error('Not a valid link')) }
     if (u.protocol !== 'http:' && u.protocol !== 'https:') return reject(new Error('Only http(s) links can be added'))
-    const req = (u.protocol === 'https:' ? httpsRequest : httpRequest)(u, { method, headers: { 'user-agent': 'PearTube', ...headers } }, res => {
+    try { checkUrlHost(u, allowPrivate) } catch (err) { return reject(err) }
+    // A fresh agent: a pooled socket is reused without a lookup, so one an unguarded request left would skip the guard.
+    const req = (u.protocol === 'https:' ? httpsRequest : httpRequest)(u, { method, headers: { 'user-agent': 'PearTube', ...headers }, agent: false, lookup: guardedLookup(allowPrivate) }, res => {
       if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location && redirects < 5) {
         res.resume()
-        resolve(send(new URL(res.headers.location, u).href, { method, headers, timeoutMs, maxBytes, redirects: redirects + 1 }))
+        resolve(send(new URL(res.headers.location, u).href, { method, headers, timeoutMs, maxBytes, redirects: redirects + 1, allowPrivate }))
         return
       }
       const chunks = []

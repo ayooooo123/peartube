@@ -8,13 +8,13 @@
 PearTube is a small, self-hosted media library and CDN on the
 [Holepunch](https://holepunch.to) stack. A relay imports links, stores each video in its own
 Hypercore, and shares the pieces with phones, desktops, TVs and other relays over the DHT — or
-with the relay next door over LAN discovery. The core stays under 1,000 lines; the Holepunch
-modules do the heavy lifting.
+with the relay next door over LAN discovery. The core (`src/index.js`, `src/node/`, `src/protocol.js`,
+`src/apply.js`, `src/mnemonic.js`) is about 3,900 lines; the Holepunch modules do the heavy lifting.
 
 Each identity has one **Channel**. Its owner (and the devices and writers the owner grants)
 publishes; followers have read-only copies and still help seed the catalog and the pieces.
 
-> **Status:** 0.4.42 is a working release, not a polished product. Browser playback, the relay
+> **Status:** 0.4.44 is a working release, not a polished product. Browser playback, the relay
 > UI, LAN discovery and both apps have been exercised on real hardware; everything else is
 > described honestly under [Known limitations](#known-limitations). Read that before trusting it
 > with anything you cannot lose.
@@ -65,7 +65,7 @@ publishes; followers have read-only copies and still help seed the catalog and t
 1. **Unified Channels.** Every account or relay is a single [Autobee](https://github.com/holepunchto/autobee)
    Channel (`peartube://channel/<key>`) with a deterministic ACL `apply`, fast-forwarding only onto views the owner's own devices stamp:
    followers replicate and seed read-only without appending, linked devices authenticate via a
-   fork-proof 12-word BIP-39 recovery phrase (`claim`) or explicit writer grants (`owner`/`mod`/`writer`),
+   fork-proof 12-word recovery phrase (`claim`) or explicit writer grants (`owner`/`mod`/`writer`),
    owners and moderators can delete any entry or revoke writers, and optional `peartube://access/…`
    epoch passes encrypt per-video Hypercores so blind relays seed ciphertext while canceled subscribers
    lose access to new epochs.
@@ -150,7 +150,7 @@ When an AI coding/ops agent (Codex CLI, Claude Code, OpenCode, etc.) installs `p
    - **OpenAI-hosted Codex Cloud VMs (`Work in > Cloud`):** cannot host a live public or LAN relay. Their HTTP/HTTPS-only egress proxy blocks HyperDHT/UDX UDP, no inbound ports exist, and the VM hibernates between turns. Use loopback-only tests against `createTestnet()` (`PEARTUBE_BOOTSTRAP=127.0.0.1:<port>`), call an external relay's HTTPS `/v1/acquire`, or deploy the container to a real VPS.
 2. **Settings before starting.** An unattended install sets these as env vars; each one is the starting value of its setting in the UI.
    - On a LAN host set `PEARTUBE_LAN_HOST=$HOST_IP` (the reachable LAN IPv4). Players stream through `/v1/blob` on the API port, so no stream address or second port is needed.
-   - Generate `PEARTUBE_API_TOKEN=$(openssl rand -hex 32)` on any non-loopback network (`GET` playback/Stremio/M3U routes stay open; `POST`/`PUT`/`DELETE` `/v1/*` and `/v1/settings` require `Authorization: Bearer <token>`). Keep `PEARTUBE_STORAGE` at mode `0700` and env files at `0600`.
+   - Generate `PEARTUBE_API_TOKEN=$(openssl rand -hex 32)` on any non-loopback network (`GET` playback/Stremio/M3U routes stay open; `POST`/`PUT`/`DELETE` `/v1/*` and `/v1/settings` require `Authorization: Bearer <token>` and are accepted only from the relay's own page or from no page at all). Keep `PEARTUBE_STORAGE` at mode `0700` and env files at `0600`.
    - Leave `PEARTUBE_CHANNEL` unset to found a new channel, or pass an existing `PEARTUBE_CHANNEL`/`PEARTUBE_SOURCES` (add `PEARTUBE_REPLICATE=1` to mirror and seed remote blobs). The key is saved in `settings.json` on first start, so later starts need no env var.
 3. **Install and detach as a persistent service.**
 
@@ -245,7 +245,8 @@ When an AI coding/ops agent (Codex CLI, Claude Code, OpenCode, etc.) installs `p
    (`peartube://channel/<status.channel>`), and where `PEARTUBE_API_TOKEN` is stored.
 
 Every variable except `PEARTUBE_STORAGE`, `PEARTUBE_API_HOST`, `PEARTUBE_API_PORT`,
-`PEARTUBE_API_TOKEN`, `PEARTUBE_SOURCES`, `PEARTUBE_PLUGINS_DIR` and the `PEARTUBE_PRIVATE_RELAY*`
+`PEARTUBE_API_TOKEN`, `PEARTUBE_SOURCES`, `PEARTUBE_PLUGINS_DIR`, `PEARTUBE_WATCH_DIR`,
+`PEARTUBE_ALLOW_PRIVATE_URLS` and the `PEARTUBE_PRIVATE_RELAY*`
 guard mode is also a setting in the web UI. An env var is that setting's starting value; a change
 saved in the UI overrides it until you put the env value back.
 
@@ -285,10 +286,15 @@ whole import, which carries on afterwards. The peer port and the guard port can'
 same fixed port. Settings are accepted only from the relay's own page, never cross-origin.
 
 A relay without `PEARTUBE_API_TOKEN` already trusts its local network: devices on private
-addresses may change settings, while public clients get `403`. Its founded channel key is
+addresses reached by IP literal, `localhost` or `.local` may change settings and use every other
+write route, while public clients and DNS-rebound `Host` headers get `403`. With or without a token,
+a write (`POST`/`PUT`/`DELETE` on `/v1/*`) that comes from another site's page (an `Origin` that is
+not the relay's own) gets `403`, and only `GET`/`HEAD` replies carry `Access-Control-Allow-Origin: *`
+for players, Stremio and M3U readers. Its founded channel key is
 remembered as the **Primary channel key** setting on first start, so following a channel cannot
 silently replace the relay's own library. A `settings.json` from before channels has its
 `tracker` value moved to `channel`, and its `streamHost`/`streamPort` dropped, when the relay starts.
+A saved `watchDir` is dropped too: the import folder is set only by `PEARTUBE_WATCH_DIR`.
 
 | Variable | Default | Meaning |
 |---|---|---|
@@ -309,7 +315,7 @@ silently replace the relay's own library. A `settings.json` from before channels
 | `PEARTUBE_PUBLISH_CHANNEL` | `1` on relays | List this relay's saved videos in its own channel without duplicating media (`0` disables) |
 | `PEARTUBE_DIRECTORY` | off | `1`: publish a list of subscribed channels so peers can discover them. Turning it off unlists the ones it listed (kept in private `directory.json`); sources added with **Add to directory** stay |
 | `PEARTUBE_GLOBAL_SEARCH` | off | `1`: answer other nodes' global searches with the public media this relay holds whole. The `media-check` plugin reads each held file's first block once (1 MiB/s at most, 0.1 MiB/s while viewers are served) and keeps the verdict in private `media-checked.json`; a file is offered only once it is checked |
-| `PEARTUBE_WATCH_DIR` | none | Folder (e.g. `/data/import`) imported once per file |
+| `PEARTUBE_WATCH_DIR` | none | Folder (e.g. `/data/import`) imported once per file. Env only: the API and UI can ask for a scan of it (Library → Import folder), never name another folder |
 | `PEARTUBE_MIRROR_FEEDS` | none | Comma-separated JSON feed or peer `/v1/entries` URLs to import |
 | `PEARTUBE_REPLICATE` | off | `1` (or keys) to P2P-replicate remote blobs without duplicating catalog entries |
 | `PEARTUBE_REPLICATE_FREE_GB` | `20` | Free disk GiB kept in reserve while replicating |
@@ -326,6 +332,7 @@ silently replace the relay's own library. A `settings.json` from before channels
 | `UBIT_BIN` | bundled `bare-ubit` | Override path or binary name for page link metadata and downloads |
 | `PEARTUBE_ALLOWED_PEERS` | none | Comma-separated 64-hex Noise public keys allowed through the swarm firewall |
 | `PEARTUBE_API_TOKEN` | none | Bearer token required on mutating `/v1/*` routes and `/v1/settings` |
+| `PEARTUBE_ALLOW_PRIVATE_URLS` | off | `1`: let direct downloads, feeds and link identification fetch from loopback and private (LAN, CGNAT, ULA) addresses. Off, those are refused at every redirect and after DNS resolution. Link-local addresses (`169.254.0.0/16`, `fe80::/10`, cloud metadata) are refused either way |
 
 ### Reachability
 
@@ -350,7 +357,7 @@ routing** instead moves the relay's own traffic onto guards and drops them.
 One port serves the UI at `/`, the `/v1` API, video at `/v1/blob`, the Stremio addon and the M3U
 playlist. The node's blob server stays on loopback behind `/v1/blob`.
 Without `PEARTUBE_API_TOKEN` there is no auth, so run an open relay only on a network you trust:
-anyone who can reach it can queue a download of any URL.
+anyone on it can queue a download of any public URL.
 
 The UI has five tabs: **Library** (add and play), **Channels** (your channel and the ones you
 follow), **Sharing** (peers, kept copies, HiveRelays, Stremio and M3U addresses), **TV** (pair
@@ -369,11 +376,12 @@ and control) and **Settings**. Plugins appear only as user intents.
 | `GET/DELETE /v1/jobs[/:id]` | Acquire jobs; sources are never returned. `DELETE` cancels or removes |
 | `GET /v1/status` | Keys, stored bytes, peers and per-transport traffic, `lan`, `privateRouting`, `privateGuard` (`publicKey`, `port`, circuit counts, or `null`), `tokenRequired`, `settingsOpen` |
 | `GET/POST /v1/sources`, `DELETE /v1/sources/:key` | Follow or remove a channel |
-| `POST /v1/open`, `GET /v1/resolve` | Open a `peartube://channel/…`, `peartube://access/…` subscriber pass, receiver pairing or `peartube://watch/…` link |
+| `POST /v1/open` | Open a `peartube://channel/…`, `peartube://access/…` subscriber pass, receiver pairing or `peartube://watch/…` link: follows, saves the pass, pairs or warms the video |
+| `GET /v1/resolve?uri=` | Read-only: what a link asks for (`parseUri`), without following, pairing, saving a pass or warming anything |
 | `POST /v1/cache/clear`, `GET /v1/events` | Clear cached pieces; live SSE updates |
 | `GET /manifest.json`, `/catalog/…`, `/stream/…` | Stremio v3 addon |
 | `GET /v1/playlist.m3u` | M3U8 playlist |
-| `GET /v1/plugins`, `POST /v1/plugins/:name/run`, `POST /v1/mirror` | Import and seeder plugins (`http-acquire`, `channel-backfill`, `blob-rechunk`, `watch-dir`, `feed-mirror`, `p2p-replicate`, `hiverelay-seed`, `media-check`, plus `/data/plugins/*.mjs`) |
+| `GET /v1/plugins`, `POST /v1/plugins/:name/run`, `POST /v1/mirror` | Import and seeder plugins (`http-acquire`, `channel-backfill`, `blob-rechunk`, `watch-dir`, `feed-mirror`, `p2p-replicate`, `hiverelay-seed`, `media-check`, plus `/data/plugins/*.mjs`). `watch-dir` scans only `PEARTUBE_WATCH_DIR` and ignores any folder in the request |
 | `/v1/cast/*` | Pair, play, attach, control and stop TVs; start or manage a local receiver |
 
 Job states: `queued` → `running` (`bytes` of `total`) → `announcing` → `done`, or `failed`/`cancelled`.
@@ -384,7 +392,7 @@ A job is `done` only once its announce is on disk.
 | Capability | How it works |
 |---|---|
 | **Public followers** (`peartube://channel/<key>`) | Strictly read-only (`optimistic: false`); followers replicate and seed catalog + `512 KiB` video blocks without write access |
-| **Multi-device accounts** (12-word phrase or `grantWriter`) | Every device keeps its own random `Corestore` writer core (zero fork risk) and proves ownership via a detached Ed25519 `claim` signed from the 12-word BIP-39 vault (`identity.json`, `0600`) |
+| **Multi-device accounts** (12-word phrase or `grantWriter`) | Every device keeps its own random `Corestore` writer core (zero fork risk) and proves ownership via a detached Ed25519 `claim` signed from the 12-word vault (`identity.json`, `0600`). The phrase uses the BIP-39 English wordlist and checksum, but keys come from domain-separated SHA-256 of the phrase (`src/mnemonic.js`), not BIP-39's PBKDF2-HMAC-SHA512 seed, so other BIP-39 wallets derive different keys from it |
 | **Moderation & deletion** | `owner` and `mod` writers can delete any entry in the Channel and revoke secondary writers (`purgeEntries` optional) |
 | **Paid / private epochs** (`peartube://access/<ch>:<epoch>:<key>`) | Private uploads encrypt each per-video `Hypercore` with a random key wrapped under `EpochKey_N`; blind relays seed ciphertext, and rotating to `EpochKey_N+1` locks canceled subscribers out of new uploads without re-encrypting archives |
 ## Cast and TV receivers

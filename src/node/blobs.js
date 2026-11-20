@@ -57,6 +57,18 @@ export async function createBlobs (ctx) {
     }, 2000)
     lruTimer.unref?.()
   }
+  // Copies this node keeps for its own channel (a mirror that took another channel's core instead of downloading
+  // the file again): never cleared as cache. Private, beside settings.json.
+  const keptPath = join(storage, 'kept-copies.json')
+  const kept = new Set()
+  try {
+    for (const hex of JSON.parse(readFileSync(keptPath, 'utf8'))) if (HEX64.test(hex)) kept.add(hex)
+  } catch {}
+  function keepCopy (hex, on = true) {
+    if (!HEX64.test(hex) || kept.has(hex) === on) return
+    on ? kept.add(hex) : kept.delete(hex)
+    writeFileSync(keptPath, JSON.stringify([...kept]), { mode: 0o600 })
+  }
   let cacheMaxBytes = 0
   let cacheGrowth = 0
   let ceilingPass = null
@@ -298,6 +310,7 @@ export async function createBlobs (ctx) {
       if (hex) {
         recordCached(hex, core.length, core.byteLength, c.blocks, c.slices)
         touchCached(hex)
+        meter(hex, byteLength, from)
       }
       // A 4K remux pulls gigabytes in seconds, so growth is bounded between
       // passes instead of only when playback starts.
@@ -514,7 +527,7 @@ export async function createBlobs (ctx) {
   const evictedTo = new WeakMap()
   async function evictBehind (blobsHex, blob, { playheadByte = 0, keepBehindBytes = 64 * 1024 * 1024, maxBytes = Infinity } = {}) {
     const core = blobCores.get(blobsHex)
-    if (!core?.opened || !blob || blob.blockLength <= 16 || isOwnedBlob(blobsHex) || core.writable) return 0
+    if (!core?.opened || !blob || blob.blockLength <= 16 || isOwnedBlob(blobsHex) || kept.has(blobsHex) || core.writable) return 0
     const bs = Math.max(65536, Math.round((blob.byteLength || BLOB_BLOCK_SIZE) / blob.blockLength))
     const playhead = blob.blockOffset + Math.floor(Math.max(0, playheadByte) / bs)
     const keepBlocks = Math.max(16, Math.ceil(keepBehindBytes / bs))
@@ -576,14 +589,14 @@ export async function createBlobs (ctx) {
   function cachedTotalBytes () {
     let total = 0
     for (const [k, c] of blobCores) {
-      if (isOwnedBlob(k) || !c.opened || c.length <= 0 || c.byteLength <= 0) continue
+      if (isOwnedBlob(k) || kept.has(k) || !c.opened || c.length <= 0 || c.byteLength <= 0) continue
       ensureBlockCounter(c, k)
       const blocks = localBlocks(c)
       recordCached(k, c.length, c.byteLength, blocks, blockCounts.get(c)?.slices)
       if (blocks > 0) total += Math.min(coreByteLen(c), Math.round((blocks / c.length) * coreByteLen(c)))
     }
     for (const [k, meta] of cachedBlobs) {
-      if (blobCores.has(k) || isOwnedBlob(k) || meta.blocks <= 0 || meta.length <= 0 || meta.byteLength <= 0) continue
+      if (blobCores.has(k) || isOwnedBlob(k) || kept.has(k) || meta.blocks <= 0 || meta.length <= 0 || meta.byteLength <= 0) continue
       total += Math.min(meta.byteLength, Math.round((meta.blocks / meta.length) * meta.byteLength))
     }
     return total
@@ -625,7 +638,7 @@ export async function createBlobs (ctx) {
       const recent = freshest && Date.now() - (lastUsedAt.get(freshest) || 0) < 10 * 60 * 1000
       const playing = keepHex || (recent ? freshest : null)
       const victims = [...new Set([...blobCores.keys(), ...cachedBlobs.keys()])]
-        .filter(hex => hex && !isOwnedBlob(hex) && hex !== playing && !streaming.has(hex))
+        .filter(hex => hex && !isOwnedBlob(hex) && !kept.has(hex) && hex !== playing && !streaming.has(hex))
         .filter(hex => {
           for (const tag of warmRanges.keys()) if (tag.startsWith(`${hex}:`)) return false
           const open = blobCores.get(hex)
@@ -646,7 +659,7 @@ export async function createBlobs (ctx) {
       // One film can be larger than the whole budget. Keep a window around its
       // playhead — the part the viewer can still rewind into — and drop the
       // rest behind it, instead of clearing a film mid-playback.
-      if (total > target && playing && !isOwnedBlob(playing)) {
+      if (total > target && playing && !isOwnedBlob(playing) && !kept.has(playing)) {
         const core = blobCores.get(playing)
         if (core?.opened && core.length > 16) {
           const keepBehind = Math.min(64 * 1024 * 1024, Math.max(8 * 1024 * 1024, Math.floor(budget / 8)))
@@ -730,7 +743,7 @@ export async function createBlobs (ctx) {
     let clearedBytes = 0
     const allCachedHex = [...new Set([...blobCores.keys(), ...cachedBlobs.keys()])]
     for (const hex of allCachedHex) {
-      if (hex === keepBlobsHex) continue
+      if (hex === keepBlobsHex || kept.has(hex)) continue
       clearedBytes += await clearBlobHex(hex).catch(() => 0)
     }
     const { reclaimedBytes } = clearedBytes > 0 ? await gcStorage({ full: true }) : { reclaimedBytes: 0 }
@@ -1124,6 +1137,8 @@ export async function createBlobs (ctx) {
         if (!isWorklet && !info?.head) lastHttpViewAt = Date.now()
         if (!isOwnedBlob(hex)) {
           await blobCore(hex).catch(() => {})
+          const copy = !info?.head && !encryptionKey && info?.blob ? await pickCopy(hex, info.blob).catch(() => null) : null
+          if (copy) return { key: b4a.from(copy.blobs, 'hex'), blob: copy.blob, active: true }
         } else if (!ctx.life.closing && ownedBlobs.has(hex) && !info?.head) {
           let rec = httpOwned.get(hex)
           if (!rec) {
@@ -1164,6 +1179,152 @@ export async function createBlobs (ctx) {
     for (const s of blobSlots) ensureBlockCounter(s.core)
   }
 
+  // Download speed per video core over the last 10 s, from Hypercore's documented `download` events, and how many
+  // peers it came from. Memory only: never stored, never sent to anyone.
+  const meters = new Map() // blobsHex -> { at: second, buckets: bytes per second (ring of 10), peers: Map<peer, second> }
+  function roll (m, now) {
+    for (let s = Math.max(m.at + 1, now - 9); s <= now; s++) m.buckets[s % 10] = 0
+    m.at = Math.max(m.at, now)
+    for (const [p, s] of m.peers) if (now - s >= 10) m.peers.delete(p)
+  }
+  function meter (hex, byteLength, from) {
+    const now = Math.floor(Date.now() / 1000)
+    let m = meters.get(hex)
+    if (!m) {
+      if (meters.size >= 64) meters.delete(meters.keys().next().value)
+      m = { at: now, buckets: new Array(10).fill(0), peers: new Map() }
+      meters.set(hex, m)
+    }
+    roll(m, now)
+    m.buckets[now % 10] += byteLength > 0 ? byteLength : 0
+    if (from) m.peers.set(from, now)
+  }
+  function readMeter (hex) {
+    const m = meters.get(hex)
+    if (!m) return { rateBps: 0, sources: 0 }
+    roll(m, Math.floor(Date.now() / 1000))
+    return { rateBps: Math.round(m.buckets.reduce((a, b) => a + b, 0) / 10), sources: m.peers.size }
+  }
+
+  // Cores whose announces claim the same file (same sha256 and size) in separate swarms. The catalog names them
+  // while it lists (`setAlternates`), keyed by `blobs:blockOffset`; only public files have them. The sha256 is only
+  // a publisher's claim (`decodeOp` checks its shape, nothing more), so it only nominates; `sameBytes` decides.
+  const alternates = new Map() // tag -> group (including self, capped at 8)
+  const tagOf = (hex, blob) => `${hex}:${blob.blockOffset}`
+  function setAlternates (group) {
+    const capped = group.slice(0, 8)
+    for (const a of capped) {
+      const tag = tagOf(a.blobs, a.blob)
+      if (!alternates.has(tag) && alternates.size >= 4096) alternates.delete(alternates.keys().next().value)
+      alternates.set(tag, capped)
+    }
+  }
+  // A read whose own core has no peer within PEER_WAIT_MS moves to another copy whose bytes are proven equal, and
+  // stays there while that copy keeps a peer. Another copy's swarm is joined only then, so a node tells no one about
+  // the other copies until its own one fails.
+  const PEER_WAIT_MS = 5000
+  const VERIFY_MS = 10_000
+  const failovers = new Map() // tag -> { blobs, blob } serving in place of the file's own core
+  const refused = new Set() // `tag>blobs` of copies whose bytes were shown to differ
+  const wholeHere = core => core.length > 0 && localBlocks(core) >= core.length
+  const within = (promise, ms) => {
+    let timer
+    return Promise.race([promise, new Promise(resolve => { timer = setTimeout(resolve, ms, null) })]).finally(() => clearTimeout(timer))
+  }
+  function waitForPeer (core, ms) {
+    if (core.peers.length > 0) return Promise.resolve(true)
+    return new Promise(resolve => {
+      const done = ok => { clearTimeout(timer); core.off('peer-add', onAdd); core.off('close', onClose); resolve(ok) }
+      const onAdd = () => done(true)
+      const onClose = () => done(false)
+      const timer = setTimeout(() => done(false), ms)
+      core.on('peer-add', onAdd)
+      core.on('close', onClose)
+    })
+  }
+  // Both files are whole cores (one video per core), and their Merkle tree hashes match. A tree hash covers every
+  // block's bytes and position and no key, so equal hashes mean the same bytes in the same blocks, and Hypercore
+  // checks every block the other copy sends against its tree. The listed core's hash comes only from what this node
+  // already holds (its signed length and last block): with neither, nothing can be proven and nothing is swapped.
+  // Answers true (same bytes), false (proven different) or null (cannot tell now).
+  async function sameBytes (core, blob, alt, altBlob) {
+    const whole = (c, b) => b.blockOffset === 0 && c.length > 0 && b.blockLength === c.length
+    if (!whole(core, blob) || !(await core.has(core.length - 1))) return null
+    await within(alt.update({ wait: true }), VERIFY_MS)
+    if (!(alt.length > 0)) return null
+    if (!whole(alt, altBlob) || alt.length !== core.length || altBlob.byteLength !== blob.byteLength) return null
+    const [mine, theirs] = await Promise.all([within(core.treeHash(), VERIFY_MS), within(alt.treeHash(), VERIFY_MS)])
+    return mine && theirs ? b4a.equals(mine, theirs) : null
+  }
+  async function pickCopy (hex, blob) {
+    const tag = tagOf(hex, blob)
+    const group = alternates.get(tag)
+    const others = group?.filter(b => b.blobs !== hex)
+    const core = blobCores.get(hex)
+    if (!others?.length || slotSet.has(hex) || !core?.opened || wholeHere(core)) return null
+    const current = failovers.get(tag)
+    if (current) {
+      const alt = blobCores.get(current.blobs)
+      if (alt?.opened && (alt.peers.length > 0 || wholeHere(alt))) return current
+      failovers.delete(tag)
+    }
+    // While the listed core has peers, take its last block (one block, from the swarm already being read), so a
+    // later failover can compute its tree hash without them.
+    if (core.peers.length > 0 && core.length > 0) core.get(core.length - 1).catch(() => {})
+    if (await waitForPeer(core, PEER_WAIT_MS)) return null
+    if (!(core.length > 0) || !(await core.has(core.length - 1))) return null
+    for (const alt of others.slice(0, 3)) {
+      const pair = `${tag}>${alt.blobs}`
+      if (encryptedBlobs.has(alt.blobs) || refused.has(pair)) continue
+      ctx.net.wantContent(alt.blobs)
+      const altCore = await blobCore(alt.blobs).catch(() => null)
+      if (!altCore) continue
+      const same = (wholeHere(altCore) || await waitForPeer(altCore, PEER_WAIT_MS)) ? await sameBytes(core, blob, altCore, alt.blob).catch(() => null) : null
+      if (same === true) {
+        failovers.set(tag, alt)
+        return alt
+      }
+      // Different trees of two whole files never become equal (cores only append), so a proven refusal stands.
+      if (same === false) {
+        if (refused.size >= 4096) refused.clear()
+        refused.add(pair)
+      }
+    }
+    return null
+  }
+
+  // How well a file can stream here now, read only from what this node already has open: no lookup, no announce, no
+  // message to any peer. A core no one opened (no viewer, no player, no peer's request) reports `open: false`.
+  // Display only: Hypercore documents `core.peers` but not its peers' fields, so `remoteContiguousLength` (a peer
+  // with every block) is read the way `status()` reads `inflight`, and nothing decides on it. When another copy is
+  // serving (`usingOtherCopy`), the numbers are that copy's. On a legacy shared slot they count the whole slot.
+  function entryHealth (entry) {
+    const tag = tagOf(entry.blobs, entry.blob)
+    const serving = failovers.get(tag)?.blobs || entry.blobs
+    const core = blobCores.get(serving) || weakOwned.get(serving) || httpOwned.get(serving)?.core || blobSlots.find(s => s.key === serving)?.core
+    const base = {
+      open: false,
+      shared: slotSet.has(serving),
+      otherCopies: Math.max(0, (alternates.get(tag)?.filter(b => b.blobs !== entry.blobs).length) || 0),
+      usingOtherCopy: serving !== entry.blobs,
+      peers: 0,
+      wholePeers: 0,
+      lanPeers: 0,
+      rateBps: 0,
+      sources: 0
+    }
+    if (!core?.opened || core.closing || core.closed) return base
+    const peers = core.peers
+    return {
+      ...base,
+      open: true,
+      peers: peers.length,
+      wholePeers: peers.filter(p => core.length > 0 && p.remoteContiguousLength >= core.length).length,
+      lanPeers: peers.filter(p => ctx.net.hasLanPeer(p.remotePublicKey)).length,
+      ...readMeter(serving)
+    }
+  }
+
   return {
     blobSlots,
     blobCores,
@@ -1190,6 +1351,10 @@ export async function createBlobs (ctx) {
     warmRanges,
     warm,
     entryCachedBytes,
+    entryHealth,
+    setAlternates,
+    keepCopy,
+    isKept: hex => kept.has(hex),
     gcStorage,
     gcUnreferencedSlotBlob,
     evictBehind,

@@ -77,19 +77,19 @@ function createChannel (conn, { protocol, maxFrame = MAX_FRAME, label, onRequest
     encoding: jsonFrame(maxFrame),
     onmessage (msg) {
       if (!msg) return
-      const p = pending.get(msg.id)
-      if (p) {
+      if (onRequest && typeof msg.type === 'string') {
+        Promise.resolve().then(() => onRequest(msg, control)).then(
+          result => { message.send({ id: msg.id, ok: true, result }) },
+          err => { message.send({ id: msg.id, ok: false, error: err.message }) }
+        ).catch(() => {})
+      } else if ('ok' in msg && pending.has(msg.id)) {
+        const p = pending.get(msg.id)
         pending.delete(msg.id)
         clearTimeout(p.timer)
         if (msg.ok) p.resolve(msg.result)
         else p.reject(new Error(msg.error || `${label} error`))
       } else if (msg.event) {
         try { onEvent?.(msg) } catch {}
-      } else if (onRequest && typeof msg.type === 'string') {
-        Promise.resolve().then(() => onRequest(msg, control)).then(
-          result => { message.send({ id: msg.id, ok: true, result }) },
-          err => { message.send({ id: msg.id, ok: false, error: err.message }) }
-        ).catch(() => {})
       }
     }
   })

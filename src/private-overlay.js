@@ -12,6 +12,7 @@ import hypercoreCrypto from 'hypercore-crypto'
 import c from 'compact-encoding'
 import sodium from 'sodium-native'
 import b4a from 'b4a'
+import { ipv6Groups } from './protocol.js'
 
 const PROTOCOL = 'peartube/private-guard/v1'
 const CARD_DOMAIN = b4a.from('peartube/private-route-card/v1\0')
@@ -27,6 +28,8 @@ const MAX_RV_SLOTS_PER_TOPIC = 64
 const MAX_CIRCUITS_TOTAL = 1024
 const MAX_CIRCUITS_PER_CONN = 32
 const MAX_CARD_BYTES = 512
+const MAX_RPC_FRAME = 64 * 1024
+const MAX_DHT_OPS_PER_10S = 256
 
 const OP_HELLO = 1
 const OP_REGISTER = 2
@@ -65,7 +68,10 @@ const mutSignEnc = {
 const frameEnc = {
   preencode (s, m) { c.uint.preencode(s, m.op); c.uint.preencode(s, m.id); c.buffer.preencode(s, m.payload || b4a.alloc(0)) },
   encode (s, m) { c.uint.encode(s, m.op); c.uint.encode(s, m.id); c.buffer.encode(s, m.payload || b4a.alloc(0)) },
-  decode (s) { return { op: c.uint.decode(s), id: c.uint.decode(s), payload: c.buffer.decode(s) } }
+  decode (s) {
+    if (s.end - s.start > MAX_RPC_FRAME) { s.start = s.end; return null }
+    try { return { op: c.uint.decode(s), id: c.uint.decode(s), payload: c.buffer.decode(s) } } catch { s.start = s.end; return null }
+  }
 }
 const bufArrEnc = {
   preencode (s, a) { c.uint.preencode(s, a.length); for (const x of a) c.buffer.preencode(s, x) },
@@ -90,18 +96,23 @@ function verifyDhtMutable (sig, seq, value, publicKey) {
   return sodium.crypto_sign_verify_detached(sig, signable, publicKey)
 }
 
+// A peer's diversity bucket: its IPv4 /24 or IPv6 /48. IPv6 is expanded to eight groups first, so every spelling of
+// one address (`2001::1`, `2001:0:0:0:0:0:0:1`) lands in one bucket, and IPv4-mapped IPv6 is its IPv4 address.
 export function diversityBucketForAddress (host, port, allowLoopback = false) {
   if (typeof host !== 'string' || !host) return null
-  const clean = host.startsWith('::ffff:') ? host.slice(7) : host
+  const loopback = label => (allowLoopback && Number.isInteger(port) && port > 0) ? `loopback:${label}:${port}` : null
+  const groups = host.includes(':') ? ipv6Groups(host) : null
+  const mapped = groups && groups.slice(0, 5).every(g => g === 0) && groups[5] === 0xffff
+  const clean = mapped ? `${groups[6] >> 8}.${groups[6] & 0xff}.${groups[7] >> 8}.${groups[7] & 0xff}` : host
   const v4 = clean.split('.')
   if (v4.length === 4 && v4.every(p => /^\d+$/.test(p) && Number(p) <= 255)) {
     const a = Number(v4[0]), b = Number(v4[1]), d = Number(v4[2])
-    if (a === 127) return (allowLoopback && Number.isInteger(port) && port > 0) ? `loopback:${clean}:${port}` : null
+    if (a === 127) return loopback(clean)
     return a === 0 ? null : `ipv4:${a}.${b}.${d}.0/24`
   }
-  if (clean === '::1') return (allowLoopback && Number.isInteger(port) && port > 0) ? `loopback:::1:${port}` : null
-  if (clean.includes(':')) return `ipv6:${clean.toLowerCase().split(':').slice(0, 3).map(s => s.padStart(4, '0')).join(':')}/48`
-  return null
+  if (!groups) return null
+  if (groups.slice(0, 7).every(g => g === 0)) return groups[7] === 1 ? loopback('::1') : null
+  return `ipv6:${groups.slice(0, 3).map(g => g.toString(16).padStart(4, '0')).join(':')}/48`
 }
 
 function sealBox (plain, sealKey) {
@@ -176,6 +187,7 @@ function attachRpcChannel (conn, onRequest) {
     msg = ch.addMessage({
       encoding: frameEnc,
       onmessage (f) {
+        if (!f) return
         const w = pending.get(f.id)
         if (w && w.replyOp === f.op) { pending.delete(f.id); clearTimeout(w.timer); w.resolve(f.payload); return }
         Promise.resolve(onRequest?.(f, send)).catch(() => {})
@@ -261,9 +273,10 @@ export async function createPrivateGuard ({
     if (closing || rvTopics.get(tHex) !== entry || !entry.slots.size || Date.now() - entry.lastAnnounceAt < 45_000) return
     try { await dht.announce(entry.topicBuf, keyPair).finished(); entry.lastAnnounceAt = Date.now() } catch {}
   })
-  const removeRvSlot = (tHex, sHex) => {
+  // Only the session that registered a slot may remove it (unregister or disconnect).
+  const removeRvSlot = (tHex, sHex, session) => {
     const e = rvTopics.get(tHex)
-    if (!e) return
+    if (!e || e.slots.get(sHex)?.session !== session) return
     e.slots.delete(sHex)
     if (!e.slots.size) {
       const topicBuf = e.topicBuf
@@ -301,7 +314,14 @@ export async function createPrivateGuard ({
   const server = dht.createServer({ firewall: () => false }, conn => {
     if (closing) { conn.destroy(); return }
     conn.on('error', () => {}); conn.setKeepAlive(5000)
-    const session = { conn, rpc: null, role: null, ownedRoutes: new Set(), ownedRvSlots: new Set(), drops: new Set(), circuits: 0 }
+    const session = { conn, rpc: null, role: null, ownedRoutes: new Set(), ownedRvSlots: new Set(), drops: new Set(), circuits: 0, dhtOps: [] }
+    const allowDhtOp = () => {
+      const now = Date.now()
+      while (session.dhtOps.length && now - session.dhtOps[0] > 10_000) session.dhtOps.shift()
+      if (session.dhtOps.length >= MAX_DHT_OPS_PER_10S) return false
+      session.dhtOps.push(now)
+      return true
+    }
     sessions.add(session)
 
     session.rpc = attachRpcChannel(conn, async (f, send) => {
@@ -320,18 +340,24 @@ export async function createPrivateGuard ({
       } else if (f.op === OP_REGISTER) {
         if (session.role !== 'endpoint' || p.byteLength !== 36) return send(OP_REGISTER_ACK, f.id, b4a.from([0]))
         const tokHex = b4a.toString(p.subarray(0, 32), 'hex')
-        if (!routes.has(tokHex) && (routes.size >= MAX_ROUTES_TOTAL || session.ownedRoutes.size >= MAX_ROUTES_PER_CONN)) return send(OP_REGISTER_ACK, f.id, b4a.from([0]))
+        // A live token belongs to the session that registered it: another session can neither take it over nor
+        // refresh it past the caps. An expired one is free again and counts as a new registration.
+        const cur = routes.get(tokHex)
+        const mine = cur?.session === session
+        if (cur && !mine && cur.expiresAt > Date.now()) return send(OP_REGISTER_ACK, f.id, b4a.from([0]))
+        if (!mine && (routes.size - (cur ? 1 : 0) >= MAX_ROUTES_TOTAL || session.ownedRoutes.size >= MAX_ROUTES_PER_CONN)) return send(OP_REGISTER_ACK, f.id, b4a.from([0]))
+        if (cur && !mine) cur.session.ownedRoutes.delete(tokHex)
         routes.set(tokHex, { session, expiresAt: Date.now() + Math.max(15_000, Math.min(ROUTE_TTL_MS, p.readUInt32BE(32))) })
         session.ownedRoutes.add(tokHex)
         send(OP_REGISTER_ACK, f.id, b4a.from([1]))
       } else if (f.op === OP_PUT_MUTABLE) {
-        if (session.role !== 'endpoint' || p.byteLength <= 100) return send(OP_PUT_MUTABLE_ACK, f.id, b4a.from([0]))
+        if (session.role !== 'endpoint' || p.byteLength <= 100 || !allowDhtOp()) return send(OP_PUT_MUTABLE_ACK, f.id, b4a.from([0]))
         const publicKey = p.subarray(0, 32), seq = p.readUInt32BE(32), signature = p.subarray(36, 100), value = p.subarray(100)
         if (value.byteLength > MAX_CARD_BYTES || !verifyDhtMutable(signature, seq, value, publicKey)) return send(OP_PUT_MUTABLE_ACK, f.id, b4a.from([0]))
         if (failMutablePutsRemaining > 0) { failMutablePutsRemaining--; return send(OP_PUT_MUTABLE_ACK, f.id, b4a.from([0])) }
         try { await dht.mutablePut({ publicKey }, value, { seq, signMutable: () => signature }); putMutableCount++; send(OP_PUT_MUTABLE_ACK, f.id, b4a.from([1])) } catch { send(OP_PUT_MUTABLE_ACK, f.id, b4a.from([0])) }
       } else if (f.op === OP_GET_MUTABLE) {
-        if (session.role !== 'endpoint' || p.byteLength !== 32) return send(OP_GET_MUTABLE_REPLY, f.id, b4a.from([0]))
+        if (session.role !== 'endpoint' || p.byteLength !== 32 || !allowDhtOp()) return send(OP_GET_MUTABLE_REPLY, f.id, b4a.from([0]))
         try {
           const r = await dht.mutableGet(p, { latest: true })
           send(OP_GET_MUTABLE_REPLY, f.id, r?.value ? b4a.concat([b4a.from([1]), u32(r.seq), r.signature, r.value]) : b4a.from([0]))
@@ -346,15 +372,19 @@ export async function createPrivateGuard ({
           e = { topicBuf: b4a.from(rvTopic), slots: new Map(), announcing: false, lastAnnounceAt: 0 }
           rvTopics.set(tHex, e)
         }
-        if (!e.slots.has(sHex) && e.slots.size >= MAX_RV_SLOTS_PER_TOPIC) return send(OP_RV_REGISTER_ACK, f.id, b4a.from([0]))
-        e.slots.set(sHex, { sealedCard, expiresAt: Date.now() + Math.max(15_000, Math.min(ROUTE_TTL_MS, ttl)) })
+        // Same rule for rendezvous slots: a live slot is its registering session's alone.
+        const slot = e.slots.get(sHex)
+        if (slot && slot.session !== session && slot.expiresAt > Date.now()) return send(OP_RV_REGISTER_ACK, f.id, b4a.from([0]))
+        if (!slot && e.slots.size >= MAX_RV_SLOTS_PER_TOPIC) return send(OP_RV_REGISTER_ACK, f.id, b4a.from([0]))
+        if (slot && slot.session !== session) slot.session.ownedRvSlots.delete(`${tHex}:${sHex}`)
+        e.slots.set(sHex, { sealedCard, session, expiresAt: Date.now() + Math.max(15_000, Math.min(ROUTE_TTL_MS, ttl)) })
         session.ownedRvSlots.add(`${tHex}:${sHex}`)
         await ensureRvAnnounced(tHex, e)
         rvRegisterCount++; send(OP_RV_REGISTER_ACK, f.id, b4a.from([1]))
       } else if (f.op === OP_RV_UNREGISTER) {
         if (session.role === 'endpoint' && p.byteLength === 48) {
           const tHex = b4a.toString(p.subarray(0, 32), 'hex'), sHex = b4a.toString(p.subarray(32, 48), 'hex')
-          session.ownedRvSlots.delete(`${tHex}:${sHex}`); removeRvSlot(tHex, sHex)
+          session.ownedRvSlots.delete(`${tHex}:${sHex}`); removeRvSlot(tHex, sHex, session)
         }
       } else if (f.op === OP_RV_FETCH) {
         if (session.role !== 'hop') return send(OP_RV_FETCH_REPLY, f.id, c.encode(bufArrEnc, []))
@@ -363,7 +393,7 @@ export async function createPrivateGuard ({
         if (e) for (const [k, v] of e.slots) { if (v.expiresAt <= now) e.slots.delete(k); else cards.push(v.sealedCard) }
         send(OP_RV_FETCH_REPLY, f.id, c.encode(bufArrEnc, cards))
       } else if (f.op === OP_RV_LOOKUP) {
-        if (session.role !== 'endpoint' || p.byteLength !== 32) return send(OP_RV_LOOKUP_REPLY, f.id, c.encode(bufArrEnc, []))
+        if (session.role !== 'endpoint' || p.byteLength !== 32 || !allowDhtOp()) return send(OP_RV_LOOKUP_REPLY, f.id, c.encode(bufArrEnc, []))
         const seen = new Map(), now = Date.now(), local = rvTopics.get(b4a.toString(p, 'hex'))
         if (local) for (const [k, v] of local.slots) { if (v.expiresAt <= now) local.slots.delete(k); else seen.set(b4a.toString(v.sealedCard, 'hex'), v.sealedCard) }
         const rGuards = new Map(), q = dht.lookup(p), qt = setTimeout(() => q.destroy(), 4000); qt.unref?.()
@@ -468,7 +498,7 @@ export async function createPrivateGuard ({
       sessions.delete(session)
       for (const d of [...session.drops]) d()
       for (const t of session.ownedRoutes) if (routes.get(t)?.session === session) routes.delete(t)
-      for (const pair of session.ownedRvSlots) { const i = pair.indexOf(':'); removeRvSlot(pair.slice(0, i), pair.slice(i + 1)) }
+      for (const pair of session.ownedRvSlots) { const i = pair.indexOf(':'); removeRvSlot(pair.slice(0, i), pair.slice(i + 1), session) }
     })
   })
 
@@ -479,9 +509,9 @@ export async function createPrivateGuard ({
     if (closing) return
     announceService().catch(() => {})
     const now = Date.now()
-    for (const [k, r] of routes) if (r.expiresAt <= now) routes.delete(k)
+    for (const [k, r] of routes) if (r.expiresAt <= now) { routes.delete(k); r.session.ownedRoutes.delete(k) }
     for (const [tHex, e] of rvTopics) {
-      for (const [sHex, s] of e.slots) if (s.expiresAt <= now) e.slots.delete(sHex)
+      for (const [sHex, s] of e.slots) if (s.expiresAt <= now) { e.slots.delete(sHex); s.session.ownedRvSlots.delete(`${tHex}:${sHex}`) }
       if (!e.slots.size) {
         const topicBuf = e.topicBuf
         rvTopics.delete(tHex)

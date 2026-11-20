@@ -17,10 +17,12 @@ import { identify, posterUrl, backdropUrl } from '../src/identify.js'
 import { API_PORT } from '../src/protocol.js'
 
 const env = process.env
+// A flag env var: unset, empty, `0` and `false` are off.
+const on = s => Boolean(s) && s !== '0' && s !== 'false'
 
 // Guard-only mode: the standalone Corestore-free forwarder (bin/private-relay.js, same env), never a content relay.
-if (env.PEARTUBE_PRIVATE_RELAY || env.PEARTUBE_PRIVATE_RELAY_PORT) {
-  if (env.PEARTUBE_CHANNEL || env.PEARTUBE_SOURCES || env.PEARTUBE_PRIVATE_ROUTING || env.PEARTUBE_REPLICATE || env.PEARTUBE_WATCH_DIR || env.PEARTUBE_MIRROR_FEEDS) {
+if (on(env.PEARTUBE_PRIVATE_RELAY) || env.PEARTUBE_PRIVATE_RELAY_PORT) {
+  if (env.PEARTUBE_CHANNEL || env.PEARTUBE_SOURCES || on(env.PEARTUBE_PRIVATE_ROUTING) || on(env.PEARTUBE_REPLICATE) || env.PEARTUBE_WATCH_DIR || env.PEARTUBE_MIRROR_FEEDS) {
     throw new Error('PEARTUBE_PRIVATE_RELAY runs a standalone Corestore-free guard forwarder and cannot be combined with channel or content flags; run peartube-private-relay separately')
   }
   await import('./private-relay.js')
@@ -130,15 +132,15 @@ let mirrorHost = null
 async function shutdown () {
   if (shuttingDown) return
   shuttingDown = true
-  const kill = () => { try { os.kill?.(process.pid, 9) } catch {} process.exit(0) }
-  setTimeout(kill, 3000).unref()
+  // Only a shutdown that hangs is killed; a clean one exits 0, so service managers see a normal stop.
+  setTimeout(() => { try { os.kill?.(process.pid, 9) } catch {} process.exit(1) }, 3000).unref()
   api.close()
   const guardStopped = stopGuard()
   // Let an open or reopen in flight finish (bounded by the kill timer) so its node is closed, not cut off mid-open.
   await Promise.race([lifecycle, new Promise(resolve => setTimeout(resolve, 2000))])
   await stop()
   await guardStopped
-  kill()
+  process.exit(0)
 }
 for (const signal of ['SIGINT', 'SIGTERM']) {
   process.on(signal, shutdown)
@@ -172,8 +174,9 @@ function scheduleReplicate () {
   }, 2000)
   replicateDebounce.unref?.()
 }
+// The import folder is env-only, like the storage and plugins folders: the host chooses folders on its disk.
+const watchDir = env.PEARTUBE_WATCH_DIR || null
 const mirrorConfig = () => ({
-  watchDir: cfg('watchDir') || null,
   feeds: cfg('feeds'),
   replicate: replicateValue(),
   replicateMinFreeBytes: Math.max(0, cfg('replicateFreeGb')) * 1024 * 1024 * 1024,
@@ -242,6 +245,7 @@ async function start () {
     acquirer: state.acquirer,
     mirrorChannel: cfg('publishChannel'),
     rechunk: cfg('rechunk'),
+    watchDir,
     ...mirrorConfig(),
     hiverelay,
     pluginsDir: env.PEARTUBE_PLUGINS_DIR || join(storage, 'plugins'),
@@ -365,7 +369,7 @@ state.applySettings = changed => serial(async () => {
       await mirrorStarting
       state.mirror?.run('blob-rechunk').catch(() => {})
     }
-    if (has('watchDir', 'feeds', 'replicate', 'replicateSources', 'replicateFreeGb', 'replicateMbps', 'globalSearch')) {
+    if (has('feeds', 'replicate', 'replicateSources', 'replicateFreeGb', 'replicateMbps', 'globalSearch')) {
       await mirrorStarting
       state.mirror?.configure(mirrorConfig())
     }

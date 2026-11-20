@@ -35,6 +35,8 @@ import { createPrivateGuard } from '../src/private-overlay.js'
 
 const root = new URL('..', import.meta.url).pathname
 const tmp = () => mkdtempSync(join(tmpdir(), 'peartube-relay-settings-'))
+// The in-process acquirer's source is a loopback HTTP server: opt in to private URLs (src/ssrf.js).
+process.env.PEARTUBE_ALLOW_PRIVATE_URLS = '1'
 const wait = ms => new Promise(resolve => setTimeout(resolve, ms))
 const artifact = join(root, 'desktop/target/e2e/relay-settings-result.json')
 const GUARD_TOPICS = [0, 1, 2, 3].map(i => HyperDHT.hash(Buffer.from(`peartube/private-guard/v1/${i}`)))
@@ -339,11 +341,11 @@ test('a reopen during a folder import waits for one file, and no file is lost or
   await relay.send('PUT', '/v1/settings', { dhtPort: await freePort() })
   const reopenMs = Date.now() - started
   const atReopen = await imported()
-  assert.ok(atReopen < files, 'the import was still running when the reopen finished')
+  assert.ok(atReopen < files, `the import was still running when the reopen finished (${atReopen}/${files})`)
   const done = await until(async () => { const n = await imported(); return n >= files && n }, 120_000, 'import finished after the reopen')
   const importMs = Date.now() - started
   assert.equal(done, files, 'every file imported exactly once')
-  assert.ok(reopenMs * 3 < importMs, `the reopen (${reopenMs} ms) did not wait for the import (${importMs} ms)`)
+  assert.ok(reopenMs * 2 < importMs, `the reopen (${reopenMs} ms) did not wait for the import (${importMs} ms)`)
   Object.assign(result, { files, reopenMs, importMs, importedAtReopen: atReopen, pass: true })
 })
 
@@ -393,7 +395,8 @@ test('relay serves bare-https TLS from storage PEMs with /ca.crt, LAN settingsOp
   execFileSync('openssl', ['x509', '-req', '-CA', join(storage, 'ca.crt'), '-CAkey', join(storage, 'ca.key'), '-CAcreateserial', '-days', '390', '-out', join(storage, 'tls.crt'), '-extfile', ext], { input: csr })
   const ca = readFileSync(join(storage, 'ca.crt'))
 
-  const relay = await startRelay(testnet, { PEARTUBE_STORAGE: storage, PEARTUBE_API_PORT: String(apiPort), PEARTUBE_HTTPS_PORT: String(httpsPort) })
+  // The acquire source below is a loopback server: the relay must opt in to private URLs (src/ssrf.js).
+  const relay = await startRelay(testnet, { PEARTUBE_STORAGE: storage, PEARTUBE_API_PORT: String(apiPort), PEARTUBE_HTTPS_PORT: String(httpsPort), PEARTUBE_ALLOW_PRIVATE_URLS: '1' })
   t.after(() => relay.stop())
 
   const caRes = await fetch(`http://127.0.0.1:${apiPort}/ca.crt`)

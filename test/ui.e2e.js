@@ -234,8 +234,8 @@ test('relay web UI: settings, plugins as intents, identification, and taste gate
   mkdirSync(shotDir, { recursive: true })
   const storage = mkdtempSync(join(tmpdir(), 'peartube-ui-storage-'))
   const binDir = mkdtempSync(join(tmpdir(), 'peartube-ui-bin-'))
+  // The import folder is env-only; the file lands just before the scan, so the scan is what imports it.
   const watchDir = mkdtempSync(join(tmpdir(), 'peartube-ui-watch-'))
-  writeFileSync(join(watchDir, 'Watched.Clip.2019.mp4'), bytesFor('watched'))
   const stub = await startStub()
   const page = fakeUbit(binDir, stub.base)
   const apiPort = await freePort()
@@ -251,7 +251,10 @@ test('relay web UI: settings, plugins as intents, identification, and taste gate
     PEARTUBE_API_HOST: '127.0.0.1',
     PEARTUBE_API_TOKEN: TOKEN,
     PEARTUBE_DHT_PORT: String(dhtPort),
-    PEARTUBE_BOOTSTRAP: '127.0.0.1:1'
+    PEARTUBE_BOOTSTRAP: '127.0.0.1:1',
+    PEARTUBE_WATCH_DIR: watchDir,
+    // The stub Cinemeta, feeds and direct links are on loopback (src/ssrf.js refuses them otherwise).
+    PEARTUBE_ALLOW_PRIVATE_URLS: '1'
   }
   let relay = await startRelay(env)
   const base = 'http://127.0.0.1:' + apiPort
@@ -479,6 +482,15 @@ test('relay web UI: settings, plugins as intents, identification, and taste gate
     assert.match(dlRes.headers.get('content-disposition') || '', /attachment; filename="Playable Clip\.mkv"/)
     assert.equal(dlRes.headers.get('content-type'), 'video/x-matroska')
     await dlRes.arrayBuffer()
+    // The sheet names what the file holds (read from its header: the relay holds it) and how well it streams.
+    const infoText = `[...document.querySelectorAll('#detail .file-info .info-row')].map(r => r.textContent).join('\\n')`
+    await waitFor(`${infoText}.includes('H.264')`, 'file info in the detail sheet', 15_000)
+    const info = await evaluate(infoText)
+    for (const line of ['FormatMKV · 0:05', 'VideoH.264 · 320×180', 'Audio 1AAC · Mono · English', 'Audio 2AAC · Mono · Spanish', 'SubtitlesSRT · English']) {
+      assert.ok(info.split('\n').some(l => l.startsWith(line)), `file info shows "${line}": ${info}`)
+    }
+    assert.ok(info.split('\n').includes('HealthPlays from this relay'), 'the relay\'s own copy plays from the relay: ' + info)
+    result.checks.fileInfo = info
     await evaluate(`(() => { window.__modalCopied = ''; document.addEventListener('copy', ev => { window.__modalCopied = ev.clipboardData?.getData('text/plain') || '' }, false); return true })()`)
     await clickText('Copy link', '#detail')
     const modalCopied = await evaluate(`window.__modalCopied`)
@@ -607,16 +619,18 @@ test('relay web UI: settings, plugins as intents, identification, and taste gate
     result.checks.identifyPage = { id: pageEntry.id, title: pageEntry.title }
     mark('identifyPage')
 
-    // Import a folder.
+    // Scan the import folder: the page offers a scan, never a path.
     await open('#library')
+    assert.equal(await evaluate(`document.querySelector('#folderInput') === null && !document.body.innerHTML.includes(${JSON.stringify(watchDir)})`), true, 'the page names no folder')
+    writeFileSync(join(watchDir, 'Watched.Clip.2019.mp4'), bytesFor('watched'))
     clicks = 0
-    await clickText('Import a folder')
-    await type('#folderInput', watchDir)
-    await clickText('Import', '#folderForm')
+    await clickText('Import folder')
+    await clickText('Scan import folder', '#folderForm')
     result.interactions.importFolder = clicks
     mark('importFolderClicked')
     await waitApi(async () => (await entries()).find(e => e.title === 'Watched Clip 2019'), 'watched file imported')
-    assert.equal((await settingsNow()).settings.watchDir.value, watchDir)
+    await waitApi(async () => /Scanned the import folder/.test(await evaluate(`document.querySelector('#addMsg').textContent`)), 'scan result shown')
+    assert.equal('watchDir' in (await settingsNow()).settings, false, 'the import folder is not a setting')
 
     // Follow a feed.
     clicks = 0

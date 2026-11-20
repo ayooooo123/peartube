@@ -1,11 +1,13 @@
 import { createReadStream, mkdtempSync, readdirSync, readFileSync, writeFileSync, renameSync, rmSync, statSync } from 'node:fs'
-import { randomUUID, randomBytes } from 'node:crypto'
+import { createHash, randomUUID, randomBytes } from 'node:crypto'
 import { request as httpRequest } from 'node:http'
 import { request as httpsRequest } from 'node:https'
 import { dirname, join } from 'node:path'
 import b4a from 'b4a'
 import { Readable } from 'streamx'
+import ByteStream from 'hypercore-byte-stream'
 import { downloadPage } from './identify.js'
+import { checkUrlHost, guardedLookup, privateUrlsAllowed } from './ssrf.js'
 
 const TERMINAL_STATUS = new Set([400, 401, 403, 404, 410, 451])
 const DEFAULT_HEADERS = { 'user-agent': 'VLC/3.0.18 LibVLC/3.0.18', accept: '*/*', 'accept-encoding': 'identity' }
@@ -30,7 +32,7 @@ function waitAbortable (ms, controller) {
 // Jobs hold private source URLs and auth headers, so they stay collared inside a 0600 file and
 // never leak into Corestore where replication would serve them to any stranger who names the core.
 // What anyone may see of a job: no source secrets, no internal announce payload, no per-video key.
-export const publicJob = ({ source, announce, storeKey, etag, lastModified, hashState, hashBytes, ...job }) => job
+export const publicJob = ({ source, announce, existing, storeKey, etag, lastModified, hashState, hashBytes, ...job }) => job
 
 export function createAcquirer (node, file, {
   concurrency = 4,
@@ -41,7 +43,11 @@ export function createAcquirer (node, file, {
   defaultChannel = false,
   ubitConfigDir = join(dirname(file), 'ubit'),
   ubit = '',
-  onDone = null
+  onDone = null,
+  // A copy of another channel's core that gains no block for this long gives way to the job's own URL.
+  copyStall = 120_000,
+  // Loopback and private source hosts (src/ssrf.js); link-local is refused either way.
+  allowPrivateUrls = privateUrlsAllowed()
 } = {}) {
   const workRoot = dirname(file)
   try {
@@ -52,7 +58,7 @@ export function createAcquirer (node, file, {
   let jobs = []
   try { jobs = JSON.parse(readFileSync(file, 'utf8')) } catch {}
   for (const job of jobs) {
-    if (job.status === 'running' || (job.status === 'failed' && job.source)) {
+    if (job.status === 'running' || job.status === 'copying' || (job.status === 'failed' && job.source)) {
       job.status = job.announce ? 'announcing' : 'queued'
     }
   }
@@ -66,10 +72,12 @@ export function createAcquirer (node, file, {
     renameSync(file + '.tmp', file)
   }
 
+  // Every hop, the first URL and each redirect, must name a host src/ssrf.js allows; names are checked as they resolve.
   function openSource (url, headers, controller, redirects = 0, timeout = stallTimeout) {
     return new Promise((resolve, reject) => {
       if (controller.aborted) return reject(new Error('Cancelled'))
       const parsed = new URL(url)
+      try { checkUrlHost(parsed, allowPrivateUrls) } catch (err) { return reject(err) }
       const fn = parsed.protocol === 'https:' ? httpsRequest : httpRequest
       let settled = false
       const onAbort = () => req.destroy(new Error('Cancelled'))
@@ -80,7 +88,8 @@ export function createAcquirer (node, file, {
         if (controller.onabort === onAbort) controller.onabort = null
         err ? reject(err) : resolve(res)
       }
-      const req = fn(parsed, { headers }, res => {
+      // A fresh agent: a pooled socket is reused without a lookup, so one an unguarded request left would skip the guard.
+      const req = fn(parsed, { headers, agent: false, lookup: guardedLookup(allowPrivateUrls) }, res => {
         if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location && redirects < 10) {
           res.resume?.()
           const nextUrl = new URL(res.headers.location, parsed)
@@ -95,7 +104,7 @@ export function createAcquirer (node, file, {
         if (res.statusCode < 200 || res.statusCode >= 300) {
           res.resume?.()
           const ra = Number(res.headers['retry-after'])
-          const retryAfter = Number.isFinite(ra) && ra > 0 ? ra * 1000 : 0
+          const retryAfter = Math.min(Number.isFinite(ra) && ra > 0 ? ra * 1000 : 0, 300_000)
           finish(Object.assign(new Error(`Source answered ${res.statusCode}`), { status: res.statusCode, retryAfter }))
           return
         }
@@ -179,6 +188,53 @@ export function createAcquirer (node, file, {
     })())
   }
 
+  // A feed item another followed channel already publishes (same sha256 and size): take that core from peers instead
+  // of downloading the file again, so every holder seeds one swarm, and keep it out of the cache ceiling. The other
+  // channel's sha256 is only its claim, so the whole copy is hashed here against the feed's digest before this relay
+  // announces it; a copy that does not match is cleared. Returns the announce for this job, or null when no block
+  // arrived for `copyStall` or the bytes are not the feed's file; the job then downloads from its URL.
+  async function copyExisting (job, controller) {
+    const src = job.existing
+    const { blockOffset: start, blockLength } = src.blob
+    const op = { type: 'announce', id: job.id, title: job.title, size: src.size, sha256: src.sha256, blobs: src.blobs, blob: src.blob }
+    Object.assign(job, { status: 'copying', total: src.size, bytes: 0 })
+    save()
+    node.keepCopy(src.blobs)
+    await node.warm(op)
+    let core = null
+    let range = null
+    let have = -1
+    let progressAt = Date.now()
+    try {
+      while (true) {
+        if (controller.aborted) throw new Error('Cancelled')
+        if (!core || core.closed) {
+          range?.destroy()
+          core = await node.blobCore(src.blobs)
+          range = core.download({ start, end: start + blockLength })
+        }
+        const now = await core.count(start, start + blockLength)
+        if (now > have) { have = now; progressAt = Date.now() }
+        job.bytes = Math.min(src.size, Math.round(src.size * have / blockLength))
+        if (have >= blockLength) break
+        if (Date.now() - progressAt > copyStall) return null
+        await waitAbortable(1000, controller)
+      }
+    } finally {
+      range?.destroy()
+    }
+    if (src.blob.byteLength === src.size && await localSha256(core, src.blob) === src.sha256) return op
+    node.keepCopy(src.blobs, false)
+    if (src.key) await node.clearCache(src.key).catch(() => {})
+    return null
+  }
+  // The file's bytes from local blocks only (its own session: the stream closes the core it reads).
+  async function localSha256 (core, blob) {
+    const hash = createHash('sha256')
+    for await (const chunk of new ByteStream(core.session(), blob, { prefetch: false })) hash.update(chunk)
+    return hash.digest('hex')
+  }
+
   // A job is spent only once its announce is durable; save the stored blob's announce immediately after put()
   // without triggering foreign-cache GC so a restart re-announces instead of orphaning the core and re-fetching.
   async function run (job) {
@@ -193,6 +249,17 @@ export function createAcquirer (node, file, {
     const controller = { aborted: false, onabort: null, abort () { this.aborted = true; this.onabort?.() } }
     running.set(job, controller)
     try {
+      if (!job.announce && job.existing) {
+        const op = await copyExisting(job, controller)
+        if (closed) throw new Error('Closed')
+        if (op) {
+          Object.assign(job, { status: 'announcing', announce: op, source: null })
+        } else {
+          node.keepCopy(job.existing.blobs, false)
+          Object.assign(job, { status: 'running', existing: null, bytes: 0 })
+        }
+        save()
+      }
       if (!job.announce) {
         let op
         if (job.source.page) {
@@ -286,10 +353,13 @@ export function createAcquirer (node, file, {
         // Dead-letter 401/403/404/410 sources once instead of choking concurrency slots forever.
         if (TERMINAL_STATUS.has(err.status) || job.attempts >= maxAttempts) job.source = null
       }
-      // A job that will never run again must not leave a half-written core sitting on the array.
-      if (job.store && (job.status === 'cancelled' || (job.status === 'failed' && !job.source))) node.dropStore?.(job.store)?.catch?.(() => {})
+      // A job that will never run again must not leave a half-written core sitting on the array, nor a copy kept.
+      if (job.status === 'cancelled' || (job.status === 'failed' && !job.source)) {
+        if (job.store) node.dropStore?.(job.store)?.catch?.(() => {})
+        if (job.existing && !job.announce) node.keepCopy(job.existing.blobs, false)
+      }
       if (!closed && job.status === 'failed' && job.source && retryDelay > 0) {
-        const delay = err.retryAfter || Math.min(retryDelay * 2 ** ((job.attempts || 1) - 1), 300_000)
+        const delay = Math.min(err.retryAfter || retryDelay * 2 ** ((job.attempts || 1) - 1), 300_000)
         setTimeout(() => {
           if (job.status === 'failed' && !node.closing && !closed) {
             job.status = 'queued'
@@ -314,9 +384,11 @@ export function createAcquirer (node, file, {
   // A 32-hex name per job: the Corestore key for that video is derived from it, so a restart reopens the same core.
   const newStore = () => `video:${randomUUID().replace(/-/g, '')}`
 
-  function add ({ id, title, source, channel = defaultChannel, private: isPrivate = false, plugin = 'http-acquire' }) {
+  function add ({ id, title, source, channel = defaultChannel, private: isPrivate = false, plugin = 'http-acquire', existing = null }) {
     if (typeof source?.url !== 'string' || !/^https?:\/\//.test(source.url)) throw new Error('source.url must be http(s)')
     const job = { jobId: randomUUID(), id, title, plugin, channel: Boolean(channel), private: Boolean(isPrivate || source.private), status: 'queued', created: Date.now(), store: newStore(), source: { url: source.url, headers: source.headers || {}, page: Boolean(source.page) } }
+    // Public copies only: a private job encrypts its own core.
+    if (existing && !job.private) job.existing = { key: existing.key || null, size: existing.size, sha256: existing.sha256, blobs: existing.blobs, blob: existing.blob }
     // Private media is encrypted with a per-video key; a resumed core must be reopened with the same one.
     if (job.private) job.storeKey = randomBytes(32).toString('hex')
     jobs.push(job)
@@ -330,8 +402,11 @@ export function createAcquirer (node, file, {
     const job = jobs.find(j => j.jobId === jobId)
     if (!job) return null
     // A job that will never run again drops its half-written core here; a running one does it in `run()`'s catch.
-    const drop = () => { if (job.store && !job.announce) node.dropStore?.(job.store)?.catch?.(() => {}) }
-    if (job.status === 'queued' || job.status === 'running') {
+    const drop = () => {
+      if (job.store && !job.announce) node.dropStore?.(job.store)?.catch?.(() => {})
+      if (job.existing && !job.announce) node.keepCopy(job.existing.blobs, false)
+    }
+    if (job.status === 'queued' || job.status === 'running' || job.status === 'copying') {
       const controller = running.get(job)
       job.status = 'cancelled'
       job.source = null

@@ -64,7 +64,8 @@ export function createGlobalSearch ({ swarm, peerConnections, connListeners, isP
   const runs = new Map() // query key -> run, newest last
   const controls = new Map() // conn -> Promise<control>
   const topicConns = new Map() // conn -> peerInfo, for connections the search lookup dialed
-  const served = new Map() // control -> { at: [] }, oldest first
+  const served = new Set() // open search channels, oldest first
+  const peerHits = new Map() // peerHex -> stamp[]
   const unpairs = new Map() // conn -> stop answering
   const nodeHits = []
 
@@ -93,11 +94,16 @@ export function createGlobalSearch ({ swarm, peerConnections, connListeners, isP
   async function answer (msg, control) {
     if (!serving || closed || isPrivate()) throw new Error('off')
     if (msg.type !== 'search') throw new Error('unknown request')
-    const rec = served.get(control) || { at: [] }
-    served.delete(control)
-    served.set(control, rec)
     const now = Date.now()
-    if (overLimit(rec.at, PER_CHANNEL, now) || overLimit(nodeHits, PER_NODE, now)) throw new Error('busy')
+    const peer = hexOf(control.conn) || 'anon'
+    let stamps = peerHits.get(peer)
+    if (!stamps) {
+      if (peerHits.size >= 256) peerHits.delete(peerHits.keys().next().value)
+      stamps = []
+      peerHits.set(peer, stamps)
+    }
+    if (served.has(control)) { served.delete(control); served.add(control) }
+    if (overLimit(stamps, PER_CHANNEL, now) || overLimit(nodeHits, PER_NODE, now)) throw new Error('busy')
     const ws = words(msg.q)
     const mid = validId(msg.mid)
     if (!ws.length && !mid) throw new Error('bad query')
@@ -114,9 +120,9 @@ export function createGlobalSearch ({ swarm, peerConnections, connListeners, isP
   }
 
   function track (control) {
-    served.set(control, { at: [] })
+    served.add(control)
     // The least recently used channel goes, never the connection under it.
-    for (const old of served.keys()) {
+    for (const old of served) {
       if (served.size <= SERVE_CHANNELS) break
       if (old !== control) { served.delete(old); old.close() }
     }
@@ -154,8 +160,9 @@ export function createGlobalSearch ({ swarm, peerConnections, connListeners, isP
     list = null
     for (const stop of unpairs.values()) stop()
     unpairs.clear()
-    for (const control of served.keys()) control.close()
+    for (const control of served) control.close()
     served.clear()
+    peerHits.clear()
     announce?.destroy().catch(() => {})
     announce = null
   }
@@ -184,7 +191,7 @@ export function createGlobalSearch ({ swarm, peerConnections, connListeners, isP
         protocol: PROTOCOL,
         label: 'Relay',
         onRequest: answer,
-        onClose: () => controls.delete(conn),
+        onClose: c => { served.delete(c); controls.delete(conn) },
         refused: 'This peer does not answer searches',
         duplicate: 'A search channel is already open with this peer',
         timedOut: 'Timed out opening the search channel'
@@ -287,9 +294,9 @@ export function createGlobalSearch ({ swarm, peerConnections, connListeners, isP
     serve,
     suspend: endSearch,
     close () {
-      closed = true
       endSearch()
       serve(null)
+      closed = true
       swarm.off('connection', onSwarmConnection)
       connListeners.delete(pair)
     }

@@ -17,17 +17,16 @@ const SPEC = {
   dhtPort: { env: 'PEARTUBE_DHT_PORT', type: 'port', def: 0 },
   bootstrap: { env: 'PEARTUBE_BOOTSTRAP', type: 'hosts', def: [] },
   relayThrough: { env: 'PEARTUBE_RELAY_THROUGH', type: 'keys', def: [] },
-  privateRouting: { env: 'PEARTUBE_PRIVATE_ROUTING', type: 'bool', def: false, fromEnv: s => Boolean(s) },
+  privateRouting: { env: 'PEARTUBE_PRIVATE_ROUTING', type: 'bool', def: false, fromEnv: flag },
   privateGuard: { env: 'PEARTUBE_PRIVATE_GUARD', type: 'bool', def: false, live: true, fromEnv: flag },
   privateGuardPort: { env: 'PEARTUBE_PRIVATE_GUARD_PORT', type: 'port', def: 0, live: true },
   channel: { env: 'PEARTUBE_CHANNEL', type: 'key', def: '' },
   allowedPeers: { env: 'PEARTUBE_ALLOWED_PEERS', type: 'keys', def: [], live: true },
   publishChannel: { env: 'PEARTUBE_PUBLISH_CHANNEL', type: 'bool', def: true, fromEnv: s => s !== '0' },
-  directory: { env: 'PEARTUBE_DIRECTORY', type: 'bool', def: false, live: true, fromEnv: s => Boolean(s) },
+  directory: { env: 'PEARTUBE_DIRECTORY', type: 'bool', def: false, live: true, fromEnv: flag },
   // Answer other nodes' global searches (src/search.js) with the media this relay holds.
   globalSearch: { env: 'PEARTUBE_GLOBAL_SEARCH', type: 'bool', def: false, live: true, fromEnv: flag },
   acquireConcurrency: { env: 'PEARTUBE_ACQUIRE_CONCURRENCY', type: 'number', def: 4, min: 1, max: 32, live: true },
-  watchDir: { env: 'PEARTUBE_WATCH_DIR', type: 'path', def: '', live: true },
   feeds: { env: 'PEARTUBE_MIRROR_FEEDS', type: 'urls', def: [], live: true },
   replicate: { env: 'PEARTUBE_REPLICATE', type: 'bool', def: false, live: true, fromEnv: s => Boolean(s) && s !== '0' && s !== 'false' },
   replicateSources: { env: 'PEARTUBE_REPLICATE', type: 'keys', def: [], live: true, fromEnv: s => flag(s) ? [] : csv(s.toLowerCase()) },
@@ -38,7 +37,7 @@ const SPEC = {
   cacheMaxGb: { env: 'PEARTUBE_CACHE_MAX_GB', type: 'number', def: 0, min: 0, max: 1e6, live: true },
   hiverelays: { env: 'PEARTUBE_HIVERELAYS', type: 'urls', def: [] },
   hiverelayApiKey: { env: 'PEARTUBE_HIVERELAY_API_KEY', type: 'secret', def: '' },
-  hiverelayDiscover: { env: 'PEARTUBE_HIVERELAY_DISCOVER', type: 'bool', def: false, fromEnv: s => Boolean(s) },
+  hiverelayDiscover: { env: 'PEARTUBE_HIVERELAY_DISCOVER', type: 'bool', def: false, fromEnv: flag },
   hiverelayReplicas: { env: 'PEARTUBE_HIVERELAY_REPLICAS', type: 'number', def: 3, min: 1, max: 32 },
   hiverelayUploadMbps: { env: 'PEARTUBE_HIVERELAY_UPLOAD_MBPS', type: 'number', def: 50, min: 0, max: 1e5 },
   rechunk: { env: 'PEARTUBE_RECHUNK', type: 'bool', def: false, live: true, fromEnv: flag },
@@ -73,9 +72,6 @@ function validate (key, spec, value) {
     case 'key':
       if (typeof value !== 'string' || (value && !HEX64.test(value.toLowerCase()))) throw bad(key, 'must be a 64-character hex key')
       return value.toLowerCase()
-    case 'path':
-      if (typeof value !== 'string' || (value && !value.startsWith('/'))) throw bad(key, 'must be an absolute folder path')
-      return value.trim()
     case 'secret':
       if (typeof value !== 'string' || value.length > 512) throw bad(key, 'must be text')
       return value
@@ -110,9 +106,10 @@ export function createSettings (storage, env = {}) {
   const file = join(storage, 'settings.json')
   let saved = {}
   try { saved = JSON.parse(readFileSync(file, 'utf8')) || {} } catch {}
-  // Files from before channels: `tracker` was this key, and the blob server had its own LAN port.
-  if (Object.hasOwn(saved, 'tracker') || Object.hasOwn(saved, 'streamHost') || Object.hasOwn(saved, 'streamPort')) {
-    const { tracker, streamHost: _h, streamPort: _p, ...rest } = saved
+  // Files from before channels: `tracker` was this key, and the blob server had its own LAN port. `watchDir` is
+  // env-only now (PEARTUBE_WATCH_DIR): a folder on the relay's disk is the host's to choose, not the API's.
+  if (['tracker', 'streamHost', 'streamPort', 'watchDir'].some(k => Object.hasOwn(saved, k))) {
+    const { tracker, streamHost: _h, streamPort: _p, watchDir: _w, ...rest } = saved
     saved = tracker && !Object.hasOwn(rest, 'channel') ? { ...rest, channel: tracker } : rest
     writeFileSync(file + '.tmp', JSON.stringify(saved, null, 2), { mode: 0o600 })
     renameSync(file + '.tmp', file)

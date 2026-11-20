@@ -12,7 +12,7 @@ import Corestore from 'corestore'
 import HyperDHT from 'hyperdht'
 import ByteStream from 'hypercore-byte-stream'
 import b4a from 'b4a'
-import { HEX64, RECEIVER_PORT, cleanName, formatReceiverUri, formatWatchUri, parseUri } from './protocol.js'
+import { HEX64, RECEIVER_PORT, cleanName, formatReceiverUri, formatWatchUri, parseUri, safeEqual } from './protocol.js'
 import { interfaceAdapter, selfAddressAdapter } from './lan.js'
 import { qrSvg } from './qr.js'
 import { openControl, serveControl } from './cast-control.js'
@@ -96,16 +96,6 @@ export async function resolvePeerStorage (candidate, fallback) {
   }
   probedPeerDirs.set(candidate, ok)
   return ok ? candidate : fallback
-}
-
-// Constant-time byte stroke so a nosy neighbor on shared Wi-Fi cannot side-channel the TV PIN.
-function safeEqual (a, b) {
-  const ba = b4a.from(String(a || ''))
-  const bb = b4a.from(String(b || ''))
-  if (ba.length === 0 || ba.length !== bb.length) return false
-  let diff = 0
-  for (let i = 0; i < ba.length; i++) diff |= ba[i] ^ bb[i]
-  return diff === 0
 }
 
 export function normalizePairCode (raw) {
@@ -383,7 +373,7 @@ export async function createReceiver ({
   let adHandle = null
   // Wrong pairing codes, counted apart for LAN links and all others: a stranger across the internet cannot lock out
   // pairing in the room.
-  const pairFailures = { lan: [], far: [] }
+  const pairFailures = { lan: [], far: [], peers: new Map() }
   let lastLoadedBlobs = ''
   let evicting = false
   let lastEvictAt = 0
@@ -674,12 +664,16 @@ export async function createReceiver ({
 
   actualPort = await listenHttp(httpSrv, port, '127.0.0.1')
 
-  function failedPairings (onLan) {
+  function failedPairings (onLan, peerHex) {
     const now = Date.now()
     const kind = onLan ? 'lan' : 'far'
     pairFailures[kind] = pairFailures[kind].filter(t => now - t < 15_000)
-    if (pairFailures[kind].length >= 6) throw new Error('Too many pairing attempts; wait 15 seconds')
-    return pairFailures[kind]
+    const peer = (pairFailures.peers.get(peerHex) || []).filter(t => now - t < 15_000)
+    if (peer.length) pairFailures.peers.set(peerHex, peer)
+    else pairFailures.peers.delete(peerHex)
+    // Per-peer limit (6 in 15 s) stops one stranger from locking out every other far peer; global cap (24) bounds brute force across keys.
+    if (peer.length >= 6 || pairFailures[kind].length >= 24) throw new Error('Too many pairing attempts; wait 15 seconds')
+    return { kind, peer }
   }
   // Pairing and remote control: the only way in besides this device's own screen. Any peer that connects to the node
   // can send these, so each request is checked. An open receiver is open to the room it is in (LAN links), not to
@@ -688,9 +682,14 @@ export async function createReceiver ({
     const onLan = node.isLanConnection(control.conn)
     const trusted = openAuth && onLan
     if (type === 'pair') {
-      const failures = failedPairings(onLan)
+      const peerHex = control.conn.remotePublicKey ? b4a.toString(control.conn.remotePublicKey, 'hex') : (onLan ? 'lan' : 'far')
+      const { kind, peer } = failedPairings(onLan, peerHex)
       if (!trusted && !safeEqual(normalizePairCode(msg.code), identity.pairCode)) {
-        failures.push(Date.now())
+        const at = Date.now()
+        pairFailures[kind].push(at)
+        peer.push(at)
+        if (pairFailures.peers.size >= 256 && !pairFailures.peers.has(peerHex)) pairFailures.peers.delete(pairFailures.peers.keys().next().value)
+        pairFailures.peers.set(peerHex, peer)
         throw new Error('Invalid TV pairing code')
       }
       // An open receiver takes any LAN link without a code, so it hands that peer no permanent token: a saved one
@@ -995,6 +994,7 @@ export function createCastController ({
         record = { id: res.deviceId || record.id, name: cleanName(res.name || record.name, 'PearTube TV'), publicKey: key, token: res.token || '' }
       } finally {
         control.close()
+        getNode()?.leavePeer?.(key)
       }
     }
     saved.set(record.id, record)
@@ -1020,6 +1020,7 @@ export function createCastController ({
     const session = active
     active = null
     session?.control?.close()
+    if (session?.publicKey) getNode()?.leavePeer?.(session.publicKey)
   }
   function claim (mine, session) {
     if (mine !== attempt) {
@@ -1032,7 +1033,7 @@ export function createCastController ({
 
   // Opens the control channel for a cast or an attach. The session shows state pushes once `claim` makes it active.
   async function openSession (receiverId, target) {
-    const session = { receiverId, receiverName: target.name, transport: '', token: target.token, state: idleCastState(), control: null }
+    const session = { receiverId, publicKey: target.publicKey, receiverName: target.name, transport: '', token: target.token, state: idleCastState(), control: null }
     session.control = await connectReceiver(target, {
       onEvent: msg => {
         if (active !== session || msg.event !== 'state' || !msg.state) return

@@ -8,7 +8,7 @@ import { pipelinePromise, Readable, Transform } from 'streamx'
 import { readdirSync, readFileSync, statfsSync, statSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { unwrapVideoKey, wrapVideoKey } from '../mnemonic.js'
-import { BLOB_BLOCK_SIZE, HEX64, ID, cleanText, decodeOp, formatWatchUri, isSystemViewKey, isUniform512, str } from '../protocol.js'
+import { BLOB_BLOCK_SIZE, HEX64, ID, cleanMusic, cleanText, decodeOp, formatWatchUri, isSystemViewKey, isUniform512, str } from '../protocol.js'
 
 const coreByteLen = c => c.byteLength || 0
 
@@ -759,7 +759,7 @@ export async function createBlobs (ctx) {
   // 60 GB remux; an unnamed one is one-shot (watch-dir, plugins) and is purged when its write fails. `source` may be a
   // factory: it receives the byte offset already on disk and returns the stream from there.
   async function put (meta, source, onData = null) {
-    const { id, title, private: isPrivate = false, epoch: explicitEpoch = null, store: storeName = null } = meta
+    const { id, title, private: isPrivate = false, epoch: explicitEpoch = null, store: storeName = null, music = null } = meta
     if (!str(id, ID)) throw new Error(`Invalid id ${id}`)
     const wantPrivate = Boolean(isPrivate || explicitEpoch)
     let videoKey = null
@@ -910,6 +910,7 @@ export async function createBlobs (ctx) {
         sha256,
         blobs: keyHex,
         blob,
+        ...(music ? { music: cleanMusic(music) } : {}),
         ...(videoKey ? { epoch: ep, wrappedKey } : {})
       }
     } catch (err) {

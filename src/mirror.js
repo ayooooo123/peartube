@@ -7,11 +7,12 @@
 //   - Recruits existing HiveRelays (`hiverelay-seed`) via HTTP `/seed-core` and P2P `hiverelay-seed` DHT as supplemental seeders
 //   - Checks that held public files are media before global search offers them (`media-check`)
 //   - Dynamically loads custom user plugins dropped into `/data/plugins/*.mjs` or `*.js`
-import { createReadStream, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, statSync, statfsSync, writeFileSync } from 'node:fs'
+import { closeSync, createReadStream, existsSync, fstatSync, mkdirSync, openSync, readSync, readdirSync, readFileSync, renameSync, statSync, statfsSync, writeFileSync } from 'node:fs'
 import { basename, extname, join, resolve } from 'node:path'
 import { createHash } from 'node:crypto'
 import b4a from 'b4a'
 import { ID, MAX_TITLE, MEDIA_FILE, mediaFormat, parseUri } from './protocol.js'
+import { albumKey, parseTags } from './tags.js'
 import { createHiverelaySeeder } from './hiverelay.js'
 import { createTrafficGate } from './traffic.js'
 import { send } from './art.js'
@@ -26,11 +27,35 @@ async function fetchJson (url, headers = {}) {
   return JSON.parse(res.body)
 }
 
-// Infers a canonical PearTube ID (`imdb:tt...:s01e02`, `imdb:tt...`, or `clip:<slug>`) from a filename or sidecar.
-function inferMediaMeta (filePath, sidecar = null) {
+// Infers a canonical PearTube ID (`imdb:tt...:s01e02`, `mb:<release>:s01e03`, `album:<hash>:s01e03`,
+// `imdb:tt...`, or `clip:<slug>`) from a filename, its own tags, or a sidecar.
+//
+// Music comes first when the file carries tags: an album's identity is the release, not the file name, and a folder of
+// "01 - Intro.flac" files names nothing. The album is decided once per folder (`albumIdentity`) and handed in, because
+// a compilation names a different artist on every track and a folder where only some rips carry a MusicBrainz id must
+// still be one album. `title` is the album on every track, the way an episode's title is its show's name: the clients
+// name a group from its first row, so a track's own name travels in `music` instead.
+function inferMediaMeta (filePath, sidecar = null, tags = null, album = null) {
   const stem = basename(filePath, extname(filePath))
   if (sidecar && typeof sidecar.id === 'string' && ID.test(sidecar.id.toLowerCase())) {
     return { id: sidecar.id.toLowerCase(), title: String(sidecar.title || stem).slice(0, MAX_TITLE) }
+  }
+  // A file in an album folder joins that album even when its own tags are missing or partial: its track number is
+  // its own, else the leading number in its name ("03 - ..."), else the caller passes the position it sits at. A
+  // folder of untagged rips is exactly the case tags exist to rescue, so it must not fall through to `clip:`.
+  if (album && (tags || album.tracks > 1)) {
+    const fromName = /^(\d{1,3})\b/.exec(stem)
+    const track = clamp(tags?.track, 1, 999) || clamp(fromName && Number(fromName[1]), 1, 999) || clamp(album.position, 1, 999)
+    if (track) {
+      const disc = clamp(tags?.disc, 1, 99) || 1
+      const se = `s${String(disc).padStart(2, '0')}e${String(track).padStart(2, '0')}`
+      const named = tags?.title || (/^\d{1,3}\s*[-._ ]+\s*(.+)$/.exec(stem) || [])[1] || stem
+      return {
+        id: `${album.release}:${se}`,
+        title: album.title,
+        music: { title: named, artist: tags?.artist || tags?.albumArtist }
+      }
+    }
   }
   const imdb = stem.match(/\b(tt\d{6,10})\b/i)
   const ep = stem.match(/\bs(\d{2})e(\d{2,3})\b/i)
@@ -45,6 +70,49 @@ function inferMediaMeta (filePath, sidecar = null) {
   const slug = stem.toLowerCase().replace(/[^a-z0-9]+/g, '')
   const suffix = slug.length >= 4 ? slug.slice(0, 24) : createHash('sha256').update(stem).digest('hex').slice(0, 12)
   return { id: `clip:${suffix}`, title: stem.replace(/[._]+/g, ' ').trim() || stem }
+}
+
+// The id suffix is `s<disc>e<track>`: two digits each, three for a track, so an out-of-range or unparseable number
+// would produce an id `decodeOp` rejects and abort the whole scan. Clamp instead, and let `null` mean "not stated".
+const clamp = (v, lo, hi) => Number.isSafeInteger(v) && v >= lo ? Math.min(v, hi) : null
+
+// One album's identity, from every tagged file in its folder rather than from any single one of them.
+//
+// The release id wins when the folder agrees on one: it is what makes two rips of the same album land on the same
+// tracks, and it survives a rename. The convention tags only some files of a folder, so one id from any file that has
+// it is taken. Without one, the album's names and year are hashed; the year is the first four digits only, since a
+// reissue and a full date would otherwise split one album, and `albumKey` folds case, punctuation and accents so a
+// differently-typed folder still agrees.
+function albumIdentity (files) {
+  let mbid = null
+  let discogs = null
+  const names = new Map()
+  for (const t of files) {
+    if (!t || !t.track) continue
+    if (!mbid && t.mbid) mbid = t.mbid
+    if (!discogs && t.discogs) discogs = t.discogs
+    if (t.album) {
+      const artist = t.albumArtist || t.artist || ''
+      const key = albumKey({ albumArtist: artist, album: t.album, year: t.year })
+      names.set(key, (names.get(key) || 0) + 1)
+    }
+  }
+  // The most common album across the folder: a bonus track or a guest credit does not rename the release.
+  const best = [...names.entries()].sort((a, b) => b[1] - a[1])[0]?.[0]
+  if (!best && !mbid && !discogs) return null
+  const named = [...files].find(t => t && t.album && albumKey({ albumArtist: t.albumArtist || t.artist || '', album: t.album, year: t.year }) === best)
+  const release = mbid
+    ? `mb:${mbid}`
+    : discogs
+      ? `discogs:r${discogs}`
+      : `album:${createHash('sha256').update(best).digest('hex').slice(0, 20)}`
+  const title = [named?.albumArtist || named?.artist, named?.album].filter(Boolean).join(' · ').slice(0, MAX_TITLE)
+  // A track with no number of its own takes the place it sorts at, so a folder of untagged rips is still one album.
+  return {
+    release,
+    title: title || basename(named?.file || '') || 'Untitled album',
+    tracks: files.filter(Boolean).length
+  }
 }
 
 export async function createMirrorHost ({
@@ -105,8 +173,8 @@ export async function createMirrorHost ({
         onchange?.()
         return job
       },
-      async ingestStream ({ id, title, stream, private: isPrivate = false }) {
-        const op = await node.put({ id, title, private: Boolean(isPrivate) }, stream)
+      async ingestStream ({ id, title, stream, private: isPrivate = false, music = null }) {
+        const op = await node.put({ id, title, private: Boolean(isPrivate), music }, stream)
         await node.append(op)
         onchange?.()
         return op
@@ -208,38 +276,127 @@ export async function createMirrorHost ({
     }
   })
 
+  // The tag read is bounded and never through the blob server: a core must not be opened just to name a track, and the
+  // announce is written from the staged file before the core exists. 1 MiB covers a FLAC picture block plus every
+  // comment an album carries; a file whose tags sit past it falls back to its name, as before. Synchronous, because a
+  // scan names every file of an album before it writes any of them, and the whole read is a few ms off page cache.
+  const TAG_BYTES = 1024 * 1024
+  function readTags (full) {
+    let fd = -1
+    try {
+      fd = openSync(full, 'r')
+      const buf = b4a.alloc(Math.min(fstatSync(fd).size, TAG_BYTES))
+      let read = 0
+      while (read < buf.length) {
+        const n = readSync(fd, buf, read, buf.length - read, read)
+        if (n <= 0) break
+        read += n
+      }
+      return parseTags(read === buf.length ? buf : buf.subarray(0, read))
+    } catch {
+      return null
+    } finally {
+      if (fd >= 0) try { closeSync(fd) } catch {}
+    }
+  }
+
+  // Album folders are one level deep, so the walk cannot follow a directory into itself and cannot loop. `withFileTypes`
+  // reports a directory by its own type, not by what a symlink points at, so a symlinked folder is skipped instead of
+  // publishing files from outside the import folder. Dot and `@` names are skipped, which keeps macOS `._01.flac` and
+  // Synology's `@eaDir` out; both would otherwise match MEDIA_FILE and land as clips.
+  const SKIP_NAME = /^[.@]/
+  function listMedia (root) {
+    const out = []
+    let entries
+    try { entries = readdirSync(root, { withFileTypes: true }) } catch { return out }
+    for (const dirent of entries.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0))) {
+      const name = dirent.name
+      if (SKIP_NAME.test(name)) continue
+      const full = join(root, name)
+      if (dirent.isDirectory()) {
+        let kids
+        try { kids = readdirSync(full, { withFileTypes: true }) } catch { continue }
+        for (const kid of kids.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0))) {
+          if (SKIP_NAME.test(kid.name) || kid.isDirectory() || !MEDIA_FILE.test(kid.name)) continue
+          const path = join(full, kid.name)
+          const st = statOf(path)
+          if (st) out.push({ rel: `${name}/${kid.name}`, dir: name, full: path, st })
+        }
+        continue
+      }
+      if (!MEDIA_FILE.test(name)) continue
+      const st = statOf(full)
+      if (st) out.push({ rel: name, dir: null, full, st })
+    }
+    return out
+  }
+  function statOf (path) {
+    try {
+      const st = statSync(path)
+      return st.isFile() && st.size > 0 ? st : null
+    } catch { return null }
+  }
+
+  // One album's identity per folder, decided from every file in it that has tags, before the first track is read.
+  // Files already imported contribute the id they were stored with, so adding a track to an album that is already on
+  // the channel does not renumber its neighbours when the new file's tags read differently.
+  async function albumFor (group, root, ledgerKeyOf) {
+    const tags = []
+    for (const f of group) {
+      const prev = watchLedger[ledgerKeyOf(f)]
+      const hit = prev?.id?.match(/^(mb:[0-9a-f]{32}|discogs:r\d{1,12}|album:[0-9a-f]{20}):s\d{2}e\d{2,3}$/)
+      if (hit) tags.push({ track: 1, mbid: hit[1].startsWith('mb:') ? hit[1].slice(3) : null, discogs: hit[1].startsWith('discogs:r') ? hit[1].slice(10) : null })
+      else tags.push(readTags(f.full))
+    }
+    return albumIdentity(tags.map((t, i) => (t ? { ...t, file: group[i].full } : null)))
+  }
+
   let scanningWatchDir = false
   async function scanFolder (dir, ctx) {
     if (!dir || !existsSync(dir)) return { scanned: 0, ingested: 0, items: [] }
     if (scanningWatchDir) return { scanned: 0, ingested: 0, busy: true, items: [] }
     scanningWatchDir = true
     try {
-      const root = resolve(dir)
-      const names = readdirSync(root).sort()
+      const files = listMedia(resolve(dir))
+      // Nested folders are albums, so each is identified once; root files are handled one at a time as before.
+      const albums = new Map()
+      for (const f of files) if (f.dir && !albums.has(f.dir)) albums.set(f.dir, [])
+      for (const f of files) if (f.dir) albums.get(f.dir).push(f)
+      const identities = new Map()
+      for (const [name, group] of albums) identities.set(name, await albumFor(group, resolve(dir), f => f.rel))
       let scanned = 0
       const ingested = []
-      for (const name of names) {
+      const failed = []
+      for (const { rel, dir: album, full, st } of files) {
         if (closed) break
-        if (!MEDIA_FILE.test(name)) continue
-        const full = join(root, name)
-        let st
-        try { st = statSync(full) } catch { continue }
-        if (!st.isFile() || st.size <= 0) continue
         scanned++
-        const prev = watchLedger[name]
+        // A file already recorded under its base name (every import before this change) keeps that key, so an existing
+        // mirror-watch.json is not invalidated and nothing already imported is ingested a second time.
+        const legacyKey = basename(rel)
+        const prev = watchLedger[rel] || (album ? null : watchLedger[legacyKey])
         if (prev && prev.size === st.size && prev.mtimeMs === Math.trunc(st.mtimeMs)) continue
         let sidecar = null
         const sidecarPath = `${full}.json`
         if (existsSync(sidecarPath)) {
           try { sidecar = JSON.parse(readFileSync(sidecarPath, 'utf8')) } catch {}
         }
-        const meta = inferMediaMeta(full, sidecar)
-        const op = await ctx.ingestStream({ id: meta.id, title: meta.title, stream: createReadStream(full), channel: mirrorChannel })
-        watchLedger[name] = { size: st.size, mtimeMs: Math.trunc(st.mtimeMs), id: op.id, sha256: op.sha256, ingestedAt: Date.now() }
-        saveWatchLedger()
-        ingested.push({ file: name, id: op.id, title: op.title, size: op.size, sha256: op.sha256 })
+        // One bad file must not stop the album or the scan: an id `put` rejects would otherwise abort every later file
+        // on every poll. The failure is reported in the result, not thrown.
+        try {
+          const tags = album ? readTags(full) : null
+          // A file with no track number of its own takes the place it holds in the folder, so a folder of untagged
+          // rips still numbers its tracks 1..n instead of every one of them landing on track 1.
+          const position = album ? albums.get(album).findIndex(f => f.rel === rel) + 1 : 0
+          const meta = inferMediaMeta(full, sidecar, tags, album ? { ...identities.get(album), position } : null)
+          const op = await ctx.ingestStream({ id: meta.id, title: meta.title, stream: createReadStream(full), channel: mirrorChannel, music: meta.music || null })
+          watchLedger[rel] = { size: st.size, mtimeMs: Math.trunc(st.mtimeMs), id: op.id, blobs: op.blobs, sha256: op.sha256, ingestedAt: Date.now() }
+          saveWatchLedger()
+          ingested.push({ file: basename(rel), id: op.id, title: op.title, size: op.size, sha256: op.sha256 })
+        } catch (err) {
+          failed.push({ file: basename(rel), error: err?.message || String(err) })
+        }
       }
-      return { scanned, ingested: ingested.length, items: ingested }
+      return { scanned, ingested: ingested.length, failed, items: ingested }
     } finally {
       scanningWatchDir = false
     }

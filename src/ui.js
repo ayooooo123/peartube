@@ -907,11 +907,15 @@ function libraryTiles () {
   const tiles = new Map()
   for (const e of S.entries) {
     const m = e.id.match(/^imdb:(tt[0-9]+)(?::s([0-9]+)e([0-9]+))?$/)
-    const kind = !m ? 'video' : m[2] ? 'show' : 'movie'
-    const key = kind === 'video' ? 'v:' + e.id + '/' + e.sha256 : kind + ':' + m[1]
+    // An imdb: id is a film or an episode. Anything else with a season and an episode is a track of an album
+    // (mb:, discogs: and album: ids carry disc and track in that suffix), and is grouped by its series key so an
+    // album is one tile with one row per track instead of one loose video per file.
+    const music = !m && e.season != null
+    const kind = !m ? (music ? 'album' : 'video') : m[2] ? 'show' : 'movie'
+    const key = kind === 'video' ? 'v:' + e.id + '/' + e.sha256 : music ? 'album:' + e.seriesKey : kind + ':' + m[1]
     let t = tiles.get(key)
     if (!t) tiles.set(key, t = { key, kind, imdb: m ? m[1] : null, title: e.title.replace(/\\s+S[0-9]+E[0-9]+$/i, ''), items: [] })
-    t.items.push({ e, season: m && m[2] ? Number(m[2]) : null, episode: m && m[3] ? Number(m[3]) : null })
+    t.items.push({ e, season: m ? (m[2] ? Number(m[2]) : null) : e.season, episode: m ? (m[3] ? Number(m[3]) : null) : e.episode })
   }
   for (const t of tiles.values()) {
     t.items.sort((a, b) => (a.season - b.season) || (a.episode - b.episode) || (b.e.size - a.e.size))
@@ -926,12 +930,17 @@ function tileLine (t) {
     const seasons = new Set(t.items.map(i => i.season)).size
     return (seasons > 1 ? plural(seasons, 'season', 'seasons') + ' · ' : '') + plural(n, 'episode', 'episodes')
   }
+  if (t.kind === 'album') {
+    const discs = new Set(t.items.map(i => i.season)).size
+    const bytes = t.items.reduce((sum, i) => sum + (i.e.size || 0), 0)
+    return [(discs > 1 ? plural(discs, 'disc', 'discs') + ' · ' : '') + plural(n, 'track', 'tracks'), size(bytes)].join(' · ')
+  }
   const e = t.items[0].e
   return [t.kind === 'movie' ? 'Movie' : 'Video', n > 1 ? n + ' versions' : size(e.size)].join(' · ')
 }
 function tileState (t) {
   if (t.saved === t.items.length) return ['Saved here', 'ok']
-  if (t.saved || t.partial) return [t.kind === 'show' && t.saved ? t.saved + ' saved here' : 'Partly saved', '']
+  if (t.saved || t.partial) return [t.kind === 'show' || t.kind === 'album' ? t.saved + ' saved here' : 'Partly saved', '']
   return ['On the network', '']
 }
 // Continue watching: where this browser stopped, remembered locally. No protocol change,
@@ -1033,7 +1042,7 @@ function renderLive () {
 let libKind = 'all'
 let libShown = 60
 let libSignature = ''
-const KINDS = [['all', 'All'], ['movie', 'Movies'], ['show', 'Shows'], ['video', 'Videos']]
+const KINDS = [['all', 'All'], ['movie', 'Movies'], ['show', 'Shows'], ['album', 'Music'], ['video', 'Videos']]
 function renderLibrary (force) {
   renderJobs()
   // The scan is offered only on a relay whose host set an import folder.

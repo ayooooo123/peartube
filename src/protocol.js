@@ -96,6 +96,21 @@ export function ipv6Groups (ip) {
   const groups = [...head, ...Array(halves.length === 2 ? missing : 0).fill('0'), ...rest]
   return groups.every(g => /^[0-9a-f]{1,4}$/.test(g)) ? groups.map(g => parseInt(g, 16)) : null
 }
+// What a music announce may say about itself beyond its title: who made it and where it sits in its release. Every
+// value is free text a peer wrote, so it is clamped to MAX_TITLE and made well-formed here, once, on the way in.
+// A track's own name lives here because `title` is the album on every track, the way an episode's title is its show's
+// name: the clients name a group from its first row. Disc and track are NOT repeated here; they are the id's own
+// `:sNNeMM` suffix, and two copies can only disagree.
+const musicField = v => typeof v === 'string' && v.length > 0 ? v.slice(0, MAX_TITLE).toWellFormed() : null
+export function cleanMusic (music) {
+  if (!music || typeof music !== 'object') return null
+  const out = {}
+  for (const key of ['title', 'artist']) {
+    const v = musicField(music[key])
+    if (v) out[key] = v
+  }
+  return Object.keys(out).length > 0 ? out : null
+}
 function parseQuery (raw) {
   const out = {}
   if (!raw) return out

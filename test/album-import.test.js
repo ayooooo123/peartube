@@ -1,0 +1,225 @@
+// A folder of music files becomes one identified album: each track announced under the release's id with its disc
+// and track in the suffix, its own name carried in `music`, and all of them grouped as one tile by the web UI.
+//
+// The fixtures are built here rather than committed: a FLAC with Vorbis comments and a MusicBrainz release id, an
+// MP3 with ID3v2.4 frames and no release id, and a folder of untagged files whose names say nothing. What each one
+// must produce is the point of the test — the id a track lands on decides whether two relays agree about an album,
+// and only an id that survives a rename and a different rip is worth writing into an append-only channel.
+import test from 'node:test'
+import assert from 'node:assert/strict'
+import { spawn } from 'node:child_process'
+import { createInterface } from 'node:readline'
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join, dirname, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
+import { parseTags, albumKey } from '../src/tags.js'
+
+const root = resolve(dirname(fileURLToPath(import.meta.url)), '..')
+const sleep = ms => new Promise(resolve => setTimeout(resolve, ms))
+
+// A FLAC whose only metadata block is a Vorbis comment: `fLaC`, one block header with the last-block flag, then
+// little-endian vendor and tag lengths. No audio frames are needed to read tags, but they are cheap, so a little
+// follows to keep the file a plausible size.
+function flac (tags) {
+  const enc = s => Buffer.from(s, 'utf8')
+  const vendor = enc('peartube-test')
+  const entries = Object.entries(tags).map(([k, v]) => enc(`${k}=${v}`))
+  const body = []
+  const vh = Buffer.alloc(4); vh.writeUInt32LE(vendor.length, 0)
+  body.push(vh, vendor)
+  const ch = Buffer.alloc(4); ch.writeUInt32LE(entries.length, 0)
+  body.push(ch)
+  for (const e of entries) { const h = Buffer.alloc(4); h.writeUInt32LE(e.length, 0); body.push(h, e) }
+  const comment = Buffer.concat(body)
+  const header = Buffer.from([0x84, (comment.length >> 16) & 0xff, (comment.length >> 8) & 0xff, comment.length & 0xff])
+  return Buffer.concat([enc('fLaC'), header, comment, Buffer.alloc(4096, 0x11)])
+}
+
+// An ID3v2.4 tag whose frames are the text frames a tagger writes, plus a `TXXX` frame for the MusicBrainz id the
+// way ffmpeg spells it and the way Picard spells it (both must match, since a mirror sees both).
+function mp3 ({ frames = {}, txxx = {}, version = 4 }) {
+  const textFrame = (id, value) => {
+    const body = Buffer.concat([Buffer.from([3]), Buffer.from(value, 'utf8')])
+    const h = Buffer.alloc(10)
+    h.write(id, 0, 'latin1')
+    if (version === 4) {
+      const n = body.length
+      h[4] = (n >> 21) & 0x7f; h[5] = (n >> 14) & 0x7f; h[6] = (n >> 7) & 0x7f; h[7] = n & 0x7f
+    } else {
+      h.writeUInt32BE(body.length, 4)
+    }
+    return Buffer.concat([h, body])
+  }
+  const parts = []
+  for (const [id, value] of Object.entries(frames)) parts.push(textFrame(id, value))
+  for (const [desc, value] of Object.entries(txxx)) {
+    const body = Buffer.concat([Buffer.from([3]), Buffer.from(desc, 'utf8'), Buffer.from([0]), Buffer.from(value, 'utf8')])
+    const h = Buffer.alloc(10)
+    h.write('TXXX', 0, 'latin1')
+    if (version === 4) {
+      const n = body.length
+      h[4] = (n >> 21) & 0x7f; h[5] = (n >> 14) & 0x7f; h[6] = (n >> 7) & 0x7f; h[7] = n & 0x7f
+    } else {
+      h.writeUInt32BE(body.length, 4)
+    }
+    parts.push(Buffer.concat([h, body]))
+  }
+  const framesBuf = Buffer.concat(parts)
+  const header = Buffer.alloc(10)
+  header.write('ID3', 0, 'latin1')
+  header[3] = version; header[4] = 0; header[5] = 0
+  const n = framesBuf.length
+  header[6] = (n >> 21) & 0x7f; header[7] = (n >> 14) & 0x7f; header[8] = (n >> 7) & 0x7f; header[9] = n & 0x7f
+  return Buffer.concat([header, framesBuf, Buffer.alloc(1024, 0x22), Buffer.from([0xff, 0xfb, 0x90, 0x00])])
+}
+
+test('a FLAC with Vorbis comments names its release, disc and track', () => {
+  const tags = parseTags(flac({
+    ALBUM: 'Blue Train',
+    ALBUMARTIST: 'John Coltrane',
+    TITLE: 'Moment\'s Notice',
+    DATE: '1958',
+    DISCNUMBER: '1',
+    TRACKNUMBER: '3',
+    MUSICBRAINZ_ALBUMID: '0123456789abcdef0123456789abcdef'
+  }))
+  assert.equal(tags.container, 'flac')
+  assert.equal(tags.album, 'Blue Train')
+  assert.equal(tags.albumArtist, 'John Coltrane')
+  assert.equal(tags.title, 'Moment\'s Notice')
+  assert.equal(tags.year, 1958)
+  assert.equal(tags.disc, 1)
+  assert.equal(tags.track, 3)
+  assert.equal(tags.mbid, '0123456789abcdef0123456789abcdef')
+})
+
+test('ID3v2.4 reads synchsafe size, and both taggers spellings of the release id', () => {
+  const ffmpeg = parseTags(mp3({
+    frames: { TALB: 'Kid A', TPE2: 'Radiohead', TIT2: 'Everything In Its Right Place', TDRC: '2000', TRCK: '1/10', TPOS: '1/1' },
+    txxx: { MUSICBRAINZ_ALBUMID: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' }
+  }))
+  assert.equal(ffmpeg.album, 'Kid A')
+  assert.equal(ffmpeg.track, 1)
+  assert.equal(ffmpeg.disc, 1)
+  assert.equal(ffmpeg.mbid, 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa')
+
+  // Picard writes the description with spaces, and the id with hyphens.
+  const picard = parseTags(mp3({
+    frames: { TALB: 'Kid A' },
+    txxx: { 'MusicBrainz Album Id': 'b0b1c2d3-1111-2222-3333-444455556666' }
+  }))
+  assert.equal(picard.mbid, 'b0b1c2d3111122223333444455556666')
+})
+
+test('ID3v2.3 reads a plain frame size, not a synchsafe one', () => {
+  const tags = parseTags(mp3({ version: 3, frames: { TALB: 'OK Computer', TPE1: 'Radiohead', TYER: '1997', TRCK: '3' } }))
+  assert.equal(tags.album, 'OK Computer')
+  assert.equal(tags.artist, 'Radiohead')
+  assert.equal(tags.year, 1997)
+  assert.equal(tags.track, 3)
+})
+
+test('a truncated tag never throws and never loops', () => {
+  const full = flac({ ALBUM: 'Half', TRACKNUMBER: '1' })
+  for (let cut = 0; cut < full.length; cut += 7) {
+    assert.doesNotThrow(() => parseTags(full.subarray(0, cut)), `cut ${cut}`)
+  }
+  const id3 = mp3({ frames: { TALB: 'Half' } })
+  for (let cut = 0; cut < id3.length; cut += 11) {
+    assert.doesNotThrow(() => parseTags(id3.subarray(0, cut)), `cut ${cut}`)
+  }
+})
+
+test('the same album folds to one key however it is typed', () => {
+  assert.equal(
+    albumKey({ albumArtist: 'Sigur Rós', album: 'Ágætis byrjun', year: 1999 }),
+    albumKey({ albumArtist: 'sigur ros', album: 'Agætis Byrjun!', year: 1999 })
+  )
+  assert.notEqual(
+    albumKey({ albumArtist: 'A', album: 'Same Name', year: 1999 }),
+    albumKey({ albumArtist: 'A', album: 'Same Name', year: 2009 })
+  )
+})
+
+// The whole path, through a real relay: a folder is scanned, each track announced, and the catalog hands back one
+// album whose tracks say which one they are.
+test('a folder becomes one album through a relay', { timeout: 240_000 }, async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'peartube-album-'))
+  const storage = join(dir, 'storage')
+  const watch = join(dir, 'staging')
+  const albumDir = join(watch, 'John Coltrane - Blue Train (1958)')
+  mkdirSync(albumDir, { recursive: true })
+  mkdirSync(storage, { recursive: true })
+
+  writeFileSync(join(albumDir, '01 - Blue Train.flac'), flac({
+    ALBUM: 'Blue Train', ALBUMARTIST: 'John Coltrane', TITLE: 'Blue Train', DATE: '1958',
+    DISCNUMBER: '1', TRACKNUMBER: '1', MUSICBRAINZ_ALBUMID: '0123456789abcdef0123456789abcdef'
+  }))
+  writeFileSync(join(albumDir, '02 - Moment\'s Notice.flac'), flac({
+    ALBUM: 'Blue Train', ALBUMARTIST: 'John Coltrane', TITLE: 'Moment\'s Notice', DATE: '1958',
+    DISCNUMBER: '1', TRACKNUMBER: '2', MUSICBRAINZ_ALBUMID: '0123456789abcdef0123456789abcdef'
+  }))
+  // Untagged, named so nothing about it says Blue Train: it must still join the album the others named.
+  // Untagged: a bare FLAC header with an empty comment block, so only its place in the folder names it.
+  writeFileSync(join(albumDir, '03.flac'), flac({}))
+
+  const port = 8300 + Math.floor(Math.random() * 400)
+  const proc = spawn(join(root, 'node_modules/.bin/bare'), [join(root, 'bin/relay.js')], {
+    cwd: root,
+    env: { ...process.env, PEARTUBE_STORAGE: storage, PEARTUBE_WATCH_DIR: watch, PEARTUBE_API_PORT: String(port), PEARTUBE_LAN_HOST: '127.0.0.1', PEARTUBE_API_TOKEN: '' },
+    stdio: ['ignore', 'pipe', 'pipe']
+  })
+  const errors = []
+  createInterface({ input: proc.stderr }).on('line', line => errors.push(line))
+  try {
+    await new Promise((resolveReady, reject) => {
+      const timer = setTimeout(() => reject(new Error('relay did not start: ' + errors.join('\n'))), 90_000)
+      createInterface({ input: proc.stdout }).on('line', line => {
+        if (line.includes('relay ready')) { clearTimeout(timer); resolveReady() }
+      })
+      proc.once('exit', code => reject(new Error(`relay exited ${code}: ${errors.join('\n')}`)))
+    })
+
+    // The import runs at startup and on a poll; wait for the catalog to hold the album rather than for a fixed time.
+    let rows = []
+    for (let i = 0; i < 120; i++) {
+      const res = await fetch(`http://127.0.0.1:${port}/v1/entries`).catch(() => null)
+      if (res?.ok) {
+        rows = (await res.json()).results || []
+        if (rows.length >= 2) break
+      }
+      await sleep(1000)
+    }
+    assert.ok(rows.length >= 3, `expected the album's tracks, got ${rows.length}: ${errors.slice(-3).join(' ')}`)
+
+    const ids = rows.map(r => r.id)
+    for (const id of ids) assert.match(id, /^mb:0123456789abcdef0123456789abcdef:s01e\d{2}$/, id)
+    assert.equal(rows[0].title, 'John Coltrane · Blue Train', 'every track carries the album as its title')
+    assert.equal(new Set(rows.map(r => r.seriesKey)).size, 1, 'one album')
+    assert.equal(new Set(rows.map(r => r.season)).size, 1, 'one disc')
+    // Two tagged tracks and one untagged file (the untagged one is named "03", so it is track 3): an untagged file
+    // in an album folder is a track of that album, not a clip of its own.
+    assert.deepEqual([...new Set(rows.map(r => r.episode))].sort((a, b) => a - b), [1, 2, 3])
+
+    const first = rows.find(r => r.episode === 1)
+    assert.equal(first.music?.title, 'Blue Train', 'the track says its own name')
+    assert.equal(first.music?.artist, 'John Coltrane')
+
+    // The M3U is in track order and names the album.
+    const m3u = await (await fetch(`http://127.0.0.1:${port}/v1/playlist.m3u`)).text()
+    const lines = m3u.split('\n').filter(l => l.startsWith('#EXTINF'))
+    assert.equal(lines.length, rows.length)
+    assert.match(lines[0], /Blue Train/)
+
+    // Nothing internal leaked: the staging folder and the socket address stay out of the channel.
+    const json = JSON.stringify(rows)
+    assert.ok(!json.includes(dir), 'no staging path in the catalog')
+    assert.ok(!json.includes(albumDir), 'no album folder in the catalog')
+  } finally {
+    proc.kill('SIGTERM')
+    await sleep(1500)
+    proc.kill('SIGKILL')
+    rmSync(dir, { recursive: true, force: true })
+  }
+})

@@ -4,13 +4,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends git ca-certific
 WORKDIR /app
 COPY package.json package-lock.json ./
 COPY worklet/crypto ./worklet/crypto
+COPY prebuilds ./prebuilds
 # Keep only what Bare loads on this platform: the `bare` binary moves out of its npm package, native add-ons keep only
 # their linux-<arch> prebuilds, and the `.node` builds for Node go.
 RUN npm ci --omit=dev --no-audit --no-fund \
   && PLATFORM=$(basename node_modules/bare-runtime-linux-* | sed 's/^bare-runtime-//') \
   && mv node_modules/bare-runtime-$PLATFORM/bin/bare /bare && chmod +x /bare \
   && rm -rf node_modules/bare-runtime-$PLATFORM node_modules/.bin \
-  && find node_modules -type d -name prebuilds -prune -exec sh -c 'for d in "$1"/*; do [ "$(basename "$d")" = "$2" ] || rm -rf "$d"; done' _ {} "$PLATFORM" \; \
+  && find prebuilds node_modules -type d -name prebuilds -prune -exec sh -c 'for d in "$1"/*; do [ "$(basename "$d")" = "$2" ] || rm -rf "$d"; done' _ {} "$PLATFORM" \; \
   && find node_modules -path '*/prebuilds/*' -name '*.node' -delete \
   && ln -sfn bare-events node_modules/events && ln -sfn bare-dgram node_modules/dgram && ln -sfn bare-os node_modules/os && ln -sfn bare-buffer node_modules/buffer
 
@@ -22,6 +23,7 @@ WORKDIR /app
 COPY package.json ./
 COPY worklet/crypto ./worklet/crypto
 COPY --from=deps /app/node_modules ./node_modules
+COPY --from=deps /app/prebuilds ./prebuilds
 COPY src ./src
 COPY bin ./bin
 COPY web/assets ./web/assets

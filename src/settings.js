@@ -41,7 +41,17 @@ const SPEC = {
   hiverelayReplicas: { env: 'PEARTUBE_HIVERELAY_REPLICAS', type: 'number', def: 3, min: 1, max: 32 },
   hiverelayUploadMbps: { env: 'PEARTUBE_HIVERELAY_UPLOAD_MBPS', type: 'number', def: 50, min: 0, max: 1e5 },
   rechunk: { env: 'PEARTUBE_RECHUNK', type: 'bool', def: false, live: true, fromEnv: flag },
-  cinemetaUrl: { env: 'PEARTUBE_CINEMETA_URL', type: 'url', def: CINEMETA_URL, live: true, empty: true }
+  cinemetaUrl: { env: 'PEARTUBE_CINEMETA_URL', type: 'url', def: CINEMETA_URL, live: true, empty: true },
+  slskUser: { env: 'PEARTUBE_SLSK_USER', type: 'text', def: '', live: true },
+  slskPass: { env: 'PEARTUBE_SLSK_PASS', type: 'secret', def: '', live: true },
+  slskServer: { env: 'PEARTUBE_SLSK_SERVER', type: 'hostport', def: 'vps.slsknet.org:2271', live: true },
+  // Peers connect back to this TCP port to send files; a bound socket cannot move, so a change reopens the node.
+  slskListenPort: { env: 'PEARTUBE_SLSK_LISTEN_PORT', type: 'port', def: 50300 },
+  // Share the album folders with Soulseek peers (off by default, so a private library is never published silently).
+  // The addon reads these when its client is made, so a change reopens the node. The folder shared stays env-only
+  // (PEARTUBE_SLSK_SHARE_DIR), like the import folder: the API must not be able to publish another folder on disk.
+  slskShare: { env: 'PEARTUBE_SLSK_SHARE', type: 'bool', def: false, fromEnv: flag },
+  slskShareMaxFiles: { env: 'PEARTUBE_SLSK_SHARE_MAX_FILES', type: 'number', def: 2000, min: 1, max: 100000 }
 }
 
 function parseEnv (spec, raw) {
@@ -72,6 +82,18 @@ function validate (key, spec, value) {
     case 'key':
       if (typeof value !== 'string' || (value && !HEX64.test(value.toLowerCase()))) throw bad(key, 'must be a 64-character hex key')
       return value.toLowerCase()
+    case 'text':
+      if (typeof value !== 'string' || value.length > 256) throw bad(key, 'must be text')
+      return value.trim()
+    case 'hostport': {
+      if (typeof value !== 'string') throw bad(key, 'must be host:port')
+      const trimmed = value.trim()
+      if (!trimmed) return spec.def
+      const m = /^([a-z0-9.:[\]-]{1,253}):(\d{1,5})$/i.exec(trimmed)
+      const p = m ? Number(m[2]) : 0
+      if (!m || p < 1 || p > 65535) throw bad(key, 'must be host:port')
+      return `${m[1]}:${p}`
+    }
     case 'secret':
       if (typeof value !== 'string' || value.length > 512) throw bad(key, 'must be text')
       return value

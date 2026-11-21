@@ -328,6 +328,13 @@ A saved `watchDir` is dropped too: the import folder is set only by `PEARTUBE_WA
 | `PEARTUBE_PLUGINS_DIR` | `<PEARTUBE_STORAGE>/plugins` | Directory scanned on startup for `*.mjs`/`*.js` import plugins |
 | `PEARTUBE_ACQUIRE_CONCURRENCY` | `4` | Maximum concurrent HTTP acquisition downloads |
 | `PEARTUBE_CINEMETA_URL` | `https://v3-cinemeta.strem.io` | Cinemeta-compatible title service; empty turns lookups off |
+| `PEARTUBE_SLSK_USER` | none | Soulseek account username for the `soulseek` album provider plugin (empty leaves the plugin inert) |
+| `PEARTUBE_SLSK_PASS` | none | Soulseek account password (`0600` in `settings.json`, write-only in `/v1/settings`, never logged) |
+| `PEARTUBE_SLSK_SERVER` | `vps.slsknet.org:2271` | Soulseek central server `host:port` |
+| `PEARTUBE_SLSK_LISTEN_PORT` | `50300` | TCP port Soulseek peers connect back to when they send a file. Publish it (`-p 50300:50300`) and forward it on the router, or downloads never start; `0` lets the OS pick a new one each start (unpublishable). Reopens the node when changed |
+| `PEARTUBE_SLSK_SHARE` | `0` (off) | `1` lets Soulseek users browse and download the album folders (`Artist - Album (Year)/NN - Title.ext`, one level deep). Off by default so a private library is never published. Settable from the UI; reopens the node when changed |
+| `PEARTUBE_SLSK_SHARE_MAX_FILES` | `2000` | Most media files indexed and advertised when sharing is on (1 to 100000). Settable from the UI; reopens the node when changed |
+| `PEARTUBE_SLSK_SHARE_DIR` | `PEARTUBE_WATCH_DIR`, else `<PEARTUBE_STORAGE>/staging` | Folder whose album folders are shared. Env only: the API cannot point sharing at another folder |
 | `UBIT_CONFIG_DIR` | `<PEARTUBE_STORAGE>/ubit` | Config and scratch folder passed to `bare-ubit` / `ubit` |
 | `UBIT_BIN` | bundled `bare-ubit` | Override path or binary name for page link metadata and downloads |
 | `PEARTUBE_ALLOWED_PEERS` | none | Comma-separated 64-hex Noise public keys allowed through the swarm firewall |
@@ -359,9 +366,19 @@ playlist. The node's blob server stays on loopback behind `/v1/blob`.
 Without `PEARTUBE_API_TOKEN` there is no auth, so run an open relay only on a network you trust:
 anyone on it can queue a download of any public URL.
 
-The UI has five tabs: **Library** (add and play), **Channels** (your channel and the ones you
-follow), **Sharing** (peers, kept copies, HiveRelays, Stremio and M3U addresses), **TV** (pair
-and control) and **Settings**. Plugins appear only as user intents.
+The UI has six tabs: **Library** (add and play video), **Music** (albums by artist, each with the
+cover its own FLAC files embed or a colour-and-initials sleeve, an album sheet to play from, and
+the Soulseek album search), **Channels** (your channel and the ones you follow), **Sharing** (peers,
+kept copies, HiveRelays, Stremio and M3U addresses), **TV** (pair and control) and **Settings**.
+Plugins appear only as user intents.
+
+A Soulseek mirror shows under the album search as a card redrawn every second while it runs: the
+peer, "Track 3 of 11", bytes of the album with a percentage, the speed, and the phase in words
+("Asking", "Queued at 12 on <peer>", "Connecting", "Downloading", "Adding to your library"). The
+Mirror button that started it follows it too, and the header says "Mirroring N%" on every tab. A
+failure shows the relay's own reason, plus "Publish port 50300" when peers have failed to reach
+this relay and nothing has transferred yet. A finished card reads "Saved · 12 tracks · 488 MB"
+with Open album.
 
 | Route | Does |
 |---|---|
@@ -371,7 +388,8 @@ and control) and **Settings**. Plugins appear only as user intents.
 | `POST /v1/restart` | Reopens the node, jobs, plugins and cast stack in the running process; same auth and origin rules as settings |
 | `POST /v1/identify` `{url}` | Link contents: parsed name, Cinemeta `candidates` and `match`, or a plain `clip:` fallback |
 | `POST /v1/search/global` `{query, id}` | Search relays this relay does not follow (`peartube/search/v1`): rows with `magnetUrl`, `relays` and the title fields, after about 1.2 s. The same query again within 10 s returns the answers that arrived since; after that it asks the relays again, so a file a relay got since shows up (a relay rebuilds its list at most every 15 s). Token when one is set, else private addresses only, and only from the relay's own page; a new query at most every 3 s per address |
-| `GET /v1/search?id=imdb:tt…`, `GET /v1/entries`, `POST /v1/entries/remove` | Channel entries with `streamUrl` (on this port's `/v1/blob`); one result per file (`id` + `sha256`), or owner/mod entry removal + unreferenced core purge |
+| `GET /v1/search?id=imdb:tt…`, `GET /v1/entries` | Channel entries with `streamUrl` (on this port's `/v1/blob`); one result per file (`id` + `sha256`) |
+| `POST /v1/entries/remove` `{key}` \| `{seriesKey}` \| `{ids: [...]}` | Owner/mod removal of one entry, a whole album (`seriesKey`, e.g. `mb:<release>`) or a list of ids, in one call. Every announce this channel holds for each file goes, and the node purges its core (or clears its blocks) unless another announce still uses them. A file this relay mirrored (in `<storage>/staging`, listed in its album folder's `.peartube-mirrored.json`, or in a folder pinned by `.peartube-album.json`) is deleted with its `mirror-watch.json` row so no scan imports it again, and an emptied album folder goes too; a file the owner put in the import folder stays, its row kept so no scan re-imports it until the file changes. Returns `{removed: [{key, id, sha256, title, file: 'deleted'\|'kept'\|null}], notRemoved: [{key, id, reason}], filesDeleted}`; another channel's entries land in `notRemoved` |
 | `POST /v1/acquire` `{id, title, private, source}` | Fetch, store (optionally epoch-encrypted) and announce; `page: true` downloads and muxes a page through `ubit` on every attempt |
 | `GET/DELETE /v1/jobs[/:id]` | Acquire jobs; sources are never returned. `DELETE` cancels or removes |
 | `GET /v1/status` | Keys, stored bytes, peers and per-transport traffic, `lan`, `privateRouting`, `privateGuard` (`publicKey`, `port`, circuit counts, or `null`), `tokenRequired`, `settingsOpen` |
@@ -508,7 +526,7 @@ no bank is bundled. Subtitles use platform fonts and fonts attached to the media
 | `src/http.js`, `src/ui.js` | The one-port server and the relay web UI |
 | `src/acquire.js`, `src/settings.js`, `src/identify.js` | Private job queue, settings store, link identification and Cinemeta matching |
 | `src/lan.js`, `src/cast.js`, `src/cast-control.js` | LAN discovery, Cast & TV receiver stack, its control channel |
-| `src/mirror.js`, `src/hiverelay.js` | Plugin host and HiveRelay recruitment/seeding |
+| `src/mirror.js`, `src/providers/soulseek.js`, `src/hiverelay.js` | Plugin host, Soulseek album provider (`SOULSEEK_SEARCH_CAP = 200`), and HiveRelay recruitment/seeding |
 | `src/private-overlay.js`, `bin/private-relay.js` | Stateless 2-hop guard overlay and guard forwarders |
 | `bin/relay.js` | Relay daemon |
 | `worklet/` | The worklet the apps run (`worker.js`), its crypto and the QuickJS bare-kit build |

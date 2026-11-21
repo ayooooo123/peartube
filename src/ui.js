@@ -222,13 +222,13 @@ export const page = `<!doctype html>
     .pills::-webkit-scrollbar { display: none; }
     .pill { flex: none; }
     .pill.rate { display: none; }
-    .tabs { padding: 0 8px; }
+    .tabs { padding: 0 6px; gap: 0; }
     main { padding: 16px 16px 96px; }
     h2 { font-size: 18px; margin: 28px 0 12px; }
     .item { flex-wrap: wrap; }
     .item.job { flex-wrap: nowrap; }
     .item:not(.job) .acts { width: 100%; justify-content: flex-start; }
-    .tabs a { padding: 12px 10px 10px; }
+    .tabs a { padding: 12px 8px 10px; }
     .thumb { width: 96px; height: 54px; }
     .setting .control { max-width: none; }
     .grid { grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 20px 10px; }
@@ -267,7 +267,82 @@ export const page = `<!doctype html>
   #pSeek { width: 100%; accent-color: var(--brand); padding: 0; cursor: pointer; }
   .clock { font-variant-numeric: tabular-nums; font-size: 12.5px; color: var(--p-dim); min-width: 96px; }
   #playerModal.chrome-hidden .p-top, #playerModal.chrome-hidden .p-bar { opacity: 0; pointer-events: none; }
-  #playerModal .p-mini-controls, #pMiniRestore { display: none; }
+  /* Music: one bar along the bottom of every tab, and the queue it opens. The bar is the proof that sound is on. */
+  :root { --np-h: 76px; }
+  .np { position: fixed; left: 0; right: 0; bottom: 0; z-index: 30; min-height: var(--np-h); display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(200px, 1.5fr) auto; grid-template-areas: 'info ctl seek side'; align-items: center; gap: 6px 20px; padding: 10px 24px; background: color-mix(in srgb, var(--surface) 94%, transparent); backdrop-filter: blur(18px) saturate(1.3); border-top: 1px solid var(--line); box-shadow: 0 -10px 30px rgba(0,0,0,.16); }
+  body.np-on main { padding-bottom: calc(var(--np-h) + 56px); }
+  body.np-on #toast { bottom: calc(var(--np-h) + 16px); }
+  body.np-on #castBar { bottom: calc(var(--np-h) + 12px); }
+  .np-info { grid-area: info; display: flex; align-items: center; gap: 12px; min-width: 0; }
+  .np-art { flex: none; width: 48px; height: 48px; border-radius: 10px; border: 0; padding: 0; background: linear-gradient(150deg, var(--brand), color-mix(in srgb, var(--brand) 35%, var(--raised))); color: var(--on-brand); font: inherit; font-weight: 800; font-size: 20px; cursor: pointer; }
+  .np-art .sleeve { position: relative; width: 100%; height: 100%; border-radius: inherit; }
+  .np-art .sleeve-mono { font-size: 17px; }
+  .np-text { min-width: 0; display: flex; flex-direction: column; align-items: flex-start; }
+  .np-title { max-width: 100%; padding: 0; border: 0; background: none; color: var(--text); font: inherit; font-weight: 600; text-align: left; cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .np-title:hover { text-decoration: underline; }
+  .np-sub { max-width: 100%; color: var(--dim); font-size: 12.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .np-sub.bad { color: var(--bad); }
+  .np-pos { display: none; }
+  .np-ctl { grid-area: ctl; display: flex; align-items: center; gap: 4px; }
+  .np-btn { flex: none; width: 40px; height: 40px; padding: 0; border-radius: 50%; border: 0; background: transparent; color: var(--text); display: inline-flex; align-items: center; justify-content: center; cursor: pointer; transition: background var(--t-fast) var(--ease), transform var(--t-fast) var(--ease); }
+  .np-btn:hover:not(:disabled) { background: var(--raised); }
+  .np-btn:disabled { opacity: .35; cursor: default; }
+  .np-btn svg, .track-play svg, .np-q svg, .nq-num svg { width: 20px; height: 20px; fill: currentColor; }
+  .np-btn.np-play { width: 44px; height: 44px; background: var(--text); color: var(--bg); }
+  .np-btn.np-play:hover:not(:disabled) { background: var(--text); transform: scale(1.06); }
+  .i-pause { display: none; }
+  .on > .i-play { display: none; }
+  .on > .i-pause { display: block; }
+  .btn-ic { display: inline-flex; }
+  .btn-ic svg { width: 16px; height: 16px; fill: currentColor; }
+  .np-seek { grid-area: seek; display: flex; align-items: center; gap: 10px; color: var(--dim); font-size: 12px; font-variant-numeric: tabular-nums; }
+  .np-seek span { flex: none; min-width: 38px; }
+  .np-seek span:first-child { text-align: right; }
+  #npSeek { flex: 1; min-width: 0; margin: 0; accent-color: var(--brand); cursor: pointer; }
+  #npSeek:disabled { cursor: default; }
+  .np-side { grid-area: side; display: flex; align-items: center; gap: 10px; color: var(--dim); }
+  .np-q { min-height: 36px; padding: 0 12px; font-variant-numeric: tabular-nums; }
+  .np-q[aria-expanded='true'] { color: var(--text); border-color: var(--line); background: var(--raised); }
+  .np-vol { display: flex; align-items: center; gap: 6px; }
+  .np-vol svg { width: 18px; height: 18px; fill: currentColor; flex: none; }
+  #npVol { width: 92px; margin: 0; accent-color: var(--brand); cursor: pointer; }
+  .np-queue { position: fixed; right: 16px; bottom: calc(var(--np-h) + 10px); z-index: 31; width: min(400px, calc(100vw - 24px)); max-height: min(62vh, 540px); display: flex; flex-direction: column; background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-panel); box-shadow: 0 24px 60px rgba(0,0,0,.35); overflow: hidden; }
+  .nq-head { display: flex; align-items: center; gap: 8px; padding: 12px 10px 8px 18px; border-bottom: 1px solid var(--line); }
+  .nq-head .grow h3 { margin: 0; }
+  .nq-list { list-style: none; margin: 0; padding: 6px; overflow-y: auto; }
+  .nq-list button { width: 100%; display: grid; grid-template-columns: 28px minmax(0, 1fr) auto; align-items: center; gap: 10px; padding: 8px 10px; border: 0; border-radius: var(--r-control); background: none; color: var(--text); font: inherit; font-size: 14px; text-align: left; cursor: pointer; }
+  .nq-list button:hover { background: var(--raised); }
+  .nq-num { color: var(--dim); font-size: 12.5px; font-variant-numeric: tabular-nums; text-align: center; display: flex; justify-content: center; }
+  .nq-num svg { width: 16px; height: 16px; }
+  .nq-name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .nq-dur { color: var(--dim); font-size: 12.5px; font-variant-numeric: tabular-nums; }
+  .nq-list .done button { color: var(--dim); }
+  .nq-list .now button { background: var(--brand-soft); font-weight: 600; }
+  .nq-list .now .nq-num { color: var(--ring); }
+  .rows .row-item.now { background: var(--brand-soft); border-radius: var(--r-control); padding-left: 10px; padding-right: 10px; }
+  .rows .row-item.now + .row-item { border-top-color: transparent; }
+  .row-item.now .label { color: var(--ring); }
+  .tag.now { color: var(--ring); background: transparent; border: 1px solid currentColor; margin-left: 8px; vertical-align: 1px; }
+  .track-play { flex: none; width: 36px; height: 36px; padding: 0; border-radius: 50%; border: 1px solid var(--line); background: transparent; color: var(--text); display: inline-flex; align-items: center; justify-content: center; cursor: pointer; }
+  .track-play svg { width: 14px; height: 14px; }
+  .track-play:hover { border-color: var(--brand); }
+  .row-item.now .track-play { background: var(--brand); border-color: var(--brand); color: var(--on-brand); }
+  .pill.busy::before { content: ''; display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--brand); margin-right: 6px; vertical-align: 1px; animation: npPulse 1.2s ease-in-out infinite; }
+  @keyframes npPulse { 50% { opacity: .25; } }
+  @media (prefers-reduced-motion: reduce) { .pill.busy::before { animation: none; } }
+  @media (max-width: 640px) {
+    :root { --np-h: 104px; }
+    .np { grid-template-columns: minmax(0, 1fr) auto auto; grid-template-areas: 'info ctl side' 'seek seek seek'; gap: 2px 4px; padding: 8px 10px 10px 14px; }
+    .np-art, .np-vol, .np-qtext { display: none; }
+    .np-pos { display: inline; }
+    .np-pos::after { content: ' · '; }
+    .np-btn { width: 38px; height: 38px; }
+    .np-btn.np-play { width: 42px; height: 42px; }
+    .np-q { min-height: 38px; width: 38px; padding: 0; }
+    .np-seek { gap: 8px; }
+    .np-queue { left: 8px; right: 8px; width: auto; bottom: calc(var(--np-h) + 8px); }
+  }
+.p-mini-controls, #pMiniRestore { display: none; }
   #playerModal.mini { inset: auto 18px 18px auto; width: min(380px, calc(100vw - 24px)); height: 280px; border-radius: 16px;
     border: 1px solid rgba(255,255,255,.18); box-shadow: 0 18px 65px rgba(0,0,0,.7); }
   #playerModal.mini .p-stage { flex: 1; }
@@ -291,6 +366,128 @@ export const page = `<!doctype html>
     #playerModal:not(.mini) .p-bar select { max-width: 42vw; }
     #playerModal.mini { right: 12px; bottom: 12px; }
   }
+  /* ==== Music library ==== */
+  .sleeve { position: relative; flex: none; width: 64px; height: 64px; border-radius: 8px; display: flex; align-items: center; justify-content: center; overflow: hidden; color: rgba(255,255,255,.95); box-shadow: inset 0 0 0 1px rgba(255,255,255,.1), 0 1px 3px rgba(0,0,0,.18); }
+  .sleeve-mono { font-weight: 800; font-size: 24px; letter-spacing: -0.03em; line-height: 1; text-shadow: 0 2px 12px rgba(0,0,0,.28); }
+  .sleeve-img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+  .shelf { display: flex; flex-direction: column; gap: 28px; }
+  .shelf > .empty { padding: 24px 0; }
+  .artist-head { display: flex; align-items: baseline; gap: 10px; margin-bottom: 12px; }
+  .artist-head h3 { font-size: 17px; font-weight: 700; letter-spacing: -0.01em; margin: 0; }
+  .artist-head .count { color: var(--dim); font-size: 13px; font-variant-numeric: tabular-nums; }
+  .album-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 10px; }
+  .album-card { display: flex; align-items: center; gap: 10px; padding: 10px 14px 10px 10px; background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-card); transition: border-color var(--t-fast) var(--ease); }
+  .album-card:hover { border-color: color-mix(in srgb, var(--dim) 40%, transparent); }
+  .album-open { flex: 1; min-width: 0; display: flex; align-items: center; gap: 14px; padding: 0; border: 0; background: none; color: inherit; font: inherit; text-align: left; cursor: pointer; border-radius: 8px; }
+  .album-open .sleeve { width: 72px; height: 72px; }
+  .album-text { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+  .album-name { font-weight: 650; font-size: 15px; line-height: 1.25; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .album-meta { color: var(--dim); font-size: 12.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .album-meta:empty { display: none; }
+  .album-play { flex: none; width: 40px; height: 40px; padding: 0; border-radius: 50%; border: 1px solid var(--line); background: var(--raised); color: var(--text); display: inline-flex; align-items: center; justify-content: center; cursor: pointer; transition: background var(--t-fast) var(--ease), color var(--t-fast) var(--ease), transform var(--t-fast) var(--ease); }
+  .album-play .btn-ic svg { width: 18px; height: 18px; }
+  .album-play:hover, .album-play:has(.btn-ic.on) { background: var(--brand); border-color: var(--brand); color: var(--on-brand); }
+  .album-play:hover { transform: scale(1.06); }
+  .detail-head.album-head { display: grid; grid-template-columns: auto minmax(0, 1fr); grid-template-rows: 1fr auto auto; grid-template-areas: 'art title' 'art meta' 'art acts'; column-gap: 20px; row-gap: 0; align-items: end; }
+  .album-head > .sleeve { grid-area: art; }
+  .ah-title { grid-area: title; min-width: 0; }
+  .ah-meta { grid-area: meta; min-width: 0; }
+  .album-head > .album-acts { grid-area: acts; }
+  .sleeve.sleeve-lg { width: 168px; height: 168px; border-radius: var(--r-card); box-shadow: inset 0 0 0 1px rgba(255,255,255,.1), 0 18px 40px rgba(0,0,0,.28); }
+  .sleeve-lg .sleeve-mono { font-size: 64px; }
+  .detail-head.album-head h3 { font-size: 28px; margin: 0 0 4px; }
+  .album-by { font-weight: 600; font-size: 15px; margin-bottom: 4px; }
+  .album-acts { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 14px; }
+  .album-acts .btn.primary { min-width: 116px; }
+  .disc-head { font-size: 12px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; color: var(--dim); margin: 18px 0 6px; }
+  .rows.tracks .row-item { gap: 12px; padding: 6px 8px; border-top: 0; border-radius: var(--r-control); cursor: pointer; }
+  .rows.tracks .row-item:hover { background: var(--raised); }
+  .rows.tracks .row-item.now { background: var(--brand-soft); padding: 6px 8px; }
+  .rows.tracks .label { font-weight: 500; font-size: 14.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  #detail .rows.tracks .meta { font-size: 12.5px; line-height: 1.4; }
+  .rows.tracks .meta:empty { display: none; }
+  .rows.tracks .track-play { width: 32px; height: 32px; border: 0; border-radius: 8px; background: transparent; color: var(--dim); font-size: 13.5px; font-variant-numeric: tabular-nums; }
+  .rows.tracks .track-play svg { display: none; width: 14px; height: 14px; }
+  .rows.tracks .row-item:hover .track-play .tn, .rows.tracks .row-item.now .track-play .tn, .rows.tracks .track-play:focus-visible .tn { display: none; }
+  .rows.tracks .row-item:hover .track-play:not(.on) .i-play, .rows.tracks .row-item.now .track-play:not(.on) .i-play, .rows.tracks .track-play:focus-visible:not(.on) .i-play { display: block; }
+  .rows.tracks .track-play.on .i-pause { display: block; }
+  .rows.tracks .row-item:hover .track-play, .rows.tracks .row-item.now .track-play { color: var(--text); background: transparent; }
+  .rows.tracks .row-item.now .track-play { color: var(--ring); }
+  .track-dur { flex: none; min-width: 42px; text-align: right; color: var(--dim); font-size: 13px; font-variant-numeric: tabular-nums; }
+  .track-dl { flex: none; width: 32px; height: 32px; display: inline-flex; align-items: center; justify-content: center; border-radius: 8px; color: var(--dim); opacity: 0; transition: opacity var(--t-fast) var(--ease); }
+  .track-dl svg { width: 18px; height: 18px; }
+  .row-item:hover .track-dl, .track-dl:focus-visible { opacity: 1; }
+  .track-dl:hover { color: var(--text); background: var(--surface); }
+  @media (hover: none) { .track-dl { opacity: 1; } }
+  @media (max-width: 640px) {
+    .album-list { grid-template-columns: minmax(0, 1fr); gap: 8px; }
+    .album-open .sleeve { width: 56px; height: 56px; }
+    .album-open .sleeve-mono { font-size: 20px; }
+    .detail-head.album-head { grid-template-columns: 108px minmax(0, 1fr); grid-template-rows: auto auto auto; grid-template-areas: 'art title' 'meta meta' 'acts acts'; column-gap: 14px; }
+    .album-head > .sleeve { margin-bottom: 12px; }
+    .ah-title { align-self: center; margin-bottom: 12px; }
+    .sleeve.sleeve-lg { width: 108px; height: 108px; }
+    .sleeve-lg .sleeve-mono { font-size: 40px; }
+    .detail-head.album-head h3 { font-size: 21px; }
+    .album-acts .btn.primary { flex: 1; }
+    .rows.tracks .row-item { gap: 8px; padding: 6px 4px; }
+  }
+  /* ==== Soulseek sources (SourcesBrowse) ==== */
+  .slsk-port { margin-top: 12px; font-size: 13px; color: var(--dim); line-height: 1.45; overflow-wrap: anywhere; }
+  .slsk-port.alert { background: var(--raised); border-left: 4px solid var(--warn); border-radius: 8px; padding: 10px 12px; color: var(--text); }
+  .slsk-port code { font-size: 12.5px; background: var(--surface); padding: 1px 5px; border-radius: 4px; }
+  .meta.wrap { white-space: normal; overflow-wrap: anywhere; }
+  .slsk-jobs { margin-top: 12px; }
+  .slsk-jobs .item.job { align-items: flex-start; }
+  .slsk-state { font-size: 13.5px; font-weight: 600; margin-top: 2px; overflow-wrap: anywhere; }
+  .slsk-state.ok { color: var(--ok); }
+  .slsk-state.bad { color: var(--bad); }
+  .slsk-state.warn { color: var(--warn); }
+  .slsk-amount { font-variant-numeric: tabular-nums; }
+  .slsk-jobs .bar-track { height: 5px; }
+  .slsk-jobs .bar-track.wait > div { background: var(--dim); }
+  .slsk-fix { color: var(--text); }
+  .slsk-fix code { font-size: 12px; background: var(--raised); padding: 1px 5px; border-radius: 4px; }
+  .slsk-tools { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; margin: 10px 0; }
+  .slsk-tools select { width: auto; min-width: 200px; }
+  .slsk-browse h3 { margin: 0; font-size: 17px; overflow-wrap: anywhere; }
+  .slsk-head { display: flex; gap: 8px; align-items: flex-start; margin-bottom: 12px; }
+  .slsk-head .grow { flex: 1; min-width: 0; }
+  .slsk-browse input[type=search] { margin-bottom: 10px; }
+  .slsk-wait { display: flex; gap: 10px; align-items: center; color: var(--dim); font-size: 14px; padding: 18px 0; }
+  .slsk-spin { width: 16px; height: 16px; flex: none; border: 2px solid var(--line); border-top-color: var(--brand); border-radius: 50%; animation: slskSpin .8s linear infinite; }
+  @keyframes slskSpin { to { transform: rotate(360deg); } }
+  @media (prefers-reduced-motion: reduce) { .slsk-spin { animation-duration: 3s; } }
+  .item.slsk-folder { flex-direction: column; flex-wrap: nowrap; align-items: stretch; gap: 0; }
+  .item.slsk-folder.focus { border-color: var(--brand); }
+  .slsk-row { display: flex; gap: 14px; align-items: center; flex-wrap: wrap; }
+  .slsk-row .info { flex: 1 1 240px; min-width: 0; }
+  .slsk-files { margin-top: 10px; border-top: 1px solid var(--line); }
+  .slsk-file { display: flex; gap: 10px; align-items: center; padding: 8px 2px; border-bottom: 1px solid var(--line); font-size: 13.5px; cursor: pointer; min-width: 0; }
+  .slsk-file:last-child { border-bottom: 0; }
+  .slsk-file input { width: 18px; height: 18px; flex: none; margin: 0; accent-color: var(--brand); }
+  .slsk-file .grow { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+  .slsk-file .meta { margin: 0; flex: none; max-width: 48%; }
+  @media (max-width: 640px) {
+    .slsk-file { flex-wrap: wrap; }
+    .slsk-file .meta { max-width: none; flex-basis: 100%; padding-left: 28px; }
+    .slsk-tools select { width: 100%; }
+    .slsk-jobs .item.job { flex-wrap: wrap; }
+    .slsk-jobs .item.job .acts { width: 100%; justify-content: flex-start; }
+  }
+  /* ==== end Soulseek sources ==== */
+  /* ==== Delete (DeleteAndSingleMirror) ==== */
+  .track-del { flex: none; min-width: 32px; height: 32px; padding: 0 6px; display: inline-flex; align-items: center; justify-content: center; border: 0; border-radius: 8px; background: transparent; color: var(--dim); font: inherit; font-size: 13px; font-weight: 600; cursor: pointer; opacity: 0; transition: opacity var(--t-fast) var(--ease); }
+  .track-del svg { width: 18px; height: 18px; }
+  .row-item:hover .track-del, .track-del:focus-visible, .track-del.armed { opacity: 1; }
+  .track-del:hover { color: var(--text); background: var(--surface); }
+  @media (hover: none) { .track-del { opacity: 1; } }
+  .btn.armed, .track-del.armed { color: var(--bad); border-color: var(--bad); }
+  .del-ask { align-self: center; color: var(--bad); overflow-wrap: anywhere; }
+  .slsk-file > label { display: flex; gap: 10px; align-items: center; flex: 1 1 auto; min-width: 0; cursor: pointer; }
+  .slsk-file .slsk-one { flex: none; min-height: 32px; padding: 0 10px; font-size: 13px; }
+  @media (max-width: 640px) { .slsk-file .meta { order: 2; } }
+  /* ==== end Delete ==== */
 </style>
 </head>
 <body>
@@ -306,6 +503,7 @@ export const page = `<!doctype html>
   </div>
   <nav class="tabs" aria-label="Sections">
     <a href="#library" data-tab="library">Library</a>
+    <a href="#music" data-tab="music">Music</a>
     <a href="#channels" data-tab="channels">Channels</a>
     <a href="#sharing" data-tab="sharing">Sharing</a>
     <a href="#tv" data-tab="tv">TV</a>
@@ -377,6 +575,33 @@ export const page = `<!doctype html>
       <div class="msg" id="globalMsg" role="status"></div>
       <div class="list" id="globalResults"></div>
     </form>
+  </section>
+
+  <section id="tab-music" data-panel="music" hidden>
+    <h2>Music <span class="count" id="musicCount"></span></h2>
+    <div class="lib-tools" id="musicTools" hidden>
+      <input id="musicFilter" type="search" aria-label="Search music" placeholder="Chop Suey!">
+    </div>
+    <div class="shelf" id="albums"></div>
+    <h2>Find albums</h2>
+    <!-- ==== Soulseek sources (SourcesBrowse) ==== -->
+    <form id="slskForm" class="card">
+      <div class="field">
+        <label for="slskInput">Artist or album</label>
+        <div class="row"><input class="grow" id="slskInput" type="search" spellcheck="false" placeholder="John Coltrane Blue Train" required><button class="btn primary" type="submit" id="slskBtn">Search</button></div>
+        <span class="hint" id="slskHint">Finds albums on peers and mirrors them here.</span>
+      </div>
+      <div class="slsk-port" id="slskPort" role="note" hidden></div>
+      <div class="list slsk-jobs" id="slskJobs" aria-label="Mirrors" hidden></div>
+      <div class="msg" id="slskMsg" role="status"></div>
+      <div class="slsk-tools" id="slskTools" hidden>
+        <select id="slskSort" aria-label="Sort albums"><option value="ready">Ready to send first</option><option value="quality">Best quality first</option><option value="size">Largest first</option></select>
+        <span class="hint">A queue means the peer sends to others first.</span>
+      </div>
+      <div class="list" id="slskResults"></div>
+    </form>
+    <div class="card slsk-browse" id="slskBrowse" hidden></div>
+    <!-- ==== end Soulseek sources ==== -->
   </section>
 
   <section id="tab-channels" data-panel="channels" hidden>
@@ -481,6 +706,37 @@ export const page = `<!doctype html>
   <div id="detailBody"></div>
 </dialog>
 <div id="castBar" hidden></div>
+<div class="np" id="np" role="region" aria-label="Music player" hidden>
+  <div class="np-info">
+    <button class="np-art" id="npArt" type="button" aria-label="Open album"></button>
+    <div class="np-text">
+      <button class="np-title" id="npTitle" type="button"></button>
+      <div class="np-sub" aria-live="polite"><span class="np-pos" id="npPos"></span><span id="npMeta"></span></div>
+    </div>
+  </div>
+  <div class="np-ctl">
+    <button class="np-btn" id="npPrev" type="button" aria-label="Previous track"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="5.5" width="2.6" height="13" rx="1"/><path d="M19 6.4v11.2a1 1 0 0 1-1.55.83L9.6 13.2a1.4 1.4 0 0 1 0-2.4l7.85-5.23A1 1 0 0 1 19 6.4z"/></svg></button>
+    <button class="np-btn np-play" id="npPlay" type="button" aria-label="Play"><svg class="i-play" viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5.5v13a1 1 0 0 0 1.5.86l10.2-6.5a1 1 0 0 0 0-1.72L9.5 4.64A1 1 0 0 0 8 5.5z"/></svg><svg class="i-pause" viewBox="0 0 24 24" aria-hidden="true"><rect x="6.5" y="5" width="4" height="14" rx="1.2"/><rect x="13.5" y="5" width="4" height="14" rx="1.2"/></svg></button>
+    <button class="np-btn" id="npNext" type="button" aria-label="Next track"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="16.4" y="5.5" width="2.6" height="13" rx="1"/><path d="M5 6.4v11.2a1 1 0 0 0 1.55.83l7.85-5.23a1.4 1.4 0 0 0 0-2.4L6.55 5.57A1 1 0 0 0 5 6.4z"/></svg></button>
+  </div>
+  <div class="np-seek">
+    <span id="npAt">0:00</span>
+    <input type="range" id="npSeek" min="0" max="0" step="any" value="0" aria-label="Seek" disabled>
+    <span id="npLeft">--:--</span>
+  </div>
+  <div class="np-side">
+    <button class="btn quiet np-q" id="npQueueBtn" type="button" aria-expanded="false" aria-controls="npQueue"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="6" width="12" height="2" rx="1"/><rect x="3" y="11" width="12" height="2" rx="1"/><rect x="3" y="16" width="8" height="2" rx="1"/><path d="M15.5 13.6v6.3a.6.6 0 0 0 .92.5l4.6-3.15a.6.6 0 0 0 0-1l-4.6-3.15a.6.6 0 0 0-.92.5z"/></svg><span class="np-qtext" id="npQText"></span></button>
+    <label class="np-vol"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9.5h3.2L12 5.6v12.8l-4.8-3.9H4z"/><path d="M15.2 8.6a5 5 0 0 1 0 6.8l-1.1-1.1a3.4 3.4 0 0 0 0-4.6zM17.6 6.2a8.4 8.4 0 0 1 0 11.6l-1.1-1.1a6.8 6.8 0 0 0 0-9.4z"/></svg><input type="range" id="npVol" min="0" max="100" step="1" value="100" aria-label="Volume"></label>
+  </div>
+</div>
+<section class="np-queue" id="npQueue" aria-label="Queue" hidden>
+  <div class="nq-head">
+    <div class="grow"><h3>Queue</h3><div class="meta" id="npQueueMeta"></div></div>
+    <button class="btn quiet" id="npClear" type="button">Stop</button>
+    <button class="btn quiet" id="npQueueClose" type="button">Close</button>
+  </div>
+  <ol class="nq-list" id="npList"></ol>
+</section>
 <div id="toast" role="status" hidden></div>
 <div id="playerModal" role="dialog" aria-modal="true" aria-labelledby="pTitle">
   <div class="p-top">
@@ -654,7 +910,7 @@ const sval = key => setting(key) ? setting(key).value : undefined
 let tab = 'library'
 function showTab () {
   const want = location.hash.slice(1)
-  tab = ['library', 'channels', 'sharing', 'tv', 'settings'].includes(want) ? want : 'library'
+  tab = ['library', 'music', 'channels', 'sharing', 'tv', 'settings'].includes(want) ? want : 'library'
   for (const a of document.querySelectorAll('.tabs a')) a.setAttribute('aria-current', a.dataset.tab === tab ? 'page' : 'false')
   for (const s of document.querySelectorAll('[data-panel]')) s.hidden = s.dataset.panel !== tab
   if (tab === 'tv') loadCast()
@@ -677,11 +933,15 @@ async function refresh () {
     Object.assign(S, { status: st, sources: src, entries: ent.results || [], jobs: jb.jobs || [], plugins: pl.plugins || [], offline: false })
     if (set) S.settings = set
     if (ident) S.identity = ident
+    noticeJobs(!S.loaded)
+    S.loaded = true
+    restoreMusic()
   } catch (err) {
     S.offline = !needsToken
   }
   if (pressing || player) { refreshQueued = true; return }
   render()
+  if (S.jobs.some(slskActive)) pollMirrors()
   if (tab === 'settings') refreshSettingsView()
 }
 let settingsShown = ''
@@ -708,6 +968,7 @@ const soon = () => { clearTimeout(refreshTimer); refreshTimer = setTimeout(refre
 function render () {
   renderPills()
   if (tab === 'library') renderLibrary()
+  if (tab === 'music') renderMusic()
   if (tab === 'channels') renderChannels()
   if (tab === 'sharing') renderSharing()
   if (tab === 'tv') renderCast()
@@ -723,6 +984,15 @@ function renderPills () {
     pills.push(h('span', { class: 'pill' + (st.peers || st.lanPeers ? ' ok' : '') }, h('b', null, String((st.peers || 0))), ' ', (st.peers === 1 ? 'peer' : 'peers'), st.lanPeers ? ' · ' + st.lanPeers + ' nearby' : ''))
     pills.push(h('span', { class: 'pill rate' }, '↓ ', h('b', null, rate(st.downBps)), ' ↑ ', h('b', null, rate(st.upBps))))
   }
+  // A mirror runs for minutes; the header says so on every tab, and a press goes to its progress.
+  const mirrors = S.jobs.filter(j => j.plugin === 'soulseek' && MIRROR_ACTIVE.has(j.status))
+  if (!S.offline && mirrors.length) {
+    const total = mirrors.every(j => j.total > 0) ? mirrors.reduce((n, j) => n + j.total, 0) : 0
+    const pct = total ? Math.min(99, Math.floor(mirrors.reduce((n, j) => n + (j.bytes || 0), 0) / total * 100)) : null
+    const btn = h('button', { class: 'pill busy', type: 'button' }, 'Mirroring' + (mirrors.length > 1 ? ' ' + mirrors.length + ' albums' : '') + (pct != null ? ' ' + pct + '%' : ''))
+    btn.onclick = () => { location.hash = '#music'; setTimeout(() => $('slskJobs').scrollIntoView({ block: 'center' }), 0) }
+    pills.push(btn)
+  }
   const restart = S.settings ? S.settings.restartNeeded.length : 0
   if (restart) {
     const btn = h('button', { class: 'pill warn', type: 'button' }, 'Restart to apply ' + plural(restart, 'change', 'changes'))
@@ -731,6 +1001,19 @@ function renderPills () {
   }
   if (needsToken && !token) pills.push(h('span', { class: 'pill warn' }, 'Read-only until you sign in'))
   $('pills').replaceChildren(...pills)
+}
+const MIRROR_ACTIVE = new Set(['queued', 'running', 'transferring', 'announcing'])
+// When a mirror lands or fails, say so on whichever tab is open. The first load only learns what is already there.
+const jobWas = new Map()
+function noticeJobs (first) {
+  for (const j of S.jobs) {
+    if (j.plugin !== 'soulseek') continue
+    const was = jobWas.get(j.jobId)
+    jobWas.set(j.jobId, j.status)
+    if (first || was === j.status || (was && !MIRROR_ACTIVE.has(was))) continue
+    if (j.status === 'done') toast('Added “' + (j.title || 'the album') + '” to your library')
+    else if (j.status === 'failed') toast('Could not mirror “' + (j.title || 'the album') + '”' + (j.error ? ': ' + j.error : ''))
+  }
 }
 
 // ---- Library: add flow
@@ -870,27 +1153,31 @@ $('copyForm').onsubmit = async ev => {
 
 // ---- Library: jobs and entries
 // Copying: the file is already in a followed channel, so the relay takes that copy from peers instead of downloading.
+// Album mirrors have their own card under Find albums (slskJobItem); this list is everything else.
 const JOB_TEXT = { queued: 'Waiting', copying: 'Copying from peers', running: 'Downloading', announcing: 'Publishing', done: 'Added', failed: 'Failed', cancelled: 'Cancelled' }
+function jobItem (j) {
+  const active = j.status === 'queued' || j.status === 'copying' || j.status === 'running' || j.status === 'announcing'
+  const moving = j.status === 'running' || j.status === 'copying'
+  const pct = j.total ? Math.min(100, Math.round((j.bytes || 0) / j.total * 100)) : null
+  const verb = j.status === 'copying' ? 'Copying from peers' : 'Downloading'
+  const status = moving && j.bytes != null
+    ? (pct != null ? verb + ' ' + pct + '% of ' + size(j.total) : verb + ' · ' + size(j.bytes))
+    : JOB_TEXT[j.status] || j.status
+  const tagClass = j.status === 'done' ? 'tag ok' : j.status === 'failed' ? 'tag bad' : 'tag'
+  return h('div', { class: 'item job' },
+    h('div', { class: 'info' },
+      h('div', { class: 'name' }, j.title || 'Untitled'),
+      h('div', { class: 'meta' }, h('span', { class: tagClass }, status), j.status === 'done' && j.size ? ' ' + size(j.size) : ''),
+      j.error && j.status === 'failed' ? h('div', { class: 'meta err wrap' }, j.error) : null,
+      moving ? h('div', { class: 'bar-track' }, h('div', { style: 'width:' + (pct == null ? 100 : pct) + '%' })) : null),
+    h('div', { class: 'acts' }, h('button', { class: 'btn quiet', onclick: e => act(e.currentTarget, async () => { await api('/v1/jobs/' + j.jobId, { method: 'DELETE' }); refresh() }) }, active ? 'Cancel' : 'Dismiss')))
+}
 function renderJobs () {
   const recent = Date.now() - 6 * 3600_000
-  const jobs = S.jobs.filter(j => j.status !== 'done' || j.created > recent).sort((a, b) => b.created - a.created).slice(0, 20)
+  const jobs = S.jobs.filter(j => j.plugin !== 'soulseek' && (j.status !== 'done' || j.created > recent)).sort((a, b) => b.created - a.created).slice(0, 20)
   $('jobsWrap').hidden = !jobs.length
   $('jobCount').textContent = jobs.length ? String(jobs.length) : ''
-  $('jobs').replaceChildren(...jobs.map(j => {
-    const active = j.status === 'queued' || j.status === 'copying' || j.status === 'running' || j.status === 'announcing'
-    const moving = j.status === 'running' || j.status === 'copying'
-    const pct = j.total ? Math.min(100, Math.round((j.bytes || 0) / j.total * 100)) : null
-    const verb = j.status === 'copying' ? 'Copying from peers' : 'Downloading'
-    const status = moving && j.bytes != null ? (pct != null ? verb + ' ' + pct + '% of ' + size(j.total) : verb + ' · ' + size(j.bytes)) : JOB_TEXT[j.status] || j.status
-    const tagClass = j.status === 'done' ? 'tag ok' : j.status === 'failed' ? 'tag bad' : 'tag'
-    return h('div', { class: 'item job' },
-      h('div', { class: 'info' },
-        h('div', { class: 'name' }, j.title || 'Untitled'),
-        h('div', { class: 'meta' }, h('span', { class: tagClass }, status), j.status === 'done' && j.size ? ' ' + size(j.size) : ''),
-        j.error && j.status === 'failed' ? h('div', { class: 'meta err' }, j.error) : null,
-        moving ? h('div', { class: 'bar-track' }, h('div', { style: 'width:' + (pct == null ? 100 : pct) + '%' })) : null),
-      h('div', { class: 'acts' }, h('button', { class: 'btn quiet', onclick: e => act(e.currentTarget, async () => { await api('/v1/jobs/' + j.jobId, { method: 'DELETE' }); refresh() }) }, active ? 'Cancel' : 'Dismiss')))
-  }))
+  $('jobs').replaceChildren(...jobs.map(jobItem))
 }
 
 // ---- Library: one tile per title (the relay already returns one entry per file). Episodes group under their show,
@@ -907,18 +1194,96 @@ function libraryTiles () {
   const tiles = new Map()
   for (const e of S.entries) {
     const m = e.id.match(/^imdb:(tt[0-9]+)(?::s([0-9]+)e([0-9]+))?$/)
-    const kind = !m ? 'video' : m[2] ? 'show' : 'movie'
-    const key = kind === 'video' ? 'v:' + e.id + '/' + e.sha256 : kind + ':' + m[1]
+    // An imdb: id is a film or an episode. Anything else with a season and an episode is a track of an album
+    // (mb:, discogs: and album: ids carry disc and track in that suffix), and is grouped by its series key so an
+    // album is one tile with one row per track instead of one loose video per file.
+    const music = !m && e.season != null
+    const kind = !m ? (music ? 'album' : 'video') : m[2] ? 'show' : 'movie'
+    const key = kind === 'video' ? 'v:' + e.id + '/' + e.sha256 : music ? 'album:' + e.seriesKey : kind + ':' + m[1]
     let t = tiles.get(key)
     if (!t) tiles.set(key, t = { key, kind, imdb: m ? m[1] : null, title: e.title.replace(/\\s+S[0-9]+E[0-9]+$/i, ''), items: [] })
-    t.items.push({ e, season: m && m[2] ? Number(m[2]) : null, episode: m && m[3] ? Number(m[3]) : null })
+    t.items.push({ e, season: m ? (m[2] ? Number(m[2]) : null) : e.season, episode: m ? (m[3] ? Number(m[3]) : null) : e.episode })
   }
   for (const t of tiles.values()) {
+    if (t.kind === 'album') continue
     t.items.sort((a, b) => (a.season - b.season) || (a.episode - b.episode) || (b.e.size - a.e.size))
     t.saved = t.items.filter(i => saved(i.e)).length
     t.partial = t.items.some(i => !saved(i.e) && i.e.cachedBytes)
   }
+  for (const t of mergeAlbums(tiles)) tiles.set(t.key, t)
   return [...tiles.values()].sort((a, b) => a.title.localeCompare(b.title))
+}
+// An album is its artist and its name, not its release id: a peer that tagged by release group and another that
+// tagged by release announce the same album under two ids, and both land here as one tile. A track held twice is one
+// row, playing the copy saved here (or the larger one). The album's name is what most of its tracks' titles say, so
+// one badly tagged track ("Untitled album") neither renames the album nor splits it off.
+const fold = s => String(s || '').toLowerCase().normalize('NFKD').replace(/[^a-z0-9]+/g, ' ').trim()
+function mergeAlbums (tiles) {
+  const groups = new Map()
+  for (const t of [...tiles.values()]) {
+    if (t.kind !== 'album') continue
+    tiles.delete(t.key)
+    const votes = new Map()
+    for (const i of t.items) {
+      const a = (i.e.music && i.e.music.artist) || ''
+      const name = a && i.e.title.startsWith(a + ' · ') ? i.e.title.slice(a.length + 3) : i.e.title
+      const v = votes.get(a + '\\n' + name) || { a, name, n: 0 }
+      v.n++
+      votes.set(a + '\\n' + name, v)
+    }
+    const top = [...votes.values()].sort((x, y) => y.n - x.n)[0]
+    const id = fold(top.a) + '\\n' + fold(top.name)
+    const g = groups.get(id)
+    if (g) g.parts.push(t)
+    else groups.set(id, { artist: top.a, album: top.name, parts: [t] })
+  }
+  const albums = [...groups.values()].map(({ artist, album, parts }) => {
+    // The release with the most tracks names the tile, so its key stays put when a duplicate arrives or leaves.
+    parts.sort((x, y) => (y.items.length - x.items.length) || x.key.localeCompare(y.key))
+    const all = parts.flatMap(p => p.items)
+      .sort((a, b) => (a.season - b.season) || (a.episode - b.episode) || (saved(b.e) - saved(a.e)) || (b.e.size - a.e.size))
+    const items = []
+    for (const i of all) {
+      const prev = items[items.length - 1]
+      if (prev && prev.season === i.season && prev.episode === i.episode && fold(trackName(prev.e)) === fold(trackName(i.e))) prev.copies++
+      else items.push({ ...i, copies: 1 })
+    }
+    return {
+      key: parts[0].key,
+      kind: 'album',
+      imdb: null,
+      title: artist ? artist + ' · ' + album : album,
+      artist,
+      album,
+      releases: parts.length,
+      // Every announce this tile folded, across all its releases: a delete must reach the sibling release ids, not just
+      // the one that happened to sort first, or the tile regroups from the survivors and the album reappears.
+      keys: parts.flatMap(p => p.items.map(i => i.e.key)),
+      items,
+      saved: items.filter(i => saved(i.e)).length,
+      partial: items.some(i => !saved(i.e) && i.e.cachedBytes),
+      seed: sleeveHash(fold(artist) + '\\n' + fold(album))
+    }
+  })
+  // One artist's albums sit side by side, so each takes its own sixth of the colour wheel: its hash picks a sixth,
+  // and a sibling already there moves it to the next free one. Taken in hash order, an album keeps its colour unless
+  // a newcomer lands on its sixth first, which is rare; up to six albums per artist never share a hue.
+  const byArtist = new Map()
+  for (const t of albums) {
+    const k = fold(t.artist)
+    if (!byArtist.has(k)) byArtist.set(k, [])
+    byArtist.get(k).push(t)
+  }
+  for (const list of byArtist.values()) {
+    const used = new Set()
+    for (const t of list.sort((a, b) => a.seed - b.seed)) {
+      let slot = Math.floor((t.seed % 360) / 60)
+      for (let k = 0; k < 6 && used.has(slot); k++) slot = (slot + 1) % 6
+      used.add(slot)
+      t.hue = slot * 60 + (t.seed >>> 11) % 36
+    }
+  }
+  return albums
 }
 function tileLine (t) {
   const n = t.items.length
@@ -926,14 +1291,195 @@ function tileLine (t) {
     const seasons = new Set(t.items.map(i => i.season)).size
     return (seasons > 1 ? plural(seasons, 'season', 'seasons') + ' · ' : '') + plural(n, 'episode', 'episodes')
   }
+  if (t.kind === 'album') {
+    const discs = new Set(t.items.map(i => i.season)).size
+    // Size, not length: a length is known only once every track's header is read, and a shelf where some cards
+    // say minutes and others megabytes reads as noise. The sheet says both.
+    return [(discs > 1 ? plural(discs, 'disc', 'discs') + ' · ' : '') + plural(n, 'track', 'tracks'), size(t.items.reduce((sum, i) => sum + (i.e.size || 0), 0))].join(' · ')
+  }
   const e = t.items[0].e
   return [t.kind === 'movie' ? 'Movie' : 'Video', n > 1 ? n + ' versions' : size(e.size)].join(' · ')
 }
 function tileState (t) {
   if (t.saved === t.items.length) return ['Saved here', 'ok']
-  if (t.saved || t.partial) return [t.kind === 'show' && t.saved ? t.saved + ' saved here' : 'Partly saved', '']
+  if (t.saved || t.partial) return [t.kind === 'show' ? t.saved + ' saved here' : t.kind === 'album' ? t.saved + ' of ' + t.items.length + ' saved here' : 'Partly saved', '']
   return ['On the network', '']
 }
+
+// ---- Music library
+// An album's picture is the one its own files carry: a FLAC PICTURE block, read from the bytes this relay already
+// holds (never a third party: Cover Art Archive from this page would tell it what the relay holds, and /v1/poster
+// serves IMDb ids only). Until one is found, and for albums that carry none, the album wears a sleeve made from its
+// name: a hue (spread across the artist's albums by mergeAlbums), and from a hash of artist and album a second hue,
+// a lightness, an angle and one of three cuts (a sweep, a record, a split), with the album's initials on top. The
+// same album is the same sleeve on every reload, and albums by one artist are told apart at a glance.
+function sleeveHash (s) {
+  let x = 2166136261
+  for (let i = 0; i < s.length; i++) x = Math.imul(x ^ s.charCodeAt(i), 16777619)
+  // FNV-1a leaves short strings' high bits poorly mixed; a final avalanche spreads every bit the sleeve reads.
+  x ^= x >>> 16
+  x = Math.imul(x, 0x85ebca6b)
+  x ^= x >>> 13
+  x = Math.imul(x, 0xc2b2ae35)
+  return (x ^ (x >>> 16)) >>> 0
+}
+const SMALL_WORDS = new Set(['a', 'an', 'the', 'of', 'and', 'in', 'on', 'to', 'for', 'le', 'la', 'les', 'de', 'der', 'die', 'das'])
+function monogram (name) {
+  const words = String(name || '').split(/[\\s·:/-]+/).filter(Boolean)
+  const big = words.filter(w => !SMALL_WORDS.has(w.toLowerCase()))
+  const pick = (big.length ? big : words).map(w => [...w][0]).filter(c => /[\\p{L}\\p{N}]/u.test(c))
+  return (pick.slice(0, 2).join('') || '♪').toUpperCase()
+}
+function albumArt (t, cls) {
+  const n = t.seed
+  const h1 = t.hue
+  const h2 = (h1 + 30 + (n >>> 9) % 120) % 360
+  const angle = 120 + (n >>> 17) % 120
+  const base = 'hsl(' + h1 + ' 62% ' + (42 + (n >>> 3) % 16) + '%)'
+  const deep = 'hsl(' + h2 + ' 64% 20%)'
+  const shine = 'radial-gradient(circle at 78% 18%, rgba(255,255,255,.22), transparent 46%), '
+  const cuts = [
+    shine + 'linear-gradient(' + angle + 'deg, ' + base + ', ' + deep + ')',
+    'repeating-radial-gradient(circle, rgba(0,0,0,.14) 0 1px, transparent 1px 4px), radial-gradient(circle, ' + base + ' 0 31%, ' + deep + ' 32%)',
+    shine + 'linear-gradient(' + angle + 'deg, ' + base + ' 0 54%, ' + deep + ' 54%)'
+  ]
+  const box = h('div', { class: 'sleeve' + (cls ? ' ' + cls : ''), 'aria-hidden': 'true', style: 'background:' + cuts[(n >>> 25) % 3] },
+    h('span', { class: 'sleeve-mono' }, monogram(t.album)))
+  albumCover(t).then(src => { if (src) box.append(h('img', { class: 'sleeve-img', alt: '', src })) })
+  return box
+}
+// The first front cover (or, failing one, the first picture) among the album's first few saved tracks. Only files
+// held here are read, so looking for a picture never asks the network for a title; four tracks bound the cost of an
+// album that carries none to four small reads.
+const covers = new Map() // tile key -> Promise of an object URL or null
+function albumCover (t) {
+  if (!covers.has(t.key)) {
+    covers.set(t.key, (async () => {
+      for (const i of t.items.filter(x => saved(x.e) && x.e.streamUrl).slice(0, 4)) {
+        const src = await flacPicture(i.e).catch(() => null)
+        if (src) return src
+      }
+      return null
+    })())
+  }
+  return covers.get(t.key)
+}
+// Walks a FLAC file's metadata blocks (after an ID3 tag, if one leads) through 16 KB range reads, and returns the
+// PICTURE block's image as an object URL.
+async function flacPicture (e) {
+  const url = resolveStreamUrl(e.streamUrl)
+  const read = async (at, n) => {
+    const r = await fetch(url, { headers: { range: 'bytes=' + at + '-' + (at + n - 1) } })
+    // Anything but a range reply would be the whole file.
+    if (r.status !== 206) { if (r.body) r.body.cancel(); return new Uint8Array(0) }
+    return new Uint8Array(await r.arrayBuffer())
+  }
+  let win = { at: 0, b: await read(0, 16384) }
+  const bytes = async (at, n) => {
+    if (at < win.at || at + n > win.at + win.b.length) win = { at, b: await read(at, Math.max(n, 16384)) }
+    const b = win.b.subarray(at - win.at, at - win.at + n)
+    if (b.length < n) throw new Error('short read')
+    return b
+  }
+  const ascii = b => String.fromCharCode(...b)
+  let at = 0
+  const id3 = await bytes(0, 10)
+  if (ascii(id3.subarray(0, 3)) === 'ID3') at = 10 + ((id3[6] & 127) << 21 | (id3[7] & 127) << 14 | (id3[8] & 127) << 7 | (id3[9] & 127))
+  if (ascii(await bytes(at, 4)) !== 'fLaC') return null
+  at += 4
+  let pick = null
+  for (let n = 0; n < 64; n++) {
+    const hd = await bytes(at, 4)
+    const len = hd[1] << 16 | hd[2] << 8 | hd[3]
+    if ((hd[0] & 127) === 6 && len < 16e6) {
+      const block = await bytes(at + 4, len)
+      const kind = new DataView(block.buffer, block.byteOffset).getUint32(0)
+      if (!pick || kind === 3) pick = block
+      if (kind === 3) break
+    }
+    if (hd[0] & 128) break
+    at += 4 + len
+  }
+  if (!pick) return null
+  const v = new DataView(pick.buffer, pick.byteOffset, pick.byteLength)
+  let p = 4
+  const mime = ascii(pick.subarray(p + 4, p + 4 + v.getUint32(p)))
+  p += 4 + v.getUint32(p)
+  p += 4 + v.getUint32(p) + 16
+  const length = v.getUint32(p)
+  if (!/^image[/](jpeg|png|webp|gif)$/.test(mime) || p + 4 + length > pick.length) return null
+  return URL.createObjectURL(new Blob([pick.subarray(p + 4, p + 4 + length)], { type: mime }))
+}
+// The album's running time, once every track's header has been read (the sheet reads them all); 0 until then.
+function albumSecs (t) {
+  let secs = 0
+  for (const i of t.items) {
+    const d = infoData.get(i.e.key)
+    if (!d || !d.media || !d.media.duration) return 0
+    secs += d.media.duration
+  }
+  return secs
+}
+// What a copy of the album is: "FLAC 24-bit 44.1 kHz". The full verdict (bitrate, "lossless container") is the
+// album sheet's; this is the one fact a listener sorts a shelf by. The shelf reads one track's header per album,
+// and once a sheet has read them all it says what most tracks are.
+function shortQuality (d) {
+  const a = d && d.media && (d.media.audio || [])[0]
+  if (!a) return ''
+  return [a.codec, a.depth ? a.depth + '-bit' : '', a.rate ? (a.rate / 1000) + ' kHz' : ''].filter(Boolean).join(' ')
+}
+// One read per album at a time: the card is painted when it lands, and asked again on a later draw if it did not.
+const qualityAsked = new Set()
+function albumQuality (t) {
+  const e = t.items[0].e
+  if (infoData.has(e.key)) return commonQuality(t)
+  if (qualityAsked.has(e.key)) return ''
+  qualityAsked.add(e.key)
+  infoEntries.set(e.key, e)
+  loadInfo(e.key).then(() => {
+    qualityAsked.delete(e.key)
+    if (!infoData.has(e.key)) return
+    for (const line of document.querySelectorAll('[data-aq]')) if (line.dataset.aq === t.key) line.textContent = albumLine(t)
+  })
+  return ''
+}
+// Saved here is the normal state of a mirrored album, so it is said only when it is not true.
+function albumLine (t) {
+  const [state, tone] = tileState(t)
+  return [tone === 'ok' ? '' : state, albumQuality(t)].filter(Boolean).join(' · ')
+}
+function albumPlayBtn (t) {
+  const list = t.items.map(i => i.e).filter(e => !e.locked)
+  if (!list.length) return null
+  const b = h('button', { class: 'album-play', 'data-album': t.key, 'aria-label': 'Play ' + t.album, onclick: () => (queue.length && (tileOf(queue[queueIndex]) || {}).key === t.key) ? musicToggle() : startQueue(list, list[0], t.title) })
+  const ic = h('span', { class: 'btn-ic' })
+  ic.innerHTML = ICON_PLAY + ICON_PAUSE
+  b.append(ic)
+  return b
+}
+// The Music view is a shelf per artist, not a wall of posters: albums are square, read left to right as name, size
+// and copy, and play from where they sit. Rows fill the width four to a line on a desktop and stack on a phone.
+function renderAlbums (list) {
+  const byArtist = new Map()
+  for (const t of list) {
+    const k = t.artist || 'Unknown artist'
+    if (!byArtist.has(k)) byArtist.set(k, [])
+    byArtist.get(k).push(t)
+  }
+  return [...byArtist].sort((a, b) => a[0].localeCompare(b[0])).map(([artist, albums]) => h('section', { class: 'artist-group' },
+    h('div', { class: 'artist-head' },
+      h('h3', null, artist),
+      h('span', { class: 'count' }, plural(albums.length, 'album', 'albums') + ' · ' + plural(albums.reduce((n, t) => n + t.items.length, 0), 'track', 'tracks'))),
+    h('div', { class: 'album-list' }, albums.sort((a, b) => a.album.localeCompare(b.album)).map(t => h('div', { class: 'album-card', 'data-tile': t.key },
+      h('button', { class: 'album-open', onclick: () => openDetail(t.key) },
+        albumArt(t),
+        h('span', { class: 'album-text' },
+          h('span', { class: 'album-name' }, t.album),
+          h('span', { class: 'album-meta' }, tileLine(t)),
+          h('span', { class: 'album-meta', 'data-aq': t.key }, albumLine(t)))),
+      albumPlayBtn(t))))))
+}
+const albumMatches = (t, q) => t.title.toLowerCase().includes(q) || t.items.some(i => trackName(i.e).toLowerCase().includes(q))
 // Continue watching: where this browser stopped, remembered locally. No protocol change,
 // no relay state; a different browser starts its own list.
 const WATCH_KEY = 'peartube-watch'
@@ -1043,7 +1589,9 @@ function renderLibrary (force) {
     $('folderForm').hidden = true
     $('folderChip').setAttribute('aria-expanded', 'false')
   }
-  const all = libraryTiles()
+  // Albums live under Music: the film grid and its posters are the wrong shape for them.
+  const tiles = libraryTiles()
+  const all = tiles.filter(t => t.kind !== 'album')
   const resume = resumeTiles(all)
   renderHero(resume)
   renderResume(resume)
@@ -1051,7 +1599,7 @@ function renderLibrary (force) {
   const q = $('libFilter').value.trim().toLowerCase()
   const list = all.filter(t => (libKind === 'all' || t.kind === libKind) && (!q || t.title.toLowerCase().includes(q)))
   // Progress polls arrive every few seconds; redraw only when what the grid shows has changed.
-  const signature = [libKind, q, libShown, S.offline, ...list.slice(0, libShown).map(t => t.key + tileState(t)[0] + t.items.length)].join('|')
+  const signature = [libKind, q, libShown, S.offline, S.loaded, tiles.length - all.length, ...list.slice(0, libShown).map(t => t.key + tileState(t)[0] + t.items.length)].join('|')
   if (!force && signature === libSignature) return
   libSignature = signature
   $('libCount').textContent = all.length ? String(all.length) : ''
@@ -1061,7 +1609,7 @@ function renderLibrary (force) {
     return n || k === 'all' ? h('button', { class: 'chip', 'aria-pressed': String(libKind === k), onclick: () => { libKind = k; libShown = 60; renderLibrary() } }, label + ' ', h('span', { class: 'count' }, String(n))) : null
   }).filter(Boolean))
   if (!all.length) {
-    $('entries').replaceChildren(h('div', { class: 'empty' }, S.offline ? 'Can’t reach the relay.' : 'Nothing here yet. Paste a link above to add a video.'))
+    $('entries').replaceChildren(h('div', { class: 'empty' }, S.offline ? 'Can’t reach the relay.' : !S.loaded && !needsToken ? 'Loading the library…' : tiles.length ? 'No videos yet. Your albums are under Music.' : 'Nothing here yet. Paste a link above to add a video.'))
     return
   }
   if (!list.length) {
@@ -1085,6 +1633,31 @@ function renderLibrary (force) {
 }
 function showMore () { libShown += 60; renderLibrary() }
 $('libFilter').oninput = () => { libShown = 60; renderLibrary() }
+
+// ---- Music: the albums tab. Its own surface, not a filter on the film grid: a shelf per artist, the album sheet
+// as the place to listen, and the Soulseek search below it as the way to add more.
+let musicSignature = ''
+function renderMusic (force) {
+  renderSlskStatus()
+  const all = libraryTiles().filter(t => t.kind === 'album')
+  const q = $('musicFilter').value.trim().toLowerCase()
+  const list = all.filter(t => !q || albumMatches(t, q))
+  const signature = [q, S.offline, S.loaded, ...list.map(t => t.key + tileState(t)[0] + t.items.length)].join('|')
+  if (!force && signature === musicSignature) return
+  musicSignature = signature
+  $('musicCount').textContent = all.length ? String(all.length) : ''
+  $('musicTools').hidden = all.length < 2
+  if (!all.length) {
+    $('albums').replaceChildren(h('div', { class: 'empty' }, S.offline ? 'Can’t reach the relay.' : !S.loaded && !needsToken ? 'Loading albums…' : 'No albums yet. Find one below.'))
+  } else if (!list.length) {
+    $('albums').replaceChildren(h('div', { class: 'empty' }, 'No album, artist or track matches “' + q + '”.'))
+  } else {
+    $('albums').replaceChildren(...renderAlbums(list))
+    paintRows()
+  }
+  if ($('detail').open) renderDetail()
+}
+$('musicFilter').oninput = () => renderMusic()
 
 // ---- Library: search all relays (POST /v1/search/global). Answers that arrive later come with an update event,
 // which asks the same query again for 60 s.
@@ -1120,12 +1693,336 @@ $('globalForm').onsubmit = ev => {
   act($('globalBtn'), askGlobal, 'globalMsg')
 }
 
+// ==== Soulseek sources (SourcesBrowse): search, browse a peer's folders, mirror, port and job legibility ====
+// POST /v1/providers/soulseek/{search,browse,mirror}. Peer paths use backslashes; they are shown with slashes. A
+// search row is the matching files of one peer folder; Browse lists that peer's whole share by folder, so an album's
+// track count, size and per-file depth/rate/length can be checked (and files deselected) before mirroring.
+const slskPath = s => String(s || '').split('\\\\').join('/')
+const slskDir = f => slskPath(f).split('/').slice(0, -1).join('/')
+const slskLeaf = (path, n) => path.split('/').filter(s => s && !s.startsWith('@@')).slice(-(n || 1)).join(' / ')
+const slskKey = (username, dir) => username + '\\n' + dir.toLowerCase()
+const slskStarted = new Map()
+let slskLast = null
+let slskView = null
+function slskRate (bitDepth, sampleRate, bitrate) {
+  if (bitDepth && sampleRate) return bitDepth + '-bit/' + (sampleRate / 1000) + ' kHz'
+  if (sampleRate) return (sampleRate / 1000) + ' kHz'
+  return bitrate ? bitrate + ' kbps' : 'Rate unknown'
+}
+const slskMinutes = s => s >= 3600 ? Math.floor(s / 3600) + ' h ' + Math.round(s % 3600 / 60) + ' min' : Math.max(1, Math.round(s / 60)) + ' min'
+function slskFolders (files) {
+  const groups = new Map()
+  for (const f of files) {
+    const dir = slskDir(f.filename)
+    const key = slskKey(f.username, dir)
+    let g = groups.get(key)
+    if (!g) groups.set(key, g = { key, username: f.username, dir, title: slskLeaf(dir) || 'Shared files', slots: Boolean(f.slots), queue: Number(f.queue) || 0, files: [], bytes: 0, secs: 0, score: 0, rates: [] })
+    g.files.push(f)
+    g.bytes += Number(f.size) || 0
+    g.secs += Number(f.length) || 0
+    g.score = Math.max(g.score, (f.bit_depth || 0) * 1e7 + (f.sample_rate || 0) * 10 + (f.bitrate || 0) / 1000)
+    const r = slskRate(f.bit_depth, f.sample_rate, f.bitrate)
+    if (!g.rates.includes(r)) g.rates.push(r)
+  }
+  return [...groups.values()]
+}
+const slskQuality = g => g.rates.length > 1 ? g.rates[0] + ' (mixed)' : g.rates[0]
+
+// The button that starts a mirror then follows it ("Queued at 12", "34%", "Saved") across redraws, so the row that
+// was pressed answers at once; a failed or cancelled mirror gives the button back.
+function slskMirrorBtn (g, pick, label, msgId) {
+  const b = h('button', { class: 'btn primary', 'data-slsk-key': g.key, 'data-label': label, onclick: async () => {
+    const files = pick()
+    if (!files.length || slskStarted.has(g.key)) return
+    // The first mirror of a session signs in first, which can take seconds; the press is answered at once.
+    b.textContent = 'Starting'
+    const r = await act(b, () => api('/v1/providers/soulseek/mirror', { body: { username: g.username, title: g.title, files: files.map(f => ({ filename: f.filename, size: f.size })) } }), msgId)
+    if (!r || !r.job) { b.textContent = b.dataset.label; return }
+    slskStarted.set(g.key, r.job.jobId)
+    if (!S.jobs.some(j => j.jobId === r.job.jobId)) S.jobs.unshift(r.job)
+    renderMirrors()
+    pollMirrors()
+  } }, label)
+  slskSyncButton(b)
+  return b
+}
+
+const slskSorts = { quality: (a, b) => b.score - a.score || b.bytes - a.bytes, size: (a, b) => b.bytes - a.bytes }
+function renderSourceResults () {
+  if (!slskLast) return
+  const groups = slskFolders(slskLast.candidates)
+  const sorter = slskSorts[$('slskSort').value]
+  if (sorter) groups.sort(sorter)
+  const secs = Math.max(1, Math.round(slskLast.ms / 1000)) + ' s'
+  const peers = new Set(slskLast.candidates.map(c => c.username)).size
+  say('slskMsg', groups.length ? plural(groups.length, 'album', 'albums') + ' from ' + plural(peers, 'peer', 'peers') + ' in ' + secs + '.' : 'No matching albums found in ' + secs + '.')
+  $('slskTools').hidden = !groups.length
+  $('slskResults').replaceChildren(...groups.map(g => h('div', { class: 'item' },
+    h('div', { class: 'info' },
+      h('div', { class: 'name' }, g.title),
+      h('div', { class: 'meta' }, [g.slots ? 'Slots open' : 'Slots full', g.queue ? 'Queue ' + g.queue : 'No queue', slskQuality(g), size(g.bytes), plural(g.files.length, 'matching track', 'matching tracks'), g.username].join(' · '))),
+    h('div', { class: 'acts' },
+      h('button', { class: 'btn', onclick: () => openSlskBrowse(g.username, g.dir) }, 'Browse'),
+      slskMirrorBtn(g, () => g.files, g.files.length === 1 ? 'Mirror track' : 'Mirror', 'slskMsg')))))
+}
+$('slskSort').onchange = renderSourceResults
+$('slskForm').onsubmit = ev => {
+  ev.preventDefault()
+  const query = $('slskInput').value.trim()
+  if (!query) return
+  try { localStorage.setItem('peartube.slskQuery', query) } catch {}
+  const started = Date.now()
+  const tick = () => say('slskMsg', 'Searching peers… ' + Math.round((Date.now() - started) / 1000) + ' s. Replies trickle in for about 25 s.')
+  tick()
+  const timer = setInterval(tick, 1000)
+  act($('slskBtn'), async () => {
+    try {
+      const r = await api('/v1/providers/soulseek/search', { body: { query } })
+      slskLast = { query, candidates: r.candidates || [], ms: Date.now() - started }
+    } finally { clearInterval(timer) }
+    renderSourceResults()
+  }, 'slskMsg')
+}
+try { $('slskInput').value = localStorage.getItem('peartube.slskQuery') || '' } catch {}
+
+// Browse: the relay caches a peer's list for a few minutes, so reopening is instant; the first fetch can take
+// seconds (up to 30), so it shows a ticking spinner, and a peer that does not answer is said plainly.
+async function openSlskBrowse (username, focusDir, again) {
+  const view = { username, focus: focusDir || '', data: null, error: '', filter: '', open: new Set(), off: new Map(), shown: 40, started: Date.now() }
+  if (focusDir) view.open.add(slskKey(username, focusDir))
+  slskView = view
+  renderSlskBrowse()
+  $('slskBrowse').scrollIntoView({ block: 'start', behavior: 'smooth' })
+  const timer = setInterval(() => {
+    const t = $('slskWaitText')
+    if (t && slskView === view) t.textContent = slskWaitText(view)
+  }, 1000)
+  try {
+    view.data = await api('/v1/providers/soulseek/browse', { body: { username, refresh: Boolean(again) } })
+    view.folders = slskFolders(view.data.files || [])
+    const focus = slskKey(username, view.focus)
+    view.folders.sort((a, b) => (b.key === focus) - (a.key === focus) || (a.dir < b.dir ? -1 : a.dir > b.dir ? 1 : 0))
+  } catch (err) {
+    view.error = err.message
+  } finally { clearInterval(timer) }
+  if (slskView === view) renderSlskBrowse()
+}
+const slskWaitText = v => 'Asking ' + v.username + ' for their shared files… ' + Math.round((Date.now() - v.started) / 1000) + ' s'
+function renderSlskBrowse () {
+  const box = $('slskBrowse')
+  const v = slskView
+  box.hidden = !v
+  if (!v) return box.replaceChildren()
+  const d = v.data
+  const summary = d
+    ? [plural(v.folders.length, 'folder', 'folders'), plural(d.tracks, 'track', 'tracks'), size(d.size), d.cached ? 'saved list' : 'just fetched'].join(' · ')
+    : v.error ? 'Could not list files' : 'Loading'
+  const head = h('div', { class: 'slsk-head' },
+    h('div', { class: 'grow' }, h('h3', null, v.username), h('div', { class: 'meta' }, summary)),
+    h('button', { class: 'btn quiet', disabled: !d && !v.error, onclick: () => openSlskBrowse(v.username, v.focus, true) }, 'Refresh'),
+    h('button', { class: 'btn quiet', onclick: () => { slskView = null; renderSlskBrowse() } }, 'Close'))
+  if (!d && !v.error) {
+    return box.replaceChildren(head, h('div', { class: 'slsk-wait', role: 'status' }, h('span', { class: 'slsk-spin', 'aria-hidden': 'true' }), h('span', { id: 'slskWaitText' }, slskWaitText(v))))
+  }
+  if (v.error) return box.replaceChildren(head, h('div', { class: 'msg err', role: 'alert' }, v.error))
+  if (!d.files.length) return box.replaceChildren(head, h('div', { class: 'msg' }, v.username + ' shares no music files, or hides them from browsing.'))
+  box.replaceChildren(head,
+    h('input', { type: 'search', id: 'slskFilter', spellcheck: 'false', placeholder: 'Blue Train', 'aria-label': 'Filter folders', oninput: ev => { v.filter = ev.target.value; v.shown = 40; renderSlskFolders() } }),
+    h('div', { class: 'msg', id: 'slskBrowseMsg', role: 'status' }),
+    h('div', { class: 'list', id: 'slskFolders' }))
+  renderSlskFolders()
+}
+function renderSlskFolders () {
+  const v = slskView
+  const q = v.filter.trim().toLowerCase()
+  const list = v.folders.filter(g => !q || g.dir.toLowerCase().includes(q))
+  const items = list.slice(0, v.shown).map(slskFolderItem)
+  if (list.length > v.shown) items.push(h('button', { class: 'btn quiet', onclick: () => { v.shown += 40; renderSlskFolders() } }, 'Show ' + Math.min(40, list.length - v.shown) + ' more folders'))
+  if (!list.length) items.push(h('div', { class: 'meta' }, 'No folder matches “' + v.filter.trim() + '”.'))
+  $('slskFolders').replaceChildren(...items)
+}
+function slskFolderItem (g) {
+  const v = slskView
+  const off = v.off.get(g.key) || new Set()
+  v.off.set(g.key, off)
+  const open = v.open.has(g.key)
+  const picked = () => g.files.filter(f => !off.has(f.filename))
+  const label = () => {
+    const n = picked().length
+    return n === g.files.length ? 'Mirror folder' : n ? 'Mirror ' + plural(n, 'track', 'tracks') : 'None selected'
+  }
+  const mirror = slskMirrorBtn(g, picked, label(), 'slskBrowseMsg')
+  if (!picked().length) mirror.disabled = true
+  const where = slskLeaf(g.dir, 2)
+  const facts = [plural(g.files.length, 'track', 'tracks'), slskQuality(g), size(g.bytes), g.secs ? slskMinutes(g.secs) : ''].filter(Boolean).join(' · ')
+  const toggle = h('button', { class: 'btn quiet', 'aria-expanded': String(open), onclick: () => { if (open) v.open.delete(g.key); else v.open.add(g.key); renderSlskFolders() } }, open ? 'Hide files' : 'Files')
+  // Each file can be mirrored on its own: it lands in its album's folder as a track of that album (the relay reads
+  // its tags, else this folder's name, and says so on the job), and is followed live like a folder mirror.
+  const one = f => {
+    const b = slskMirrorBtn({ key: slskKey(g.username, f.filename), username: g.username, title: '', files: [f] }, () => [f], 'Mirror track', 'slskBrowseMsg')
+    b.className = 'btn quiet slsk-one'
+    b.setAttribute('aria-label', 'Mirror track ' + slskLeaf(slskPath(f.filename)))
+    return b
+  }
+  const files = open
+    ? h('div', { class: 'slsk-files' }, ...g.files.map(f => h('div', { class: 'slsk-file' },
+        h('label', null,
+          h('input', { type: 'checkbox', checked: !off.has(f.filename), onchange: ev => {
+            if (ev.target.checked) off.delete(f.filename)
+            else off.add(f.filename)
+            if (slskStarted.has(g.key)) return
+            mirror.textContent = mirror.dataset.label = label()
+            mirror.disabled = !picked().length
+          } }),
+          h('span', { class: 'grow' }, slskLeaf(slskPath(f.filename)))),
+        h('span', { class: 'meta' }, [slskRate(f.bit_depth, f.sample_rate, f.bitrate), duration(f.length), size(f.size)].filter(Boolean).join(' · ')),
+        one(f))))
+    : null
+  return h('div', { class: 'item slsk-folder' + (slskKey(v.username, v.focus) === g.key ? ' focus' : '') },
+    h('div', { class: 'slsk-row' },
+      h('div', { class: 'info' }, h('div', { class: 'name' }, g.title), h('div', { class: 'meta' }, where !== g.title ? where + ' · ' + facts : facts)),
+      h('div', { class: 'acts' }, toggle, mirror)),
+    files)
+}
+
+// ---- Mirror progress: one card per album mirror, redrawn every second from /v1/jobs while any is active.
+// A queue place is the peer saying yes, later, so it reads as a place in line, never as a stall; only a minute of
+// silence with no place is a warning. A failure shows the relay's own reason, plus the port fix when this session
+// has evidence peers cannot reach the relay (inbound failures and no transfer yet).
+function slskActive (j) { return j.plugin === 'soulseek' && MIRROR_ACTIVE.has(j.status) }
+const slskFor = ms => ms < 90_000 ? Math.round(ms / 1000) + ' s' : Math.round(ms / 60_000) + ' min'
+const slskPct = j => j.total ? Math.min(j.status === 'done' ? 100 : 99, Math.floor((j.bytes || 0) / j.total * 100)) : null
+// What a mirror is doing: a sentence for its card and a word or two for the button that started it.
+function slskJobState (j) {
+  const pct = slskPct(j)
+  if (j.status === 'done') return { tone: 'ok', text: 'Saved · ' + plural(j.fileCount || 1, 'track', 'tracks') + ' · ' + size(j.size || j.bytes || 0), short: 'Saved' }
+  if (j.status === 'failed') return { tone: 'bad', text: 'Failed', short: 'Failed' }
+  if (j.status === 'cancelled') return { tone: '', text: 'Cancelled', short: 'Cancelled' }
+  if (j.status === 'announcing') return { tone: '', text: 'Adding to your library', short: 'Adding' }
+  if (j.status === 'transferring') return { tone: '', text: 'Downloading from ' + j.peer + (pct != null ? ' · ' + pct + '%' : ''), short: pct != null ? pct + '%' : 'Downloading' }
+  if (j.phase === 'connecting') return { tone: '', text: 'Connecting to ' + j.peer, short: 'Connecting' }
+  if (j.queuePlace > 0) return { tone: '', text: 'Queued at ' + j.queuePlace + ' on ' + j.peer, short: 'Queued at ' + j.queuePlace }
+  if (j.queuePlace === 0) return { tone: '', text: 'Next in line on ' + j.peer, short: 'Next in line' }
+  if (j.idleMs > 60_000) return { tone: 'warn', text: 'No answer from ' + j.peer + ' for ' + slskFor(j.idleMs), short: 'No answer' }
+  return { tone: '', text: 'Asking ' + j.peer + ' to send', short: 'Asking' }
+}
+// The amount line: bytes of the whole album, the speed while bytes move, and how long nothing has changed.
+function slskAmount (j) {
+  const got = j.total ? size(j.bytes || 0) + ' of ' + size(j.total) : j.bytes ? size(j.bytes) + ' so far' : ''
+  const quiet = j.idleMs > 15_000 ? slskFor(j.idleMs) : ''
+  const note = j.status === 'transferring' ? (quiet ? 'no data for ' + quiet : j.speed > 0 ? rate(j.speed) : '')
+    : j.phase === 'connecting' ? 'waiting for it to reach port ' + j.listenPort
+      : j.queuePlace != null && quiet ? 'waiting ' + quiet : ''
+  return [got, note].filter(Boolean).join(' · ')
+}
+const slskPortFix = n => ['Publish port ' + n + ' (', h('code', null, '-p ' + n + ':' + n), ') and forward it on your router.']
+const slskAlbumEntry = j => j.sha256s && j.sha256s.length ? S.entries.find(e => j.sha256s.includes(e.sha256)) : null
+function slskJobItem (j) {
+  const st = slskJobState(j)
+  const active = MIRROR_ACTIVE.has(j.status)
+  const pct = slskPct(j)
+  const p = plugin('soulseek')
+  const unreachable = p.inboundFailures > 0 && p.transfersOk === 0
+  const album = j.status === 'done' ? slskAlbumEntry(j) : null
+  const track = [j.fileCount > 1 ? 'Track ' + j.fileIndex + ' of ' + j.fileCount : '', j.file].filter(Boolean).join(' · ')
+  const btn = (label, fn) => h('button', { class: 'btn' + (label === 'Open album' ? '' : ' quiet'), 'data-fk': j.jobId + ':' + label, onclick: fn }, label)
+  return h('div', { class: 'item job slsk-job', 'data-job': j.jobId, 'data-status': j.status },
+    h('div', { class: 'info' },
+      h('div', { class: 'name' }, j.title || 'Album'),
+      h('div', { class: 'slsk-state' + (st.tone ? ' ' + st.tone : '') }, st.text),
+      active && track ? h('div', { class: 'meta' }, track) : null,
+      active && slskAmount(j) ? h('div', { class: 'meta slsk-amount' }, slskAmount(j)) : null,
+      active ? h('div', { class: 'bar-track' + (j.status === 'transferring' || j.status === 'announcing' ? '' : ' wait') }, h('div', { style: 'width:' + (j.status === 'announcing' ? 100 : pct || 0) + '%' })) : null,
+      j.status === 'done' && j.note ? h('div', { class: 'meta wrap' }, j.note) : null,
+      j.status === 'failed' && j.error ? h('div', { class: 'meta err wrap slsk-error' }, j.error) : null,
+      j.status === 'failed' && unreachable ? h('div', { class: 'meta wrap slsk-fix' }, ...slskPortFix(p.listenPort || p.listenPortSetting || j.listenPort)) : null),
+    h('div', { class: 'acts' },
+      album ? btn('Open album', () => { const t = tileOf(album); if (t) openDetail(t.key) }) : null,
+      btn(active ? 'Cancel' : 'Dismiss', e => act(e.currentTarget, async () => { await api('/v1/jobs/' + j.jobId, { method: 'DELETE' }); refresh() }))))
+}
+function slskSyncButton (b) {
+  const key = b.dataset.slskKey
+  const id = slskStarted.get(key)
+  if (!id) return
+  const j = S.jobs.find(x => x.jobId === id)
+  if (j && (j.status === 'failed' || j.status === 'cancelled')) {
+    slskStarted.delete(key)
+    b.textContent = b.dataset.label
+    b.disabled = false
+    return
+  }
+  b.textContent = j ? slskJobState(j).short : 'Mirroring'
+  b.disabled = true
+}
+function renderSlskJobs () {
+  const box = $('slskJobs')
+  const fk = box.contains(document.activeElement) ? document.activeElement.dataset.fk : ''
+  const recent = Date.now() - 3600_000
+  const jobs = S.jobs.filter(j => j.plugin === 'soulseek' && (j.status !== 'done' || j.created > recent))
+    .sort((a, b) => MIRROR_ACTIVE.has(b.status) - MIRROR_ACTIVE.has(a.status) || b.created - a.created).slice(0, 5)
+  box.hidden = !jobs.length
+  box.replaceChildren(...jobs.map(slskJobItem))
+  const again = fk && [...box.querySelectorAll('[data-fk]')].find(b => b.dataset.fk === fk)
+  if (again) again.focus()
+  for (const b of document.querySelectorAll('button[data-slsk-key]')) slskSyncButton(b)
+}
+function renderMirrors () {
+  renderPills()
+  if (tab === 'music') renderSlskStatus()
+}
+// Cheap and independent of the full refresh, which holds still while a film plays. When the last mirror ends, one
+// full refresh loads the new album's tracks so its card can open it.
+let slskPolling = false
+async function pollMirrors () {
+  if (slskPolling) return
+  slskPolling = true
+  let failed = false
+  try {
+    while (S.jobs.some(slskActive)) {
+      await new Promise(resolve => setTimeout(resolve, 1000))
+      try { S.jobs = (await api('/v1/jobs')).jobs || [] } catch { failed = true; break }
+      noticeJobs(false)
+      if (!pressing) renderMirrors()
+    }
+  } finally { slskPolling = false }
+  if (!failed) refresh()
+}
+
+// The port peers send files to. The relay cannot test its own public port, so the strong warning waits for evidence:
+// a peer that could not reach it, or a mirror that has waited a minute with no answer at all.
+function slskPortNote (p) {
+  if (!p.configured || p.status === 'unavailable' || p.listenPortSetting == null) return null
+  const port = p.listenPort == null ? p.listenPortSetting : p.listenPort
+  const fix = n => [' Publish it (', h('code', null, '-p ' + n + ':' + n), ') and forward it on your router.']
+  if (p.listenPortSetting === 0) return { alert: true, kids: ['Soulseek picks a new port each start' + (port ? ' (now ' + port + ')' : '') + ', which cannot be published, so peers cannot send you files. Set a Listen port in Settings.'] }
+  if (port === 0) return { alert: true, kids: ['Soulseek could not open port ' + p.listenPortSetting + ' on this relay. Pick a free Listen port in Settings.'] }
+  const stalled = S.jobs.some(j => j.plugin === 'soulseek' && j.status === 'queued' && !j.bytes && j.queuePlace == null && j.idleMs > 60_000)
+  if ((p.inboundFailures && !p.transfersOk) || stalled) {
+    return { alert: true, kids: ['Peers cannot reach this relay, so downloads never start. Soulseek listens on port ' + port + '.', ...fix(port)] }
+  }
+  return { alert: false, kids: ['Peers send files to this relay on port ' + port + '; keep it reachable.'] }
+}
+function renderSlskStatus () {
+  const p = plugin('soulseek')
+  $('slskHint').textContent = p.status === 'unavailable'
+    ? 'Unavailable on this device.'
+    : p.configured
+      ? 'Finds albums on peers and mirrors them here.'
+      : 'Add your account in Settings to search.'
+  const note = slskPortNote(p)
+  $('slskPort').hidden = !note
+  $('slskPort').classList.toggle('alert', Boolean(note && note.alert))
+  $('slskPort').replaceChildren(...(note ? note.kids : []))
+  renderSlskJobs()
+}
+// ==== end Soulseek sources ====
+
 // ---- Library: details sheet (play, cast, copy; a show's episodes by season)
 let detailKey = null
 let detailSeason = null
-function openDetail (key) {
+function openDetail (key, season = null) {
   detailKey = key
-  detailSeason = null
+  detailSeason = season
   renderDetail()
   if (!$('detail').open) $('detail').showModal()
   if (!infoTimer) infoTimer = setInterval(pollInfo, 3000)
@@ -1163,14 +2060,74 @@ function downloadBtn (e, quiet, nameOverride) {
   if (!e || !e.streamUrl) return null
   return h('a', { class: 'btn' + (quiet ? ' quiet' : ''), 'data-download': true, href: downloadHref(e, nameOverride), download: '' }, 'Download')
 }
-function deleteBtn (e, quiet) {
-  if (!S.settings || !e || e.source !== S.status.channel) return null
-  return h('button', { class: 'btn' + (quiet ? ' quiet' : ''), onclick: ev => act(ev.currentTarget, async () => {
-    await api('/v1/entries/remove', { body: { key: e.key } })
-    toast('Removed from channel')
-    await refresh()
-  }) }, 'Delete')
+// ---- Delete (DeleteAndSingleMirror)
+// Two presses: the first arms the button ("Confirm", and what goes said beside it) for 5 s, the second deletes. The
+// owner only, and only this channel's entries: another channel's are its owner's to remove. The toast says whether
+// the file left the disk too (a mirrored file does; one in the import folder stays).
+const ownEntry = e => Boolean(S.settings && e && e.source === S.status.channel)
+const ICON_TRASH = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 7h14M10 11v6M14 11v6M9 7l1-3h4l1 3M7 7l1 13h8l1-13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>'
+function removedText (r) {
+  const gone = (r && r.removed) || []
+  if (!gone.length) return (r && r.notRemoved && r.notRemoved[0] && r.notRemoved[0].reason) || 'Nothing was removed'
+  const what = gone.length > 1 ? plural(gone.length, 'track', 'tracks') + ' removed' : 'Removed'
+  if (gone.some(x => x.file === 'kept')) return what + ' from the library. Files in the import folder stay.'
+  return what + (gone.some(x => x.file === 'deleted') ? ' and deleted from disk' : ' from the library')
 }
+async function removeEntries (body, after) {
+  const r = await api('/v1/entries/remove', { body })
+  toast(removedText(r))
+  if (after) after()
+  await refresh()
+}
+function armDelete (b, idle, ask, run) {
+  let timer = 0
+  const reset = () => {
+    clearTimeout(timer)
+    timer = 0
+    b.classList.remove('armed')
+    idle()
+    if (ask) ask.hidden = true
+  }
+  b.onclick = ev => {
+    ev.stopPropagation()
+    if (!timer) {
+      b.classList.add('armed')
+      b.textContent = 'Confirm'
+      if (ask) ask.hidden = false
+      timer = setTimeout(reset, 5000)
+      return
+    }
+    reset()
+    act(b, run)
+  }
+  idle()
+  return b
+}
+function deleteBtn (e, quiet) {
+  if (!ownEntry(e)) return null
+  const b = h('button', { class: 'btn' + (quiet ? ' quiet' : '') })
+  return armDelete(b, () => { b.textContent = 'Delete' }, null, () => removeEntries({ key: e.key }))
+}
+function trackDeleteBtn (e) {
+  if (!ownEntry(e)) return null
+  const b = h('button', { class: 'track-del', title: 'Delete', 'aria-label': 'Delete ' + trackName(e) })
+  return armDelete(b, () => { b.innerHTML = ICON_TRASH }, null, () => removeEntries({ key: e.key }))
+}
+// One press for the whole album: every track this channel holds under its release, in one request.
+function albumDeleteBtn (t) {
+  const own = t.items.filter(i => ownEntry(i.e))
+  if (!own.length) return null
+  const ask = h('span', { class: 'meta del-ask', role: 'status', hidden: true }, 'Deletes “' + t.album + '” and its ' + plural(own.length, 'track', 'tracks') + '.')
+  const b = h('button', { class: 'btn quiet' })
+  armDelete(b, () => { b.textContent = 'Delete album' }, ask, () => {
+    // The tile's key list spans every release folded into it; its items collapse duplicate copies to one row and
+    // would leave the dropped copy's announce behind (mergeAlbums keeps only the first). Fall back to rows we have.
+    const keys = Array.isArray(t.keys) && t.keys.length ? t.keys : own.map(i => i.e.key)
+    return removeEntries({ keys }, () => $('detail').close())
+  })
+  return [b, ask]
+}
+// ---- end Delete
 function fileRow (label, e, withHealth) {
   const from = sourceName(e.source)
   const dlName = /^S\\d+E\\d+$/i.test(label) && e.title && !/s\\d+e\\d+/i.test(e.title) ? e.title + ' ' + label : (e.title || label)
@@ -1187,6 +2144,438 @@ function fileRow (label, e, withHealth) {
       deleteBtn(e, true))),
   shown ? infoPanel(e) : null)
 }
+
+// ---- Music
+// A track is a track, not one of a film's versions: the row shows the number it is addressed by (its disc and track
+// from the id's ':sNNeMM' suffix) and the name the announce carries in 'music.title'. The announce title is the album
+// on every track, so without 'music' an album's rows would all read the same.
+const trackName = e => (e.music && e.music.title) || (e.id.split(':').pop() || '').toUpperCase() || e.title || 'Track'
+const trackNo = e => e.season != null && e.episode != null
+  ? (e.season > 1 ? e.season + '-' : '') + String(e.episode).padStart(2, '0')
+  : ''
+// What a track is, in the terms a listener judges a copy by: the sample rate and depth of a lossless file, or the
+// bitrate of a lossy one, plus the bitrate the file's own size works out to. The header is read once per file and
+// cached; until it arrives the cell is empty rather than a guess.
+function qualityOf (e, d) {
+  if (!d || !d.media) return ''
+  const secs = d.media.duration
+  const a = (d.media.audio || [])[0]
+  const bits = a && a.depth ? a.depth + '-bit ' : ''
+  // "Lossless container", never "lossless": FLAC stores whatever it was given without further loss, and a file
+  // transcoded from a lossy source is still a lossless container of lossy audio. The word on its own invites the
+  // reader to believe the recording is lossless, which only the source can decide.
+  const containerLossless = d.media.container === 'flac' || d.media.container === 'wav' || (a && a.codec === 'FLAC')
+  const base = a ? bits + (a.rate ? (a.rate / 1000) + ' kHz' : '') : ''
+  const br = bitrate(e.size, secs)
+  return [a && a.codec, base, containerLossless ? 'lossless container' : br, containerLossless ? br + ' file' : ''].filter(Boolean).join(' · ')
+}
+// A row's second line says only what sets the track apart: an artist who is not the album's, a copy that is not
+// what the rest of the album is (one 16-bit track on a 24-bit album), not saved here yet, or held twice. On a
+// clean album every row is one line. The full verdict ("lossless container", bitrate) is the line's tooltip, and
+// the album's own is the sheet's header.
+function trackMeta (e, d, albumArtist, copies, common) {
+  const artist = e.music && e.music.artist
+  const q = shortQuality(d)
+  return [artist && artist !== albumArtist ? artist : '', q !== common ? q : '', saved(e) ? '' : where(e), copies > 1 ? copies + ' copies' : ''].filter(Boolean).join(' · ')
+}
+// What most of an album's tracks are, among the headers read so far.
+function commonQuality (t) {
+  const n = new Map()
+  for (const i of t.items) {
+    const q = shortQuality(infoData.get(i.e.key))
+    if (q) n.set(q, (n.get(q) || 0) + 1)
+  }
+  return [...n].sort((a, b) => b[1] - a[1]).map(x => x[0])[0] || ''
+}
+const trackSecs = d => (d && d.media && d.media.duration) || 0
+const ICON_DOWNLOAD = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4v11m0 0l-4.5-4.5M12 15l4.5-4.5M5 19h14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>'
+// The whole row plays its track; the number turns into play or pause on the row being hovered or playing.
+function trackRow (i, t, common) {
+  const e = i.e
+  const d = infoData.get(e.key)
+  infoEntries.set(e.key, e)
+  if (!d) loadInfo(e.key)
+  const go = () => isCurrent(e) ? musicToggle() : startQueue(t.items.map(x => x.e), e, t.title)
+  const btn = h('button', { class: 'track-play', 'aria-label': 'Play ' + trackName(e), onclick: ev => { ev.stopPropagation(); go() } }, h('span', { class: 'tn' }, String(i.episode)))
+  btn.insertAdjacentHTML('beforeend', ICON_PLAY + ICON_PAUSE)
+  const dl = e.streamUrl ? h('a', { class: 'track-dl', href: downloadHref(e, (trackNo(e) ? trackNo(e) + ' ' : '') + trackName(e) + ' — ' + t.title), download: '', title: 'Download', 'aria-label': 'Download ' + trackName(e) }) : null
+  if (dl) dl.innerHTML = ICON_DOWNLOAD
+  return h('div', { class: 'row-item track', 'data-track': e.key, 'data-name': trackName(e), onclick: ev => { if (!ev.target.closest('a, button')) go() } },
+    btn,
+    h('div', { class: 'grow', style: 'min-width:0' },
+      h('div', { class: 'label' }, trackName(e), h('span', { class: 'tag now', hidden: true })),
+      h('div', { class: 'meta', 'data-q': e.key, title: qualityOf(e, d) }, trackMeta(e, d, t.artist, i.copies, common))),
+    h('span', { class: 'track-dur', 'data-dur': e.key }, duration(trackSecs(d))),
+    dl,
+    trackDeleteBtn(e))
+}
+// The sheet's header: how much and how long (once every header is read) and where it lives; then what the copy is.
+function albumHeadLine (t) {
+  const secs = albumSecs(t)
+  return [plural(t.items.length, 'track', 'tracks'), secs ? Math.round(secs / 60) + ' min' : '', size(t.items.reduce((n, i) => n + (i.e.size || 0), 0)),
+    tileState(t)[0], t.releases > 1 ? 'from ' + t.releases + ' releases' : ''].filter(Boolean).join(' · ')
+}
+function albumVerdict (t) {
+  const common = commonQuality(t)
+  const i = t.items.find(x => shortQuality(infoData.get(x.e.key)) === common) || t.items[0]
+  return qualityOf(i.e, infoData.get(i.e.key))
+}
+// Headers land one by one after the sheet opens; each redraws the lines that depend on them, never the rows.
+function paintAlbumSheet (t) {
+  const box = $('detailBody')
+  const common = commonQuality(t)
+  const am = box.querySelector('[data-am]')
+  if (am) am.textContent = albumHeadLine(t)
+  const av = box.querySelector('[data-av]')
+  if (av) av.textContent = albumVerdict(t)
+  for (const i of t.items) {
+    const d = infoData.get(i.e.key)
+    for (const line of box.querySelectorAll('[data-q]')) {
+      if (line.dataset.q !== i.e.key) continue
+      line.textContent = trackMeta(i.e, d, t.artist, i.copies, common)
+      line.title = qualityOf(i.e, d)
+    }
+    for (const cell of box.querySelectorAll('[data-dur]')) if (cell.dataset.dur === i.e.key) cell.textContent = duration(trackSecs(d))
+  }
+}
+function albumHead (t) {
+  const list = t.items.map(i => i.e).filter(e => !e.locked)
+  const del = albumDeleteBtn(t)
+  const icons = h('span', { class: 'btn-ic' })
+  icons.innerHTML = ICON_PLAY + ICON_PAUSE
+  const shuffled = () => {
+    const pool = list.slice()
+    for (let i = pool.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [pool[i], pool[j]] = [pool[j], pool[i]] }
+    return pool
+  }
+  // Flat children on a grid: beside the sleeve on a desktop; on a phone the name sits beside it and the facts and
+  // buttons take the full width under it, so Play and Shuffle stay on one line.
+  return h('div', { class: 'detail-head album-head' },
+    albumArt(t, 'sleeve-lg'),
+    h('div', { class: 'ah-title' },
+      h('h3', { id: 'detailTitle' }, t.album),
+      h('div', { class: 'album-by' }, t.artist || 'Unknown artist')),
+    h('div', { class: 'ah-meta' },
+      h('div', { class: 'meta', 'data-am': t.key }, albumHeadLine(t)),
+      h('div', { class: 'meta', 'data-av': t.key }, albumVerdict(t))),
+    list.length || del
+      ? h('div', { class: 'album-acts' },
+        list.length ? h('button', { class: 'btn primary', 'data-album': t.key, onclick: () => queue.length && (tileOf(queue[queueIndex]) || {}).key === t.key ? musicToggle() : startQueue(list, list[0], t.title) }, icons, h('span', null, 'Play')) : null,
+        list.length > 1 ? h('button', { class: 'btn quiet', onclick: () => startQueue(shuffled(), null, t.title, 'Shuffling') }, 'Shuffle') : null,
+        del)
+      : null)
+}
+
+// ---- Music: one queue, one audio element, one bar along the bottom of every tab
+// The queue is what plays next, in the order the queue panel shows. Starting one replaces it; shuffling only reorders
+// it, so the panel never lies about what comes next. The queue, the spot in it and the volume are kept in this
+// browser, so a reload comes back to the same track, paused where it was.
+const ICON_PLAY = '<svg class="i-play" viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5.5v13a1 1 0 0 0 1.5.86l10.2-6.5a1 1 0 0 0 0-1.72L9.5 4.64A1 1 0 0 0 8 5.5z"/></svg>'
+const ICON_PAUSE = '<svg class="i-pause" viewBox="0 0 24 24" aria-hidden="true"><rect x="6.5" y="5" width="4" height="14" rx="1.2"/><rect x="13.5" y="5" width="4" height="14" rx="1.2"/></svg>'
+const MUSIC_KEY = 'peartube-music'
+let musicStore = {}
+try { musicStore = JSON.parse(localStorage.getItem(MUSIC_KEY) || '{}') || {} } catch {}
+let queue = []
+let queueIndex = 0
+let queueTitle = ''
+let audioEl = null
+let npState = 'idle' // loading, playing, paused, done or error: what the bar says under the track name
+let npAnnounce = '' // said once the first sound of a started track is heard, never before it
+let npError = '' // why the current track did not play, in the listener's terms
+let npSlowTimer = 0 // a load that has not started after 10 s says it is still looking, rather than spinning in silence
+let npSlow = false
+function npLoading () {
+  npState = 'loading'
+  npSlow = false
+  clearTimeout(npSlowTimer)
+  npSlowTimer = setTimeout(() => { if (npState === 'loading') { npSlow = true; paintBar() } }, 10000)
+}
+let seekDragging = false
+let lastMusicSave = 0
+let musicRestored = false
+const albumName = title => String(title || '').split(' · ').pop()
+const isCurrent = e => queue.length > 0 && queue[queueIndex].key === e.key
+const clock = s => duration(s) || '0:00'
+const nowLine = (verb, i) => verb + ' “' + trackName(queue[i]) + '”' + (queue.length > 1 ? ', ' + (i + 1) + ' of ' + queue.length : '')
+
+function musicAudio () {
+  if (audioEl) return audioEl
+  // Attached, not floating: a detached media element has no document to schedule playback against, and its
+  // events are the only thing that keeps the bar honest about what is playing.
+  const a = audioEl = el('audio')
+  a.preload = 'auto'
+  a.hidden = true
+  a.volume = Number.isFinite(musicStore.vol) ? Math.min(1, Math.max(0, musicStore.vol)) : 1
+  document.body.append(a)
+  a.addEventListener('playing', () => {
+    npState = 'playing'
+    if (npAnnounce) { toast(npAnnounce); npAnnounce = '' }
+    paintBar()
+  })
+  a.addEventListener('waiting', () => { if (!a.paused) { npLoading(); paintBar() } })
+  a.addEventListener('pause', () => { if (npState !== 'done' && npState !== 'error') npState = 'paused'; paintBar(); saveMusic(true) })
+  a.addEventListener('ended', trackEnded)
+  a.addEventListener('timeupdate', () => { paintTime(); saveMusic() })
+  a.addEventListener('durationchange', paintTime)
+  a.addEventListener('error', async () => {
+    const src = a.getAttribute('src')
+    if (!src || !queue.length) return
+    const e = queue[queueIndex]
+    npState = 'error'
+    npAnnounce = ''
+    npError = 'Could not play this track'
+    paintBar()
+    const why = await whyUnplayable(a.error, src)
+    if (a.getAttribute('src') !== src) return
+    npError = why
+    toast('Could not play “' + trackName(e) + '”. ' + why + '.')
+    paintBar()
+  })
+  // Media keys and the system's now-playing panel drive the same queue as the bar.
+  const ms = navigator.mediaSession
+  const actions = [['play', () => { if (a.paused) musicToggle() }], ['pause', () => { if (!a.paused) a.pause() }], ['previoustrack', musicPrev], ['nexttrack', musicNext], ['seekto', d => musicSeek(d.seekTime)]]
+  if (ms) for (const [name, fn] of actions) { try { ms.setActionHandler(name, fn) } catch {} }
+  return a
+}
+// A media error alone cannot tell a missing file from a broken one: code 4 covers both a 404 and a format this
+// browser lacks. One byte asked of the same URL tells them apart.
+async function whyUnplayable (err, src) {
+  if (err && err.code === 3) return 'The file is damaged and could not be decoded'
+  let res
+  try { res = await fetch(src, { headers: { range: 'bytes=0-0' } }) } catch { return 'Could not reach the relay' }
+  if (res.body) res.body.cancel().catch(() => {})
+  if (res.status === 404) return 'The relay does not have this file'
+  if (!res.ok) return 'The relay could not send this file (' + res.status + ')'
+  return err && err.code === 2 ? 'The connection to the relay dropped' : 'This browser cannot play this format'
+}
+function setMediaSession (e) {
+  if (!navigator.mediaSession || typeof MediaMetadata !== 'function') return
+  try { navigator.mediaSession.metadata = new MediaMetadata({ title: trackName(e), artist: (e.music && e.music.artist) || '', album: albumName(e.title) }) } catch {}
+}
+// Starts a list from one of its tracks (the first when none is named) and says so once the sound starts.
+function startQueue (list, start, title, verb = 'Playing') {
+  const q = list.filter(e => !e.locked)
+  if (!q.length) return
+  queue = q
+  queueTitle = title || q[0].title
+  $('detail').close()
+  const i = Math.max(0, q.indexOf(start))
+  playAt(i, i === 0 && q.length > 1 ? verb + ' “' + albumName(queueTitle) + '”, ' + plural(q.length, 'track', 'tracks') : nowLine(verb, i))
+  loadQueueInfo()
+}
+// Track lengths for the queue panel come from the same header read as the sheet's rows.
+function loadQueueInfo () {
+  for (const e of queue) if (!infoData.has(e.key)) { infoEntries.set(e.key, e); loadInfo(e.key) }
+}
+function playAt (i, announce) {
+  const a = musicAudio()
+  // A track has no picture, so it never opens the video player; one that is open is closed, not left half-running.
+  closePlayer()
+  queueIndex = i
+  const e = queue[i]
+  npAnnounce = announce || ''
+  npLoading()
+  a.preload = 'auto'
+  a.src = resolveStreamUrl(e.streamUrl)
+  a.play().catch(err => {
+    // A browser that wants a click first refuses here; the bar then offers play instead of a spinner that never ends.
+    if (err && err.name === 'NotAllowedError' && queue[queueIndex] === e) { npState = 'paused'; npAnnounce = ''; paintBar() }
+  })
+  setMediaSession(e)
+  saveMusic(true)
+  paintBar()
+}
+function musicToggle () {
+  const a = audioEl
+  if (!a || !queue.length) return
+  if (npState === 'done') playAt(0, nowLine('Playing', 0))
+  else if (npState === 'error') playAt(queueIndex)
+  else if (a.paused) a.play().catch(() => {})
+  else a.pause()
+}
+function musicNext () {
+  if (queueIndex + 1 < queue.length) playAt(queueIndex + 1)
+}
+function musicPrev () {
+  if (!queue.length) return
+  // Like every player: back restarts the track, and only a second press near its start goes to the one before.
+  if (queueIndex === 0 || (audioEl && audioEl.currentTime > 3 && npState !== 'error')) musicSeek(0)
+  else playAt(queueIndex - 1)
+}
+function musicSeek (secs) {
+  const a = audioEl
+  if (!a || !Number.isFinite(a.duration)) return
+  a.currentTime = Math.max(0, Math.min(a.duration, secs))
+  paintTime()
+}
+function trackEnded () {
+  if (queueIndex + 1 < queue.length) { playAt(queueIndex + 1, nowLine('Now playing', queueIndex + 1)); return }
+  npState = 'done'
+  toast('Finished “' + albumName(queueTitle) + '”')
+  paintBar()
+}
+function musicStop () {
+  queue = []
+  queueIndex = 0
+  npState = 'idle'
+  if (audioEl) { audioEl.pause(); audioEl.removeAttribute('src'); audioEl.load() }
+  saveMusic(true)
+  paintBar()
+}
+function saveMusic (now) {
+  if (!now && Date.now() - lastMusicSave < 5000) return
+  lastMusicSave = Date.now()
+  const vol = audioEl ? audioEl.volume : 1
+  musicStore = queue.length ? { keys: queue.map(x => x.key), i: queueIndex, at: (audioEl && audioEl.currentTime) || 0, title: queueTitle, vol } : { vol }
+  try { localStorage.setItem(MUSIC_KEY, JSON.stringify(musicStore)) } catch {}
+}
+// After the first load: the queue this browser left comes back on the same track, paused where it was.
+function restoreMusic () {
+  if (musicRestored || !S.entries.length) return
+  musicRestored = true
+  const m = musicStore
+  if (queue.length || !Array.isArray(m.keys)) return
+  const byKey = new Map(S.entries.map(e => [e.key, e]))
+  const cur = byKey.get(m.keys[m.i])
+  if (!cur) return
+  queue = m.keys.map(k => byKey.get(k)).filter(Boolean)
+  queueIndex = queue.indexOf(cur)
+  queueTitle = m.title || cur.title
+  const a = musicAudio()
+  a.preload = 'metadata'
+  a.src = resolveStreamUrl(cur.streamUrl)
+  if (m.at > 0) a.addEventListener('loadedmetadata', () => { if (queue[queueIndex] === cur && m.at < a.duration) a.currentTime = m.at }, { once: true })
+  npState = 'paused'
+  setMediaSession(cur)
+  loadQueueInfo()
+  paintBar()
+}
+
+function paintBar () {
+  const e = queue[queueIndex]
+  $('np').hidden = !e
+  document.body.classList.toggle('np-on', Boolean(e))
+  paintRows()
+  if (!e) {
+    toggleQueue(false)
+    document.title = 'PearTube'
+    if (navigator.mediaSession) navigator.mediaSession.metadata = null
+    return
+  }
+  const playing = Boolean(audioEl && !audioEl.paused)
+  $('npPlay').classList.toggle('on', playing)
+  $('npPlay').setAttribute('aria-label', playing ? 'Pause' : 'Play')
+  // The bar wears the album's own sleeve, so the tile and the bar read as the same record.
+  const art = $('npArt')
+  if (art.dataset.key !== e.key) {
+    const t = tileOf(e)
+    art.dataset.key = e.key
+    art.replaceChildren(t && t.album ? albumArt(t) : albumName(e.title).trim().charAt(0).toUpperCase() || '?')
+  }
+  $('npArt').setAttribute('aria-label', 'Open ' + albumName(e.title))
+  $('npTitle').textContent = trackName(e)
+  const status = npState === 'loading' ? (npSlow ? 'Still looking for this file on the network…' : 'Loading…') : npState === 'error' ? npError : npState === 'done' ? 'Finished' : ''
+  $('npMeta').textContent = status || [e.music && e.music.artist, albumName(e.title)].filter(Boolean).join(' · ')
+  $('npMeta').parentNode.classList.toggle('bad', npState === 'error')
+  const pos = (queueIndex + 1) + ' of ' + queue.length
+  $('npPos').textContent = pos
+  $('npQText').textContent = pos
+  $('npQueueBtn').setAttribute('aria-label', 'Queue, track ' + pos)
+  $('npNext').disabled = queueIndex + 1 >= queue.length
+  document.title = trackName(e) + ' · ' + albumName(e.title)
+  paintTime()
+  if (!$('npQueue').hidden) renderQueue()
+}
+function paintTime () {
+  const a = audioEl
+  if (!a || !queue.length) return
+  const dur = Number.isFinite(a.duration) ? a.duration : 0
+  const seek = $('npSeek')
+  const at = seekDragging ? Number(seek.value) : (a.currentTime || 0)
+  $('npAt').textContent = clock(at)
+  $('npLeft').textContent = dur ? '-' + clock(dur - at) : '--:--'
+  seek.disabled = !dur
+  if (!seekDragging) { seek.max = String(dur); seek.value = String(at) }
+  seek.setAttribute('aria-valuetext', clock(at) + ' of ' + clock(dur))
+}
+// Every row and album button that names a track says whether it is the one playing, wherever it is drawn, without
+// redrawing anything under the pointer: rows carry data-track, album buttons data-album with the tile key.
+function paintRows () {
+  const cur = queue[queueIndex]
+  const playing = Boolean(cur && audioEl && !audioEl.paused)
+  for (const row of document.querySelectorAll('[data-track]')) {
+    const now = Boolean(cur) && row.dataset.track === cur.key
+    row.classList.toggle('now', now)
+    const btn = row.querySelector('.track-play')
+    if (btn) {
+      btn.classList.toggle('on', now && playing)
+      btn.setAttribute('aria-label', (now && playing ? 'Pause ' : 'Play ') + row.dataset.name)
+    }
+    const tag = row.querySelector('.tag.now')
+    if (tag) {
+      tag.hidden = !now
+      tag.textContent = npState === 'loading' ? 'Loading' : playing ? 'Playing' : 'Paused'
+    }
+  }
+  const buttons = document.querySelectorAll('[data-album]')
+  if (!buttons.length) return
+  const curTile = cur ? (tileOf(cur) || {}).key : null
+  for (const btn of buttons) {
+    const mine = Boolean(curTile) && btn.dataset.album === curTile
+    const icons = btn.querySelector('.btn-ic')
+    if (icons) icons.classList.toggle('on', mine && playing)
+    if (btn.lastChild !== icons) btn.lastChild.textContent = !mine ? 'Play' : playing ? 'Pause' : 'Resume'
+  }
+}
+function toggleQueue (open) {
+  const panel = $('npQueue')
+  panel.hidden = !(open ?? panel.hidden) || !queue.length
+  $('npQueueBtn').setAttribute('aria-expanded', String(!panel.hidden))
+  if (panel.hidden) return
+  renderQueue()
+  const cur = $('npList').querySelector('.now')
+  if (cur) cur.scrollIntoView({ block: 'nearest' })
+}
+function renderQueue () {
+  const playing = Boolean(audioEl && !audioEl.paused)
+  $('npQueueMeta').textContent = albumName(queueTitle) + ' · ' + plural(queue.length, 'track', 'tracks')
+  $('npList').replaceChildren(...queue.map((e, i) => {
+    const now = i === queueIndex
+    const d = infoData.get(e.key)
+    const secs = d && d.media && d.media.duration
+    const num = h('span', { class: 'nq-num' + (now && playing ? ' on' : '') }, now ? '' : String(i + 1))
+    if (now) num.innerHTML = ICON_PLAY + ICON_PAUSE
+    return h('li', { class: now ? 'now' : i < queueIndex ? 'done' : '' },
+      h('button', { 'aria-current': now ? 'true' : false, onclick: () => now ? musicToggle() : playAt(i) },
+        num, h('span', { class: 'nq-name' }, trackName(e)), h('span', { class: 'nq-dur' }, secs ? duration(secs) : '')))
+  }))
+}
+// The library tile that holds a track, whatever its grouping key is.
+const tileOf = e => libraryTiles().find(t => t.items.some(i => i.e.key === e.key))
+const openAlbum = () => { const e = queue[queueIndex]; const t = e && tileOf(e); if (t) openDetail(t.key, e.season) }
+$('npArt').onclick = openAlbum
+$('npTitle').onclick = openAlbum
+$('npPlay').onclick = musicToggle
+$('npPrev').onclick = musicPrev
+$('npNext').onclick = musicNext
+$('npQueueBtn').onclick = () => toggleQueue()
+$('npQueueClose').onclick = () => { toggleQueue(false); $('npQueueBtn').focus() }
+$('npClear').onclick = musicStop
+$('npSeek').addEventListener('input', () => { seekDragging = true; paintTime() })
+$('npSeek').addEventListener('change', () => { seekDragging = false; musicSeek(Number($('npSeek').value)) })
+$('npVol').value = String(Math.round((Number.isFinite(musicStore.vol) ? musicStore.vol : 1) * 100))
+$('npVol').addEventListener('input', () => { musicAudio().volume = Number($('npVol').value) / 100; saveMusic(true) })
+addEventListener('pointerdown', ev => { if (!$('npQueue').hidden && !ev.target.closest('#npQueue, #npQueueBtn')) toggleQueue(false) })
+// Music keys, whenever a typed key would not land in a text field: space plays or pauses, the arrows step 10 s.
+addEventListener('keydown', ev => {
+  if (!queue.length || player || ev.altKey || ev.ctrlKey || ev.metaKey || ev.defaultPrevented) return
+  const t = ev.target
+  const range = t.tagName === 'INPUT' && t.type === 'range'
+  if ((!range && /^(INPUT|SELECT|TEXTAREA)$/.test(t.tagName)) || t.isContentEditable) return
+  if (ev.key === 'Escape' && !$('npQueue').hidden) { ev.preventDefault(); toggleQueue(false); $('npQueueBtn').focus() }
+  else if (ev.key === ' ') { ev.preventDefault(); musicToggle() }
+  else if (!range && (ev.key === 'ArrowLeft' || ev.key === 'ArrowRight')) { ev.preventDefault(); musicSeek(audioEl.currentTime + (ev.key === 'ArrowLeft' ? -10 : 10)) }
+})
 
 // ---- Library: what a file holds and how well it streams here now (GET /v1/entries/info), redrawn every 3 s while
 // the sheet is open. Episodes and versions open theirs with File info; a single file shows it at once, and each
@@ -1288,6 +2677,11 @@ async function loadInfo (key, read) {
   for (const tag of $('detailBody').querySelectorAll('[data-health]')) {
     if (tag.dataset.health === key) paintTag(tag, e, infoData.get(key))
   }
+  // An album sheet's rows and header are built from these reads, so they are redrawn as each header lands.
+  const am = $('detailBody').querySelector('[data-am]')
+  const at = am && libraryTiles().find(x => x.key === am.dataset.am)
+  if (at && at.items.some(i => i.e.key === key)) paintAlbumSheet(at)
+  if (!$('npQueue').hidden && queue.some(x => x.key === key)) renderQueue()
 }
 function pollInfo () {
   if (document.hidden) return
@@ -1298,11 +2692,21 @@ function renderDetail () {
   const box = $('detailBody')
   infoWatched.clear()
   if (!t) { box.replaceChildren(h('div', { class: 'empty' }, 'This title is no longer in the library.')); return }
-  const head = h('div', { class: 'detail-head' },
-    posterBox(t.imdb ? '/v1/poster/' + t.imdb : null, t.title),
-    h('div', { class: 'grow' }, h('h3', { id: 'detailTitle' }, t.title), h('div', { class: 'meta' }, tileLine(t) + ' · ' + tileState(t)[0])))
+  const head = t.kind === 'album'
+    ? albumHead(t)
+    : h('div', { class: 'detail-head' },
+      posterBox(t.imdb ? '/v1/poster/' + t.imdb : null, t.title),
+      h('div', { class: 'grow' }, h('h3', { id: 'detailTitle' }, t.title), h('div', { class: 'meta' }, tileLine(t) + ' · ' + tileState(t)[0])))
   let body
-  if (t.kind === 'show') {
+  if (t.kind === 'album') {
+    // Every track on one page, in disc and track order, with a heading per disc when there is more than one: a
+    // disc picker hid half an album behind a select for no gain.
+    const discs = [...new Set(t.items.map(i => i.season))].sort((a, b) => a - b)
+    const common = commonQuality(t)
+    body = discs.map(d => [
+      discs.length > 1 ? h('h4', { class: 'disc-head' }, 'Disc ' + d) : null,
+      h('div', { class: 'rows tracks' }, t.items.filter(i => i.season === d).map(i => trackRow(i, t, common)))]).flat()
+  } else if (t.kind === 'show') {
     const seasons = [...new Set(t.items.map(i => i.season))]
     if (detailSeason == null || !seasons.includes(detailSeason)) detailSeason = seasons[0]
     const pick = seasons.length > 1
@@ -1326,7 +2730,8 @@ function renderDetail () {
         deleteBtn(e, false)),
       infoPanel(e)]
   }
-  box.replaceChildren(head, ...body)
+  box.replaceChildren(head, ...body.filter(Boolean))
+  paintRows()
 }
 $('detailClose').onclick = () => $('detail').close()
 $('detail').addEventListener('click', ev => { if (ev.target === $('detail')) $('detail').close() })
@@ -1626,10 +3031,18 @@ const GROUPS = [
     { key: 'hiverelayApiKey', label: 'HiveRelay access key', hint: 'One key for every HiveRelay listed above.', ph: 'hr_4f1c2a9b7d' },
     { key: 'hiverelayReplicas', label: 'Copies per video on HiveRelays', hint: 'How many HiveRelays hold each video.', ph: '3' },
     { key: 'hiverelayUploadMbps', label: 'HiveRelay upload limit (Mbps)', hint: 'Caps seeding speed to helpers.', ph: '50' }
+  ] },
+  { title: 'Sources', hint: 'Music network account for album search.', items: [
+    { key: 'slskUser', label: 'Account username', hint: 'Username used to sign in and search.', ph: 'coltrane_fan' },
+    { key: 'slskPass', label: 'Account password', hint: 'Saved privately on this relay; never logged.', ph: 'correct-horse-battery' },
+    { key: 'slskServer', label: 'Server address', hint: 'Host and port of the central server.', ph: 'vps.slsknet.org:2271' },
+    { key: 'slskListenPort', label: 'Listen port', hint: 'Peers send files here; publish and forward this port.', ph: '50300' },
+    { key: 'slskShare', label: 'Share my albums', hint: 'Lets other users browse and download your album folders.' },
+    { key: 'slskShareMaxFiles', label: 'Most files to share', hint: 'Caps how many files other users can see.', ph: '2000' }
   ] }
 ]
 
-const INPUT_TYPE = { host: 'text', port: 'number', number: 'number', key: 'text', path: 'text', url: 'url', secret: 'password' }
+const INPUT_TYPE = { host: 'text', hostport: 'text', text: 'text', port: 'number', number: 'number', key: 'text', path: 'text', url: 'url', secret: 'password' }
 // Settings cards with unsaved edits, by title: redraws leave them alone, and saving one card redraws only that card.
 const dirtyCards = new Set()
 
@@ -1855,7 +3268,7 @@ events.onmessage = ev => {
   }
 }
 setInterval(() => {
-  const busy = S.jobs.some(j => j.status === 'running' || j.status === 'queued' || j.status === 'announcing') || plugin('p2p-replicate').replicating || plugin('blob-rechunk').running
+  const busy = S.jobs.some(j => j.status === 'running' || j.status === 'queued' || j.status === 'transferring' || j.status === 'announcing') || plugin('p2p-replicate').replicating || plugin('blob-rechunk').running
   if (busy || document.visibilityState === 'visible') refresh()
 }, 4000)
 setInterval(() => { if (tab === 'tv' || (S.cast && S.cast.session)) loadCast() }, 5000)
@@ -2047,6 +3460,8 @@ function closePlayer () {
 
 function openPlayer (entry, at = 0) {
   closePlayer()
+  // One sound at a time: a film or a clip pauses the album, which stays on its bar to resume after.
+  if (audioEl && !audioEl.paused) audioEl.pause()
   playerEntry = entry
   const streamUrl = resolveStreamUrl(entry.streamUrl)
   const worker = getWorker()
@@ -2598,7 +4013,9 @@ function openPlayer (entry, at = 0) {
 
       p.webCodecsSupported = Boolean(m.webCodecsSupported)
       const MS = window.MediaSource || window.ManagedMediaSource
-      p.mseSupported = Boolean(p.videoStream >= 0 && mf.mseType && MS && MS.isTypeSupported(mf.mseType))
+      // A music file has no video track, so the fast path is gated on the manifest's own MIME type, not on a
+      // video stream: an audio-only manifest still plays through MSE, while a video one needs its video track.
+      p.mseSupported = Boolean(mf.mseType && MS && MS.isTypeSupported(mf.mseType) && (p.videoStream >= 0 || mf.defaultAudio >= 0))
       // Prefer MSE (<video>) first whenever supported so macOS/iOS promote directly to AVSampleBufferDisplayLayer
       // (native BT.709/BT.1886 colors, 10-bit P010/HDR, zero per-frame JS copy). Fall back to WebCodecs -> WASM+GPU.
       p.useMse = Boolean(p.mseSupported)

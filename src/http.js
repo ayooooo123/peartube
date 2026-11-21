@@ -324,13 +324,15 @@ export function createApi (state) {
       }
       return { media, mediaDeferred: !readable, ...(trusted ? { health: n.entryHealth(entry) } : {}) }
     }
+    // One entry by `key`, every track of an album by `seriesKey`, or a list of `ids`, in one request (owner only:
+    // every write is). Each file matched loses every announce this relay's channel holds for it, so a second copy of
+    // the same file does not take its place; the node then reclaims the file's blocks unless another announce still
+    // points at them. A file this relay mirrored into its import folder or staging is deleted, with its
+    // mirror-watch.json row, so no later scan imports it again (`file: 'deleted'`); one the owner put in the import
+    // folder stays (`file: 'kept'`). An entry from another channel is that channel's to remove: it is listed in
+    // `notRemoved`, never touched.
     if (req.method === 'POST' && path === '/v1/entries/remove') {
-      const n = requireNode(node)
-      const { key } = await body(req)
-      if (typeof key !== 'string' || !key.trim()) throw Object.assign(new Error('key is required'), { status: 400 })
-      await n.remove(key.trim())
-      srv.notify('update')
-      return { removed: true, key: key.trim() }
+      return removeEntries(requireNode(node), state, srv, await body(req))
     }
     if (req.method === 'GET' && path === '/v1/sources') {
       if (!node) return { tracker: state.fallbackStatus?.tracker || '', channel: '', sources: [], discovered: [], published: [] }
@@ -385,10 +387,19 @@ export function createApi (state) {
       const { id, title, source, channel, private: isPrivate = false } = await body(req)
       return acquirer.add({ id, title, source, channel, private: isPrivate })
     }
-    if (req.method === 'GET' && path === '/v1/jobs') return { jobs: acquirer ? acquirer.list() : (state.fallbackJobs?.() || []) }
+    if (req.method === 'GET' && path === '/v1/jobs') {
+      const base = acquirer ? acquirer.list() : (state.fallbackJobs?.() || [])
+      const extra = state.mirror?.listProviderJobs?.() || []
+      return { jobs: extra.length ? [...base, ...extra] : base }
+    }
     const match = path.match(/^\/v1\/jobs\/([0-9a-f-]{36})$/)
-    if (match && req.method === 'GET') return acquirer ? acquirer.get(match[1]) : (state.fallbackJobs?.().find(j => j.jobId === match[1]) || null)
-    if (match && req.method === 'DELETE') return acquirer ? acquirer.cancel(match[1]) : null
+    if (match && req.method === 'GET') {
+      return (acquirer ? acquirer.get(match[1]) : (state.fallbackJobs?.().find(j => j.jobId === match[1]) || null)) ||
+        state.mirror?.getProviderJob?.(match[1]) || null
+    }
+    if (match && req.method === 'DELETE') {
+      return (acquirer ? acquirer.cancel(match[1]) : null) || state.mirror?.cancelProviderJob?.(match[1]) || null
+    }
     if (req.method === 'GET' && path === '/v1/plugins') {
       return { plugins: state.mirror ? state.mirror.list() : [] }
     }
@@ -401,6 +412,16 @@ export function createApi (state) {
       if (!state.mirror) throw Object.assign(new Error('Mirror host unavailable on read-only peer'), { status: 404 })
       const { plugin = 'http-acquire', ...payload } = await body(req)
       return state.mirror.run(plugin, payload)
+    }
+    const provMatch = req.method === 'POST' && path.match(/^\/v1\/providers\/([^/]+)\/(search|browse|mirror)$/)
+    if (provMatch) {
+      if (!state.mirror) throw Object.assign(new Error('Mirror host unavailable on read-only peer'), { status: 404 })
+      const name = decodeURIComponent(provMatch[1])
+      const action = provMatch[2]
+      const payload = await body(req)
+      if (action === 'search') return state.mirror.searchProvider(name, payload)
+      if (action === 'browse') return state.mirror.browseProvider(name, payload)
+      return state.mirror.mirrorProvider(name, payload)
     }
 
     if (state.cast && path.startsWith('/v1/cast/')) {
@@ -600,4 +621,69 @@ export function createApi (state) {
     sse.clear()
   })
   return srv
+}
+
+// Removing entries is the owner's one destructive action, and it is shared by three call shapes (`key`,
+// `seriesKey`, a list of `ids`, or a list of whole announce `keys`). Exported so a test can drive the real code
+// rather than a copy of it.
+export async function removeEntries (node, state, srv, body) {
+  const n = node
+  const { key, seriesKey, ids, keys } = body || {}
+  const clean = s => (typeof s === 'string' ? s.trim() : '')
+  const idList = Array.isArray(ids) ? ids.map(clean).filter(Boolean).slice(0, 2000) : []
+  const keyList = Array.isArray(keys) ? keys.map(clean).filter(Boolean).slice(0, 2000) : []
+  if (!clean(key) && !clean(seriesKey) && !idList.length && !keyList.length) throw Object.assign(new Error('key, seriesKey, ids or keys is required'), { status: 400 })
+  const own = n.status().channel
+  const rows = await n.search(null)
+  const picked = rows.filter(r => r.key === clean(key) || (clean(seriesKey) && r.seriesKey === clean(seriesKey).toLowerCase()) || idList.includes(r.id) || keyList.includes(r.key))
+  // A key the listing does not show (a duplicate announce, or one written before it) is still removed as asked.
+  if (clean(key) && !picked.length) {
+    await n.remove(clean(key))
+    srv.notify('update')
+    return { removed: [{ key: clean(key) }], notRemoved: [], filesDeleted: 0 }
+  }
+  // A key the listing collapses away — a sibling announce for the same id+sha256, which `catalog.search` dedupes
+  // to one record per file — is still removed when the caller names it. Without this, a merged album's delete
+  // leaves such an announce behind and the tile regroups from it: the resurrection `keys` exists to prevent.
+  const unseen = keyList.filter(k => !picked.some(r => r.key === k))
+  const notRemoved = picked.filter(r => r.source !== own).map(r => ({ key: r.key, id: r.id, reason: 'Published by another channel' }))
+  // Keyed by id+sha256, so one release's copy of a track is removed without taking a sibling release's copy of a
+  // different file that happens to carry the same id.
+  const files = new Map(picked.filter(r => r.source === own).map(r => [`${r.id}/${r.sha256}`, r]))
+  const removed = []
+  // Every announce actually removed, one row each, so the count the caller reports is the count we did. A file
+  // held under two of this channel's announces is two removals, and the toast must not say one.
+  const removedKeys = new Set()
+  // `catalog.search` returns one record per id+sha256, so a sibling announce for the same file can never appear
+  // here; the caller's own `keys` is what reaches those, below. The second pass exists only to catch the window
+  // where a just-removed announce is still visible in the listing.
+  for (let pass = 0; pass < 4 && files.size; pass++) {
+    const left = (pass ? await n.search(null) : picked).filter(r => r.source === own && files.has(`${r.id}/${r.sha256}`) && !removedKeys.has(r.key))
+    if (!left.length) break
+    for (const r of left) {
+      try {
+        await n.remove(r.key)
+        removedKeys.add(r.key)
+        removed.push({ key: r.key, id: r.id, sha256: r.sha256, title: r.music?.title || r.title })
+        // This file is done: without dropping it from `files` every later pass re-selected the same rows and
+        // called remove on keys that no longer existed.
+        files.delete(`${r.id}/${r.sha256}`)
+      } catch (err) {
+        files.delete(`${r.id}/${r.sha256}`)
+        notRemoved.push({ key: r.key, id: r.id, reason: err?.message || 'Remove failed' })
+      }
+    }
+  }
+  for (const k of unseen) {
+    try {
+      await n.remove(k)
+      removed.push({ key: k, id: null, sha256: null, title: null })
+    } catch (err) {
+      notRemoved.push({ key: k, id: null, reason: err?.message || 'Remove failed' })
+    }
+  }
+  const fate = state.mirror?.forgetImported ? await state.mirror.forgetImported(removed) : new Map()
+  for (const r of removed) r.file = fate.get(`${r.id}/${r.sha256}`) || null
+  srv.notify('update')
+  return { removed, notRemoved, filesDeleted: removed.filter(r => r.file === 'deleted').length }
 }

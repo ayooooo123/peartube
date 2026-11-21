@@ -1,6 +1,6 @@
 import b4a from 'b4a'
 import hypercoreCrypto from 'hypercore-crypto'
-import { HEX64, cleanText, decodeOp, describeEntry, formatWatchUri, isSystemViewKey, parseUri, str } from '../protocol.js'
+import { HEX64, cleanMusic, cleanText, decodeOp, describeEntry, formatWatchUri, isSystemViewKey, parseUri, str } from '../protocol.js'
 import { applied } from './channel.js'
 
 export function createCatalog (ctx) {
@@ -212,8 +212,17 @@ export function createCatalog (ctx) {
   // A catalog record as every view shows it: its fields, what the title/id say it is, and how to play or share it.
   // The watch link names the channel it was found in: whoever opens it joins that channel's swarm, where the peers
   // that cached the video serve it, since only its publisher and relays announce the video itself.
+  // `music` arrives from any peer, so it is clamped again on the way out (`cleanMusic`), never trusted from the log;
+  // an announce written by a build without it simply has none.
   function entryView ({ entry, ...rest }) {
-    return { ...rest, ...describeEntry(rest.id, rest.title), streamUrl: ctx.blobs.streamUrl(entry), magnetUrl: formatWatchUri(entry, rest.source, 'channel') }
+    const music = cleanMusic(entry.music)
+    return {
+      ...rest,
+      ...(music ? { music } : {}),
+      ...describeEntry(rest.id, rest.title),
+      streamUrl: ctx.blobs.streamUrl(entry),
+      magnetUrl: formatWatchUri(entry, rest.source, 'channel')
+    }
   }
 
   // Channels whose swarm a watch link joined without following them, oldest first.

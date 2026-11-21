@@ -181,7 +181,10 @@ const mirrorConfig = () => ({
   replicate: replicateValue(),
   replicateMinFreeBytes: Math.max(0, cfg('replicateFreeGb')) * 1024 * 1024 * 1024,
   replicateMbps: Math.max(0, cfg('replicateMbps')),
-  mediaCheck: cfg('globalSearch')
+  mediaCheck: cfg('globalSearch'),
+  slskUser: cfg('slskUser'),
+  slskPass: cfg('slskPass'),
+  slskServer: cfg('slskServer')
 })
 // Global search answers (src/search.js) offer only files the `media-check` plugin found to be media.
 const searchServe = () => cfg('globalSearch') ? { isMedia: key => Boolean(state.mirror?.isMedia(key)) } : null
@@ -247,6 +250,9 @@ async function start () {
     rechunk: cfg('rechunk'),
     watchDir,
     ...mirrorConfig(),
+    slskListenPort: cfg('slskListenPort'),
+    slskShare: cfg('slskShare'),
+    slskShareMaxFiles: cfg('slskShareMaxFiles'),
     hiverelay,
     pluginsDir: env.PEARTUBE_PLUGINS_DIR || join(storage, 'plugins'),
     onchange: () => api.notify('update'),
@@ -369,7 +375,7 @@ state.applySettings = changed => serial(async () => {
       await mirrorStarting
       state.mirror?.run('blob-rechunk').catch(() => {})
     }
-    if (has('feeds', 'replicate', 'replicateSources', 'replicateFreeGb', 'replicateMbps', 'globalSearch')) {
+    if (has('feeds', 'replicate', 'replicateSources', 'replicateFreeGb', 'replicateMbps', 'globalSearch', 'slskUser', 'slskPass', 'slskServer')) {
       await mirrorStarting
       state.mirror?.configure(mirrorConfig())
     }

@@ -24,7 +24,7 @@ import { createInterface } from 'node:readline'
 const root = new URL('..', import.meta.url).pathname
 const outDir = join(root, 'desktop/target/e2e')
 const shotDir = join(outDir, 'ui-audit/after')
-const PLUGIN_IDS = ['http-acquire', 'channel-backfill', 'blob-rechunk', 'watch-dir', 'feed-mirror', 'p2p-replicate', 'hiverelay-seed']
+const PLUGIN_IDS = ['http-acquire', 'channel-backfill', 'blob-rechunk', 'watch-dir', 'feed-mirror', 'p2p-replicate', 'hiverelay-seed', 'soulseek']
 const TOKEN = randomBytes(16).toString('hex')
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms))
 
@@ -368,7 +368,7 @@ test('relay web UI: settings, plugins as intents, identification, and taste gate
     await evaluate(`document.querySelector('#set-dhtPort').value = ''`)
     await type('#set-dhtPort', String(otherPort))
     await clickText('Save changes', '.card:has(#set-dhtPort)')
-    const overridden = await waitApi(async () => { const s = await settingsNow(); return s.settings.dhtPort.value === otherPort && s }, 'env value overridden from the UI')
+    const overridden = await waitApi(async () => { const s = await settingsNow(); return s.settings.dhtPort.value === otherPort && !s.restartNeeded.length && s }, 'env value overridden from the UI')
     assert.deepEqual([overridden.settings.dhtPort.source, overridden.restartNeeded], ['file', []], 'settings.json wins over the env var, applied at once')
     // Nothing on the Settings tab applies before Save: the env reset, a switch and a list edit all wait.
     await clickText('Use PEARTUBE_DHT_PORT', '.card:has(#set-dhtPort)')
@@ -380,7 +380,7 @@ test('relay web UI: settings, plugins as intents, identification, and taste gate
     assert.deepEqual([held.settings.dhtPort.value, held.settings.directory.value, held.settings.allowedPeers.value], [otherPort, false, []], 'nothing applied before Save')
     await clickText('Remove', '.setting:has(#set-allowedPeers)')
     await clickText('Save changes', '.card:has(#set-dhtPort)')
-    await waitApi(async () => { const s = await settingsNow(); return s.settings.dhtPort.source === 'env' && s.settings.dhtPort.value === dhtPort }, 'env value back after Save')
+    await waitApi(async () => { const s = await settingsNow(); return s.settings.dhtPort.source === 'env' && s.settings.dhtPort.value === dhtPort && !s.restartNeeded.length }, 'env value back after Save')
     assert.deepEqual((await settingsNow()).settings.allowedPeers.value, [], 'a list entry added then removed is never saved')
     held = await settingsNow()
     assert.equal(held.settings.directory.value, false, 'the Library card keeps its own unsaved switch')
@@ -395,18 +395,18 @@ test('relay web UI: settings, plugins as intents, identification, and taste gate
     await evaluate(`document.querySelector('#set-dhtPort').value = ''`)
     await type('#set-dhtPort', String(firstPort))
     await clickText('Save changes', '.card:has(#set-dhtPort)')
-    await waitApi(async () => (await settingsNow()).settings.dhtPort.value === firstPort, 'port overridden again')
+    await waitApi(async () => { const s = await settingsNow(); return s.settings.dhtPort.value === firstPort && !s.restartNeeded.length }, 'port overridden again')
     await clickText('Use PEARTUBE_DHT_PORT', '.card:has(#set-dhtPort)')
     const typedPort = await freePort()
     await evaluate(`document.querySelector('#set-dhtPort').value = ''`)
     await type('#set-dhtPort', String(typedPort))
     assert.equal(await evaluate(`[...document.querySelectorAll('.card:has(#set-dhtPort) .tag')].some(t => t.textContent.includes('after saving'))`), false, 'typing drops the pending env reset')
     await clickText('Save changes', '.card:has(#set-dhtPort)')
-    const typed = await waitApi(async () => { const s = await settingsNow(); return s.settings.dhtPort.value === typedPort && s }, 'the typed port is saved')
+    const typed = await waitApi(async () => { const s = await settingsNow(); return s.settings.dhtPort.value === typedPort && !s.restartNeeded.length && s }, 'the typed port is saved')
     assert.equal(typed.settings.dhtPort.source, 'file')
     await clickText('Use PEARTUBE_DHT_PORT', '.card:has(#set-dhtPort)')
     await clickText('Save changes', '.card:has(#set-dhtPort)')
-    await waitApi(async () => (await settingsNow()).settings.dhtPort.source === 'env', 'env value back again')
+    await waitApi(async () => { const s = await settingsNow(); return s.settings.dhtPort.source === 'env' && !s.restartNeeded.length }, 'env value back again')
     result.checks.typingCancelsEnvReset = true
     await type('#set-lanHost', '192.0.2.10')
     await clickText('Save changes', '.card:has(#set-lanHost)')
@@ -623,6 +623,13 @@ test('relay web UI: settings, plugins as intents, identification, and taste gate
     await open('#library')
     assert.equal(await evaluate(`document.querySelector('#folderInput') === null && !document.body.innerHTML.includes(${JSON.stringify(watchDir)})`), true, 'the page names no folder')
     writeFileSync(join(watchDir, 'Watched.Clip.2019.mp4'), bytesFor('watched'))
+    // And one album: a folder of two tagged 8 s FLAC tracks.
+    const albumDir = join(watchDir, 'Test Band - First Light')
+    mkdirSync(albumDir)
+    for (const [n, name, hz] of [[1, 'Dawn', 440], [2, 'Dusk', 550]]) {
+      execFileSync('ffmpeg', ['-loglevel', 'error', '-y', '-f', 'lavfi', '-i', `sine=frequency=${hz}:sample_rate=44100:duration=8`, '-metadata', 'title=' + name, '-metadata', 'artist=Test Band',
+        '-metadata', 'album=First Light', '-metadata', 'track=' + n, join(albumDir, `0${n} - ${name}.flac`)])
+    }
     clicks = 0
     await clickText('Import folder')
     await clickText('Scan import folder', '#folderForm')
@@ -631,6 +638,37 @@ test('relay web UI: settings, plugins as intents, identification, and taste gate
     await waitApi(async () => (await entries()).find(e => e.title === 'Watched Clip 2019'), 'watched file imported')
     await waitApi(async () => /Scanned the import folder/.test(await evaluate(`document.querySelector('#addMsg').textContent`)), 'scan result shown')
     assert.equal('watchDir' in (await settingsNow()).settings, false, 'the import folder is not a setting')
+
+    // Music: Play starts the album in the bar, which keeps time with the sound, seeks, skips to the next track,
+    // stays through a tab switch and pauses on Space. The bar it leaves comes back paused on every later load,
+    // so the taste gates below run with it on screen.
+    await waitApi(async () => (await entries()).filter(e => e.music && e.title === 'Test Band · First Light').length === 2, 'album imported')
+    await open('#library')
+    assert.equal(await evaluate(`[...document.querySelectorAll('#entries .tile')].some(t => t.textContent.includes('First Light'))`), false, 'albums are not tiles on the film grid')
+    await open('#music')
+    await waitFor(`[...document.querySelectorAll('.album-card .album-name')].some(n => n.textContent === 'First Light')`, 'album on the Music shelf')
+    await evaluate(`[...document.querySelectorAll('.album-card')].find(c => c.querySelector('.album-name').textContent === 'First Light').querySelector('.album-open').setAttribute('data-e2e', 'album'); true`)
+    await click('[data-e2e="album"]')
+    await waitFor(`!!document.querySelector('#detail[open] [data-album]')`, 'album sheet')
+    await click('#detail [data-album]')
+    await waitFor(`!!audioEl && audioEl.currentTime > 1 && !$('np').hidden`, 'album playing in the bar', 20_000)
+    const bar = await evaluate(`({ pos: $('npQText').textContent, title: $('npTitle').textContent, seek: Number($('npSeek').value), at: audioEl.currentTime })`)
+    assert.deepEqual([bar.pos, bar.title], ['1 of 2', 'Dawn'], 'the bar names the track and its place in the queue')
+    assert.ok(Math.abs(bar.seek - bar.at) < 1, 'the seek bar keeps time with the sound: ' + JSON.stringify(bar))
+    await evaluate(`(() => { const s = $('npSeek'); s.value = '5'; s.dispatchEvent(new Event('input')); s.dispatchEvent(new Event('change')); return true })()`)
+    await waitFor(`audioEl.currentTime >= 5`, 'the seek bar moves playback')
+    await click('#npNext')
+    await waitFor(`$('npQText').textContent === '2 of 2' && $('npTitle').textContent === 'Dusk' && audioEl.currentTime > 0.5`, 'next track playing', 20_000)
+    await goTab('Channels')
+    assert.equal(await evaluate(`!$('np').hidden && !audioEl.paused`), true, 'the bar and the sound stay through a tab switch')
+    await evaluate(`document.activeElement.blur(); true`)
+    await send('Input.dispatchKeyEvent', { type: 'keyDown', key: ' ', code: 'Space', windowsVirtualKeyCode: 32, text: ' ' })
+    await send('Input.dispatchKeyEvent', { type: 'keyUp', key: ' ', code: 'Space', windowsVirtualKeyCode: 32 })
+    await waitFor(`audioEl.paused && !$('npPlay').classList.contains('on')`, 'Space pauses')
+    await shot('music-bar-1440-dark', true)
+    result.checks.musicBar = bar
+    mark('musicBar')
+    await open('#library')
 
     // Follow a feed.
     clicks = 0
@@ -718,7 +756,7 @@ test('relay web UI: settings, plugins as intents, identification, and taste gate
     for (const [width, height] of [[1440, 900], [390, 844]]) {
       for (const scheme of ['light', 'dark']) {
         await viewport(width, height, scheme)
-        for (const tab of ['library', 'channels', 'sharing', 'tv', 'settings']) {
+        for (const tab of ['library', 'music', 'channels', 'sharing', 'tv', 'settings']) {
           const loadStart = Date.now()
           await open('#' + tab)
           const loadMs = Date.now() - loadStart

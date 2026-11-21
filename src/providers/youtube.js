@@ -65,7 +65,9 @@ export function createYoutubePlugin ({
   storage,
   stagingRoot = join(storage, 'staging'),
   stagingLabel = 'storage',
-  scanStaging = null,
+  // `(place, ctx, { cancelled }) => scan result`: the host runs `place` once no other import holds the folder and
+  // imports in the same step. Without it (a bare plugin) the files are only placed.
+  placeAndScan = null,
   info: ubitInfo = null,
   download: downloadPage = null,
   // `(url) => Promise<{ status, headers, body: bytes }>`: the relay's guarded fetch, for result pictures.
@@ -266,39 +268,40 @@ export function createYoutubePlugin ({
           job.note = `${job.skipped.length} of ${tracks.length} tracks not saved: ${job.skipped.map(s => `${s.title} (${s.error})`).join('; ')}`.slice(0, 600)
         }
         const finalDir = join(stagingRoot, folderName)
-        const pinPath = join(finalDir, ALBUM_PIN)
-        let pinned = null
-        try { pinned = JSON.parse(readFileSync(pinPath, 'utf8'))?.release } catch {}
-        // Only a folder this album's own pin already names, or an empty one, is taken: a pin written into a folder
-        // of the owner's files would re-file them under `yt:`.
-        let held = []
-        try { held = readdirSync(finalDir).filter(n => !/^[.@]/.test(n)) } catch {}
-        if (pinned ? pinned !== release : held.length) throw Object.assign(new Error(`The folder “${folderName}” already holds other files`), { status: 409 })
-        mkdirSync(finalDir, { recursive: true })
-        // The pin goes in before the first file, so a scan that runs between the two already sees it.
-        writeFileSync(pinPath, JSON.stringify({ release, title: albumTitle, artist }) + '\n')
         const placed = new Set()
-        for (const g of got) {
-          const dst = freePath(finalDir, fileOf(g.t, g.ext))
-          try {
-            renameSync(g.path, dst)
-          } catch {
-            copyFileSync(g.path, dst)
+        // Runs only once no other import holds the folder (`placeAndScan`), in one step with this album's own
+        // import: until then nothing is in the import folder, so a save that is cancelled or gives up while it waits
+        // leaves nothing for a later scan to add.
+        const place = () => {
+          const pinPath = join(finalDir, ALBUM_PIN)
+          let pinned = null
+          try { pinned = JSON.parse(readFileSync(pinPath, 'utf8'))?.release } catch {}
+          // Only a folder this album's own pin already names, or an empty one, is taken: a pin written into a
+          // folder of the owner's files would re-file them under `yt:`.
+          let held = []
+          try { held = readdirSync(finalDir).filter(n => !/^[.@]/.test(n)) } catch {}
+          if (pinned ? pinned !== release : held.length) throw Object.assign(new Error(`The folder “${folderName}” already holds other files`), { status: 409 })
+          mkdirSync(finalDir, { recursive: true })
+          writeFileSync(pinPath, JSON.stringify({ release, title: albumTitle, artist }) + '\n')
+          for (const g of got) {
+            const dst = freePath(finalDir, fileOf(g.t, g.ext))
+            try {
+              renameSync(g.path, dst)
+            } catch {
+              copyFileSync(g.path, dst)
+            }
+            placed.add(basename(dst))
           }
-          placed.add(basename(dst))
+          noteMirrored(finalDir, placed)
+          job.phase = 'importing'
+          onchange?.()
         }
-        noteMirrored(finalDir, placed)
-        Object.assign(job, { status: 'announcing', phase: 'importing', speed: 0, progressAt: Date.now() })
+        // 'waiting' (for another import to finish; Cancel still works) then 'importing' (this album's own files).
+        Object.assign(job, { status: 'announcing', phase: 'waiting', speed: 0, progressAt: Date.now() })
         onchange?.()
-        // `done` means imported: a scan that finished after the files were placed has looked at every one of them.
-        // While another scan holds the folder this one waits; the files are in place, so a relay that stops now
-        // imports them at its next start.
-        let scan = scanStaging ? await scanStaging(stagingRoot, ctx) : { scanned: 0, ingested: 0, items: [] }
-        while (scan?.busy && !closed && !job.controller.aborted) {
-          await new Promise(resolve => setTimeout(resolve, 250))
-          scan = await scanStaging(stagingRoot, ctx)
-        }
-        if (scan?.busy) throw new Error('Cancelled')
+        let scan = { scanned: 0, ingested: 0, items: [] }
+        if (placeAndScan) scan = await placeAndScan(place, ctx, { cancelled: () => closed || job.controller.aborted })
+        else place()
         // By path inside the import folder: another album's file of the same name is not this save's.
         const relOf = name => `${folderName}/${name}`
         const refusedImport = (scan?.failed || []).filter(f => placed.has(f.file) && f.rel === relOf(f.file))
@@ -357,7 +360,8 @@ export function createYoutubePlugin ({
   function cancelJob (jobId) {
     const j = jobs.get(jobId)
     if (!j) return null
-    if (j.status === 'queued' || j.status === 'transferring') {
+    // Cancel works until this album's own import starts: while it waits for another import, nothing is placed yet.
+    if (j.status === 'queued' || j.status === 'transferring' || (j.status === 'announcing' && j.phase === 'waiting')) {
       j.controller.aborted = true
       j.controller.onabort?.()
       j.status = 'cancelled'

@@ -23,6 +23,8 @@ import { fileURLToPath } from 'node:url'
 import { createInterface } from 'node:readline'
 import createTestnet from 'hyperdht/testnet.js'
 import { albumKey } from '../src/tags.js'
+import { createNode } from '../src/index.js'
+import { createMirrorHost } from '../src/mirror.js'
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const freePort = () => new Promise(res => { const s = createServer().listen(0, '127.0.0.1', () => { const { port } = s.address(); s.close(() => res(port)) }) })
@@ -321,4 +323,83 @@ test('YouTube source: unified search, audio-only save into a yt: album, partial 
     removed: removed.data.filesDeleted,
     degradedMessage: degraded.message
   }, null, 2) + '\n')
+})
+
+// A finished save must not touch the import folder while another import holds it, because that wait can be long (a
+// first import of a large folder) and has to stay cancellable. Ways this can go wrong, each checked below: the files
+// are placed before the wait, so a cancelled or abandoned save is imported anyway; Cancel is ignored while waiting;
+// the wait never ends; a save that waited and then went ahead does not import.
+test('YouTube save: waits for a running import with nothing placed, can be cancelled, and gives up after a limit', { timeout: 180_000 }, async t => {
+  const dir = mkdtempSync(join(tmpdir(), 'pt-youtube-wait-'))
+  const storage = join(dir, 'storage')
+  const watchDir = join(dir, 'import')
+  for (const d of [storage, watchDir]) mkdirSync(d, { recursive: true })
+  const testnet = await createTestnet(3)
+  const node = await createNode({ storage, bootstrap: testnet.bootstrap })
+  const host = importWaitMs => createMirrorHost({
+    node,
+    storage,
+    acquirer: null,
+    watchDir,
+    pollIntervalMs: 0,
+    importWaitMs,
+    youtube: {
+      info: async () => ({ entries: [] }),
+      download: async (url, outDir) => {
+        const path = join(outDir, 'audio.m4a')
+        writeFileSync(path, Buffer.concat([Buffer.from([0, 0, 0, 24]), Buffer.from('ftypM4A '), Buffer.from(url)]))
+        return { path, size: null }
+      }
+    }
+  })
+  let mirror = await host(60_000)
+  t.after(async () => {
+    await mirror.close()
+    await node.close()
+    await testnet.destroy()
+    rmSync(dir, { recursive: true, force: true })
+  })
+  // An import to wait behind: 300 files, each its own bytes.
+  let batch = 0
+  const longImport = () => {
+    batch++
+    for (let i = 0; i < 300; i++) writeFileSync(join(watchDir, `clip-${batch}-${String(i).padStart(3, '0')}.mp4`), createHash('sha256').update(`${batch}:${i}`).digest().subarray(0, 24).toString('hex').repeat(600))
+    let done = false
+    const run = mirror.run('watch-dir').then(r => { done = true; return r })
+    return { run, done: () => done }
+  }
+  const ytFolders = () => readdirSync(watchDir).filter(n => n.endsWith('[YouTube]'))
+  const save = (album, wait) => mirror.mirrorProvider('youtube', { artist: 'Waits', album, tracks: [{ videoId: 'aaaaaaaaaa1', title: 'One' }], wait })
+
+  // Cancel while waiting: nothing was placed, so nothing is imported later.
+  const first = longImport()
+  const started = await save('Cancelled')
+  const waiting = await until(() => { const j = mirror.getProviderJob(started.job.jobId); return j.status === 'announcing' && j.phase === 'waiting' && j }, 10_000).catch(() => null)
+  assert.ok(waiting, 'the save waits behind the running import')
+  assert.equal(first.done(), false, 'and that import is still running')
+  assert.deepEqual(ytFolders(), [], 'nothing is placed while another import runs')
+  assert.equal(mirror.cancelProviderJob(started.job.jobId).status, 'cancelled')
+  await until(() => !existsSync(join(storage, 'youtube-work')) || readdirSync(join(storage, 'youtube-work')).length === 0)
+  assert.equal((await first.run).ingested, 300)
+  assert.deepEqual(ytFolders(), [])
+  assert.equal(mirror.getProviderJob(started.job.jobId).status, 'cancelled')
+  assert.equal((await mirror.run('watch-dir')).ingested, 0, 'the cancelled save left nothing to import')
+
+  // With the folder free, the same save goes straight through and is imported.
+  const ok = await save('Goes through', true)
+  assert.equal(ok.files, 1)
+  assert.equal(ok.ingested, 1)
+  assert.deepEqual(ytFolders(), ['Waits - Goes through [YouTube]'])
+  assert.deepEqual((await node.search()).map(e => e.id).filter(id => id.startsWith('yt:')), [`${ok.id}:s01e01`])
+
+  // The wait has a limit (100 ms on this second host): after it the save fails in plain words, again with nothing
+  // placed, while the other import is still running.
+  await mirror.close()
+  mirror = await host(100)
+  const second = longImport()
+  await assert.rejects(save('Gave up', true), err => /Another import has held the folder for 1 s\. Nothing was saved/.test(err.message) && err.status === 503)
+  assert.equal(second.done(), false, 'it gave up while the other import was still running')
+  assert.deepEqual(ytFolders(), ['Waits - Goes through [YouTube]'])
+  assert.equal((await second.run).ingested, 300)
+  assert.equal((await mirror.run('watch-dir')).ingested, 0, 'the abandoned save left nothing to import')
 })

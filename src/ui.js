@@ -2872,7 +2872,7 @@ function ytJobState (j) {
   if (j.status === 'done') return { tone: 'ok', text: 'Saved · ' + plural(n, 'track', 'tracks') + ' · ' + size(j.size || j.bytes || 0), what: YT_LABEL, short: 'Saved' }
   if (j.status === 'failed') return { tone: 'bad', text: 'Failed', short: 'Failed' }
   if (j.status === 'cancelled') return { tone: '', text: 'Cancelled', short: 'Cancelled' }
-  if (j.status === 'announcing') return { tone: '', text: 'Adding to your library', short: 'Adding' }
+  if (j.status === 'announcing') return j.phase === 'waiting' ? { tone: '', text: 'Waiting for another import to finish', short: 'Waiting' } : { tone: '', text: 'Adding to your library', short: 'Adding' }
   if (j.status === 'transferring') return n > 1 ? { tone: '', text: 'Downloading track ' + j.fileIndex + ' of ' + n + ' from YouTube', short: 'Track ' + j.fileIndex + ' of ' + n } : { tone: '', text: 'Downloading from YouTube', short: 'Saving' }
   return { tone: '', text: 'Waiting to start', short: 'Waiting' }
 }
@@ -2969,7 +2969,8 @@ function srcJobItem (j) {
       j.status === 'failed' && unreachable ? h('div', { class: 'meta wrap slsk-fix' }, ...slskPortFix(p.listenPort || p.listenPortSetting || j.listenPort)) : null),
     h('div', { class: 'acts' },
       album ? btn('Open album', () => { const t = tileOf(album); if (t) openDetail(t.key) }) : null,
-      btn(active ? 'Cancel' : 'Dismiss', e => act(e.currentTarget, async () => { await api('/v1/jobs/' + j.jobId, { method: 'DELETE' }); refresh() }))))
+      // Once a job's own import runs there is nothing left to cancel, so no button offers it.
+      active && j.status === 'announcing' && j.phase !== 'waiting' ? null : btn(active ? 'Cancel' : 'Dismiss', e => act(e.currentTarget, async () => { await api('/v1/jobs/' + j.jobId, { method: 'DELETE' }); refresh() }))))
 }
 // A button that started a job follows it; "s:" keys are Soulseek folders, "y:" keys YouTube videos. A job that
 // failed, was cancelled, or left the list (dismissed, or trimmed by the relay) gives the button back.

@@ -586,6 +586,8 @@ and `.github/workflows/release.yml` builds and publishes the relay image and Mac
 choose on release (`js`, `rust`, `lock` per-surface defaults, or `both` side-by-side). Android release APKs are
 built and signed only on the release Mac (`android/release.sh`, `android/release-tv.sh`, which refuse an APK not
 signed by the pinned release key) and attached to the release with `gh release upload`.
+The scripts pass `-Ppeartube.signRelease`; without it, `help`, debug and a hand-run `assembleRelease` read
+no passwords, and the release build is unsigned. A `-Ppeartube.dev` build never reads the release passwords.
 ## History
 
 The previous platform (apps, channels, HRPC, transcoding, custody proofs) is tagged

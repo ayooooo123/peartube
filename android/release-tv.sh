@@ -1,6 +1,8 @@
 #!/bin/sh
 # Builds the signed arm64 Dumb TV Receiver APK(s) (`com.peartube.receiver`) into android/build/release-apk/.
 #   sh android/release-tv.sh --engine js|rust|both
+# Gradle signs only when the script passes -Ppeartube.signRelease; every other Gradle run
+# (help, debug, -Ppeartube.dev) reads no password.
 # Signing and the signer check work as in release.sh.
 set -eu
 
@@ -36,7 +38,7 @@ if [ -x /usr/libexec/java_home ]; then JAVA_HOME=$(/usr/libexec/java_home -v 17)
 export ANDROID_HOME
 version=$(node -p 'require("../package.json").version')
 
-./gradlew --console=plain :tv:assembleRelease "-Ppeartube.engine=$engine" ${native_local:+"-Ppeartube.nativeLocal=$native_local"}
+./gradlew --console=plain :tv:assembleRelease -Ppeartube.signRelease "-Ppeartube.engine=$engine" ${native_local:+"-Ppeartube.nativeLocal=$native_local"}
 mkdir -p build/release-apk
 suffix=""
 [ "$engine" = "rust" ] && suffix="-rust"

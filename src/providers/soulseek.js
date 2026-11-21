@@ -228,7 +228,9 @@ export function createSoulseekPlugin ({
   // The folder mirrors land in: the relay passes the root `watch-dir` sweeps; a bare plugin uses `<storage>/staging`.
   stagingRoot = join(storage, 'staging'),
   stagingLabel = 'storage',
-  scanStaging = null,
+  // `(place, ctx, { cancelled }) => scan result`: the host runs `place` once no other import holds the folder and
+  // imports in the same step. Without it (a bare plugin) the files are only placed.
+  placeAndScan = null,
   slskUser = '',
   slskPass = '',
   slskServer = DEFAULT_SERVER,
@@ -592,7 +594,9 @@ export function createSoulseekPlugin ({
         }
 
         if (closed || job.cancelled) throw new Error('Cancelled')
+        // 'waiting' until this album's own import starts: nothing is in the import folder yet and Cancel works.
         job.status = 'announcing'
+        job.phase = 'waiting'
         onchange?.()
 
         // Name the folder from the peer's tags (or its folder name). Peer bytes are stored as served: when the caller
@@ -626,43 +630,41 @@ export function createSoulseekPlugin ({
             .slice(0, MAX_TITLE) || folderName
         }
 
+        if (closed || job.cancelled) throw new Error('Cancelled')
         const finalAlbumDir = join(stagingRoot, folderName)
-        mkdirSync(finalAlbumDir, { recursive: true })
-        // The pin goes in before the files, so a scan that runs between the two already sees it. A lone track pins a
-        // new folder to its album; a folder that already has a pin keeps it.
-        const pinPath = join(finalAlbumDir, ALBUM_PIN)
-        if (callerRelease) writeFileSync(pinPath, JSON.stringify({ release: callerRelease, ...(single ? { title: single.albumTitle } : {}) }) + '\n')
-        else if (single && !existsSync(pinPath)) writeFileSync(pinPath, JSON.stringify({ release: single.release, title: single.albumTitle }) + '\n')
         const placed = new Set()
-        for (const d of downloaded) {
-          const dst = freePath(finalAlbumDir, single ? single.file : d.name)
-          placed.add(basename(dst))
-          try {
-            renameSync(d.tmpPath, dst)
-          } catch {
-            copyFileSync(d.tmpPath, dst)
-            try { unlinkSync(d.tmpPath) } catch {}
+        // Runs only once no other import holds the folder (`placeAndScan`), in one step with this album's own
+        // import: until then the files stay in the work folder, so a mirror that is cancelled or gives up while it
+        // waits leaves nothing for a later scan to add.
+        const place = () => {
+          mkdirSync(finalAlbumDir, { recursive: true })
+          // The pin goes in before the files. A lone track pins a new folder to its album; a folder that already
+          // has a pin keeps it.
+          const pinPath = join(finalAlbumDir, ALBUM_PIN)
+          if (callerRelease) writeFileSync(pinPath, JSON.stringify({ release: callerRelease, ...(single ? { title: single.albumTitle } : {}) }) + '\n')
+          else if (single && !existsSync(pinPath)) writeFileSync(pinPath, JSON.stringify({ release: single.release, title: single.albumTitle }) + '\n')
+          for (const d of downloaded) {
+            const dst = freePath(finalAlbumDir, single ? single.file : d.name)
+            placed.add(basename(dst))
+            try {
+              renameSync(d.tmpPath, dst)
+            } catch {
+              copyFileSync(d.tmpPath, dst)
+              try { unlinkSync(d.tmpPath) } catch {}
+            }
+            // A single file mirrored for a non-album id (a clip or film) carries that id in a sidecar.
+            if (downloaded.length === 1 && !single && !callerRelease && callerId && ID.test(callerId)) {
+              writeFileSync(`${dst}.json`, JSON.stringify({ id: callerId, title: job.title }))
+            }
           }
-          // A single file mirrored for a non-album id (a clip or film) carries that id in a sidecar.
-          if (downloaded.length === 1 && !single && !callerRelease && callerId && ID.test(callerId)) {
-            writeFileSync(`${dst}.json`, JSON.stringify({ id: callerId, title: job.title }))
-          }
+          noteMirrored(finalAlbumDir, placed)
+          cleanupDir(workDir)
+          job.phase = 'importing'
+          onchange?.()
         }
-        noteMirrored(finalAlbumDir, placed)
-        cleanupDir(workDir)
-
-        const scanRes = scanStaging
-          ? await scanStaging(stagingRoot, ctx)
-          : { scanned: 0, ingested: 0, items: [] }
-
-        // If watch-dir was momentarily busy on another file, wait briefly and scan once more so this job settles after ingest.
-        let finalScan = scanRes
-        if (scanRes?.busy && scanStaging) {
-          for (let retry = 0; retry < 20 && finalScan?.busy && !closed; retry++) {
-            await new Promise(resolve => setTimeout(resolve, 250))
-            finalScan = await scanStaging(stagingRoot, ctx)
-          }
-        }
+        let finalScan = { scanned: 0, ingested: 0, items: [] }
+        if (placeAndScan) finalScan = await placeAndScan(place, ctx, { cancelled: () => closed || job.cancelled })
+        else place()
 
         // The sha256 of each file this album added, so a client can open the album the mirror created.
         Object.assign(job, {
@@ -670,7 +672,8 @@ export function createSoulseekPlugin ({
           size: completedBytes,
           bytes: completedBytes,
           total: completedBytes,
-          sha256s: (finalScan?.items || []).filter(it => placed.has(it.file)).map(it => it.sha256)
+          // By path inside the import folder: another album's file of the same name is not this mirror's.
+          sha256s: (finalScan?.items || []).filter(it => placed.has(it.file) && it.rel === `${folderName}/${it.file}`).map(it => it.sha256)
         })
         onchange?.()
         return {
@@ -751,7 +754,8 @@ export function createSoulseekPlugin ({
   function cancelJob (jobId) {
     const j = jobs.get(jobId)
     if (!j) return null
-    if (j.status === 'queued' || j.status === 'transferring') {
+    // Cancel works until this album's own import starts: while it waits for another import, nothing is placed yet.
+    if (j.status === 'queued' || j.status === 'transferring' || (j.status === 'announcing' && j.phase === 'waiting')) {
       j.cancelled = true
       j.status = 'cancelled'
       onchange?.()

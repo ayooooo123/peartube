@@ -1071,7 +1071,7 @@ export async function createMirrorHost ({
     storage,
     stagingRoot: slskStaging,
     stagingLabel: slskStagingLabel,
-    scanStaging: (dir, ctx) => scanFolder(dir, ctx, watchDir && resolve(watchDir) === resolve(dir) ? '' : 'staging:'),
+    placeAndScan: (place, ctx, opts) => placeAndScan(slskStaging, ctx, watchDir && resolve(watchDir) === resolve(slskStaging) ? '' : 'staging:', place, opts),
     slskUser,
     slskPass,
     slskServer,

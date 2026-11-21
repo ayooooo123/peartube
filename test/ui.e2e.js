@@ -1220,6 +1220,22 @@ test('relay web UI: settings, plugins as intents, identification, music sources,
     // 5. Taste gates on every tab, both sizes, both schemes; then the Music tab with results on screen and with the
     // save dialog open.
     browser.issues.length = 0
+    // While the pages load, this process asks the relay for its status, one request after another. A slow page
+    // load beside a relay that kept answering is the page's fault; beside a relay that went quiet it is the
+    // relay's (or a starved machine's), and the failure says which. It ends when the relay does.
+    result.relayStalls = []
+    let probing = true
+    let slowestStatusMs = 0
+    const probe = (async () => {
+      while (probing) {
+        const at = Date.now()
+        try { await (await fetch(base + '/v1/status')).arrayBuffer() } catch { break }
+        const ms = Date.now() - at
+        slowestStatusMs = Math.max(slowestStatusMs, ms)
+        if (ms > 1000) result.relayStalls.push({ at, ms })
+        await sleep(250)
+      }
+    })()
     for (const [width, height] of [[1440, 900], [390, 844]]) {
       for (const scheme of ['light', 'dark']) {
         await viewport(width, height, scheme)
@@ -1227,7 +1243,7 @@ test('relay web UI: settings, plugins as intents, identification, music sources,
           const where = width + ' ' + scheme + ' ' + tab
           const loadStart = Date.now()
           // A load that never completes keeps what it waited on too.
-          await open('#' + tab).catch(err => { result.viewports.push({ where, loadMs: Date.now() - loadStart, slowRequests: browser.during(loadStart, Date.now()) }); throw err })
+          await open('#' + tab).catch(err => { result.viewports.push({ where, at: loadStart, loadMs: Date.now() - loadStart, slowRequests: browser.during(loadStart, Date.now()) }); throw err })
           const loadEnd = Date.now()
           const loadMs = loadEnd - loadStart
           // A load over 3 s keeps every request it saw, so a failure names what it waited on.
@@ -1235,7 +1251,7 @@ test('relay web UI: settings, plugins as intents, identification, music sources,
           await sleep(600)
           const audit = await tasteAudit(where)
           await shot(`${tab}-${width}-${scheme}`)
-          result.viewports.push({ where, loadMs, ...(slowRequests ? { slowRequests } : {}), ...audit })
+          result.viewports.push({ where, at: loadStart, loadMs, ...(slowRequests ? { slowRequests } : {}), ...audit })
         }
         await open('#music')
         await type('#srcInput', 'test band')
@@ -1253,6 +1269,8 @@ test('relay web UI: settings, plugins as intents, identification, music sources,
         await click('#ytSaveCancel')
       }
     }
+    probing = false
+    await probe
     const external = browser.requests.filter(u => /ytimg\.com|youtube\.com/i.test(u))
     assert.deepEqual(external, [], 'the page never contacts YouTube or its image host')
     result.consoleIssues = [...browser.issues]
@@ -1260,8 +1278,12 @@ test('relay web UI: settings, plugins as intents, identification, music sources,
     const slowest = result.viewports.reduce((a, v) => v.loadMs > a.loadMs ? v : a)
     // A stream the page before held open lives long by design; name the slowest request of the load itself.
     const waitedOn = slowest.slowRequests && (slowest.slowRequests.find(r => !r.before) || slowest.slowRequests[0])
+    const stalled = result.relayStalls.filter(s => s.at < slowest.at + slowest.loadMs && s.at + s.ms > slowest.at)
     assert.ok(slowest.loadMs < 5000, 'slowest page load took ' + slowest.loadMs + ' ms (' + slowest.where + ')' +
-      (waitedOn ? '; slowest request ' + waitedOn.method + ' ' + waitedOn.path + ' ' + waitedOn.ms + ' ms, ' + waitedOn.status + (waitedOn.headersMs != null ? ', headers after ' + waitedOn.headersMs + ' ms' : '') : ''))
+      (waitedOn ? '; slowest request ' + waitedOn.method + ' ' + waitedOn.path + ' ' + waitedOn.ms + ' ms, ' + waitedOn.status + (waitedOn.headersMs != null ? ', headers after ' + waitedOn.headersMs + ' ms' : '') : '') +
+      (stalled.length
+        ? '; during it the relay took ' + Math.max(...stalled.map(s => s.ms)) + ' ms to answer /v1/status to this process, so the relay or the machine stalled, not the page'
+        : '; the relay answered /v1/status to this process within ' + slowestStatusMs + ' ms throughout, so the wait was in the page or the browser'))
     assert.deepEqual(browser.issues, [], 'console errors or warnings')
     mark('tasteGates')
 

@@ -390,7 +390,8 @@ Downloading track 3 of 11 from YouTube
 | queued | Waiting to start | Waiting | — |
 | transferring, `fileCount > 1` | Downloading track ‹i› of ‹n› from YouTube | Track ‹i› of ‹n› | — |
 | transferring, one file | Downloading from YouTube | Saving | — |
-| announcing | Adding to your library | Adding | — |
+| announcing, `phase: waiting` (another import holds the folder; nothing placed; Cancel works; indeterminate bar, valuetext "Waiting") | Waiting for another import to finish | Waiting | — |
+| announcing, `phase: importing` (no Cancel button: nothing is left to cancel) | Adding to your library | Adding | — |
 | done | Saved · ‹n› tracks · ‹size› · YouTube · AAC 128 kbps | Saved | ok |
 | done with skipped tracks (needs a contract field, §10) | Saved ‹k› of ‹n› tracks | Saved ‹k› of ‹n› | warn |
 | failed | Failed | Failed | bad |
@@ -746,7 +747,7 @@ Group states: §3.4. Advice: §3.5.
 | Selection bar `#ytPick` | hidden · 1 selected · n selected · n selected including earlier searches |
 | Save dialog `#ytSave` | open with prefills · open without prefills · library-has-album note · peers-had-lossless note · full-album note · validation error · submitting · server error · closed |
 | Dialog track row | first (↑ disabled) · middle · last (↓ disabled) · only (✕ disabled) · just moved (focus kept, announced) |
-| Source job card | Soulseek: today's states · YouTube: queued · transferring multi · transferring single · announcing · done · done with skips · failed (+ explanation) · cancelled |
+| Source job card | Soulseek: today's states · YouTube: queued · transferring multi · transferring single · announcing (waiting) · announcing (importing) · done · done with skips · failed (+ explanation) · cancelled |
 | Progress bar | steps (n ≤ 30) · fallback single bar (n > 30) · indeterminate (one track) · reduced motion (static) |
 | Album shelf card | YouTube only · merged ("also YouTube") · not YouTube (today) |
 | Album sheet | YouTube only · merged, FLAC plays · merged, YouTube plays · merged, tracks only from YouTube |

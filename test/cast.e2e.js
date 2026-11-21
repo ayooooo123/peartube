@@ -1,4 +1,4 @@
-// End-to-end verification of PearTube Cast & TV Receivers (peartube-cast/v1):
+// End-to-end verification of PearTube Cast & TV Receivers (peartube-cast/v2):
 //   1. Receiver with no screen (subprocess `test/receiver-fixture.js`): wrong-code rejection, pairing by
 //      the 6-character TV code, exact bytes to its player, state pushes, and seek/pause/stop remote control.
 //   2. Receiver found by mDNS on the LAN: pairing and control on the cast channel of the LAN link, mid-stream
@@ -6,6 +6,8 @@
 //   3. Receiver known only by a `peartube://receiver/<64-hex-pubkey>?token=...` link: pairing, casting, control and
 //      attach over the one HyperDHT connection.
 //   4. A TV on private routing: a private sender casts to it and the film arrives only over 2-hop circuits.
+//   5. Mixed versions: a receiver that advertises another TXT `v` is never dialed; a linked one on the old version
+//      refuses the channel and the sender names the version mismatch.
 // Writes repeatable verification evidence to `desktop/target/e2e/cast-result.json`.
 import test from 'node:test'
 import assert from 'node:assert/strict'
@@ -19,10 +21,12 @@ import { createInterface } from 'node:readline'
 import { Readable } from 'node:stream'
 import createTestnet from 'hyperdht/testnet.js'
 import Hyperswarm from 'hyperswarm'
+import Protomux from 'protomux'
+import c from 'compact-encoding'
 import { createNode } from '../src/index.js'
 import { createPrivateGuard } from '../src/private-overlay.js'
 import { createCastController, createReceiver, receiverKeyPair } from '../src/cast.js'
-import { openControl } from '../src/cast-control.js'
+import { commandToWire, openControl } from '../src/cast-control.js'
 import { createLan } from '../src/lan.js'
 import { formatReceiverUri, parseUri } from '../src/protocol.js'
 import { mdnsBus } from './mdns.js'
@@ -183,7 +187,7 @@ test('a receiver found on the LAN takes the cast on the LAN link, plays through 
     stranger.joinPeer(Buffer.from(tv.publicKey, 'hex'))
   })
   const farControl = await openControl(far)
-  await assert.rejects(() => farControl.call('cmd', { action: 'stop' }), /Unauthorized/, 'no command without the token')
+  await assert.rejects(() => farControl.call('command', commandToWire({ action: 'stop' }, '')), /Unauthorized/, 'no command without the token')
   for (let i = 0; i < 6; i++) await assert.rejects(() => farControl.call('pair', { code: '000000' }), /Invalid TV pairing code/)
   await assert.rejects(() => farControl.call('pair', { code: tv.info().pairCode }), /Too many pairing attempts/, 'six wrong codes lock out links of that kind')
 
@@ -491,6 +495,68 @@ test('a receiver on a 1 GiB disk plays a 1.2 GiB film: watched blocks are trimme
   assert.ok(maxCached < 768 * 1024 * 1024, `watched blocks were trimmed as it played (most cached ${maxCached})`)
 
   evidence.scenarios.smallDiskTrim = { volumeBytes: 1024 * 1024 * 1024, filmBytes: size, lowestFreeBytes: minFree, mostCachedBytes: maxCached, seconds: Math.round((Date.now() - started) / 1000) }
+})
+
+// Mixed versions. A receiver that advertises another TXT `v` is listed as not current and never dialed, also when
+// pairing saved it under another id than the one it advertises; one known only by its link that runs the old version
+// is dialed, refuses the v2 channel, and the sender says the two devices run different PearTube versions. Neither
+// ever sees the pair code or the token. "Dialed" is a call of the node's connectPeer. (Fails before v2: `v=2` was
+// current and the old channel name was the one spoken.)
+test('a receiver on another PearTube version is not current, and a linked one is refused with a version message', { timeout: 120_000 }, async t => {
+  const testnet = await createTestnet(3)
+  const bus = mdnsBus()
+  const sender = await createNode({ storage: tmp('mixed-sender'), bootstrap: testnet.bootstrap })
+  const old = new Hyperswarm({ bootstrap: testnet.bootstrap })
+  let oldOpens = 0
+  let oldFrames = 0
+  old.on('connection', conn => {
+    conn.on('error', () => {})
+    const mux = Protomux.from(conn)
+    mux.pair({ protocol: 'peartube-cast/v1' }, () => {
+      oldOpens++
+      const channel = mux.createChannel({ protocol: 'peartube-cast/v1', id: null })
+      channel.addMessage({ encoding: c.raw, onmessage: () => { oldFrames++ } })
+      channel.open()
+    })
+  })
+  await old.listen()
+  const cast = createCastController({ storage: tmp('mixed-cast'), getNode: () => sender, getLanHost: () => '127.0.0.1', adapter: bus() })
+  t.after(async () => {
+    await cast.close()
+    await old.destroy({ force: true })
+    await sender.close()
+    await testnet.destroy()
+  })
+  await cast.setLanHost('127.0.0.1')
+  const dialed = []
+  const connectPeer = sender.connectPeer
+  sender.connectPeer = (key, options) => {
+    dialed.push(key)
+    return connectPeer(key, options)
+  }
+
+  const advertisedKey = randomBytes(32).toString('hex')
+  bus().advertise({ name: 'Old TV', type: 'peartube-cast', protocol: 'tcp', port: 1, txt: { proto: 'peartube-cast', v: '2', id: 'old-tv', name: 'Old TV', h: '127.0.0.1', pk: advertisedKey, lp: '0', auth: 'open' } })
+  const listed = await waitFor(() => cast.listReceivers().find(r => r.id === 'old-tv'), 'the old receiver is listed')
+  assert.equal(listed.current, false, 'a receiver that advertises v=2 is not current')
+  await assert.rejects(cast.castAttach({ receiverId: 'old-tv' }), /different PearTube version/)
+  assert.deepEqual(dialed, [], 'and is never dialed')
+
+  // Saved as 'saved-tv' from its link; it now advertises v=2 as 'renamed-tv' with the same key.
+  const renamedKey = randomBytes(32).toString('hex')
+  const renamed = await cast.pairReceiver({ uri: formatReceiverUri({ publicKey: renamedKey, deviceId: 'saved-tv', name: 'Renamed TV', token: 'a-pair-token' }) })
+  bus().advertise({ name: 'Renamed TV', type: 'peartube-cast', protocol: 'tcp', port: 1, txt: { proto: 'peartube-cast', v: '2', id: 'renamed-tv', name: 'Renamed TV', h: '127.0.0.1', pk: renamedKey, lp: '0', auth: 'code' } })
+  const listedRenamed = await waitFor(() => cast.listReceivers().find(r => r.id === renamed.id && r.host), 'the renamed receiver is listed under its saved id')
+  assert.equal(listedRenamed.current, false, 'listed as not current')
+  await assert.rejects(cast.castAttach({ receiverId: renamed.id }), /different PearTube version/)
+  assert.deepEqual(dialed, [], 'and not dialed either')
+
+  const oldKey = old.keyPair.publicKey.toString('hex')
+  const linked = await cast.pairReceiver({ uri: formatReceiverUri({ publicKey: oldKey, deviceId: 'old-linked', name: 'Linked TV', token: 'the-pair-token' }) })
+  await assert.rejects(cast.castAttach({ receiverId: linked.id }), /different PearTube version.*update PearTube on both devices/, 'a linked receiver on the old version refuses the channel')
+  assert.deepEqual(dialed, [oldKey], 'the dial happened')
+  assert.equal(oldOpens + oldFrames, 0, 'the old receiver never saw a channel, a code or a token')
+  evidence.scenarios.mixedVersions = { advertisedV2Current: listed.current, linkedRefused: true, oldChannelOpens: oldOpens }
 })
 
 test('a TV on private routing takes a private cast, plays it over 2-hop circuits only, and serves it privately', { timeout: 240_000 }, async t => {

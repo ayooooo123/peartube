@@ -8,10 +8,13 @@ import b4a from 'b4a'
 import { mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { Readable } from 'node:stream'
 import createTestnet from 'hyperdht/testnet.js'
+import { getEncoding } from '../spec/hyperschema/index.js'
+import { CAST } from '../spec/protocols.js'
 import { createNode } from '../src/index.js'
-import { createReceiver } from '../src/cast.js'
-import { openControl } from '../src/cast-control.js'
+import { createReceiver, idleCastState } from '../src/cast.js'
+import { commandToWire, openControl, pairedFromWire, stateFromWire, stateToWire } from '../src/cast-control.js'
 import { selfAddressAdapter, createLan } from '../src/lan.js'
 import { mdnsBus } from './mdns.js'
 
@@ -321,8 +324,18 @@ test('roaming from LAN to public DHT, live setAllowedPeers unban, and node suspe
   await until(async () => (await b.search('imdb:tt9000003')).length === 1, 20_000, 'resumed node synced new entry')
 })
 
-const CAST_PROTOCOL = 'peartube-cast/v1'
-const CAST_JUNK = ['null', '7', '"x"', '[]', '{broken', 'x'.repeat(80 * 1024)]
+// The cast channel spoken by hand (peartube-cast/v2 frames, spec/protocols.js), to send what a real sender or receiver
+// never would. These fail before v2: the cast channel was peartube-cast/v1 with JSON messages.
+const FRAME = getEncoding('@peartube/frame')
+const REMOTE_ERROR = getEncoding('@peartube/remote-error')
+const PAIR = getEncoding('@peartube/cast-pair')
+const COMMAND = getEncoding('@peartube/cast-command')
+const STATE = getEncoding('@peartube/cast-state')
+const castOp = name => CAST.ops.findIndex(o => o.name === name)
+const frame = (kind, op, id, value) => c.encode(FRAME, { kind, op, id, value })
+const varint53 = b4a.from([0xff, 0, 0, 0, 0, 0, 0, 0x20, 0])
+const hugeCount = b4a.from([0xfe, 0x00, 0x00, 0x10, 0x00]) // an array count of 1,048,576
+const sleep = ms => new Promise(resolve => setTimeout(resolve, ms))
 
 // The first connection `swarm` gets after it dials `publicKey`.
 function dial (swarm, publicKey) {
@@ -332,7 +345,24 @@ function dial (swarm, publicKey) {
   })
 }
 
-test('a receiver outlives junk on its cast channel, and an open receiver is open to its LAN only', async t => {
+// A raw channel under `protocol`: every frame the other side sends, by id, and whether it ever opened.
+function rawChannel (conn, protocol = CAST.protocol) {
+  const frames = new Map()
+  let opened
+  const openedP = new Promise(resolve => { opened = resolve })
+  const channel = Protomux.from(conn).createChannel({ protocol, id: null, onopen: () => opened(true), onclose: () => opened(false) })
+  const msg = channel.addMessage({ encoding: c.raw, onmessage: buf => { const f = c.decode(FRAME, buf); frames.set(f.id, f) } })
+  channel.open()
+  return { channel, frames, opened: openedP, send: buf => msg.send(buf) }
+}
+
+async function reply (peer, id, ms = 5000) {
+  const end = Date.now() + ms
+  while (!peer.frames.has(id) && Date.now() < end) await sleep(50)
+  return peer.frames.get(id) || null
+}
+
+test('a receiver outlives hostile frames on its cast channel, refuses the old protocol, and asks a far peer for its token', async t => {
   const faults = processFaults(t)
   const testnet = await createTestnet(3)
   const mkTmp = () => mkdtempSync(join(tmpdir(), 'peartube-cast-cap-'))
@@ -346,33 +376,53 @@ test('a receiver outlives junk on its cast channel, and an open receiver is open
     await testnet.destroy()
   })
 
-  // The channel spoken by hand, to send what a real sender never would: text that is not a JSON object, and a frame
-  // over the size cap.
   const conn = await dial(stranger, b4a.from(receiver.publicKey, 'hex'))
-  const replies = []
-  const channel = Protomux.from(conn).createChannel({ protocol: CAST_PROTOCOL, id: null })
-  const text = channel.addMessage({ encoding: c.string, onmessage: reply => replies.push(JSON.parse(reply)) })
-  channel.open()
-  for (const junk of CAST_JUNK) text.send(junk)
-  text.send(JSON.stringify({ id: 9, type: 'cmd', action: 'status' }))
-  text.send(JSON.stringify({ id: 10, type: 'pair' }))
-  text.send(JSON.stringify({ id: 11, type: 'cmd', token: '', action: 'status' }))
-  const deadline = Date.now() + 5000
-  while (replies.length < 3 && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 50))
+  const peer = rawChannel(conn)
+  assert.equal(await peer.opened, true, 'a receiver takes the cast channel')
+  peer.send(b4a.alloc(70 * 1024, 0x61)) // over the frame cap
+  peer.send(b4a.concat([varint53, b4a.from([0, 1, 0])])) // kind at 2^53
+  peer.send(b4a.concat([b4a.from([0]), varint53, b4a.from([1, 0])])) // op at 2^53
+  peer.send(b4a.concat([b4a.from([0, 0]), varint53, b4a.from([0])])) // id at 2^53
+  peer.send(frame(4, 0, 90, b4a.alloc(0))) // kind 4
+  peer.send(frame(0, castOp('command'), 0, c.encode(COMMAND, commandToWire({ action: 'status' }, '')))) // id 0
+  peer.send(frame(0, castOp('command'), 20, b4a.from([0xff]))) // a value that does not decode
+  const askedUnknown = Date.now()
+  peer.send(frame(0, castOp('state'), 21, b4a.alloc(0))) // an event op as a request
+  peer.send(frame(0, 9, 22, b4a.alloc(0))) // beyond the op list
+  peer.send(frame(0, castOp('command'), 9, c.encode(COMMAND, commandToWire({ action: 'status' }, ''))))
+  peer.send(frame(0, castOp('pair'), 10, c.encode(PAIR, { code: '' })))
+  const errorOf = async id => c.decode(REMOTE_ERROR, (await reply(peer, id)).value)
+  assert.equal((await errorOf(20)).code, 'DECODE_ERROR')
+  assert.equal((await errorOf(21)).code, 'UNKNOWN_OP')
+  assert.equal((await errorOf(22)).code, 'UNKNOWN_OP')
+  assert.ok(Date.now() - askedUnknown < 1000, 'unknown ops are answered at once')
+  const unauthorized = await errorOf(9)
+  assert.equal(unauthorized.code, 'HANDLER_ERROR')
+  assert.match(unauthorized.message, /Unauthorized/, 'an open receiver still asks a peer from across the DHT for its token')
+  assert.match((await errorOf(10)).message, /Invalid TV pairing code/, 'and still asks it for the TV code')
+  assert.equal(peer.frames.has(0) || peer.frames.has(90), false, 'id 0 and kind 4 are not answered')
+  assert.equal(conn.destroyed, false, 'hostile frames do not cost the peer its connection')
 
-  assert.deepEqual(replies.map(r => r.id), [9, 10, 11], 'only the requests are answered')
-  assert.equal(replies[0].ok, false)
-  assert.match(replies[0].error, /Unauthorized/, 'an open receiver still asks a peer from across the DHT for its token')
-  assert.equal(replies[1].ok, false)
-  assert.match(replies[1].error, /Invalid TV pairing code/, 'and still asks it for the TV code')
-  assert.match(replies[2].error, /Unauthorized/, 'an empty token is not the pair token')
-  assert.equal(conn.destroyed, false, 'junk does not cost the peer its connection')
+  // That was seven bad frames; the eighth closes the channel, and the connection stays.
+  peer.send(b4a.from([0xff]))
+  for (let i = 0; i < 100 && !peer.channel.closed; i++) await sleep(50)
+  assert.equal(peer.channel.closed, true, 'eight bad frames close the channel')
+  const again = rawChannel(conn)
+  assert.equal(await again.opened, true, 'a new channel on the same connection')
+  again.send(frame(0, castOp('pair'), 1, c.encode(PAIR, { code: '' })))
+  assert.ok(await reply(again, 1), 'is answered')
+
+  // A sender on the old version opens the old name: refused, and the connection stays.
+  assert.equal(await rawChannel(conn, 'peartube-cast/v1').opened, false, 'the receiver refuses peartube-cast/v1')
+  assert.equal(conn.destroyed, false)
+  assert.equal(receiver.info().protocol, 'peartube-cast/v2')
   assert.deepEqual(faults, [], 'no frame from a peer reaches the process as an error')
 })
 
 // An open receiver is open to the room it is in, not to every peer that can find it: a LAN link pairs without a code
-// and gets no permanent token, so only a device on that link can control this TV.
-test('an open receiver hands its LAN link no pair token', async t => {
+// and gets no permanent token, so only a device on that link can control this TV. Its commands reach the TV's host
+// as the objects they did before v2.
+test('an open receiver hands its LAN link no pair token, and applies each command as before', async t => {
   const faults = processFaults(t)
   const testnet = await createTestnet(3)
   const bus = mdnsBus()
@@ -380,7 +430,8 @@ test('an open receiver hands its LAN link no pair token', async t => {
   const lan = keyPair => createLan({ host: '127.0.0.1', keyPair, adapter: bus(s => s), dialAfter: 200 })
   const receiverNode = await createNode({ storage: mkTmp(), bootstrap: testnet.bootstrap, lan })
   const senderNode = await createNode({ storage: mkTmp(), bootstrap: testnet.bootstrap, lan })
-  const receiver = await createReceiver({ storage: mkTmp(), node: receiverNode, openAuth: true })
+  const hostGot = []
+  const receiver = await createReceiver({ storage: mkTmp(), node: receiverNode, openAuth: true, onCommand: cmd => { hostGot.push(cmd) } })
   t.after(async () => {
     await receiver.close()
     for (const n of [senderNode, receiverNode]) await n.close()
@@ -395,21 +446,97 @@ test('an open receiver hands its LAN link no pair token', async t => {
   let conn = null
   while (!conn && Date.now() < deadline) {
     conn = [...senderNode.peerConnections()].find(c => c.remotePublicKey && b4a.toString(c.remotePublicKey, 'hex') === receiver.publicKey) || null
-    if (!conn) await new Promise(resolve => setTimeout(resolve, 100))
+    if (!conn) await sleep(100)
   }
   assert.ok(conn, 'the sender found the receiver on its LAN')
 
-  const control = await openControl(conn)
-  const paired = await control.call('pair', { code: '' })
+  const pushed = [] // the volume of each state the receiver pushes
+  const control = await openControl(conn, { onState: s => pushed.push(s.volume) })
+  const paired = pairedFromWire(await control.call('pair', { code: '' }))
   assert.equal(paired.deviceId, receiver.deviceId, 'the LAN link pairs without a code')
+  assert.equal(paired.publicKey, receiver.publicKey)
   assert.equal(paired.token, '', 'and is handed no token that would keep working after the room is left')
-  const status = await control.call('cmd', { token: '', action: 'status' })
-  assert.equal(status.state.status, 'idle', 'a LAN link controls the TV with no token')
+  const command = async cmd => stateFromWire(await control.call('command', commandToWire(cmd, '')))
+  assert.equal((await command({ action: 'status' })).status, 'idle', 'a LAN link controls the TV with no token')
+
+  assert.equal((await command({ action: 'volume', volume: 0.4 })).volume, 0.4)
+  const muted = await command({ action: 'volume', muted: true })
+  assert.equal(muted.muted, true)
+  assert.equal(muted.volume, 0.4, 'a volume command that sets only muted leaves the volume as it is')
+  assert.equal((await command({ action: 'seek', positionMs: 1234.5 })).positionMs, 1235, 'a fractional seek, in whole ms')
+  await command({ action: 'seek', positionMs: 20_000 })
+  assert.equal((await command({ action: 'skip', deltaMs: -10_000 })).positionMs, 10_000, 'back 10 s')
+  assert.equal((await command({ action: 'skip', deltaMs: -30_000 })).positionMs, 0, 'the playhead stays at 0 or more')
+  assert.equal((await command({ action: 'selectAudio', stream: -1 })).audio, -1, 'audio off')
+  // What the TV's host got: the action, its own arguments and the receiver's sequence number, as before v2.
+  assert.deepEqual(hostGot.map(({ seq: _seq, ...cmd }) => cmd), [
+    { action: 'volume', volume: 0.4 },
+    { action: 'volume', muted: true },
+    { action: 'seek', positionMs: 1235 },
+    { action: 'seek', positionMs: 20_000 },
+    { action: 'skip', deltaMs: -10_000, positionMs: 10_000 },
+    { action: 'skip', deltaMs: -30_000, positionMs: 0 },
+    { action: 'selectAudio', stream: -1 }
+  ])
+  assert.ok(hostGot.every((cmd, i) => i === 0 || cmd.seq === hostGot[i - 1].seq + 1))
+
+  // load, play, pause, togglePlay, selectSubtitle and stop, as the host gets them. The load carries an entry far over
+  // the cast-entry bounds (a real sender bounds it first): the receiver bounds it again before it keeps it.
+  await receiverNode.publish({ id: 'imdb:tt0000042', title: 'Host Shapes' }, Readable.from([b4a.alloc(64 * 1024, 7)]))
+  const [film] = await receiverNode.search('imdb:tt0000042')
+  const oversized = { key: 'k'.repeat(1000), id: 'i'.repeat(1000), title: 't'.repeat(1000), size: 65_536, sha256: 's'.repeat(1000) }
+  const bounded = { key: 'k'.repeat(256), id: 'i'.repeat(128), title: 't'.repeat(80), size: 65_536, sha256: 's'.repeat(64) }
+  const loaded = await control.call('command', { ...commandToWire({ action: 'load', magnetUrl: film.magnetUrl, startPositionMs: 1500 }, ''), entry: oversized })
+  assert.deepEqual(receiver.state().entry, bounded, 'the receiver keeps the entry within the bounds')
+  assert.deepEqual(stateFromWire(loaded).entry, bounded)
+  const buttons = [{ action: 'play' }, { action: 'pause' }, { action: 'togglePlay' }, { action: 'selectSubtitle', stream: 2 }, { action: 'stop' }]
+  for (const cmd of buttons) await command(cmd)
+  const [load, ...pressed] = hostGot.slice(7).map(({ seq: _seq, ...cmd }) => cmd)
+  assert.match(load.streamUrl, /^http:\/\/127\.0\.0\.1:\d+\/cast\/v1\/p2p\/[0-9a-f]{32}$/)
+  assert.deepEqual(load, { action: 'load', entry: bounded, mode: 'p2p', streamUrl: load.streamUrl, startPositionMs: 1500 })
+  assert.deepEqual(pressed, buttons)
+
+  // State pushes when the receiver's connection says "wait for drain" (its write returns false): one push, then
+  // nothing until 'drain'; then the newest state once, if one came meanwhile, and that push's answer counts like the
+  // first. No state already sent goes twice, and the 'drain' listener goes with the channel.
+  const rconns = [...receiverNode.peerConnections()].filter(c => c.remotePublicKey && b4a.equals(c.remotePublicKey, conn.publicKey))
+  assert.ok(rconns.length, 'the receiver\'s end of the connection')
+  const writes = rconns.map(c => c.write)
+  const stall = on => rconns.forEach((c, i) => { c.write = on ? function (...args) { writes[i].apply(this, args); return false } : writes[i] })
+  const drains = () => rconns.reduce((n, c) => n + c.listenerCount('drain'), 0)
+  const drain = () => rconns.forEach(c => c.emit('drain'))
+  const volume = v => command({ action: 'volume', volume: v })
+  await control.call('subscribe', { token: '' })
+  const base = drains()
+  stall(true)
+  await volume(0.1)
+  assert.equal(drains(), base + 1, 'a push answered false waits for drain')
+  await volume(0.2)
+  await volume(0.3)
+  assert.deepEqual(pushed, [0.1], 'nothing more is pushed before drain')
+  stall(false)
+  drain()
+  await sleep(200)
+  assert.deepEqual(pushed, [0.1, 0.3], 'on drain, the newest state once')
+  assert.equal(drains(), base)
+  stall(true)
+  await volume(0.6)
+  drain() // nothing changed after 0.6
+  await volume(0.7)
+  await volume(0.8)
+  drain() // 0.8 goes, and its false waits again
+  await volume(0.9)
+  await sleep(200)
+  assert.deepEqual(pushed, [0.1, 0.3, 0.6, 0.7, 0.8], 'a state already sent is not sent again, and a push on drain answered false waits too')
+  assert.equal(drains(), base + 1)
+  stall(false)
   control.close()
+  for (let i = 0; i < 100 && drains() > base; i++) await sleep(50)
+  assert.equal(drains(), base, 'the drain listener goes with the channel')
   assert.deepEqual(faults, [], 'no frame from a peer reaches the process as an error')
 })
 
-test('a cast sender outlives junk from a receiver', async t => {
+test('a cast sender outlives hostile frames from a receiver', async t => {
   const faults = processFaults(t)
   const testnet = await createTestnet(3)
   const receiver = new Hyperswarm({ bootstrap: testnet.bootstrap })
@@ -419,18 +546,25 @@ test('a cast sender outlives junk from a receiver', async t => {
     await receiver.destroy({ force: true })
     await testnet.destroy()
   })
-  // A receiver that answers every request with junk first, then with the reply.
+  // A receiver that answers every request with junk first (an oversized frame, a kind at 2^53, answers to ids and
+  // ops nobody asked, a state event that declares a million tracks), then with the answer.
   receiver.on('connection', conn => {
     conn.on('error', () => {})
     const mux = Protomux.from(conn)
-    mux.pair({ protocol: CAST_PROTOCOL }, () => {
-      const channel = mux.createChannel({ protocol: CAST_PROTOCOL, id: null })
-      const text = channel.addMessage({
-        encoding: c.string,
-        onmessage (request) {
-          const msg = JSON.parse(request)
-          for (const junk of CAST_JUNK) text.send(junk)
-          text.send(JSON.stringify({ id: msg.id, ok: true, result: { echo: msg.type } }))
+    mux.pair({ protocol: CAST.protocol }, () => {
+      const channel = mux.createChannel({ protocol: CAST.protocol, id: null })
+      const msg = channel.addMessage({
+        encoding: c.raw,
+        onmessage (buf) {
+          const req = c.decode(FRAME, buf)
+          const idle = c.encode(STATE, stateToWire(idleCastState()))
+          msg.send(b4a.alloc(70 * 1024))
+          msg.send(b4a.concat([varint53, b4a.from([0, 1, 0])]))
+          msg.send(frame(1, req.op, req.id + 100, idle))
+          msg.send(frame(1, castOp('pair'), req.id, idle))
+          msg.send(frame(3, castOp('state'), 0, b4a.concat([b4a.from([0]), hugeCount])))
+          msg.send(frame(1, req.op, req.id, idle))
+          msg.send(frame(3, castOp('state'), 0, idle))
         }
       })
       channel.open()
@@ -438,7 +572,12 @@ test('a cast sender outlives junk from a receiver', async t => {
   })
   await receiver.listen()
 
-  const control = await openControl(await dial(sender, receiver.keyPair.publicKey))
-  assert.deepEqual(await control.call('cmd'), { echo: 'cmd' })
+  const states = []
+  const control = await openControl(await dial(sender, receiver.keyPair.publicKey), { onState: s => states.push(s) })
+  assert.equal(stateFromWire(await control.call('subscribe', { token: '' })).status, 'idle', 'the answer to this call is the one taken')
+  for (let i = 0; i < 100 && !states.length; i++) await sleep(50)
+  assert.equal(states.length, 1, 'only the event that decodes reaches the sender')
+  assert.equal(states[0].status, 'idle')
+  assert.equal(control.closed, false, 'three bad frames do not close the channel')
   assert.deepEqual(faults, [], 'no frame from a receiver reaches the process as an error')
 })

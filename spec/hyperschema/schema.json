@@ -1,0 +1,729 @@
+{
+  "version": 1,
+  "schema": [
+    {
+      "name": "frame",
+      "namespace": "peartube",
+      "compact": true,
+      "flagsPosition": -1,
+      "fields": [
+        {
+          "name": "kind",
+          "required": true,
+          "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "op",
+          "required": true,
+          "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "id",
+          "required": true,
+          "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "value",
+          "required": true,
+          "type": "buffer",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "remote-error",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": -1,
+      "fields": [
+        {
+          "name": "code",
+          "required": true,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "message",
+          "required": true,
+          "type": "string",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "search-query",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": -1,
+      "fields": [
+        {
+          "name": "q",
+          "required": true,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "mid",
+          "required": true,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "limit",
+          "required": true,
+          "type": "uint",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "search-hit",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": -1,
+      "fields": [
+        {
+          "name": "uri",
+          "required": true,
+          "type": "string",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "search-hits",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": -1,
+      "fields": [
+        {
+          "name": "hits",
+          "required": true,
+          "array": true,
+          "type": "@peartube/search-hit",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "cast-pair",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": -1,
+      "fields": [
+        {
+          "name": "code",
+          "required": true,
+          "type": "string",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "cast-paired",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": -1,
+      "fields": [
+        {
+          "name": "deviceId",
+          "required": true,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "name",
+          "required": true,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "publicKey",
+          "required": true,
+          "type": "fixed32",
+          "version": 1
+        },
+        {
+          "name": "token",
+          "required": true,
+          "type": "string",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "cast-subscribe",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": -1,
+      "fields": [
+        {
+          "name": "token",
+          "required": true,
+          "type": "string",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "cast-entry",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": -1,
+      "fields": [
+        {
+          "name": "key",
+          "required": true,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "id",
+          "required": true,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "title",
+          "required": true,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "size",
+          "required": true,
+          "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "sha256",
+          "required": true,
+          "type": "string",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "cast-command",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": 0,
+      "fields": [
+        {
+          "name": "token",
+          "required": true,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "action",
+          "required": true,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "entry",
+          "type": "@peartube/cast-entry",
+          "version": 1
+        },
+        {
+          "name": "magnetUrl",
+          "required": true,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "startPositionMs",
+          "required": true,
+          "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "positionMs",
+          "required": true,
+          "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "deltaMs",
+          "required": true,
+          "type": "int",
+          "version": 1
+        },
+        {
+          "name": "stream",
+          "required": true,
+          "type": "int",
+          "version": 1
+        },
+        {
+          "name": "volume",
+          "required": true,
+          "type": "float64",
+          "version": 1
+        },
+        {
+          "name": "muted",
+          "required": true,
+          "type": "int",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "cast-track",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": -1,
+      "fields": [
+        {
+          "name": "stream",
+          "required": true,
+          "type": "int",
+          "version": 1
+        },
+        {
+          "name": "kind",
+          "required": true,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "codec",
+          "required": true,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "language",
+          "required": true,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "title",
+          "required": true,
+          "type": "string",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "cast-state",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": 0,
+      "fields": [
+        {
+          "name": "tracks",
+          "required": true,
+          "array": true,
+          "type": "@peartube/cast-track",
+          "version": 1
+        },
+        {
+          "name": "status",
+          "required": true,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "mode",
+          "required": true,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "entry",
+          "type": "@peartube/cast-entry",
+          "version": 1
+        },
+        {
+          "name": "positionMs",
+          "required": true,
+          "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "durationMs",
+          "required": true,
+          "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "playing",
+          "required": false,
+          "type": "bool",
+          "version": 1
+        },
+        {
+          "name": "buffering",
+          "required": false,
+          "type": "bool",
+          "version": 1
+        },
+        {
+          "name": "ended",
+          "required": false,
+          "type": "bool",
+          "version": 1
+        },
+        {
+          "name": "p2pPeers",
+          "required": true,
+          "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "cachedBytes",
+          "required": true,
+          "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "seeding",
+          "required": false,
+          "type": "bool",
+          "version": 1
+        },
+        {
+          "name": "volume",
+          "required": true,
+          "type": "float64",
+          "version": 1
+        },
+        {
+          "name": "muted",
+          "required": false,
+          "type": "bool",
+          "version": 1
+        },
+        {
+          "name": "audio",
+          "required": true,
+          "type": "int",
+          "version": 1
+        },
+        {
+          "name": "subtitle",
+          "required": true,
+          "type": "int",
+          "version": 1
+        },
+        {
+          "name": "error",
+          "required": true,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "updatedAt",
+          "required": true,
+          "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "videoDecoder",
+          "required": true,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "droppedFrames",
+          "required": true,
+          "type": "int",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "guard-hello",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": -1,
+      "fields": [
+        {
+          "name": "role",
+          "required": true,
+          "type": "string",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "guard-ack",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": -1,
+      "fields": [
+        {
+          "name": "status",
+          "required": true,
+          "type": "uint",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "guard-register",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": -1,
+      "fields": [
+        {
+          "name": "routeToken",
+          "required": true,
+          "type": "fixed32",
+          "version": 1
+        },
+        {
+          "name": "ttlMs",
+          "required": true,
+          "type": "uint",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "guard-key",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": -1,
+      "fields": [
+        {
+          "name": "key",
+          "required": true,
+          "type": "fixed32",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "guard-put-mutable",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": -1,
+      "fields": [
+        {
+          "name": "publicKey",
+          "required": true,
+          "type": "fixed32",
+          "version": 1
+        },
+        {
+          "name": "seq",
+          "required": true,
+          "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "signature",
+          "required": true,
+          "type": "fixed64",
+          "version": 1
+        },
+        {
+          "name": "value",
+          "required": true,
+          "type": "buffer",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "guard-record",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": -1,
+      "fields": [
+        {
+          "name": "seq",
+          "required": true,
+          "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "signature",
+          "required": true,
+          "type": "fixed64",
+          "version": 1
+        },
+        {
+          "name": "value",
+          "required": true,
+          "type": "buffer",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "guard-get-result",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": 0,
+      "fields": [
+        {
+          "name": "record",
+          "type": "@peartube/guard-record",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "guard-rv-register",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": -1,
+      "fields": [
+        {
+          "name": "topic",
+          "required": true,
+          "type": "fixed32",
+          "version": 1
+        },
+        {
+          "name": "slotId",
+          "required": true,
+          "type": "fixed16",
+          "version": 1
+        },
+        {
+          "name": "ttlMs",
+          "required": true,
+          "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "sealedCard",
+          "required": true,
+          "type": "buffer",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "guard-rv-slot",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": -1,
+      "fields": [
+        {
+          "name": "topic",
+          "required": true,
+          "type": "fixed32",
+          "version": 1
+        },
+        {
+          "name": "slotId",
+          "required": true,
+          "type": "fixed16",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "guard-cards",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": -1,
+      "fields": [
+        {
+          "name": "cards",
+          "required": true,
+          "array": true,
+          "type": "buffer",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "guard-dial",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": -1,
+      "fields": [
+        {
+          "name": "guardKey",
+          "required": true,
+          "type": "fixed32",
+          "version": 1
+        },
+        {
+          "name": "routeToken",
+          "required": true,
+          "type": "fixed32",
+          "version": 1
+        },
+        {
+          "name": "udxId",
+          "required": true,
+          "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "bucket",
+          "required": true,
+          "type": "string",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "guard-open",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": -1,
+      "fields": [
+        {
+          "name": "routeToken",
+          "required": true,
+          "type": "fixed32",
+          "version": 1
+        },
+        {
+          "name": "udxId",
+          "required": true,
+          "type": "uint",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "guard-ready",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": -1,
+      "fields": [
+        {
+          "name": "status",
+          "required": true,
+          "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "udxId",
+          "required": true,
+          "type": "uint",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "guard-circuit-dead",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": -1,
+      "fields": [
+        {
+          "name": "udxId",
+          "required": true,
+          "type": "uint",
+          "version": 1
+        }
+      ]
+    }
+  ]
+}

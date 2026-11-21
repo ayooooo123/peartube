@@ -1,21 +1,21 @@
-// Global search (peartube/search/v1): ask relays this node does not follow for media they hold, on the connections
+// Global search (peartube/search/v2): ask relays this node does not follow for media they hold, on the connections
 // the swarm already makes (src/control-channel.js), and answer such asks when this node is a relay that opted in
 // (the `globalSearch` setting). A hit is a watch link without `source=`, for a file the answering relay holds whole
 // and has checked is media, so the searcher reads it from that relay on the same connection.
-//   searcher -> relay   {id, type: 'search', q, mid, limit}
-//   relay -> searcher   {id, ok: true, result: {hits: [{uri}]}} or {id, ok: false, error: 'busy'}
+//   searcher -> relay   query `search-query {q, mid, limit}` (mid '' = none)
+//   relay -> searcher   `search-hits {hits: [{uri}]}`, or an error whose message says why ('busy', 'off', 'bad query')
 // Relays announce one topic; a searcher looks it up only while it searches, and closes what it dialed for search
-// a minute after its last search.
+// a minute after its last search. A peer on another version refuses the channel and is simply not asked.
 import hypercoreCrypto from 'hypercore-crypto'
 import b4a from 'b4a'
+import { SEARCH } from '../spec/protocols.js'
 import { openChannel, serveChannel } from './control-channel.js'
 import { ID, describeEntry, formatWatchUri, parseUri } from './protocol.js'
 import { diversityBucketForAddress } from './private-overlay.js'
 
-const PROTOCOL = 'peartube/search/v1'
-export const SEARCH_TOPIC = hypercoreCrypto.hash(b4a.from('peartube/search/v1/0'))
+export const SEARCH_TOPIC = hypercoreCrypto.hash(b4a.from('peartube/search/v2/0'))
 const MAX_HITS = 20
-const MAX_URI = 2048
+const MAX_URI = 2048 // UTF-8 bytes
 const MAX_QUERY = 120
 const MAX_WORDS = 8
 const ASK_CONNECTED = 16 // peers already connected that one search asks
@@ -61,7 +61,7 @@ const validId = mid => typeof mid === 'string' && mid.length <= 80 && ID.test(mi
 // A hit as the watch entry it names, or null. Hits are a stranger's claims: only the shape is checked here, and
 // Hypercore checks every byte the link later reads.
 function checkHit (hit) {
-  if (!hit || typeof hit.uri !== 'string' || hit.uri.length > MAX_URI) return null
+  if (!hit || typeof hit.uri !== 'string' || b4a.byteLength(hit.uri) > MAX_URI) return null
   let parsed
   try { parsed = parseUri(hit.uri) } catch { return null }
   if (parsed.action !== 'watch') return null
@@ -109,7 +109,6 @@ export function createGlobalSearch ({ swarm, peerConnections, connListeners, isP
 
   async function answer (msg, control) {
     if (!serving || closed || isPrivate()) throw new Error('off')
-    if (msg.type !== 'search') throw new Error('unknown request')
     const now = Date.now()
     const peer = hexOf(control.conn) || 'anon'
     let stamps = peerHits.get(peer)
@@ -129,7 +128,7 @@ export function createGlobalSearch ({ swarm, peerConnections, connListeners, isP
       if (mid && entry.id !== mid && !entry.id.startsWith(mid + ':')) continue
       if (!ws.every(w => text.includes(w))) continue
       const uri = formatWatchUri(entry)
-      if (uri.length <= MAX_URI) hits.push({ uri })
+      if (b4a.byteLength(uri) <= MAX_URI) hits.push({ uri })
       if (hits.length >= limit) break
     }
     return { hits }
@@ -147,9 +146,9 @@ export function createGlobalSearch ({ swarm, peerConnections, connListeners, isP
   function pair (conn) {
     if (!serving || closed || unpairs.has(conn) || conn.destroyed) return
     unpairs.set(conn, serveChannel(conn, {
-      protocol: PROTOCOL,
+      spec: SEARCH,
       label: 'Searcher',
-      onRequest: answer,
+      handlers: { query: answer },
       onOpen: control => {
         track(control)
         controls.set(conn, Promise.resolve(control))
@@ -206,9 +205,9 @@ export function createGlobalSearch ({ swarm, peerConnections, connListeners, isP
     let p = controls.get(conn)
     if (!p) {
       p = openChannel(conn, {
-        protocol: PROTOCOL,
+        spec: SEARCH,
         label: 'Relay',
-        onRequest: answer,
+        handlers: { query: answer },
         onClose: c => { served.delete(c); controls.delete(conn) },
         refused: 'This peer does not answer searches',
         duplicate: 'A search channel is already open with this peer',
@@ -235,9 +234,9 @@ export function createGlobalSearch ({ swarm, peerConnections, connListeners, isP
     run.pending++
     try {
       const c = await control(conn)
-      const res = await c.call('search', { q: run.q, mid: run.mid, limit: MAX_HITS }, ASK_TIMEOUT_MS)
+      const res = await c.call('query', { q: run.q, mid: run.mid || '', limit: MAX_HITS }, ASK_TIMEOUT_MS)
       run.answered++
-      const hits = Array.isArray(res?.hits) ? res.hits.slice(0, MAX_HITS) : []
+      const hits = res.hits.slice(0, MAX_HITS)
       let added = false
       for (const hit of hits) {
         const entry = checkHit(hit)

@@ -212,7 +212,7 @@ async function run (options) {
     }
     const announced = new Set()
     for (let s = 0; s < 4; s++) {
-      const guardTopic = HyperDHT.hash(Buffer.from(`peartube/private-guard/v1/${s}`))
+      const guardTopic = HyperDHT.hash(Buffer.from(`peartube/private-guard/v2/${s}`))
       for await (const reply of observer.lookup(guardTopic)) {
         for (const peer of reply.peers) announced.add(Buffer.from(peer.publicKey).toString('hex'))
       }

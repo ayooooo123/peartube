@@ -58,6 +58,8 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run lint
+      # The generated wire codecs must be what spec/build.mjs writes from the committed schema.
+      - run: npm run schema && test -z "$(git status --porcelain spec/)"
 
   # The browsing design of the relay page (the "one library" test in test/ui.e2e.js): every room and page at
   # 1440 and 390, light and dark, with the interaction checks that fail on the old page. Writes its result and

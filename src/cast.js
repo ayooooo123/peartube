@@ -1,4 +1,4 @@
-// PearTube Cast & TV Receiver stack (peartube-cast/v1). A receiver is a node with a player: senders find it by mDNS or
+// PearTube Cast & TV Receiver stack (peartube-cast/v2). A receiver is a node with a player: senders find it by mDNS or
 // by its key, connect to it as to any peer, and pair with and control it on a channel of that one connection
 // (src/cast-control.js). The film reaches it over the same connection and the swarm. Pairing secrets stay outside
 // Corestore, so they never reach replicating strangers.
@@ -15,13 +15,16 @@ import b4a from 'b4a'
 import { HEX64, RECEIVER_PORT, cleanName, formatReceiverUri, formatWatchUri, parseUri, safeEqual } from './protocol.js'
 import { interfaceAdapter, selfAddressAdapter } from './lan.js'
 import { qrSvg } from './qr.js'
-import { openControl, serveControl } from './cast-control.js'
+import { CAST } from '../spec/protocols.js'
+import { boundedEntry, commandFromWire, commandToWire, openControl, pairToWire, pairedFromWire, pairedToWire, serveControl, stateFromWire, stateToWire, subscribeToWire } from './cast-control.js'
 
 const CODE_ALPHABET = '23456789ABCDEFGHJKLMNPQRSTUVWXYZ'
 const CAST_SERVICE_TYPE = 'peartube-cast'
 // Senders and receivers on one LAN join this LAN-only topic, so LAN discovery links their nodes (src/lan.js connects
 // only peers that share a topic) before a cast needs the link.
-const CAST_LAN_TOPIC = hypercoreCrypto.hash(b4a.from('peartube-cast/v1'))
+const CAST_LAN_TOPIC = hypercoreCrypto.hash(b4a.from('peartube-cast/v2'))
+// The mDNS TXT `v` of a receiver this version can cast to. Senders list any other as not current and never dial it.
+const CAST_TXT_VERSION = '3'
 const CORS = {
   'access-control-allow-origin': '*',
   'access-control-allow-methods': 'GET, HEAD, POST, DELETE, OPTIONS',
@@ -465,10 +468,11 @@ export async function createReceiver ({
   const readAheadTimer = setInterval(steerStreams, 1000)
   readAheadTimer.unref?.()
 
-  // Cast channels senders have open, those sent each state change, and those with a write pending.
+  // Cast channels senders have open, those sent each state change, and, for those whose last push the connection
+  // took with a false ("wait for drain"), their 'drain' listener and whether a newer state is waiting.
   const controls = new Set()
   const subscribers = new Set()
-  const backpressured = new WeakSet()
+  const draining = new Map() // control -> { ondrain, behind }
 
   function pairingUri () {
     return formatReceiverUri({ publicKey, deviceId: identity.deviceId, name: identity.name, token: identity.pairToken, p2p: true })
@@ -499,7 +503,7 @@ export async function createReceiver ({
       cachedQrSvg = qrSvg(uri)
     }
     return {
-      protocol: 'peartube-cast/v1',
+      protocol: CAST.protocol,
       deviceId: identity.deviceId,
       name: identity.name,
       publicKey,
@@ -524,14 +528,34 @@ export async function createReceiver ({
     onChange(state)
   }
 
+  // One push per state change per subscriber. After a false the subscriber gets nothing until its connection drains;
+  // then the newest state goes once, if one came meanwhile, and its answer counts like the first.
+  function pushState (control, wire) {
+    if (control.emit('state', wire) !== false) return
+    const wait = {
+      behind: false,
+      ondrain () {
+        stopDraining(control)
+        if (wait.behind && !closing && subscribers.has(control)) pushState(control, stateToWire(state))
+      }
+    }
+    draining.set(control, wait)
+    control.conn.on('drain', wait.ondrain)
+  }
+
+  function stopDraining (control) {
+    const wait = draining.get(control)
+    if (!wait) return
+    draining.delete(control)
+    control.conn.off('drain', wait.ondrain)
+  }
+
   function broadcastState () {
+    const wire = stateToWire(state)
     for (const control of subscribers) {
-      if (backpressured.has(control) || control.push({ event: 'state', state }) !== false) continue
-      backpressured.add(control)
-      control.conn.once('drain', () => {
-        backpressured.delete(control)
-        if (!closing && subscribers.has(control)) control.push({ event: 'state', state })
-      })
+      const wait = draining.get(control)
+      if (wait) wait.behind = true
+      else pushState(control, wire)
     }
     notifyLocalHost(false)
   }
@@ -544,13 +568,14 @@ export async function createReceiver ({
 
   async function prepareMediaLoad (cmd) {
     activeMedia = null
-    const entry = cmd.entry ? {
+    // Bounded as it travels (src/cast-control.js): this entry goes into every later state push.
+    const entry = boundedEntry(cmd.entry ? {
       key: String(cmd.entry.key || ''),
       id: String(cmd.entry.id || 'stream'),
       title: cleanName(cmd.entry.title, cmd.entry.id || 'PearTube Stream'),
       size: Number(cmd.entry.size) || 0,
       sha256: String(cmd.entry.sha256 || '')
-    } : { key: '', id: 'stream', title: 'PearTube Stream', size: 0, sha256: '' }
+    } : { key: '', id: 'stream', title: 'PearTube Stream', size: 0, sha256: '' })
 
     // The film comes over the swarm this node is on, public or private as the node is set: a cast never switches it.
     const watch = typeof cmd.magnetUrl === 'string' && cmd.magnetUrl.startsWith('peartube://watch/') ? parseUri(cmd.magnetUrl) : null
@@ -678,13 +703,19 @@ export async function createReceiver ({
   // Pairing and remote control: the only way in besides this device's own screen. Any peer that connects to the node
   // can send these, so each request is checked. An open receiver is open to the room it is in (LAN links), not to
   // every peer on the internet.
-  async function onControl ({ id: _id, type, token, ...msg }, control) {
+  function trustedOn (control) {
     const onLan = node.isLanConnection(control.conn)
-    const trusted = openAuth && onLan
-    if (type === 'pair') {
+    return { onLan, trusted: openAuth && onLan }
+  }
+  function authorize (token, control) {
+    if (!trustedOn(control).trusted && !safeEqual(token, identity.pairToken)) throw new Error('Unauthorized; pair with this TV first')
+  }
+  const handlers = {
+    pair ({ code }, control) {
+      const { onLan, trusted } = trustedOn(control)
       const peerHex = control.conn.remotePublicKey ? b4a.toString(control.conn.remotePublicKey, 'hex') : (onLan ? 'lan' : 'far')
       const { kind, peer } = failedPairings(onLan, peerHex)
-      if (!trusted && !safeEqual(normalizePairCode(msg.code), identity.pairCode)) {
+      if (!trusted && !safeEqual(normalizePairCode(code), identity.pairCode)) {
         const at = Date.now()
         pairFailures[kind].push(at)
         peer.push(at)
@@ -694,24 +725,28 @@ export async function createReceiver ({
       }
       // An open receiver takes any LAN link without a code, so it hands that peer no permanent token: a saved one
       // would keep working from anywhere after the room is left.
-      return { deviceId: identity.deviceId, name: identity.name, publicKey, token: trusted ? '' : identity.pairToken }
+      return pairedToWire({ deviceId: identity.deviceId, name: identity.name, publicKey, token: trusted ? '' : identity.pairToken })
+    },
+    subscribe ({ token }, control) {
+      authorize(token, control)
+      // A subscription is the channel's: one that closed already gets none.
+      if (!control.closed) subscribers.add(control)
+      return stateToWire(state)
+    },
+    async command (wire, control) {
+      authorize(wire.token, control)
+      return stateToWire(await applyCommand(commandFromWire(wire)))
     }
-    if (!trusted && !safeEqual(token, identity.pairToken)) throw new Error('Unauthorized; pair with this TV first')
-    if (type === 'subscribe') {
-      subscribers.add(control)
-      return { state }
-    }
-    if (type === 'cmd') return { ok: true, state: await applyCommand(msg) }
-    throw new Error(`Unknown cast message: ${type}`)
   }
   const unserve = new Map() // connection -> stops answering on it
   function serve (conn) {
     unserve.set(conn, serveControl(conn, {
-      onRequest: onControl,
+      handlers,
       onOpen: control => controls.add(control),
       onClose: control => {
         controls.delete(control)
         subscribers.delete(control)
+        stopDraining(control)
       }
     }))
     conn.once('close', () => unserve.delete(conn))
@@ -739,7 +774,7 @@ export async function createReceiver ({
         port: lan?.port || RECEIVER_PORT,
         txt: {
           proto: CAST_SERVICE_TYPE,
-          v: '2',
+          v: CAST_TXT_VERSION,
           id: identity.deviceId,
           name: identity.name,
           h: currentHost || '127.0.0.1',
@@ -902,8 +937,9 @@ export function createCastController ({
             // Where the receiver's node answers on this LAN.
             lan: lanPort > 0 ? { host: addr, port: lanPort } : null,
             auth: txt.auth === 'open' ? 'open' : 'code',
-            // Receivers from before the cast channel advertise v1 and cannot be reached.
-            current: txt.v === '2'
+            // A receiver on another PearTube version advertises another `v`, refuses this one's channel, and is
+            // never dialed.
+            current: txt.v === CAST_TXT_VERSION
           })
           emitChange()
         },
@@ -917,13 +953,16 @@ export function createCastController ({
   }
 
   const pairedWith = disc => saved.get(disc.id) || [...saved.values()].find(s => s.publicKey && s.publicKey === disc.publicKey) || null
+  // The id a discovered receiver is listed under: its saved pairing's (matched by id or by key, since a receiver can
+  // advertise another id than the one pairing saved), else its own. The list and the dial resolve it the same way.
+  const listedId = disc => pairedWith(disc)?.id || disc.id
 
   function listReceivers () {
     const merged = new Map()
     for (const d of discovered.values()) {
       const pair = pairedWith(d)
-      merged.set(pair?.id || d.id, {
-        id: pair?.id || d.id,
+      merged.set(listedId(d), {
+        id: listedId(d),
         name: d.name || pair?.name || 'PearTube TV',
         host: d.host,
         publicKey: pair?.publicKey || d.publicKey,
@@ -932,7 +971,7 @@ export function createCastController ({
         p2p: true,
         transport: 'lan+p2p',
         auth: d.auth,
-        // A receiver from before this protocol cannot be cast to until it updates.
+        // A receiver on another PearTube version cannot be cast to until both run the same one.
         current: d.current
       })
     }
@@ -945,7 +984,7 @@ export function createCastController ({
 
   // What is known about a receiver: what pairing saved and what mDNS shows now. The saved key wins: mDNS is unsigned.
   function receiverTarget (receiverId) {
-    const disc = discovered.get(receiverId) || null
+    const disc = discovered.get(receiverId) || [...discovered.values()].find(d => listedId(d) === receiverId) || null
     const pair = saved.get(receiverId) || (disc && pairedWith(disc))
     return {
       publicKey: pair?.publicKey || disc?.publicKey || '',
@@ -961,7 +1000,7 @@ export function createCastController ({
   // channel on that connection (src/cast-control.js).
   async function connectReceiver ({ publicKey, lan = null, current = true }, handlers = {}) {
     if (!HEX64.test(publicKey)) throw new Error('This receiver has no key: pair it again with its link or code')
-    if (!current) throw new Error('This receiver runs an older PearTube: update it')
+    if (!current) throw new Error('This receiver runs a different PearTube version: update PearTube on both devices')
     const node = getNode() || (ensureNode ? await ensureNode() : null)
     if (!node) throw new Error('P2P node is not started')
     node.joinLanTopic('cast', CAST_LAN_TOPIC)
@@ -990,7 +1029,7 @@ export function createCastController ({
     if (!token) {
       const control = await connectReceiver({ publicKey: key, lan: disc?.lan, current: disc ? disc.current : true })
       try {
-        const res = await control.call('pair', { code: normalizePairCode(code) })
+        const res = pairedFromWire(await control.call('pair', pairToWire(normalizePairCode(code))))
         record = { id: res.deviceId || record.id, name: cleanName(res.name || record.name, 'PearTube TV'), publicKey: key, token: res.token || '' }
       } finally {
         control.close()
@@ -1035,9 +1074,9 @@ export function createCastController ({
   async function openSession (receiverId, target) {
     const session = { receiverId, publicKey: target.publicKey, receiverName: target.name, transport: '', token: target.token, state: idleCastState(), control: null }
     session.control = await connectReceiver(target, {
-      onEvent: msg => {
-        if (active !== session || msg.event !== 'state' || !msg.state) return
-        session.state = msg.state
+      onState: state => {
+        if (active !== session) return
+        session.state = state
         emitChange()
       },
       // The channel closes with its connection, and a LAN link can replace a DHT link under a session. Take the
@@ -1067,9 +1106,8 @@ export function createCastController ({
       let session = null
       try {
         session = await openSession(receiverId, target)
-        await session.control.call('subscribe', { token: target.token })
-        const res = await session.control.call('cmd', { token: target.token, ...command }, timeoutMs)
-        if (res.state) session.state = res.state
+        await session.control.call('subscribe', subscribeToWire(target.token))
+        session.state = stateFromWire(await session.control.call('command', commandToWire(command, target.token), timeoutMs))
         claim(mine, session)
         emitChange()
         return status()
@@ -1126,8 +1164,7 @@ export function createCastController ({
   async function castControl (cmd) {
     const session = active
     if (!session) throw new Error('No active cast session')
-    const res = await session.control.call('cmd', { token: session.token, ...cmd })
-    if (res.state) session.state = res.state
+    session.state = stateFromWire(await session.control.call('command', commandToWire(cmd, session.token)))
     if (cmd.action === 'stop' && active === session) closeActiveTransport()
     emitChange()
     return status()

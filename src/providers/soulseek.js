@@ -834,6 +834,11 @@ export function createSoulseekPlugin ({
     closed = true
     for (const j of jobs.values()) {
       if (j.status === 'queued' || j.status === 'transferring') j.cancelled = true
+      // A mirror waiting for another import has placed nothing: closing ends it as a cancel, not as a failure.
+      if (j.status === 'announcing' && j.phase === 'waiting') {
+        j.cancelled = true
+        j.status = 'cancelled'
+      }
     }
     browseCache.clear()
     closeClient()

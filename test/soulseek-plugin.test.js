@@ -516,16 +516,36 @@ test('mirror waits for a running import with nothing placed, can be cancelled, a
   assert.deepEqual(albumFolders(), [ok.folder])
   assert.equal(mirror.listProviderJobs().find(j => j.jobId === ok.jobId).sha256s.length, 1)
 
+  // Closing the relay while a mirror waits ends that wait at once, as a cancel: the job is not left waiting out
+  // its limit (60 s on this host), is not reported as a failure, and nothing is placed.
+  const third = longImport()
+  const closing = await start(false)
+  let parked = null
+  for (let i = 0; i < 400 && !parked; i++) {
+    const j = mirror.getProviderJob(closing.job.jobId)
+    if (j.status === 'announcing' && j.phase === 'waiting') parked = j
+    else await sleep(25)
+  }
+  assert.ok(parked, 'a second mirror waits behind the running import')
+  const closeAt = Date.now()
+  await mirror.close()
+  await third.run.catch(() => {})
+  assert.ok(Date.now() - closeAt < 10_000, `close took ${Date.now() - closeAt} ms`)
+  await sleep(300)
+  const closed = mirror.getProviderJob(closing.job.jobId)
+  assert.equal(closed.status, 'cancelled', closed.error || '')
+  assert.equal(closed.error, null)
+  assert.equal(readdirSync(join(watchDir, ok.folder)).filter(n => !n.startsWith('.')).length, 1, 'the closed mirror placed nothing')
+
   // The wait has a limit (100 ms on this second host): after it the mirror fails in plain words, again with nothing
   // placed, while the other import is still running.
-  await mirror.close()
   mirror = await host(100)
   const second = longImport()
   await assert.rejects(start(true), err => /Another import has held the folder for 1 s\. Nothing was saved/.test(err.message) && err.status === 503)
   assert.equal(second.done(), false, 'it gave up while the other import was still running')
   assert.deepEqual(albumFolders(), [ok.folder])
   assert.equal(readdirSync(join(watchDir, ok.folder)).filter(n => !n.startsWith('.')).length, 1, 'and added no second file to the album')
-  assert.equal((await second.run).ingested, 300)
+  assert.ok((await second.run).ingested >= 300, 'the import it gave up behind ran to its end')
   assert.equal((await mirror.run('watch-dir')).ingested, 0, 'the abandoned mirror left nothing to import')
 })
 

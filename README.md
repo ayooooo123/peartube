@@ -581,8 +581,10 @@ sh desktop/bundle.sh --receiver [--engine js|rust|both] --zip
 CI runs the core and Cast suites on every push and pull request, publishes the multi-arch
 `ghcr.io/ayooooo123/peartube-relay:latest` image on `main` using `native.lock`'s `engine.relay`
 (`js` or `rust`), builds the Android debug APKs when `android/`, `worklet/` or `src/` changes,
-and `.github/workflows/release.yml` builds and publishes whichever engine you choose on release
-(`js`, `rust`, `lock` per-surface defaults, or `both` side-by-side).
+and `.github/workflows/release.yml` builds and publishes the relay image and Mac apps for whichever engine you
+choose on release (`js`, `rust`, `lock` per-surface defaults, or `both` side-by-side). Android release APKs are
+built and signed only on the release Mac (`android/release.sh`, `android/release-tv.sh`, which refuse an APK not
+signed by the pinned release key) and attached to the release with `gh release upload`.
 ## History
 
 The previous platform (apps, channels, HRPC, transcoding, custody proofs) is tagged

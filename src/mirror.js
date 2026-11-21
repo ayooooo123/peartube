@@ -1277,7 +1277,12 @@ export async function createMirrorHost ({
       const q = String(query || '').trim()
       if (!q) throw Object.assign(new Error('query is required'), { status: 400 })
       const known = [...plugins.entries()].filter(([, p]) => typeof p.search === 'function').map(([name]) => name)
-      const wanted = Array.isArray(sources) && sources.length ? [...new Set(sources.map(String))] : known
+      // No `sources` means every source. Anything else must be a list that names at least one: a string or an
+      // empty list is a caller's mistake, not a request for everything.
+      if (sources != null && (!Array.isArray(sources) || !sources.length || sources.some(s => typeof s !== 'string'))) {
+        throw Object.assign(new Error(`sources must be a list of source names (known: ${known.join(', ')})`), { status: 400 })
+      }
+      const wanted = sources ? [...new Set(sources)] : known
       const unknown = wanted.find(name => !known.includes(name))
       if (unknown) throw Object.assign(new Error(`Unknown source: ${unknown} (known: ${known.join(', ')})`), { status: 400 })
       const deadline = Math.max(1000, Math.min(45_000, Number(timeoutMs) || 30_000))

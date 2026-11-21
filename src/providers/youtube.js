@@ -8,7 +8,7 @@
 // `info` and `download` are the relay's `ubitInfo` and `downloadPage` (src/identify.js), passed in: a host without
 // them (the apps' worklet cannot run ubit) reports `unavailable`.
 import { createHash, randomUUID } from 'node:crypto'
-import { mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, statSync, unlinkSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, statSync, unlinkSync, writeFileSync } from 'node:fs'
 import { basename, extname, join } from 'node:path'
 import { MAX_TITLE, MEDIA_FILE } from '../protocol.js'
 import { albumKey } from '../tags.js'
@@ -266,11 +266,15 @@ export function createYoutubePlugin ({
           job.note = `${job.skipped.length} of ${tracks.length} tracks not saved: ${job.skipped.map(s => `${s.title} (${s.error})`).join('; ')}`.slice(0, 600)
         }
         const finalDir = join(stagingRoot, folderName)
-        mkdirSync(finalDir, { recursive: true })
         const pinPath = join(finalDir, ALBUM_PIN)
         let pinned = null
         try { pinned = JSON.parse(readFileSync(pinPath, 'utf8'))?.release } catch {}
-        if (pinned && pinned !== release) throw Object.assign(new Error(`The folder “${folderName}” already holds another album`), { status: 409 })
+        // Only a folder this album's own pin already names, or an empty one, is taken: a pin written into a folder
+        // of the owner's files would re-file them under `yt:`.
+        let held = []
+        try { held = readdirSync(finalDir).filter(n => !/^[.@]/.test(n)) } catch {}
+        if (pinned ? pinned !== release : held.length) throw Object.assign(new Error(`The folder “${folderName}” already holds other files`), { status: 409 })
+        mkdirSync(finalDir, { recursive: true })
         // The pin goes in before the first file, so a scan that runs between the two already sees it.
         writeFileSync(pinPath, JSON.stringify({ release, title: albumTitle, artist }) + '\n')
         const placed = new Set()
@@ -287,10 +291,24 @@ export function createYoutubePlugin ({
         noteMirrored(finalDir, placed)
         Object.assign(job, { status: 'announcing', phase: 'importing', speed: 0, progressAt: Date.now() })
         onchange?.()
+        // `done` means imported: a scan that finished after the files were placed has looked at every one of them.
+        // While another scan holds the folder this one waits; the files are in place, so a relay that stops now
+        // imports them at its next start.
         let scan = scanStaging ? await scanStaging(stagingRoot, ctx) : { scanned: 0, ingested: 0, items: [] }
-        for (let retry = 0; retry < 20 && scan?.busy && !closed; retry++) {
+        while (scan?.busy && !closed && !job.controller.aborted) {
           await new Promise(resolve => setTimeout(resolve, 250))
           scan = await scanStaging(stagingRoot, ctx)
+        }
+        if (scan?.busy) throw new Error('Cancelled')
+        const refusedImport = (scan?.failed || []).filter(f => placed.has(f.file))
+        for (const f of refusedImport) {
+          const g = got.find(x => fileOf(x.t, x.ext) === f.file)
+          job.skipped.push({ track: g?.t.track ?? null, title: g?.t.title || f.file, error: `Not imported: ${String(f.error).slice(0, 160)}` })
+        }
+        const imported = placed.size - refusedImport.length
+        if (!imported) throw Object.assign(new Error(`The relay could not import the saved tracks: ${refusedImport[0].error}`), { status: 500 })
+        if (job.skipped.length) {
+          job.note = `${job.skipped.length} of ${tracks.length} tracks not saved: ${job.skipped.map(s => `${s.title} (${s.error})`).join('; ')}`.slice(0, 600)
         }
         Object.assign(job, {
           status: 'done',
@@ -301,7 +319,7 @@ export function createYoutubePlugin ({
           sha256s: (scan?.items || []).filter(it => placed.has(it.file)).map(it => it.sha256)
         })
         onchange?.()
-        return { jobId, id: release, folder: folderName, files: placed.size, bytes: doneBytes, ingested: scan?.ingested || 0, items: scan?.items || [], skipped: job.skipped }
+        return { jobId, id: release, folder: folderName, files: imported, bytes: doneBytes, ingested: scan?.ingested || 0, items: scan?.items || [], skipped: job.skipped }
       } catch (err) {
         if (job.controller.aborted || closed) {
           job.status = 'cancelled'

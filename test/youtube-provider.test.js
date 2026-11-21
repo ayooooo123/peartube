@@ -47,6 +47,7 @@ function writeStubUbit (binDir) {
     'if (args[0] === "info") {',
     '  const q = args[1].replace(/^ytsearch:/, "");',
     '  if (/nothing/.test(q)) { process.stderr.write("error: No YouTube results for \'" + q + "\'\\n"); process.exit(1) }',
+    '  if (/slow/.test(q)) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 1500);',
     '  if (/explode/.test(q)) { process.stderr.write("error: HTTP 429 from youtube\\n"); process.exit(1) }',
     '  say({ entries: [',
     '    { id: "aaaaaaaaaa1", title: "Blue Train (Remastered)", url: "https://www.youtube.com/watch?v=aaaaaaaaaa1", duration: 643, thumbnail: "x", author: "" },',
@@ -154,19 +155,38 @@ test('YouTube source: unified search, audio-only save into a yt: album, partial 
   assert.equal(second.length, 550)
   for (const k of ['username', 'slots', 'queue', 'filename']) assert.equal(k in row, false, `a video has no ${k}`)
   assert.equal((await call('POST', '/v1/search/sources', { query: 'x', sources: ['napster'] })).status, 400)
+  for (const sources of ['youtube', [], [7], {}]) {
+    const bad = await call('POST', '/v1/search/sources', { query: 'x', sources })
+    assert.equal(bad.status, 400, `sources ${JSON.stringify(sources)} is refused, not read as every source`)
+  }
   assert.equal((await call('POST', '/v1/search/sources', { query: '  ' })).status, 400)
   const failed = await call('POST', '/v1/search/sources', { query: 'explode now', sources: ['youtube'] })
   assert.equal(failed.status, 200)
   assert.match(failed.data.errors[0].message, /HTTP 429/)
 
-  // 2. Streamed: one `source` event per source, then `done`.
-  const sse = await fetch(base + '/v1/search/sources', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ query: 'blue train', stream: true }) })
+  // 2. Streamed: each source's part is sent when that source finishes, not when the last one does. Here the peer
+  // source fails at once (not set up) and YouTube takes 1.5 s, so the first event must arrive about 1.5 s before
+  // the second; a reply held back until the end has them together.
+  const sse = await fetch(base + '/v1/search/sources', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ query: 'slow blue train', stream: true }) })
   assert.match(sse.headers.get('content-type'), /text\/event-stream/)
-  const events = (await sse.text()).trim().split('\n\n').map(f => ({ event: /^event: (\w+)/m.exec(f)[1], data: JSON.parse(/^data: (.*)$/m.exec(f)[1]) }))
-  assert.deepEqual(events.map(e => e.event).sort(), ['done', 'source', 'source'])
-  assert.equal(events[events.length - 1].event, 'done')
-  assert.equal(events.find(e => e.data.source === 'youtube').data.results.length, 2)
-  assert.ok(events.find(e => e.data.source === 'soulseek').data.error)
+  const events = []
+  const reader = sse.body.getReader()
+  const decoder = new TextDecoder()
+  for (let buf = ''; ;) {
+    const { done, value } = await reader.read()
+    if (done) break
+    buf += decoder.decode(value, { stream: true })
+    for (let i; (i = buf.indexOf('\n\n')) >= 0; buf = buf.slice(i + 2)) {
+      const f = buf.slice(0, i)
+      events.push({ at: Date.now(), event: /^event: (\w+)/m.exec(f)[1], data: JSON.parse(/^data: (.*)$/m.exec(f)[1]) })
+    }
+  }
+  assert.deepEqual(events.map(e => e.event), ['source', 'source', 'done'])
+  assert.deepEqual(events.map(e => e.data.source), ['soulseek', 'youtube', undefined], 'the source that finished first is sent first')
+  assert.ok(events[1].at - events[0].at >= 1000, `the first source arrived ${events[1].at - events[0].at} ms before the second`)
+  assert.equal(events[1].data.results.length, 2)
+  assert.ok(events[0].data.error)
+  assert.deepEqual(events[2].data.bySource, { soulseek: 0, youtube: 2 })
 
   // 3 + 4. Save an album of three videos; the middle one is refused by YouTube.
   assert.equal((await call('POST', '/v1/providers/youtube/mirror', { album: 'Blue Train', tracks: [{ videoId: 'aaaaaaaaaa1', title: 'x' }] })).status, 400)
@@ -229,6 +249,16 @@ test('YouTube source: unified search, audio-only save into a yt: album, partial 
   await until(() => !existsSync(join(storage, 'youtube-work')) || readdirSync(join(storage, 'youtube-work')).length === 0)
   assert.equal(existsSync(join(watchDir, 'John Coltrane - Cancelled [YouTube]')), false, 'a cancelled save leaves no folder')
   assert.equal((await call('POST', '/v1/plugins/watch-dir/run', {})).data.ingested, 0, 'and nothing to import')
+
+  // A folder of the owner's own files that happens to carry the save's name is not taken over: no pin is written
+  // into it and nothing lands beside its files.
+  const mine = join(watchDir, 'John Coltrane - Mine [YouTube]')
+  mkdirSync(mine)
+  writeFileSync(join(mine, '01 - Own.flac'), 'own bytes')
+  const taken = await call('POST', '/v1/providers/youtube/mirror', { artist: 'John Coltrane', album: 'Mine', tracks: [{ videoId: 'aaaaaaaaaa1', title: 'Theirs' }], wait: true })
+  assert.equal(taken.status, 409, JSON.stringify(taken.data))
+  assert.deepEqual(readdirSync(mine), ['01 - Own.flac'])
+  rmSync(mine, { recursive: true })
 
   // The picture route is the owner's: another site's page is refused; an id with no picture is 204, not an error.
   const evil = await fetch(base + '/v1/providers/youtube/thumb/aaaaaaaaaa1', { headers: { origin: 'http://evil.example' } })

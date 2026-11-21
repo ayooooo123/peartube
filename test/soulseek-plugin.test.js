@@ -391,6 +391,10 @@ test('browse cache, listen port, and legible queued/transferring/failed jobs (fa
     noAnswerMs: 300,
     loadAddon: async () => fakeAddon(calls)
   })
+  // The job watchdog is unref'd so a stuck download never holds a relay open, and the fake silent peer holds no socket.
+  // A relay always has other handles; this test has none, so Node 22 ends the event loop and cancels the test before
+  // the watchdog fires. Hold the loop open for the test's length, as a real peer connection would.
+  const keepAlive = setInterval(() => {}, 1000)
   try {
     const first = await plug.browse({ username: 'bob' })
     assert.deepEqual(calls.created, [{ listenPort: 50300 }], 'the configured listen port reaches the addon')
@@ -432,6 +436,7 @@ test('browse cache, listen port, and legible queued/transferring/failed jobs (fa
     assert.equal(vinyl.placed.file, '05 - Five.flac')
     results.checks.browseAndLegibleJobs = { transitions: seen, silent: silentJob.error }
   } finally {
+    clearInterval(keepAlive)
     await plug.stop()
     rmSync(tmp, { recursive: true, force: true })
   }

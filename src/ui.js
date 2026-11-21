@@ -2881,7 +2881,7 @@ function slskJobState (j) {
   if (j.status === 'done') return { tone: 'ok', text: 'Saved · ' + plural(j.fileCount || 1, 'track', 'tracks') + ' · ' + size(j.size || j.bytes || 0), short: 'Saved' }
   if (j.status === 'failed') return { tone: 'bad', text: 'Failed', short: 'Failed' }
   if (j.status === 'cancelled') return { tone: '', text: 'Cancelled', short: 'Cancelled' }
-  if (j.status === 'announcing') return { tone: '', text: 'Adding to your library', short: 'Adding' }
+  if (j.status === 'announcing') return j.phase === 'waiting' ? { tone: '', text: 'Waiting for another import to finish', short: 'Waiting' } : { tone: '', text: 'Adding to your library', short: 'Adding' }
   if (j.status === 'transferring') return { tone: '', text: 'Downloading from ' + j.peer + (pct != null ? ' · ' + pct + '%' : ''), short: pct != null ? pct + '%' : 'Downloading' }
   if (j.phase === 'connecting') return { tone: '', text: 'Connecting to ' + j.peer, short: 'Connecting' }
   if (j.queuePlace > 0) return { tone: '', text: 'Queued at ' + j.queuePlace + ' on ' + j.peer, short: 'Queued at ' + j.queuePlace }
@@ -2904,11 +2904,11 @@ const jobAlbumEntry = j => (j.sha256s && j.sha256s.length ? S.entries.find(e => 
   (j.plugin === 'youtube' && j.id ? S.entries.find(e => e.seriesKey === j.id) : null) || null
 // Progress a reader can trust: bytes of a known total (Soulseek), else tracks done of tracks asked (YouTube).
 function jobProgress (j) {
+  // Waiting for another import: everything is downloaded but nothing is in the library yet, so no amount is shown.
+  if (j.status === 'announcing' && j.phase === 'waiting') return h('div', { class: 'bar-track indef wait', role: 'progressbar', 'aria-valuetext': 'Waiting' }, h('div'))
   if (j.plugin !== 'youtube') {
     return h('div', { class: 'bar-track' + (j.status === 'transferring' || j.status === 'announcing' ? '' : ' wait') }, h('div', { style: 'width:' + (j.status === 'announcing' ? 100 : slskPct(j) || 0) + '%' }))
   }
-  // Waiting for another import: every track is downloaded but none is in the library yet, so no count is shown.
-  if (j.status === 'announcing' && j.phase === 'waiting') return h('div', { class: 'bar-track indef wait', role: 'progressbar', 'aria-valuetext': 'Waiting' }, h('div'))
   const n = j.fileCount || 1
   const doneN = j.status === 'announcing' ? n : j.status === 'transferring' ? (j.fileIndex || 1) - 1 : 0
   const text = plural(doneN, 'track', 'tracks') + ' of ' + n + ' saved'

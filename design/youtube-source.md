@@ -148,7 +148,7 @@ Mirror steps:
 2. Run tracks one at a time. The WASM has one connection at a time (`bare-ubit/README.md:44`), so about 20 s per 4-minute track (measured).
 3. `renameSync` each file into `<stagingRoot>/<Artist> · <Album>/<NN> - <title>.m4a`.
 4. Write `.peartube-album.json` `{ "release": "yt:…", "title": "<Artist> · <Album>", "artist": "<Artist>" }`.
-5. Import. Steps 3 to 5 are one step run by the plugin host (`placeAndScan` in `src/mirror.js`): the downloaded tracks stay in the work folder until no other import holds the import folder, then they are moved in, pinned and scanned in the same tick. While the job waits (`status: "announcing"`, `phase: "waiting"`) Cancel works and nothing is placed; after `importWaitMs` (120 s) the job fails with nothing placed. A job that is not `done` leaves nothing for a later scan. (The Soulseek provider still places first and calls `scanStaging`.)
+5. Import. Steps 3 to 5 are one step run by the plugin host (`placeAndScan` in `src/mirror.js`): the downloaded tracks stay in the work folder until no other import holds the import folder, then they are moved in, pinned and scanned in the same tick. While the job waits (`status: "announcing"`, `phase: "waiting"`) Cancel works and nothing is placed; after `importWaitMs` (120 s) the job fails with nothing placed. A job that is not `done` leaves nothing for a later scan. The Soulseek provider places its mirrors the same way.
 
 Artist, album and year come **from the caller**. The provider does not guess album metadata from video titles: see §4.
 

@@ -25,6 +25,8 @@ import { albumKey, parseTags } from '../src/tags.js'
 import { SOULSEEK_SEARCH_CAP, createSoulseekPlugin, normalizeSoulseekCandidates, placeSingleTrack } from '../src/providers/soulseek.js'
 import { removeEntries } from '../src/http.js'
 import { createSettings } from '../src/settings.js'
+import { createNode } from '../src/index.js'
+import { createMirrorHost } from '../src/mirror.js'
 
 test('a lone track is placed in its album folder as NN - Title, or refused with the reason', () => {
   const tagged = placeSingleTrack({ tags: { album: 'Giant Steps', albumArtist: 'John Coltrane', title: 'Naima', year: 1960, track: 6 }, filename: '@@m\\x\\y\\zz.flac' })
@@ -446,6 +448,105 @@ test('browse cache, listen port, and legible queued/transferring/failed jobs (fa
     delete process.env.PEARTUBE_SLSK_SHARE
     delete process.env.PEARTUBE_SLSK_SHARE_MAX_FILES
   }
+})
+
+// A finished mirror must not touch the import folder while another import holds it: that wait can be long (a first
+// import of a large folder) and has to stay cancellable. Ways this can go wrong, each checked below: the files are
+// placed before the wait, so a cancelled or abandoned mirror is imported anyway; Cancel is ignored while waiting;
+// the wait never ends; a mirror that found the folder free does not import.
+test('mirror waits for a running import with nothing placed, can be cancelled, and gives up after a limit', { timeout: 180_000 }, async t => {
+  const dir = mkdtempSync(join(tmpdir(), 'slsk-wait-'))
+  const storage = join(dir, 'storage')
+  const watchDir = join(dir, 'import')
+  for (const d of [storage, watchDir]) mkdirSync(d, { recursive: true })
+  const testnet = await createTestnet(3)
+  const node = await createNode({ storage, bootstrap: testnet.bootstrap })
+  const host = importWaitMs => createMirrorHost({
+    node,
+    storage,
+    acquirer: null,
+    watchDir,
+    pollIntervalMs: 0,
+    importWaitMs,
+    slskUser: 'alice',
+    slskPass: 'secret',
+    soulseekOpts: { loadAddon: async () => fakeAddon({ created: [], browse: 0 }) }
+  })
+  let mirror = await host(60_000)
+  t.after(async () => {
+    await mirror.close()
+    await node.close()
+    await testnet.destroy()
+    rmSync(dir, { recursive: true, force: true })
+  })
+  // An import to wait behind: 300 files, each its own bytes.
+  let batch = 0
+  const longImport = () => {
+    batch++
+    for (let i = 0; i < 300; i++) writeFileSync(join(watchDir, `clip-${batch}-${String(i).padStart(3, '0')}.mp4`), createHash('sha256').update(`${batch}:${i}`).digest().subarray(0, 24).toString('hex').repeat(600))
+    let done = false
+    const run = mirror.run('watch-dir').then(r => { done = true; return r })
+    return { run, done: () => done }
+  }
+  const albumFolders = () => readdirSync(watchDir, { withFileTypes: true }).filter(e => e.isDirectory()).map(e => e.name)
+  const start = wait => mirror.mirrorProvider('soulseek', { username: 'bob', files: [{ filename: '@@m\\Artist\\Album (2001)\\01 - One.flac', size: 100 }], wait })
+
+  // Cancel while waiting: nothing was placed, so nothing is imported later.
+  const first = longImport()
+  const started = await start(false)
+  let waiting = null
+  for (let i = 0; i < 400 && !waiting; i++) {
+    const j = mirror.getProviderJob(started.job.jobId)
+    if (j.status === 'failed') assert.fail(j.error)
+    if (j.status === 'announcing' && j.phase === 'waiting') waiting = j
+    else await sleep(25)
+  }
+  assert.ok(waiting, 'the mirror waits behind the running import')
+  assert.equal(first.done(), false, 'and that import is still running')
+  assert.deepEqual(albumFolders(), [], 'nothing is placed while another import runs')
+  assert.equal(mirror.cancelProviderJob(started.job.jobId).status, 'cancelled')
+  assert.equal((await first.run).ingested, 300)
+  assert.deepEqual(albumFolders(), [])
+  assert.equal(mirror.getProviderJob(started.job.jobId).status, 'cancelled')
+  assert.equal((await mirror.run('watch-dir')).ingested, 0, 'the cancelled mirror left nothing to import')
+
+  // With the folder free, the same mirror goes straight through and is imported.
+  const ok = await start(true)
+  assert.equal(ok.ingested, 1)
+  assert.deepEqual(albumFolders(), [ok.folder])
+  assert.equal(mirror.listProviderJobs().find(j => j.jobId === ok.jobId).sha256s.length, 1)
+
+  // Closing the relay while a mirror waits ends that wait at once, as a cancel: the job is not left waiting out
+  // its limit (60 s on this host), is not reported as a failure, and nothing is placed.
+  const third = longImport()
+  const closing = await start(false)
+  let parked = null
+  for (let i = 0; i < 400 && !parked; i++) {
+    const j = mirror.getProviderJob(closing.job.jobId)
+    if (j.status === 'announcing' && j.phase === 'waiting') parked = j
+    else await sleep(25)
+  }
+  assert.ok(parked, 'a second mirror waits behind the running import')
+  const closeAt = Date.now()
+  await mirror.close()
+  await third.run.catch(() => {})
+  assert.ok(Date.now() - closeAt < 10_000, `close took ${Date.now() - closeAt} ms`)
+  await sleep(300)
+  const closed = mirror.getProviderJob(closing.job.jobId)
+  assert.equal(closed.status, 'cancelled', closed.error || '')
+  assert.equal(closed.error, null)
+  assert.equal(readdirSync(join(watchDir, ok.folder)).filter(n => !n.startsWith('.')).length, 1, 'the closed mirror placed nothing')
+
+  // The wait has a limit (100 ms on this second host): after it the mirror fails in plain words, again with nothing
+  // placed, while the other import is still running.
+  mirror = await host(100)
+  const second = longImport()
+  await assert.rejects(start(true), err => /Another import has held the folder for 1 s\. Nothing was saved/.test(err.message) && err.status === 503)
+  assert.equal(second.done(), false, 'it gave up while the other import was still running')
+  assert.deepEqual(albumFolders(), [ok.folder])
+  assert.equal(readdirSync(join(watchDir, ok.folder)).filter(n => !n.startsWith('.')).length, 1, 'and added no second file to the album')
+  assert.ok((await second.run).ingested >= 300, 'the import it gave up behind ran to its end')
+  assert.equal((await mirror.run('watch-dir')).ingested, 0, 'the abandoned mirror left nothing to import')
 })
 
 test('sharing is a relay setting: env value, UI override, and a reopen to apply it', () => {

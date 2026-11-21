@@ -477,6 +477,9 @@ export async function createMirrorHost ({
       if (Date.now() >= end) throw Object.assign(new Error(`Another import has held the folder for ${Math.ceil(waitMs / 1000)} s. Nothing was saved; try again when it finishes.`), { status: 503 })
       await new Promise(resolve => setTimeout(resolve, 100))
     }
+    // The folder also comes free when the relay closes (the running import stops between files) or the job was
+    // cancelled in the last moment of the wait: neither may place anything.
+    if (closed || cancelled()) throw new Error('Cancelled')
     place()
     return scanFolder(dir, ctx, prefix)
   }
@@ -1071,7 +1074,7 @@ export async function createMirrorHost ({
     storage,
     stagingRoot: slskStaging,
     stagingLabel: slskStagingLabel,
-    scanStaging: (dir, ctx) => scanFolder(dir, ctx, watchDir && resolve(watchDir) === resolve(dir) ? '' : 'staging:'),
+    placeAndScan: (place, ctx, opts) => placeAndScan(slskStaging, ctx, watchDir && resolve(watchDir) === resolve(slskStaging) ? '' : 'staging:', place, opts),
     slskUser,
     slskPass,
     slskServer,

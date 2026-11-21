@@ -2907,6 +2907,8 @@ function jobProgress (j) {
   if (j.plugin !== 'youtube') {
     return h('div', { class: 'bar-track' + (j.status === 'transferring' || j.status === 'announcing' ? '' : ' wait') }, h('div', { style: 'width:' + (j.status === 'announcing' ? 100 : slskPct(j) || 0) + '%' }))
   }
+  // Waiting for another import: every track is downloaded but none is in the library yet, so no count is shown.
+  if (j.status === 'announcing' && j.phase === 'waiting') return h('div', { class: 'bar-track indef wait', role: 'progressbar', 'aria-valuetext': 'Waiting' }, h('div'))
   const n = j.fileCount || 1
   const doneN = j.status === 'announcing' ? n : j.status === 'transferring' ? (j.fileIndex || 1) - 1 : 0
   const text = plural(doneN, 'track', 'tracks') + ' of ' + n + ' saved'

@@ -136,7 +136,7 @@ How YouTube fills the Soulseek fields:
 { "queued": true, "job": {
   "jobId": "uuid", "plugin": "youtube", "source": "youtube", "id": "yt:3f2a…(20 hex)",
   "title": "System of a Down · Mezmerize", "status": "queued" | "transferring" | "announcing" | "done" | "failed" | "cancelled",
-  "phase": "downloading", "peer": null, "queuePlace": null,
+  "phase": "downloading" | "waiting" | "importing", "peer": null, "queuePlace": null,
   "file": "01 - Soldier Side - Intro.m4a", "fileIndex": 1, "fileCount": 11,
   "bytes": 0, "total": null, "speed": 0, "error": null } }
 ```
@@ -148,7 +148,7 @@ Mirror steps:
 2. Run tracks one at a time. The WASM has one connection at a time (`bare-ubit/README.md:44`), so about 20 s per 4-minute track (measured).
 3. `renameSync` each file into `<stagingRoot>/<Artist> · <Album>/<NN> - <title>.m4a`.
 4. Write `.peartube-album.json` `{ "release": "yt:…", "title": "<Artist> · <Album>", "artist": "<Artist>" }`.
-5. Call `scanStaging`, as Soulseek does.
+5. Import. Steps 3 to 5 are one step run by the plugin host (`placeAndScan` in `src/mirror.js`): the downloaded tracks stay in the work folder until no other import holds the import folder, then they are moved in, pinned and scanned in the same tick. While the job waits (`status: "announcing"`, `phase: "waiting"`) Cancel works and nothing is placed; after `importWaitMs` (120 s) the job fails with nothing placed. A job that is not `done` leaves nothing for a later scan. (The Soulseek provider still places first and calls `scanStaging`.)
 
 Artist, album and year come **from the caller**. The provider does not guess album metadata from video titles: see §4.
 
@@ -281,7 +281,7 @@ Core changes this needs:
 | File | Change | Size |
 |---|---|---|
 | `src/identify.js` | `export` `ubitInfo`; `downloadPage(..., { audio })` adds `'-a'` to the args at line 121 | ~4 lines |
-| `src/providers/youtube.js` (new) | `createYoutubePlugin({ stagingRoot, scanStaging, configDir, onchange })`: `search` → `{ candidates, cap: 20, truncated: false }`; `mirror` → sequential `downloadPage`, rename, pin, `scanStaging`; `listJobs` / `getJob` / `cancelJob` with Soulseek's job shape; `info()` with the R2 health fields | ~200 lines |
+| `src/providers/youtube.js` (new) | `createYoutubePlugin({ stagingRoot, placeAndScan, info, download, onchange })`: `search` → `{ candidates, cap: 20, truncated }`; `mirror` → sequential `downloadPage` into the work folder, then `placeAndScan(place, ctx, { cancelled })` (move in, pin and scan as one step once no other import holds the folder); `listJobs` / `getJob` / `cancelJob` with Soulseek's job shape; `info()` with the R2 health fields | ~200 lines |
 | `src/mirror.js` | register the plugin after Soulseek (it needs `ubitConfigDir` passed in from `bin/relay.js:37`); `searchSources`; `readAlbumPin` → `{ release, title, artist }`; `albumFor` and `inferMediaMeta` use the pin's title/artist; ledger regex `yt:` | ~45 lines |
 | `src/providers/soulseek.js:36` | `RELEASE_ID` adds `yt:[0-9a-f]{20}` (not `parseRelease`) | 1 line |
 | `src/protocol.js:13` | `MEDIA_FILE` adds `m4a` | 1 token |

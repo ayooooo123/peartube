@@ -104,6 +104,9 @@ docker run -d --name peartube-relay --restart unless-stopped \
   ghcr.io/ayooooo123/peartube-relay:latest
 ```
 
+A relay is meant to run on a LAN. Exposing its ports to the WAN or the internet is at your own
+risk: for example, `GET /v1/plugins` is readable by any client that reaches the HTTP port.
+
 On a LAN host, prefer `--network host` so mDNS (`224.0.0.251:5353`) and ephemeral LAN ports
 reach the network. `docker build -t peartube-relay .` works too. The image is
 `gcr.io/distroless/cc-debian12` plus the `bare` binary and the relay: no shell, no package

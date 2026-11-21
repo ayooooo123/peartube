@@ -23,7 +23,9 @@ const VIDEO_ID = /^[A-Za-z0-9_-]{11}$/
 // Empty answers in a row before the provider says the extractor may be out of date: when YouTube changes its result
 // layout, `ubit` finds nothing and that cannot be told from a query with no results.
 const EMPTY_STREAK = 3
-const BOT_CHECK = /not a bot|sign in to confirm/i
+// YouTube's refusal of a whole network exit. Its age gate ("Sign in to confirm your age") is one video's refusal
+// and must not match.
+const BOT_CHECK = /not a bot/i
 
 // The `yt:` release an album saved from YouTube is pinned to: the same hash the importer gives an untagged folder as
 // `album:<hex>`, so the two name one album without sharing an id.
@@ -49,6 +51,7 @@ export function normalizeYoutubeResults (info, limit = YOUTUBE_SEARCH_CAP) {
       lossy: true,
       videoId,
       url: `https://www.youtube.com/watch?v=${videoId}`,
+      // `ubit` gives no uploader for search results today, so this is null until it does.
       channel: String(e.author || e.channel || e.uploader || '').trim().slice(0, 120) || null,
       // Served by this relay (`thumbnail()` below), so the owner's browser never contacts YouTube's image host.
       thumbnail: `/v1/providers/youtube/thumb/${videoId}`
@@ -73,6 +76,8 @@ export function createYoutubePlugin ({
   const available = typeof ubitInfo === 'function' && typeof downloadPage === 'function'
   const jobs = new Map()
   const workRoot = join(storage, 'youtube-work')
+  // Whatever a killed relay left half-downloaded.
+  if (available) try { rmSync(workRoot, { recursive: true, force: true }) } catch {}
   let closed = false
   // `ubit` holds one connection at a time, so saves run one after another across jobs.
   let chain = Promise.resolve()
@@ -93,7 +98,8 @@ export function createYoutubePlugin ({
     const cap = Math.max(1, Math.min(YOUTUBE_SEARCH_CAP, Math.trunc(Number(limit)) || YOUTUBE_SEARCH_CAP))
     let candidates
     try {
-      candidates = normalizeYoutubeResults(await ubitInfo(`ytsearch:${q}`, { timeoutMs: Math.max(1000, Math.min(45_000, Number(timeoutMs) || searchTimeoutMs)) }), cap)
+      // One row past the cap, to know whether rows were left out.
+      candidates = normalizeYoutubeResults(await ubitInfo(`ytsearch:${q}`, { timeoutMs: Math.max(1000, Math.min(45_000, Number(timeoutMs) || searchTimeoutMs)) }), cap + 1)
       lastError = null
     } catch (err) {
       if (!/no youtube results/i.test(String(err?.message))) {
@@ -108,7 +114,7 @@ export function createYoutubePlugin ({
     lastResultCount = candidates.length
     emptyStreak = candidates.length || q.length <= 3 ? 0 : emptyStreak + 1
     onchange?.()
-    return { candidates, cap: YOUTUBE_SEARCH_CAP, truncated: false }
+    return { candidates: candidates.slice(0, cap), cap: YOUTUBE_SEARCH_CAP, truncated: candidates.length > cap }
   }
 
   function trimJobs () {
@@ -155,8 +161,8 @@ export function createYoutubePlugin ({
     const release = youtubeRelease({ artist, album, year })
     const albumTitle = `${artist} · ${album}`.slice(0, MAX_TITLE)
     // Its own folder, never the one a lossless copy of the same album sits in: the pin would re-file those tracks
-    // under `yt:`.
-    const folderName = safeSegment(`${artist} - ${album}${year ? ` (${year})` : ''} [YouTube]`, 'YouTube Album')
+    // under `yt:`. The name is cut before the marker, so a long one cannot lose it and land on the other folder.
+    const folderName = `${safeSegment(`${artist} - ${album}${year ? ` (${year})` : ''}`, 'Album').slice(0, 128).trimEnd()} [YouTube]`
     const fileOf = (t, ext) => safeSegment(`${String(t.track).padStart(2, '0')} - ${t.title}`, String(t.track).padStart(2, '0')) + ext
     const jobId = randomUUID()
     const job = {
@@ -192,15 +198,22 @@ export function createYoutubePlugin ({
     onchange?.()
 
     const run = async () => {
-      if (job.controller.aborted || closed) throw new Error('Cancelled')
-      mkdirSync(workRoot, { recursive: true })
-      const workDir = mkdtempSync(join(workRoot, 'job-'))
+      let workDir = null
       try {
-        const finalDir = join(stagingRoot, folderName)
-        const placed = new Set()
+        if (job.controller.aborted || closed) throw new Error('Cancelled')
+        mkdirSync(workRoot, { recursive: true })
+        workDir = mkdtempSync(join(workRoot, 'job-'))
+        // Tracks wait in the work folder until the last one is in: a cancelled save leaves nothing to import.
+        const got = []
         let doneBytes = 0
+        let refused = null
         for (const [i, t] of tracks.entries()) {
           if (job.controller.aborted || closed) throw new Error('Cancelled')
+          if (refused) {
+            // Every other track would be refused the same way; asking again only deepens the block.
+            job.skipped.push({ track: t.track, title: t.title, error: refused })
+            continue
+          }
           Object.assign(job, { status: 'transferring', phase: 'downloading', file: fileOf(t, '.m4a'), fileIndex: i + 1, speed: 0, progressAt: Date.now() })
           onchange?.()
           const outDir = join(workDir, String(i + 1))
@@ -228,39 +241,50 @@ export function createYoutubePlugin ({
             if (!MEDIA_FILE.test(`x${ext}`)) throw new Error(`YouTube sent a file this relay does not import (${ext || 'no extension'})`)
             const size = statSync(dl.path).size
             if (!size) throw new Error('YouTube sent an empty file')
-            // The pin goes in before the first file, so a scan that runs between the two already sees it.
-            mkdirSync(finalDir, { recursive: true })
-            writeFileSync(join(finalDir, ALBUM_PIN), JSON.stringify({ release, title: albumTitle, artist }) + '\n')
-            const dst = freePath(finalDir, fileOf(t, ext))
-            try {
-              renameSync(dl.path, dst)
-            } catch {
-              writeFileSync(dst, readFileSync(dl.path))
-              try { unlinkSync(dl.path) } catch {}
-            }
-            placed.add(basename(dst))
-            noteMirrored(finalDir, [basename(dst)])
+            got.push({ t, path: dl.path, ext })
             doneBytes += size
             job.bytes = doneBytes
             savesBlocked = false
           } catch (err) {
             if (job.controller.aborted || closed) throw new Error('Cancelled')
-            if (BOT_CHECK.test(String(err?.message))) {
-              // Every other track would be refused the same way; asking again only deepens the block.
+            const reason = String(err?.message || err).slice(0, 200)
+            if (BOT_CHECK.test(reason)) {
               savesBlocked = true
-              throw Object.assign(new Error(`YouTube is refusing downloads from this relay's network (its bot check).${placed.size ? ` ${placed.size} of ${tracks.length} tracks were saved first.` : ''} Search still works; saving needs another network.`), { status: 503 })
+              refused = 'YouTube is refusing downloads from this network'
             }
             // One video YouTube will not hand over (removed, age-gated, blocked here) does not lose the album.
-            job.skipped.push({ track: t.track, title: t.title, error: String(err?.message || err).slice(0, 200) })
+            job.skipped.push({ track: t.track, title: t.title, error: refused || reason })
           }
         }
-        if (!placed.size) {
+        if (!got.length) {
           const first = job.skipped[0]
-          throw Object.assign(new Error(tracks.length === 1 ? `YouTube did not send “${first.title}”: ${first.error}` : `YouTube sent none of the ${tracks.length} tracks. First reason: ${first.error}`), { status: 502 })
+          throw refused
+            ? Object.assign(new Error('YouTube is refusing downloads from this relay\'s network (its bot check). Search still works; saving needs another network.'), { status: 503 })
+            : Object.assign(new Error(tracks.length === 1 ? `YouTube did not send “${first.title}”: ${first.error}` : `YouTube sent none of the ${tracks.length} tracks. First reason: ${first.error}`), { status: 502 })
         }
         if (job.skipped.length) {
           job.note = `${job.skipped.length} of ${tracks.length} tracks not saved: ${job.skipped.map(s => `${s.title} (${s.error})`).join('; ')}`.slice(0, 600)
         }
+        const finalDir = join(stagingRoot, folderName)
+        mkdirSync(finalDir, { recursive: true })
+        const pinPath = join(finalDir, ALBUM_PIN)
+        let pinned = null
+        try { pinned = JSON.parse(readFileSync(pinPath, 'utf8'))?.release } catch {}
+        if (pinned && pinned !== release) throw Object.assign(new Error(`The folder “${folderName}” already holds another album`), { status: 409 })
+        // The pin goes in before the first file, so a scan that runs between the two already sees it.
+        writeFileSync(pinPath, JSON.stringify({ release, title: albumTitle, artist }) + '\n')
+        const placed = new Set()
+        for (const g of got) {
+          const dst = freePath(finalDir, fileOf(g.t, g.ext))
+          try {
+            renameSync(g.path, dst)
+          } catch {
+            writeFileSync(dst, readFileSync(g.path))
+            try { unlinkSync(g.path) } catch {}
+          }
+          placed.add(basename(dst))
+        }
+        noteMirrored(finalDir, placed)
         Object.assign(job, { status: 'announcing', phase: 'importing', speed: 0, progressAt: Date.now() })
         onchange?.()
         let scan = scanStaging ? await scanStaging(stagingRoot, ctx) : { scanned: 0, ingested: 0, items: [] }
@@ -291,7 +315,7 @@ export function createYoutubePlugin ({
         onchange?.()
         throw Object.assign(new Error(job.error || 'Cancelled'), { status: err?.status || 502 })
       } finally {
-        try { rmSync(workDir, { recursive: true, force: true }) } catch {}
+        if (workDir) try { rmSync(workDir, { recursive: true, force: true }) } catch {}
       }
     }
 
@@ -363,10 +387,12 @@ export function createYoutubePlugin ({
   async function thumbnail (videoId) {
     if (!fetchBytes || !VIDEO_ID.test(String(videoId))) return null
     if (!thumbs.has(videoId)) {
-      thumbs.set(videoId, fetchBytes(`https://i.ytimg.com/vi/${videoId}/mqdefault.jpg`).then(
+      const pending = fetchBytes(`https://i.ytimg.com/vi/${videoId}/mqdefault.jpg`).then(
         res => res.status === 200 && res.body.byteLength && /^image\/(jpeg|webp|png)$/.test(String(res.headers['content-type'] || '')) ? { type: res.headers['content-type'], bytes: res.body } : null,
-        () => null
-      ))
+        // A failed request is not "no picture": forget it, so the next look asks again.
+        () => { if (thumbs.get(videoId) === pending) thumbs.delete(videoId); return null }
+      )
+      thumbs.set(videoId, pending)
       while (thumbs.size > 64) thumbs.delete(thumbs.keys().next().value)
     }
     return thumbs.get(videoId)

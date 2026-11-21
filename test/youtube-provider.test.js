@@ -50,7 +50,7 @@ function writeStubUbit (binDir) {
     '  if (/explode/.test(q)) { process.stderr.write("error: HTTP 429 from youtube\\n"); process.exit(1) }',
     '  say({ entries: [',
     '    { id: "aaaaaaaaaa1", title: "Blue Train (Remastered)", url: "https://www.youtube.com/watch?v=aaaaaaaaaa1", duration: 643, thumbnail: "x", author: "" },',
-    '    { id: "aaaaaaaaaa2", title: "Moment\'s Notice", url: "https://www.youtube.com/watch?v=aaaaaaaaaa2", duration: 550.4, author: "John Coltrane - Topic" },',
+    '    { id: "aaaaaaaaaa2", title: "Moment\'s Notice", url: "https://www.youtube.com/watch?v=aaaaaaaaaa2", duration: 550.4 },',
     '    { id: "aaaaaaaaaa2", title: "duplicate id", duration: 1 },',
     '    { id: "not a video id", title: "bad", duration: 1 }',
     '  ] });',
@@ -59,6 +59,8 @@ function writeStubUbit (binDir) {
     'const id = /v=([\\w-]{11})/.exec(args[1])[1];',
     'if (id === "gonegonegon") { say({ event: "error", error: "Video unavailable in your country" }); process.exit(1) }',
     'if (id === "botbotbotbo") { say({ event: "error", error: "YouTube: Sign in to confirm you’re not a bot" }); process.exit(1) }',
+    'if (id === "ageageageag") { say({ event: "error", error: "YouTube: Sign in to confirm your age. This video may be inappropriate for some users." }); process.exit(1) }',
+    'if (id === "slowslowslo") { say({ event: "progress", downloaded: 10, total: 4012 }); setTimeout(() => {}, 30000); return }',
     'const out = args[args.indexOf("-o") + 1];',
     'const body = Buffer.concat([Buffer.from([0, 0, 0, 24]), Buffer.from("ftypM4A "), Buffer.alloc(4000, id)]);',
     'const file = path.join(out, "Some Uploader Title [" + id + "].m4a");',
@@ -148,7 +150,7 @@ test('YouTube source: unified search, audio-only save into a yt: album, partial 
     channel: null,
     thumbnail: '/v1/providers/youtube/thumb/aaaaaaaaaa1'
   })
-  assert.equal(second.channel, 'John Coltrane - Topic')
+  assert.equal(second.channel, null, 'ubit names no uploader for search results')
   assert.equal(second.length, 550)
   for (const k of ['username', 'slots', 'queue', 'filename']) assert.equal(k in row, false, `a video has no ${k}`)
   assert.equal((await call('POST', '/v1/search/sources', { query: 'x', sources: ['napster'] })).status, 400)
@@ -209,6 +211,30 @@ test('YouTube source: unified search, audio-only save into a yt: album, partial 
   assert.equal(none.status, 502)
   assert.match(none.data.error, /YouTube did not send “Lost”: Video unavailable in your country/)
   assert.equal(existsSync(join(watchDir, 'John Coltrane - Gone [YouTube]')), false, 'a failed save leaves no folder')
+
+  // An age-gated video is one video's refusal, not the network's: the rest is saved and saving stays open.
+  const aged = await call('POST', '/v1/providers/youtube/mirror', { artist: 'John Coltrane', album: 'Aged', tracks: [{ videoId: 'ageageageag', title: 'Gated' }, { videoId: 'aaaaaaaaaa1', title: 'Open' }], wait: true })
+  assert.equal(aged.status, 200, JSON.stringify(aged.data))
+  assert.equal(aged.data.files, 1)
+  assert.match(aged.data.skipped[0].error, /confirm your age/)
+  assert.equal((await plugin()).canSave, true)
+  await call('POST', '/v1/entries/remove', { keys: (await call('GET', '/v1/entries')).data.results.filter(e => e.title.endsWith('Aged')).map(e => e.key) })
+
+  // Cancel between tracks: the track already downloaded is not left for the next scan to import.
+  const slow = await call('POST', '/v1/providers/youtube/mirror', { artist: 'John Coltrane', album: 'Cancelled', tracks: [{ videoId: 'aaaaaaaaaa1', title: 'Done' }, { videoId: 'slowslowslo', title: 'Never' }] })
+  const jobOf = async id => (await call('GET', '/v1/jobs')).data.jobs.find(x => x.jobId === id)
+  await until(async () => (await jobOf(slow.data.job.jobId)).fileIndex === 2)
+  await call('DELETE', `/v1/jobs/${slow.data.job.jobId}`)
+  await until(async () => (await jobOf(slow.data.job.jobId))?.status === 'cancelled')
+  await until(() => !existsSync(join(storage, 'youtube-work')) || readdirSync(join(storage, 'youtube-work')).length === 0)
+  assert.equal(existsSync(join(watchDir, 'John Coltrane - Cancelled [YouTube]')), false, 'a cancelled save leaves no folder')
+  assert.equal((await call('POST', '/v1/plugins/watch-dir/run', {})).data.ingested, 0, 'and nothing to import')
+
+  // The picture route is the owner's: another site's page is refused; an id with no picture is 204, not an error.
+  const evil = await fetch(base + '/v1/providers/youtube/thumb/aaaaaaaaaa1', { headers: { origin: 'http://evil.example' } })
+  assert.equal(evil.status, 403)
+  assert.equal(evil.headers.get('access-control-allow-origin'), null)
+  assert.equal((await fetch(base + '/v1/providers/youtube/thumb/x')).status, 204)
 
   // 5. Delete the album: files go, and the next scan imports nothing.
   const removed = await call('POST', '/v1/entries/remove', { keys: entries.map(e => e.key) })

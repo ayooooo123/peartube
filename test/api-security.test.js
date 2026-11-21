@@ -135,7 +135,10 @@ test('relay: read-only resolve, owner-only writes, env-only import folder, off f
     ['POST', '/v1/sources', { key: channel, kind: 'channel' }],
     ['POST', '/v1/cache/clear', {}],
     ['POST', '/v1/acquire', { id: 'clip:abcdef', title: 'x', source: { url: 'https://example.org/x.mp4' } }],
-    ['PUT', '/v1/settings', { acquireConcurrency: 2 }]
+    ['PUT', '/v1/settings', { acquireConcurrency: 2 }],
+    ['POST', '/v1/search/sources', { query: 'x' }],
+    ['POST', '/v1/providers/youtube/mirror', { artist: 'a', album: 'b', tracks: [] }],
+    ['GET', '/v1/providers/youtube/thumb/aaaaaaaaaa1', undefined]
   ]) {
     const res = await json(method, path, { headers: { ...auth, origin: EVIL }, body })
     assert.equal(res.status, 403, `${method} ${path} from another site's page`)
@@ -146,7 +149,7 @@ test('relay: read-only resolve, owner-only writes, env-only import folder, off f
   // The same writes from the relay's own page go through.
   const own = { ...auth, origin: base }
   assert.equal((await json('PUT', '/v1/settings', { headers: own, body: { acquireConcurrency: 2 } })).status, 200)
-  results.origin = { crossOriginWritesRefused: 7, ownPageAllowed: true }
+  results.origin = { crossOriginWritesRefused: 10, ownPageAllowed: true }
 
   // Reads for players stay open cross-origin.
   for (const path of ['/manifest.json', '/v1/playlist.m3u', '/v1/entries', '/v1/status']) {
@@ -198,10 +201,11 @@ test('API: a public client without the token cannot write; with it, only a match
   const post = (base, path, headers = {}) => fetch(base + path, { method: 'POST', headers: { 'content-type': 'application/json', ...headers }, body: '{}' })
 
   const open = await listen(null)
-  for (const path of ['/v1/plugins/watch-dir/run', '/v1/mirror', '/v1/open', '/v1/sources', '/v1/acquire', '/v1/cache/clear', '/v1/identify']) {
+  for (const path of ['/v1/plugins/watch-dir/run', '/v1/mirror', '/v1/open', '/v1/sources', '/v1/acquire', '/v1/cache/clear', '/v1/identify', '/v1/search/sources', '/v1/providers/youtube/mirror']) {
     assert.equal((await post(open, path)).status, 403, `${path} from a public address without a token`)
   }
   assert.equal((await fetch(open + '/v1/settings')).status, 403)
+  assert.equal((await fetch(open + '/v1/providers/youtube/thumb/aaaaaaaaaa1')).status, 403, 'a source picture from a public address without a token')
   const status = await (await fetch(open + '/v1/status')).json()
   assert.equal(status.settingsOpen, false)
   assert.equal((await fetch(open + `/v1/resolve?uri=${randomBytes(32).toString('hex')}`)).status, 200, 'reads stay open')
@@ -247,6 +251,8 @@ test('API: a DNS-rebound Host header on a tokenless LAN/loopback socket cannot r
   assert.equal((await raw('GET', '/v1/settings', { host: rebound, origin: `http://${rebound}` })).status, 403, 'DNS-rebound settings read refused')
   assert.equal((await raw('POST', '/v1/mirror', { host: rebound, origin: `http://${rebound}`, 'content-type': 'application/json' })).status, 403, 'DNS-rebound matching-Origin write refused')
   assert.equal((await raw('POST', '/v1/mirror', { host: rebound, 'content-type': 'application/json' })).status, 403, 'DNS-rebound simple POST without Origin refused')
+  assert.equal((await raw('POST', '/v1/search/sources', { host: rebound, origin: `http://${rebound}`, 'content-type': 'application/json' })).status, 403, 'DNS-rebound source search refused')
+  assert.equal((await raw('GET', '/v1/providers/youtube/thumb/aaaaaaaaaa1', { host: rebound, origin: `http://${rebound}` })).status, 403, 'DNS-rebound source picture refused')
   assert.equal((await raw('GET', '/v1/status', { host: rebound })).data.settingsOpen, false, 'status marks settings closed under DNS-rebound Host')
   assert.equal('health' in (await raw('GET', '/v1/entries/info?key=k', { host: rebound, origin: `http://${rebound}` })).data, false, 'DNS-rebound page gets no live entry health')
   assert.deepEqual(runs, [], 'no plugin ran under DNS rebinding')

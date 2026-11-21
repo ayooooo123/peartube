@@ -1292,10 +1292,10 @@ export async function createMirrorHost ({
             })
           ])
           const results = (res?.candidates || []).map(c => ({
-            source: name,
             title: c.title || String(c.filename || '').replace(/\\/g, '/').split('/').pop() || '',
             lossy: c.lossy === true || LOSSY_FILE.test(String(c.filename || '')) ? true : null,
-            ...c
+            ...c,
+            source: name
           }))
           part = { source: name, results, truncated: Boolean(res?.truncated) }
         } catch (err) {

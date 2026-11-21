@@ -16,7 +16,13 @@ import { albumKey, parseTags } from './tags.js'
 import { createHiverelaySeeder } from './hiverelay.js'
 import { createTrafficGate } from './traffic.js'
 import { send } from './art.js'
-import { ALBUM_PIN, MIRRORED_LIST, RELEASE_ID, createSoulseekPlugin } from './providers/soulseek.js'
+import { createSoulseekPlugin } from './providers/soulseek.js'
+import { ALBUM_PIN, MIRRORED_LIST, RELEASE_ID } from './providers/staging.js'
+import { createYoutubePlugin } from './providers/youtube.js'
+
+// File names whose codec is lossy by definition. A `.flac` or `.wav` proves only a lossless container, so those stay
+// unknown (`null`), never `false`.
+const LOSSY_FILE = /\.(mp3|m4a|aac|ogg|opus|wma)$/i
 
 async function fetchJson (url, headers = {}) {
   const res = await send(url, { headers: { accept: 'application/json', ...headers }, timeoutMs: 60_000, maxBytes: 8 * 1024 * 1024 })
@@ -56,7 +62,7 @@ function inferMediaMeta (filePath, sidecar = null, tags = null, album = null) {
       return {
         id: `${album.release}:${se}`,
         title: album.title,
-        music: { title: named, artist: tags?.artist || tags?.albumArtist }
+        music: { title: named, artist: tags?.artist || tags?.albumArtist || album.artist || undefined }
       }
     }
   }
@@ -120,13 +126,17 @@ function albumIdentity (files) {
   }
 }
 
-// The release a folder is pinned to (`<folder>/.peartube-album.json` `{ release, title? }`), or null. Dot names are
-// skipped by the media walk, so the pin is never itself imported.
+// The release a folder is pinned to (`<folder>/.peartube-album.json` `{ release, title?, artist? }`), or null. Dot
+// names are skipped by the media walk, so the pin is never itself imported.
 function readAlbumPin (folder) {
   try {
     const pin = JSON.parse(readFileSync(join(folder, ALBUM_PIN), 'utf8'))
     if (typeof pin?.release !== 'string' || !RELEASE_ID.test(pin.release)) return null
-    return { release: pin.release, title: typeof pin.title === 'string' ? pin.title.slice(0, MAX_TITLE) : '' }
+    return {
+      release: pin.release,
+      title: typeof pin.title === 'string' ? pin.title.slice(0, MAX_TITLE) : '',
+      artist: typeof pin.artist === 'string' ? pin.artist.slice(0, MAX_TITLE) : ''
+    }
   } catch {
     return null
   }
@@ -168,6 +178,8 @@ export async function createMirrorHost ({
   slskShare = false,
   slskShareMaxFiles = 2000,
   soulseekOpts = null,
+  // `{ info, download }`: the relay's `ubitInfo` and `downloadPage`. Without them the YouTube source is unavailable.
+  youtube = null,
   pluginsDir = join(storage, 'plugins'),
   pollIntervalMs = 60_000,
   onchange = null,
@@ -390,7 +402,7 @@ export async function createMirrorHost ({
     const identity = albumIdentity(tags.map((t, i) => (t ? { ...t, file: group[i].full } : null)))
     const pinned = readAlbumPin(join(root, group[0].dir))
     if (!pinned) return identity
-    return { release: pinned.release, title: pinned.title || identity?.title || group[0].dir, tracks: group.length, pinned: true }
+    return { release: pinned.release, title: pinned.title || identity?.title || group[0].dir, artist: pinned.artist, tracks: group.length, pinned: true }
   }
 
   const stagingDir = join(storage, 'staging')
@@ -1052,6 +1064,15 @@ export async function createMirrorHost ({
     onchange,
     ...soulseekOpts
   }))
+  register(createYoutubePlugin({
+    storage,
+    stagingRoot: slskStaging,
+    stagingLabel: slskStagingLabel,
+    scanStaging: (dir, ctx) => scanFolder(dir, ctx, watchDir && resolve(watchDir) === resolve(dir) ? '' : 'staging:'),
+    info: youtube?.info || null,
+    download: youtube?.download || null,
+    onchange
+  }))
 
   if (pluginsDir && existsSync(pluginsDir)) {
     for (const file of readdirSync(pluginsDir).sort()) {
@@ -1241,6 +1262,52 @@ export async function createMirrorHost ({
       const p = plugins.get(name)
       if (!p || typeof p.search !== 'function') throw Object.assign(new Error(`Unknown provider: ${name}`), { status: 404 })
       return p.search(payload, ctxFor(name))
+    },
+    // One query over several sources. Each source answers under its own deadline and its own ranking: a queue place
+    // on one and relevance on another cannot be compared, so rows are grouped by source, never scored across them.
+    // A source that fails is one `errors` entry; the others still answer. `onSource` gets each source's part as it
+    // finishes (the fastest first), for a caller that streams.
+    async searchSources ({ query, sources, limit, timeoutMs } = {}, onSource = null) {
+      const q = String(query || '').trim()
+      if (!q) throw Object.assign(new Error('query is required'), { status: 400 })
+      const known = [...plugins.entries()].filter(([, p]) => typeof p.search === 'function').map(([name]) => name)
+      const wanted = Array.isArray(sources) && sources.length ? [...new Set(sources.map(String))] : known
+      const unknown = wanted.find(name => !known.includes(name))
+      if (unknown) throw Object.assign(new Error(`Unknown source: ${unknown} (known: ${known.join(', ')})`), { status: 400 })
+      const deadline = Math.max(1000, Math.min(45_000, Number(timeoutMs) || 30_000))
+      const parts = await Promise.all(wanted.map(async name => {
+        let timer
+        let part
+        try {
+          const res = await Promise.race([
+            plugins.get(name).search({ query: q, ...(limit ? { limit } : {}) }, ctxFor(name)),
+            new Promise((_resolve, reject) => {
+              timer = setTimeout(() => reject(Object.assign(new Error(`No answer in ${Math.round(deadline / 1000)} s`), { status: 504 })), deadline)
+            })
+          ])
+          const results = (res?.candidates || []).map(c => ({
+            source: name,
+            title: c.title || String(c.filename || '').replace(/\\/g, '/').split('/').pop() || '',
+            lossy: c.lossy === true || LOSSY_FILE.test(String(c.filename || '')) ? true : null,
+            ...c
+          }))
+          part = { source: name, results, truncated: Boolean(res?.truncated) }
+        } catch (err) {
+          part = { source: name, results: [], truncated: false, error: { source: name, status: Number(err?.status) || 502, message: String(err?.message || err).slice(0, 300) } }
+        } finally {
+          clearTimeout(timer)
+        }
+        onSource?.(part)
+        return part
+      }))
+      return {
+        query: q,
+        sources: wanted,
+        results: parts.flatMap(p => p.results),
+        bySource: Object.fromEntries(parts.map(p => [p.source, p.results.length])),
+        truncated: Object.fromEntries(parts.map(p => [p.source, p.truncated])),
+        errors: parts.filter(p => p.error).map(p => p.error)
+      }
     },
     browseProvider (name, payload) {
       const p = plugins.get(name)

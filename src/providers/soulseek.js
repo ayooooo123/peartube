@@ -16,6 +16,7 @@ import { basename, extname, join } from 'node:path'
 import b4a from 'b4a'
 import { ID, MAX_TITLE, MEDIA_FILE } from '../protocol.js'
 import { albumKey, parseTags } from '../tags.js'
+import { ALBUM_PIN, formatAlbumDir, freePath, noteMirrored, safeSegment } from './staging.js'
 
 // Maximum normalised file candidates returned by `POST /v1/providers/soulseek/search` after ranking.
 export const SOULSEEK_SEARCH_CAP = 200
@@ -31,16 +32,6 @@ const BROWSE_CACHE_MAX = 16
 // connection is failed with the reason; a peer that reported a queue place is waited on.
 const NO_ANSWER_MS = 3 * 60_000
 const NO_CONNECT_MS = 90_000
-
-// A mirror told which album it fills pins its folder to that release in this dot file (skipped by the media walk);
-// the importer then announces every file in the folder under it, whatever the peer's tags say. Peer bytes are never
-// rewritten, so a mirrored file's sha256 is the hash of exactly what the peer served.
-export const ALBUM_PIN = '.peartube-album.json'
-export const RELEASE_ID = /^(mb:[0-9a-f]{32}|discogs:r\d{1,12}|album:[0-9a-f]{20})$/
-// The files this relay mirrored into an album folder, by name, in this dot file. Deleting an entry deletes its file
-// only when the file is listed here (or sits in `<storage>/staging`, where nothing else writes): a file the owner put
-// in the import folder is theirs, and only its announce goes.
-export const MIRRORED_LIST = '.peartube-mirrored.json'
 
 // Plain-English reason for a failed browse or download; `reason` tags the cause so `info()` can flag the listen port.
 function peerError (err, username, port, secrets) {
@@ -86,29 +77,6 @@ function parseRelease (raw) {
   return /^[0-9a-f]{32}$/.test(mb) ? `mb:${mb}` : null
 }
 
-// `<dir>/<name>`, or `<stem> (2)<ext>`… when that name is taken: a mirror never overwrites a file already there.
-function freePath (dir, name) {
-  const ext = extname(name)
-  const stem = basename(name, ext)
-  let candidate = join(dir, name)
-  for (let n = 2; n < 1000; n++) {
-    try { statSync(candidate) } catch { return candidate }
-    candidate = join(dir, `${stem} (${n})${ext}`)
-  }
-  return candidate
-}
-
-function safeSegment (raw, fallback) {
-  const clean = String(raw || '')
-    .replace(/[/\\:*?"<>|\x00-\x1f]+/g, ' ')
-    .replace(/^[.@\s]+/, '')
-    .replace(/\s+/g, ' ')
-    .trim()
-    .slice(0, 140)
-    .replace(/[.\s]+$/, '')
-  return clean || fallback
-}
-
 // The album a peer's folder names: `Artist - Album (Year)`, or `Album` under an `Artist` folder, or `Year - Album`
 // under one. A `CD1`/`Disc 2` folder is a disc of the album above it.
 function peerFolderHint (files) {
@@ -129,20 +97,6 @@ function peerFolderHint (files) {
     return { artist: split[0].trim(), album: split.slice(1).join(' - ').trim(), year }
   }
   return { artist: parentDir, album: stripped || albumDir, year }
-}
-
-function formatAlbumDir ({ artist, album, year, fallbackTitle }) {
-  if (artist && album) {
-    return safeSegment(`${artist} - ${album}${year ? ` (${year})` : ''}`, 'Mirrored Album')
-  }
-  if (fallbackTitle) {
-    const clean = String(fallbackTitle).replace(/\s*·\s*/g, ' - ').trim()
-    return safeSegment(clean, 'Mirrored Album')
-  }
-  if (album) {
-    return safeSegment(`${album}${year ? ` (${year})` : ''}`, 'Mirrored Album')
-  }
-  return 'Unknown Artist - Mirrored Album'
 }
 
 // Where one mirrored track goes, or why it cannot go anywhere. A lone file has no neighbours to name its album, so it
@@ -776,15 +730,6 @@ export function createSoulseekPlugin ({
     } catch {
       return null
     }
-  }
-
-  // Adds `names` to the folder's list of files this relay mirrored (MIRRORED_LIST), which deletion reads.
-  function noteMirrored (dir, names) {
-    const file = join(dir, MIRRORED_LIST)
-    let list = []
-    try { list = JSON.parse(readFileSync(file, 'utf8')) } catch {}
-    const next = [...new Set([...(Array.isArray(list) ? list : []), ...names])]
-    writeFileSync(file, JSON.stringify(next) + '\n')
   }
 
   // `idleMs`: how long a waiting or transferring job has gone without a phase change or a new byte, so a client can

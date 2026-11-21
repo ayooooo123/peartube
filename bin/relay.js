@@ -13,7 +13,7 @@ import { createApi } from '../src/http.js'
 import { createMirrorHost } from '../src/mirror.js'
 import { createCastController } from '../src/cast.js'
 import { createSettings } from '../src/settings.js'
-import { identify, posterUrl, backdropUrl } from '../src/identify.js'
+import { identify, posterUrl, backdropUrl, ubitInfo, downloadPage } from '../src/identify.js'
 import { API_PORT } from '../src/protocol.js'
 
 const env = process.env
@@ -253,6 +253,10 @@ async function start () {
     slskListenPort: cfg('slskListenPort'),
     slskShare: cfg('slskShare'),
     slskShareMaxFiles: cfg('slskShareMaxFiles'),
+    youtube: {
+      info: (query, opts) => ubitInfo(query, { configDir: ubitConfigDir, ...opts }),
+      download: (url, dir, opts) => downloadPage(url, dir, { configDir: ubitConfigDir, ...opts })
+    },
     hiverelay,
     pluginsDir: env.PEARTUBE_PLUGINS_DIR || join(storage, 'plugins'),
     onchange: () => api.notify('update'),

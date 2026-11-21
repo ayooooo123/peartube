@@ -10,7 +10,7 @@ export const ROLES = new Set(['owner', 'mod', 'writer'])
 export const MAX_TITLE = 300
 export const BLOB_BLOCK_SIZE = 512 * 1024
 // A file name PearTube treats as a video or audio file (folder imports, direct links, download names).
-export const MEDIA_FILE = /\.(mp4|m4v|mkv|webm|avi|mov|ts|m2ts|mts|mpg|mpeg|wmv|flv|ogv|3gp|ogg|flac|mp3|opus|wav|aac)$/i
+export const MEDIA_FILE = /\.(mp4|m4v|m4a|mkv|webm|avi|mov|ts|m2ts|mts|mpg|mpeg|wmv|flv|ogv|3gp|ogg|flac|mp3|opus|wav|aac)$/i
 export const isUniform512 = blob => Boolean(blob && (
   blob.byteLength === 0 || (
     blob.blockLength > 0 &&

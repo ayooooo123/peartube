@@ -6,6 +6,12 @@ name: Release
 #   - Tag `vX.Y.Z-rust` / dispatch `engine: rust`: ships only the native Rust engine across all surfaces.
 #   - Tag `vX.Y.Z-js`   / dispatch `engine: js`:   ships only the Bare JS engine across all surfaces.
 #   - Tag `vX.Y.Z-both` / dispatch `engine: both`: ships both JS and Rust variants side by side in one release.
+#
+# Android APKs are not built here. The release key never leaves the release Mac: build them there with
+# `sh android/release.sh` and `sh android/release-tv.sh` (both refuse an APK not signed by the release key),
+# then attach them with `gh release upload <tag> android/build/release-apk/<files> --clobber` once the release exists.
+# `publish` keeps assets already on a release and writes SHA256SUMS over all of them, so dispatch this workflow
+# again with that tag after the upload to cover the APKs in SHA256SUMS.
 
 on:
   push:
@@ -30,8 +36,6 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       desktop: ${{ steps.p.outputs.desktop }}
-      android_app: ${{ steps.p.outputs.android_app }}
-      android_tv: ${{ steps.p.outputs.android_tv }}
       relay: ${{ steps.p.outputs.relay }}
       any_rust: ${{ steps.p.outputs.any_rust }}
       release_tag: ${{ steps.p.outputs.release_tag }}
@@ -74,8 +78,6 @@ jobs:
           [ "$any_rust" = "false" ] || python3 sync-native.py check --strict
 
           echo "desktop=$d" >> "$GITHUB_OUTPUT"
-          echo "android_app=$aa" >> "$GITHUB_OUTPUT"
-          echo "android_tv=$at" >> "$GITHUB_OUTPUT"
           echo "relay=$r" >> "$GITHUB_OUTPUT"
           echo "any_rust=$any_rust" >> "$GITHUB_OUTPUT"
           echo "release_tag=$tag" >> "$GITHUB_OUTPUT"
@@ -108,98 +110,6 @@ jobs:
         with:
           name: release-macos-arm64
           path: desktop/target/release/*-macos-*.zip
-          if-no-files-found: error
-
-  android:
-    needs: plan
-    runs-on: ubuntu-latest
-    timeout-minutes: 90
-    env:
-      NDK_VERSION: 29.0.14206865
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22.x
-          cache: npm
-      - run: npm ci
-      - uses: actions/setup-java@v4
-        with:
-          distribution: zulu
-          java-version: 17
-      - name: Android NDK
-        run: |
-          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --install "ndk;$NDK_VERSION" | tail -n 1
-          echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/$NDK_VERSION" >> "$GITHUB_ENV"
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: aarch64-linux-android
-      - uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: android/native
-      - run: npm install --global cmake-runtime@4.3.1 ninja-runtime@1.13.2
-      - if: needs.plan.outputs.android_app != 'rust' || needs.plan.outputs.android_tv != 'rust'
-        run: sh worklet/bare-kit.sh arm64-v8a arm64-v8a-v8
-      - name: Build Android Phone & TV APKs (app=${{ needs.plan.outputs.android_app }}, tv=${{ needs.plan.outputs.android_tv }})
-        id: apk
-        working-directory: android
-        env:
-          KEYSTORE_B64: ${{ secrets.PEARTUBE_ANDROID_KEYSTORE_B64 }}
-          STORE_PW: ${{ secrets.PEARTUBE_ANDROID_KEYSTORE_PASSWORD }}
-          KEY_ALIAS: ${{ secrets.PEARTUBE_ANDROID_KEY_ALIAS }}
-          KEY_PW: ${{ secrets.PEARTUBE_ANDROID_KEY_PASSWORD }}
-          RELEASE_TAG: ${{ needs.plan.outputs.release_tag }}
-        run: |
-          ver=$(node -p 'require("../package.json").version')
-          mkdir -p ../dist-android
-          has_key=false
-          if [ -n "$KEYSTORE_B64" ] && [ -n "$STORE_PW" ] && [ -n "$KEY_ALIAS" ] && [ -n "$KEY_PW" ]; then
-            has_key=true
-            printf '%s' "$KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/release.jks"
-            mkdir -p "$HOME/.gradle"
-            umask 077
-            {
-              printf 'peartube.keystore=%s\n' "$RUNNER_TEMP/release.jks"
-              printf 'peartube.keystorePassword=%s\n' "$STORE_PW"
-              printf 'peartube.keyAlias=%s\n' "$KEY_ALIAS"
-              printf 'peartube.keyPassword=%s\n' "$KEY_PW"
-            } >> "$HOME/.gradle/gradle.properties"
-            tools=$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -n 1)
-          fi
-          echo "signed=$has_key" >> "$GITHUB_OUTPUT"
-          for e in $( [ "${{ needs.plan.outputs.android_app }}" = "both" ] && echo "js rust" || echo "${{ needs.plan.outputs.android_app }}" ); do
-            suf=""; [ "$e" = "rust" ] && suf="-rust"
-            if [ "$has_key" = "true" ]; then
-              out="../dist-android/PearTube-$ver$suf-arm64.apk"
-              ./gradlew --console=plain :app:assembleRelease "-Ppeartube.engine=$e"
-              cp app/build/outputs/apk/release/app-release.apk "$out"
-              "$tools/apksigner" verify "$out"
-            else
-              ./gradlew --console=plain :app:assembleDebug "-Ppeartube.engine=$e"
-              cp app/build/outputs/apk/debug/app-debug.apk "../dist-android/PearTube-$ver$suf-debug-arm64.apk"
-            fi
-          done
-          for e in $( [ "${{ needs.plan.outputs.android_tv }}" = "both" ] && echo "js rust" || echo "${{ needs.plan.outputs.android_tv }}" ); do
-            suf=""; [ "$e" = "rust" ] && suf="-rust"
-            if [ "$has_key" = "true" ]; then
-              out="../dist-android/PearTubeReceiver-$ver$suf-arm64.apk"
-              ./gradlew --console=plain :tv:assembleRelease "-Ppeartube.engine=$e"
-              cp tv/build/outputs/apk/release/tv-release.apk "$out"
-              "$tools/apksigner" verify "$out"
-            else
-              ./gradlew --console=plain :tv:assembleDebug "-Ppeartube.engine=$e"
-              cp tv/build/outputs/apk/debug/tv-debug.apk "../dist-android/PearTubeReceiver-$ver$suf-debug-arm64.apk"
-            fi
-          done
-          rm -f "$RUNNER_TEMP/release.jks" "$HOME/.gradle/gradle.properties"
-      # Debug (.dev) APKs cannot update installed release apps: upload under release-* only when signed, or on artifact-only dispatch.
-      - uses: actions/upload-artifact@v4
-        if: steps.apk.outputs.signed == 'true' || needs.plan.outputs.release_tag == ''
-        with:
-          name: ${{ steps.apk.outputs.signed == 'true' && 'release-android-arm64' || 'debug-android-arm64' }}
-          path: dist-android/*.apk
           if-no-files-found: error
 
   relay-build:
@@ -353,7 +263,7 @@ jobs:
 
   publish:
     if: needs.plan.outputs.release_tag != ''
-    needs: [plan, macos, android, relay]
+    needs: [plan, macos, relay]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v4

@@ -516,8 +516,10 @@ test('mirror waits for a running import with nothing placed, can be cancelled, a
   assert.deepEqual(albumFolders(), [ok.folder])
   assert.equal(mirror.listProviderJobs().find(j => j.jobId === ok.jobId).sha256s.length, 1)
 
-  // Closing the relay while a mirror waits ends that wait at once, as a cancel: the job is not left waiting out
-  // its limit (60 s on this host), is not reported as a failure, and nothing is placed.
+  // Closing the relay while a mirror waits ends that wait as a cancel: the job is not left waiting out its limit
+  // (60 s on this host), is not reported as a failure, and nothing is placed. The host must start every plugin's
+  // stop before it awaits any: checked in the same tick as the call, before any stop can have finished. Stopped
+  // one after another, the provider is not reached yet and the job still reads `announcing`.
   const third = longImport()
   const closing = await start(false)
   let parked = null
@@ -528,7 +530,9 @@ test('mirror waits for a running import with nothing placed, can be cancelled, a
   }
   assert.ok(parked, 'a second mirror waits behind the running import')
   const closeAt = Date.now()
-  await mirror.close()
+  const closingHost = mirror.close()
+  assert.equal(mirror.getProviderJob(closing.job.jobId).status, 'cancelled', 'flagged in the tick close() was called')
+  await closingHost
   await third.run.catch(() => {})
   assert.ok(Date.now() - closeAt < 10_000, `close took ${Date.now() - closeAt} ms`)
   await sleep(300)

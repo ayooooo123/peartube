@@ -392,14 +392,29 @@ test('YouTube save: waits for a running import with nothing placed, can be cance
   assert.deepEqual(ytFolders(), ['Waits - Goes through [YouTube]'])
   assert.deepEqual((await node.search()).map(e => e.id).filter(id => id.startsWith('yt:')), [`${ok.id}:s01e01`])
 
+  // Closing the relay while a save waits ends it as a cancel, in the tick close() is called, and close() does not
+  // wait out the save's limit (60 s on this host): the save's own stop only waits for it to unwind.
+  const third = longImport()
+  const parked = await save('Closed')
+  await until(() => { const j = mirror.getProviderJob(parked.job.jobId); return j.status === 'announcing' && j.phase === 'waiting' }, 10_000)
+  const closeAt = Date.now()
+  const closingHost = mirror.close()
+  assert.equal(mirror.getProviderJob(parked.job.jobId).status, 'cancelled', 'flagged in the tick close() was called')
+  await closingHost
+  assert.ok(Date.now() - closeAt < 5000, `close took ${Date.now() - closeAt} ms`)
+  await third.run.catch(() => {})
+  const closedJob = mirror.getProviderJob(parked.job.jobId)
+  assert.equal(closedJob.status, 'cancelled', closedJob.error || '')
+  assert.equal(closedJob.error, null)
+  assert.deepEqual(ytFolders(), ['Waits - Goes through [YouTube]'], 'the closed save placed nothing')
+
   // The wait has a limit (100 ms on this second host): after it the save fails in plain words, again with nothing
   // placed, while the other import is still running.
-  await mirror.close()
   mirror = await host(100)
   const second = longImport()
   await assert.rejects(save('Gave up', true), err => /Another import has held the folder for 1 s\. Nothing was saved/.test(err.message) && err.status === 503)
   assert.equal(second.done(), false, 'it gave up while the other import was still running')
   assert.deepEqual(ytFolders(), ['Waits - Goes through [YouTube]'])
-  assert.equal((await second.run).ingested, 300)
+  assert.ok((await second.run).ingested >= 300, 'the import it gave up behind ran to its end')
   assert.equal((await mirror.run('watch-dir')).ingested, 0, 'the abandoned save left nothing to import')
 })

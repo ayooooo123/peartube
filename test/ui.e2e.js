@@ -7,14 +7,16 @@
 //      published as `imdb:tt…` (the id MediaStorm searches by), an unknown file as a plain clip, a page link
 //      through ubit's metadata and NDJSON downloader.
 //   4. Music sources against the stub `ubit`: source chips and their memory, a streamed two-source search, YouTube
-//      rows with relay-fetched thumbnails and the fixed lossy label, a failing source on its own, the save dialog
-//      (suggestions, reorder, single track, Escape), job cards without a percentage, and library labels for
-//      YouTube copies, alone and merged with a FLAC album.
+//      rows with relay-fetched thumbnails and the fixed lossy label, rows that stay put when the slower group lands
+//      above them (and no redraw mid-press), suggestions from messy titles, failure hints, a failing source on its
+//      own, the save dialog (suggestions, reorder, single track filed into the album that has it, Escape), job
+//      cards without a percentage, library labels for YouTube copies, alone and merged with a FLAC album, removing
+//      the YouTube copy on its own, and a library-filter miss that leads on to Find music.
 //   5. Taste gates on every tab at 1440×900 and 390×844 in light and dark: no console errors or warnings, no
 //      sideways scroll, no internal plugin ids in visible text, no hint over 12 words, every field labelled
 //      with an example placeholder; again with search results on screen and with the save dialog open.
 // Writes `desktop/target/e2e/ui-result.json`, screenshots to `desktop/target/e2e/ui-audit/after/`, and the sources
-// screens to `desktop/target/e2e/sources-ux/`.
+// screens to `desktop/target/e2e/sources-ux/` (the UX-fix evidence in its `fixes/`).
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { execFileSync, spawn } from 'node:child_process'
@@ -771,6 +773,127 @@ test('relay web UI: settings, plugins as intents, identification, music sources,
     assert.match(await evaluate(`$('srcSummary').textContent`), /Soulseek off.*YouTube 3 videos/)
     result.checks.sourcesStreamed = rows.length
 
+    // Nothing moves under the pointer or the finger when the slower group lands on top. A stream stubbed in the page
+    // (no network) answers YouTube at once and Soulseek on demand, with 30 peer folders: tall enough to push a phone's
+    // rows thousands of pixels down if nothing held them. As in a real search, the first YouTube row sits mid-screen
+    // under its heading and the note, and the note changes (and wraps at 390, with a button) when the peers land:
+    // a heading held still would let the note push the row down by however much the note grew.
+    const srcStub = `window.__srcStub = (() => {
+      const real = window.fetch
+      let push = null
+      const yt = Array.from({ length: 12 }, (_, i) => ({ source: 'youtube', videoId: 'stubVid' + String(i).padStart(4, '0'), title: 'Stub Band - Song ' + (i + 1), length: 200 + i, thumbnail: '', channel: null }))
+      const files = []
+      for (let f = 0; f < 30; f++) for (let k = 0; k < 6; k++) files.push({ source: 'soulseek', username: 'peer' + f, filename: 'Music/Stub Band/Album ' + f + '/0' + k + ' - Song.flac', size: 3e7, bit_depth: 16, sample_rate: 44100, slots: true, queue: 0, length: 200 })
+      window.fetch = (url, opts) => {
+        if (String(url) !== '/v1/search/sources') return real(url, opts)
+        const enc = new TextEncoder()
+        const body = new ReadableStream({ start (c) {
+          c.enqueue(enc.encode('event: source\\ndata: ' + JSON.stringify({ source: 'youtube', results: yt }) + '\\n\\n'))
+          push = () => { c.enqueue(enc.encode('event: source\\ndata: ' + JSON.stringify({ source: 'soulseek', results: files }) + '\\n\\n')); c.close() }
+        } })
+        return Promise.resolve(new Response(body, { headers: { 'content-type': 'text/event-stream' } }))
+      }
+      return { land: () => push && push(), restore: () => { window.fetch = real } }
+    })(); true`
+    const fixShotDir = join(srcShotDir, 'fixes')
+    mkdirSync(fixShotDir, { recursive: true })
+    const firstPick = `document.querySelector('#srcGroups input[type=checkbox]')`
+    const noteNow = `(() => ({ text: $('ytNote').textContent, height: $('ytNote').getBoundingClientRect().height }))()`
+    const still = {}
+    for (const [width, height, mouse] of [[1440, 900, true], [1440, 900, false], [390, 844, false]]) {
+      const key = width + (mouse ? '-mouse' : '')
+      await viewport(width, height, 'dark')
+      await evaluate(srcStub)
+      await evaluate(`searchSources('stub band ${key}', ['soulseek', 'youtube']); true`)
+      await waitFor(`document.querySelectorAll('#ytResults .item').length === 12 && !!document.querySelector('#srcGroup-soulseek .slsk-spin')`, 'YouTube landed, peers pending', 5000)
+      const before = await evaluate(`(() => { const c = ${firstPick}; c.scrollIntoView({ block: 'center', behavior: 'instant' }); const b = c.getBoundingClientRect(); return { top: b.top, x: b.left + b.width / 2, y: b.top + b.height / 2 } })()`)
+      const noteBefore = await evaluate(noteNow)
+      // A mouse resting on the row; else no pointer, as a phone whose finger has left the glass.
+      if (mouse) await send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: before.x, y: before.y })
+      else await evaluate('srcPointer = null; true')
+      await shot(`01-${key}-youtube-before-peers`, true, fixShotDir)
+      await evaluate('__srcStub.land(); true')
+      await waitFor(`document.querySelectorAll('#slskResults .item').length === 30 && /Soulseek: /.test($('srcMsg').textContent)`, 'peer folders landed', 5000)
+      await sleep(800)
+      const after = await evaluate(`${firstPick}.getBoundingClientRect().top`)
+      const noteAfter = await evaluate(noteNow)
+      await shot(`02-${key}-after-peers-land`, true, fixShotDir)
+      still[key] = { before: before.top, after, note: [noteBefore.height, noteAfter.height], scrollY: await evaluate('scrollY') }
+      assert.ok(noteAfter.text.startsWith('Peers have FLAC copies above.') && noteAfter.height > noteBefore.height, `the YouTube note changes and grows when peers land at ${key}: ${JSON.stringify([noteBefore, noteAfter])}`)
+      assert.ok(Math.abs(after - before.top) <= 2, `the first YouTube row stays put at ${key}: ${before.top} → ${after}`)
+      await evaluate('__srcStub.restore(); true')
+    }
+    // A press in progress holds the groups still; the peer folders are drawn once it ends, and the row stays put.
+    await viewport(1440, 900, 'dark')
+    await evaluate(srcStub)
+    await evaluate(`searchSources('stub band press', ['soulseek', 'youtube']); true`)
+    await waitFor(`document.querySelectorAll('#ytResults .item').length === 12`, 'YouTube landed for the press check', 5000)
+    const head = await evaluate(`(() => { const h = $('srcHead-youtube'); h.scrollIntoView({ block: 'center', behavior: 'instant' }); const r = h.getBoundingClientRect(); return { x: r.left + 10, y: r.top + r.height / 2 } })()`)
+    await send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: head.x, y: head.y })
+    await send('Input.dispatchMouseEvent', { type: 'mousePressed', x: head.x, y: head.y, button: 'left', clickCount: 1 })
+    await evaluate('__srcStub.land(); true')
+    await sleep(500)
+    assert.equal(await evaluate(`!!document.querySelector('#srcGroup-soulseek .slsk-spin') && !document.querySelector('#slskResults')`), true, 'no group is redrawn while a press is in progress')
+    await send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: head.x, y: head.y, button: 'left', clickCount: 1 })
+    await waitFor(`document.querySelectorAll('#slskResults .item').length === 30`, 'peer folders drawn after the press', 5000)
+    const headAfter = await evaluate(`(() => { const r = $('srcHead-youtube').getBoundingClientRect(); return r.top + r.height / 2 })()`)
+    assert.ok(Math.abs(headAfter - head.y) <= 3, `the YouTube heading stays under the pointer after the press: ${head.y} → ${headAfter}`)
+    still.press = { before: head.y, after: headAfter }
+    await evaluate('__srcStub.restore(); true')
+    result.checks.groupsHoldStill = still
+
+    // Suggestions from messy titles: brackets and trailing marketing words, combining marks and quotes go; the
+    // library's spelling of an artist wins; a left side that is not a known artist (or is another video's song) is
+    // never taken for one. Run in the page against a stubbed library (restored at once) and a stubbed search.
+    const fakeLib = `(() => {
+      const mk = (rel, album, n, name) => ({ id: 'mb:' + rel + ':s01e' + String(n).padStart(2, '0'), key: rel + n, title: 'System of a Down · ' + album, season: 1, episode: n, seriesKey: 'mb:' + rel, music: { artist: 'System of a Down', title: name }, sha256: rel + n, size: 1e7, local: true, source: 'stub' })
+      return [...[[1, 'Attack'], [4, 'Hypnotize'], [11, 'Lonely Day']].map(([n, t]) => mk('hyp', 'Hypnotize', n, t)),
+        ...[[1, 'Soldier Side (intro)'], [2, 'B.Y.O.B.'], [3, 'Revenga']].map(([n, t]) => mk('mez', 'Mezmerize', n, t))]
+    })()`
+    const critiqueTitles = ['System Of A Down - Hypnotize (Official HD Video)', 'Hypnotize - Hypnotize - HQ (2005) Lyrics', 'SOAD - Mezmerize (BLACK SCREEN) - Full Album', 'System Of A Down  Hypnotize (2005) Full Album', 'Soldier Side - Intro', 'S\u0332y\u0332stem of a D\u0332own - Toxicity (Official Video)', '"Un Amour Si Grand…" (Official Audio)']
+    const searchPool = ['System Of A Down - Soldier Side', 'System Of A Down - B.Y.O.B.', 'System Of A Down - Lonely Day'].map((title, i) => ({ videoId: 'pool' + i, title, length: 240 }))
+    const suggest = (withLibrary, query) => evaluate(`(() => {
+      const kept = S.entries
+      if (${withLibrary}) S.entries = ${fakeLib}
+      try {
+        return ${JSON.stringify(critiqueTitles)}.map((title, i) => {
+          const s = ytSuggest([{ videoId: 'crit' + i, title, length: /Full Album/.test(title) ? 2600 : 240 }], [${JSON.stringify(query)}], ${JSON.stringify(searchPool)})
+          return [s.artist, s.album, s.titles[0], s.year]
+        })
+      } finally { S.entries = kept }
+    })()`)
+    const plain = await suggest(false, 'System of a Down')
+    assert.deepEqual(plain, [
+      ['System Of A Down', 'Hypnotize', 'Hypnotize', ''],
+      ['', 'Hypnotize', 'Hypnotize', '2005'],
+      ['System of a Down', 'Mezmerize', 'Mezmerize', ''],
+      ['System Of A Down', 'Hypnotize', 'Hypnotize', '2005'],
+      ['', 'Soldier Side - Intro', 'Soldier Side - Intro', ''],
+      ['System of a Down', 'Toxicity', 'Toxicity', ''],
+      ['', 'Un Amour Si Grand…', 'Un Amour Si Grand…', '']
+    ], 'clean suggestions without a library')
+    const withLibrary = await suggest(true, 'System of a Down')
+    assert.deepEqual(withLibrary, [
+      ['System of a Down', 'Hypnotize', 'Hypnotize', ''],
+      ['System of a Down', 'Hypnotize', 'Hypnotize', ''],
+      ['System of a Down', 'Mezmerize', 'Mezmerize', ''],
+      ['System of a Down', 'Hypnotize', 'Hypnotize', '2005'],
+      ['System of a Down', 'Mezmerize', 'Soldier Side (intro)', ''],
+      ['System of a Down', 'Toxicity', 'Toxicity', ''],
+      ['', 'Un Amour Si Grand…', 'Un Amour Si Grand…', '']
+    ], 'the library spells the artist and files a known song under its album')
+    // Searching the song's name: a left side that is another video's song is no artist.
+    const bySong = await suggest(false, 'soldier side')
+    assert.deepEqual(bySong[4], ['', 'Soldier Side - Intro', 'Soldier Side - Intro', ''], 'a song name is not taken for an artist')
+    for (const row of [...plain, ...withLibrary, ...bySong]) assert.doesNotMatch(row.join(' '), /\bHQ\b|\bHD\b|lyrics|official|full album|black screen|[\u0300-\u036f"]/i, 'no upload noise reaches a suggestion: ' + row)
+    result.checks.suggestions = { titles: critiqueTitles, plain, withLibrary }
+
+    // Failure hints match whole words only: a rate limit or a full disk is not an age gate.
+    const hints = await evaluate(`[ytFailHint('ERROR: Unable to download webpage: HTTP Error 429'), ytFailHint('No space left on device (storage full)'), ytFailHint('Sign in to confirm your age. This video may be inappropriate'), ytFailHint('ERROR: Private video. Sign in if you have been granted access')]`)
+    assert.deepEqual(hints, ['', '', 'Needs a signed-in account; this relay has none.', 'Private or members-only video.'], 'failure hints')
+    await viewport(1440, 900, 'dark')
+    await evaluate('scrollTo(0, 0); true')
+
     // A source that fails says so in its own group; the search as a whole is not an error.
     await ytSearch('fail band')
     await waitFor(`($('srcGroup-youtube')?.querySelector('[role=alert]')?.textContent || '').includes('YouTube search failed')`, 'YouTube failure in its group', 5000)
@@ -810,33 +933,59 @@ test('relay web UI: settings, plugins as intents, identification, music sources,
     await click('#detailClose')
     result.checks.youtubeAlbum = morning.map(e => e.id)
 
-    // One video, saved on its own into the FLAC album already here: Escape first gives focus back, then the save
-    // folds into that album as a second copy of its track.
+    // One video, saved on its own into the FLAC album already here: the dialog files the song under that album (the
+    // library has a track of its name) and says so; Escape first gives focus back, then the save takes the FLAC
+    // track's number and folds into that album as a second copy of its track.
     await ytSearch('test band')
     await waitFor(`document.querySelectorAll('#ytResults .yt-pick-row').length === 3`, 'YouTube rows for one track', 5000)
     await click('#ytResults .item:nth-child(1) .acts button')
     await waitFor(`$('ytSave').open`, 'single-track dialog')
-    assert.deepEqual(await evaluate(`[$('ytAlbum').value, $('ytSaveBtn').textContent]`), ['Dawn', 'Save track'], 'one track suggests its song as the album')
+    assert.deepEqual(await evaluate(`[$('ytArtist').value, $('ytAlbum').value, $('ytTrack-0').value, $('ytSaveBtn').textContent, document.querySelector('#ytTracks .tn').textContent, document.querySelectorAll('#ytTracks .ic-btn').length, $('ytTracksHint').hidden]`),
+      ['Test Band', 'First Light', 'Dawn', 'Save track', '1', 0, true], 'one song already in an album is filed under it, with its number, and nothing to reorder')
+    assert.match(await evaluate(`$('ytSaveNote').innerText`), /^Dawn is already track 1 here(, in FLAC .+?)?\. This adds a second copy\.$/, 'the dialog says the song is already here')
+    await shot('03-save-single-in-library-1440-dark', true, join(srcShotDir, 'fixes'))
     await send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 })
     await send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 })
     await waitFor(`!$('ytSave').open`, 'Escape closes the dialog')
     assert.equal(await evaluate(`document.activeElement.dataset.srcKey`), 'y:tbDawn00001', 'focus returns to the button that opened it')
     await click('#ytResults .item:nth-child(1) .acts button')
     await waitFor(`$('ytSave').open`, 'single-track dialog again')
-    await evaluate(`$('ytAlbum').value = ''; true`)
-    await type('#ytAlbum', 'First Light')
+    // A new song typed into that album goes after its last track.
+    await evaluate(`$('ytTrack-0').value = ''; true`)
+    await type('#ytTrack-0', 'Noon')
+    await waitFor(`/This saves as track 3\\./.test($('ytSaveNote').innerText) && document.querySelector('#ytTracks .tn').textContent === '3'`, 'a new song numbered after the album')
+    await evaluate(`$('ytTrack-0').value = ''; true`)
+    await type('#ytTrack-0', 'Dawn')
+    await waitFor(`document.querySelector('#ytTracks .tn').textContent === '1'`, 'the matching song keeps its number')
     await click('#ytSaveBtn')
-    await waitApi(async () => (await entries()).some(e => e.title === 'Test Band · First Light' && e.id.startsWith('yt:')), 'YouTube copy of a FLAC track')
+    const ytDawn = await waitApi(async () => (await entries()).find(e => e.title === 'Test Band · First Light' && e.id.startsWith('yt:')), 'YouTube copy of a FLAC track')
+    assert.equal(ytDawn.episode, 1, 'the copy takes the FLAC track\'s number')
     await open('#music')
     await waitFor(`/^FLAC 16-bit 44.1 kHz · also YouTube$/.test(${card('First Light')}?.querySelector('[data-aq]').textContent || '')`, 'merged album says what it is, then also YouTube')
+    assert.equal(await evaluate(`(() => { const yt = ${card('First Light')}.querySelector('.aq-yt'); const line = yt.parentElement.getBoundingClientRect(); const r = yt.getBoundingClientRect(); return r.width > 0 && r.right <= line.right + 0.5 })()`), true, '"also YouTube" is never cut off on the card')
     assert.equal(await evaluate(`document.querySelectorAll('.album-card').length`), 2, 'the YouTube copy joins the FLAC album, not a new one')
     await evaluate(`${card('First Light')}.querySelector('.album-open').setAttribute('data-e2e', 'merged'); true`)
     await click('[data-e2e="merged"]')
     await waitFor(`(document.querySelector('#detail[open] [data-ay]')?.textContent || '').includes('FLAC plays first')`, 'merged sheet says which copy plays', 20_000)
     assert.equal(await evaluate(`[...document.querySelectorAll('#detailBody [data-q]')].some(m => m.textContent === 'Also from YouTube')`), true, 'the track with a YouTube copy says so')
+    // Its trash names the copy it removes, and the YouTube copy has a control of its own.
+    const dawnRow = `document.querySelector('#detailBody [data-track][data-name="Dawn"]')`
+    await waitFor(`${dawnRow}?.querySelector('.track-del')?.getAttribute('aria-label') === 'Delete FLAC copy of Dawn'`, 'the trash says which copy it deletes')
+    assert.equal(await evaluate(`${dawnRow}.querySelector('.track-alt-del').textContent`), 'Remove YouTube copy')
     await shot('album-merged-1440-dark', true, srcShotDir)
+    await shot('04-album-merged-copy-controls-1440-dark', true, join(srcShotDir, 'fixes'))
+    await click('#detailBody [data-track][data-name="Dawn"] .track-alt-del')
+    await click('#detailBody [data-track][data-name="Dawn"] .track-alt-del')
+    await waitApi(async () => { const list = await entries(); return !list.some(e => e.key === ytDawn.key) && list.some(e => e.title === 'Test Band · First Light' && !e.id.startsWith('yt:') && e.episode === 1) }, 'only the YouTube copy removed')
     await click('#detailClose')
-    result.checks.mergedAlbum = await evaluate(`${card('First Light')}.querySelector('[data-aq]').textContent`)
+    await waitFor(`${card('First Light')}?.querySelector('[data-aq]').textContent === 'FLAC 16-bit 44.1 kHz'`, 'the FLAC album stands alone again')
+    result.checks.mergedAlbum = 'FLAC 16-bit 44.1 kHz · also YouTube, then the YouTube copy removed on its own'
+    // A miss in the library filter leads on to Find music with the same words.
+    await type('#musicFilter', 'zzqx')
+    await waitFor(`$('albums').querySelector('.empty button')?.textContent === 'Search YouTube for “zzqx”'`, 'the library miss offers a search')
+    await click('#albums .empty button')
+    await waitFor(`$('srcInput').value === 'zzqx' && document.querySelectorAll('#ytResults .yt-pick-row').length === 3`, 'the miss searched Find music')
+    await evaluate(`$('musicFilter').value = ''; renderMusic(); true`)
     assert.deepEqual(browser.issues.slice(issuesBefore), [], 'console errors or warnings in the sources flow')
     mark('musicSources')
     await open('#library')

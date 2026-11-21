@@ -11,6 +11,7 @@ import Protomux from 'protomux'
 import c from 'compact-encoding'
 import sodium from 'sodium-native'
 import b4a from 'b4a'
+import { guardedFrame } from './guarded-frame.js'
 
 const HEX64 = /^[0-9a-f]{64}$/i
 const SEED_PROTOCOL_NAME = 'hiverelay-seed'
@@ -22,6 +23,10 @@ const BOUND_STEP_BYTES = 8 * 1024 * 1024
 const MAX_SEED_CORES = 64
 const P2P_PAGE_SIZE = 16
 const P2P_PAGE_INTERVAL_MS = 750
+// What this side reads of a HiveRelay message; a longer one, or one that does not decode, is dropped. An unseed
+// request's fields allow no more than 137 bytes: two keys, a signature and one varint of at most 9 bytes.
+const MAX_SEED_MESSAGE = 64 * 1024
+const MAX_UNSEED_MESSAGE = 32 + 9 + 32 + 64
 
 function blake2bTopic (text) {
   const out = b4a.alloc(32)
@@ -403,9 +408,9 @@ export function createHiverelaySeeder ({
       }
     })
     if (!channel) return
-    sendMsg = channel.addMessage({ encoding: seedRequestEncoding, onmessage () { traffic.unmarkBulk(conn) } })
+    sendMsg = channel.addMessage({ encoding: guardedFrame(seedRequestEncoding, MAX_SEED_MESSAGE), onmessage (msg) { if (msg) traffic.unmarkBulk(conn) } })
     channel.addMessage({
-      encoding: seedAcceptEncoding,
+      encoding: guardedFrame(seedAcceptEncoding, MAX_SEED_MESSAGE),
       onmessage (msg) {
         if (!msg?.relayPubkey || !b4a.equals(msg.relayPubkey, remoteBuf)) return
         const payload = b4a.concat([msg.appKey, msg.relayPubkey, b4a.from(msg.region || '')])
@@ -426,9 +431,9 @@ export function createHiverelaySeeder ({
         onchange?.()
       }
     })
-    channel.addMessage({ encoding: unseedRequestEncoding })
+    channel.addMessage({ encoding: guardedFrame(unseedRequestEncoding, MAX_UNSEED_MESSAGE) })
     channel.addMessage({
-      encoding: seedDenyEncoding,
+      encoding: guardedFrame(seedDenyEncoding, MAX_SEED_MESSAGE),
       onmessage (msg) {
         if (!msg?.relayPubkey || !b4a.equals(msg.relayPubkey, remoteBuf)) return
         const payload = b4a.concat([msg.appKey, msg.relayPubkey, b4a.from(msg.reasonCode || '')])

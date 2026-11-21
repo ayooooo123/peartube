@@ -517,7 +517,12 @@ test('mirror waits for a running import with nothing placed, can be cancelled, a
   assert.equal(mirror.listProviderJobs().find(j => j.jobId === ok.jobId).sha256s.length, 1)
 
   // Closing the relay while a mirror waits ends that wait at once, as a cancel: the job is not left waiting out
-  // its limit (60 s on this host), is not reported as a failure, and nothing is placed.
+  // its limit (60 s on this host), is not reported as a failure, and nothing is placed. A plugin ahead of the
+  // provider in the close order takes 400 ms to stop here (the seeder closes its beacon cores in its own stop; a
+  // plugin registered under an existing name keeps that plugin's place, and this host's seeder is not set up, so
+  // nothing of it is left open). Every plugin's stop must have started before any is awaited, or the provider
+  // flags its waiting job only after the wait has already ended as a failure.
+  mirror.register({ name: 'hiverelay-seed', description: '', stop: () => sleep(400) })
   const third = longImport()
   const closing = await start(false)
   let parked = null

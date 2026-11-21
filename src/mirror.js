@@ -1204,7 +1204,9 @@ export async function createMirrorHost ({
   async function close () {
     closed = true
     clearInterval(timer)
-    for (const p of plugins.values()) await p.stop?.()
+    // Every stop starts before any is awaited: a plugin with work parked on this host (a mirror waiting for an
+    // import) must mark it stopped now, not after an earlier plugin's stop has finished.
+    await Promise.all([...plugins.values()].map(p => p.stop?.()))
     traffic.stop()
   }
 

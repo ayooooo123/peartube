@@ -254,9 +254,9 @@ export function serveChannel (conn, { spec, label, handlers, events, onOpen = nu
 }
 
 // The asking half: opens `spec.protocol` on `conn` and resolves once the other side answers it. A peer that does not
-// serve the protocol (another version included) refuses the channel, which rejects with `refused`. With `handlers`,
-// this side also answers the other side's requests on the same channel, so two peers that both serve can ask each
-// other.
+// serve the protocol (another version included) refuses the channel, which rejects with `refused`; a connection that
+// closes first rejects with "<label> connection closed", and no answer in time with `timedOut`. With `handlers`, this
+// side also answers the other side's requests on the same channel, so two peers that both serve can ask each other.
 export function openChannel (conn, { spec, label, handlers, events, onClose = null, refused, duplicate, timedOut }, timeoutMs = 10_000) {
   return new Promise((resolve, reject) => {
     let opened = false
@@ -276,6 +276,9 @@ export function openChannel (conn, { spec, label, handlers, events, onClose = nu
       },
       onClose () {
         if (opened) onClose?.(control)
+        // The connection went before the channel opened: that is no refusal of the protocol, and says so as a call on
+        // a closed channel does.
+        else if (conn.destroying || conn.destroyed) refuse(`${label} connection closed`)
         else refuse(refused)
       }
     })

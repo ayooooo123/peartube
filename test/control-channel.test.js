@@ -17,7 +17,7 @@ import b4a from 'b4a'
 import { getEncoding } from '../spec/hyperschema/index.js'
 import { CAST, GUARD, SEARCH } from '../spec/protocols.js'
 import { MAX_FRAME, openChannel, serveChannel } from '../src/control-channel.js'
-import { commandToWire, stateToWire } from '../src/cast-control.js'
+import { commandToWire, openControl, stateToWire } from '../src/cast-control.js'
 
 const FRAME = getEncoding('@peartube/frame')
 const QUERY = getEncoding('@peartube/search-query')
@@ -525,6 +525,35 @@ test('envelope: an open that is never answered rejects with the timeout, not the
   const spec = { protocol: 'peartube/test-unanswered/v2', ops: SPEC.ops }
   Protomux.from(env.a).pair({ protocol: spec.protocol }, () => new Promise(() => {}))
   await assert.rejects(openChannel(env.b, { spec, label: 'Peer', ...opened }, 300), { message: 'timed out' })
+})
+
+// A peer that does not serve the protocol, on a connection that stays: the open is refused.
+test('envelope: an open the peer does not serve is refused, and the connection stays', { timeout: 30_000 }, async t => {
+  const env = await setup(t)
+  const spec = { protocol: 'peartube/test-unserved/v2', ops: SPEC.ops }
+  await assert.rejects(openChannel(env.b, { spec, label: 'Peer', ...opened }), { message: 'refused' })
+  assert.equal(env.a.destroyed || env.b.destroyed, false)
+  await env.download()
+})
+
+// The connection goes while the open waits for an answer: that is a closed connection, as a call on a closed channel
+// says, not a refusal. For cast that is "Receiver connection closed" (which the sender retries once on the link that
+// is left), never the message that the two devices run different PearTube versions.
+test('envelope: a connection that closes while an open waits rejects as closed, not refused', { timeout: 30_000 }, async t => {
+  for (const [name, open] of [
+    ['envelope', conn => openChannel(conn, { spec: { protocol: 'peartube/test-dropped/v2', ops: SPEC.ops }, label: 'Peer', ...opened })],
+    ['cast', conn => openControl(conn)]
+  ]) {
+    const env = await setup(t)
+    // The other side takes the open and never answers it, so it is still waiting when the connection goes.
+    for (const protocol of ['peartube/test-dropped/v2', CAST.protocol]) Protomux.from(env.a).pair({ protocol }, () => new Promise(() => {}))
+    const opening = open(env.b)
+    await sleep(100)
+    env.b.destroy()
+    const err = await opening.then(() => null, e => e)
+    assert.equal(err?.message, name === 'cast' ? 'Receiver connection closed' : 'Peer connection closed', name)
+    assert.doesNotMatch(err.message, /refused|different PearTube version/, name)
+  }
 })
 
 // Every float on the wire is finite. cast-command.volume and cast-state.volume, both ways: what holds NaN or an

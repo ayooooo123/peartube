@@ -46,7 +46,12 @@ const SPEC = {
   slskPass: { env: 'PEARTUBE_SLSK_PASS', type: 'secret', def: '', live: true },
   slskServer: { env: 'PEARTUBE_SLSK_SERVER', type: 'hostport', def: 'vps.slsknet.org:2271', live: true },
   // Peers connect back to this TCP port to send files; a bound socket cannot move, so a change reopens the node.
-  slskListenPort: { env: 'PEARTUBE_SLSK_LISTEN_PORT', type: 'port', def: 50300 }
+  slskListenPort: { env: 'PEARTUBE_SLSK_LISTEN_PORT', type: 'port', def: 50300 },
+  // Share the album folders with Soulseek peers (off by default, so a private library is never published silently).
+  // The addon reads these when its client is made, so a change reopens the node. The folder shared stays env-only
+  // (PEARTUBE_SLSK_SHARE_DIR), like the import folder: the API must not be able to publish another folder on disk.
+  slskShare: { env: 'PEARTUBE_SLSK_SHARE', type: 'bool', def: false, fromEnv: flag },
+  slskShareMaxFiles: { env: 'PEARTUBE_SLSK_SHARE_MAX_FILES', type: 'number', def: 2000, min: 1, max: 100000 }
 }
 
 function parseEnv (spec, raw) {

@@ -165,6 +165,8 @@ export async function createMirrorHost ({
   slskPass = '',
   slskServer = 'vps.slsknet.org:2271',
   slskListenPort = 50300,
+  slskShare = false,
+  slskShareMaxFiles = 2000,
   soulseekOpts = null,
   pluginsDir = join(storage, 'plugins'),
   pollIntervalMs = 60_000,
@@ -1045,6 +1047,8 @@ export async function createMirrorHost ({
     slskPass,
     slskServer,
     slskListenPort,
+    slskShare,
+    slskShareMaxFiles,
     onchange,
     ...soulseekOpts
   }))

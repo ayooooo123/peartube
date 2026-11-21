@@ -3036,7 +3036,9 @@ const GROUPS = [
     { key: 'slskUser', label: 'Account username', hint: 'Username used to sign in and search.', ph: 'coltrane_fan' },
     { key: 'slskPass', label: 'Account password', hint: 'Saved privately on this relay; never logged.', ph: 'correct-horse-battery' },
     { key: 'slskServer', label: 'Server address', hint: 'Host and port of the central server.', ph: 'vps.slsknet.org:2271' },
-    { key: 'slskListenPort', label: 'Listen port', hint: 'Peers send files here; publish and forward this port.', ph: '50300' }
+    { key: 'slskListenPort', label: 'Listen port', hint: 'Peers send files here; publish and forward this port.', ph: '50300' },
+    { key: 'slskShare', label: 'Share my albums', hint: 'Lets other users browse and download your album folders.' },
+    { key: 'slskShareMaxFiles', label: 'Most files to share', hint: 'Caps how many files other users can see.', ph: '2000' }
   ] }
 ]
 

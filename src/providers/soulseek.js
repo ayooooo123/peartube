@@ -11,6 +11,7 @@
 //     answers or never connects back fails the job instead of leaving it at 0 bytes
 import { createHash, randomUUID } from 'node:crypto'
 import { closeSync, existsSync, fstatSync, mkdirSync, openSync, readFileSync, readSync, renameSync, rmSync, statSync, unlinkSync, writeFileSync } from 'node:fs'
+import process from 'node:process'
 import { basename, extname, join } from 'node:path'
 import b4a from 'b4a'
 import { ID, MAX_TITLE, MEDIA_FILE } from '../protocol.js'
@@ -21,6 +22,7 @@ export const SOULSEEK_SEARCH_CAP = 200
 const DEFAULT_SERVER = 'vps.slsknet.org:2271'
 // Peers open file connections back to this TCP port; it must be published/forwarded for downloads to arrive.
 export const DEFAULT_LISTEN_PORT = 50300
+export const DEFAULT_SHARE_MAX_FILES = 2000
 const TAG_READ_LIMIT = 1024 * 1024
 const BROWSE_TIMEOUT_MS = 30_000
 const BROWSE_TTL_MS = 5 * 60_000
@@ -279,6 +281,9 @@ export function createSoulseekPlugin ({
   searchTimeoutMs = 5000,
   // 0 lets the OS pick a port each start, which cannot be published; the relay setting defaults to 50300.
   slskListenPort = DEFAULT_LISTEN_PORT,
+  // Advertise and serve the album folders to peers; the addon caps the index at `slskShareMaxFiles`.
+  slskShare = false,
+  slskShareMaxFiles = DEFAULT_SHARE_MAX_FILES,
   browseTimeoutMs = BROWSE_TIMEOUT_MS,
   noAnswerMs = NO_ANSWER_MS,
   noConnectMs = NO_CONNECT_MS,
@@ -349,6 +354,10 @@ export function createSoulseekPlugin ({
     const wantKey = `${host}:${port}\n${creds.user}\n${creds.pass}`
     if (client && clientKey !== wantKey) closeClient()
     if (!client) {
+      // The addon takes its share options from the environment when a client is made (its constructor has only
+      // `listenPort`), so the relay's settings are handed over there, overriding any env value the host set.
+      process.env.PEARTUBE_SLSK_SHARE = slskShare ? '1' : '0'
+      process.env.PEARTUBE_SLSK_SHARE_MAX_FILES = String(slskShareMaxFiles)
       client = new mod.Soulseek({ listenPort })
       clientKey = wantKey
     }

@@ -251,6 +251,8 @@ async function start () {
     watchDir,
     ...mirrorConfig(),
     slskListenPort: cfg('slskListenPort'),
+    slskShare: cfg('slskShare'),
+    slskShareMaxFiles: cfg('slskShareMaxFiles'),
     hiverelay,
     pluginsDir: env.PEARTUBE_PLUGINS_DIR || join(storage, 'plugins'),
     onchange: () => api.notify('update'),

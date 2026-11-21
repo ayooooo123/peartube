@@ -24,6 +24,7 @@ import createTestnet from 'hyperdht/testnet.js'
 import { albumKey, parseTags } from '../src/tags.js'
 import { SOULSEEK_SEARCH_CAP, createSoulseekPlugin, normalizeSoulseekCandidates, placeSingleTrack } from '../src/providers/soulseek.js'
 import { removeEntries } from '../src/http.js'
+import { createSettings } from '../src/settings.js'
 
 test('a lone track is placed in its album folder as NN - Title, or refused with the reason', () => {
   const tagged = placeSingleTrack({ tags: { album: 'Giant Steps', albumArtist: 'John Coltrane', title: 'Naima', year: 1960, track: 6 }, filename: '@@m\\x\\y\\zz.flac' })
@@ -343,7 +344,8 @@ test('ranking, search cap, release-id precedence, and graceful unavailable addon
 // (no queue place, no bytes), a peer that answers and then sends, or a firewalled pair the server cannot bridge.
 function fakeAddon (calls) {
   class Soulseek {
-    constructor (opts) { calls.created.push(opts) }
+    // The addon reads its share options from the environment when a client is made, so record what it would see.
+    constructor (opts) { calls.created.push({ ...opts, share: process.env.PEARTUBE_SLSK_SHARE, shareMaxFiles: process.env.PEARTUBE_SLSK_SHARE_MAX_FILES }) }
     state () { return { connected: true, logged_in: true, listen_port: 50300 } }
     async login () { return { logged_in: true } }
     async search () { return [] }
@@ -388,6 +390,8 @@ test('browse cache, listen port, and legible queued/transferring/failed jobs (fa
     slskUser: 'alice',
     slskPass: 'secret',
     slskListenPort: 50300,
+    slskShare: true,
+    slskShareMaxFiles: 50,
     noAnswerMs: 300,
     loadAddon: async () => fakeAddon(calls)
   })
@@ -397,7 +401,7 @@ test('browse cache, listen port, and legible queued/transferring/failed jobs (fa
   const keepAlive = setInterval(() => {}, 1000)
   try {
     const first = await plug.browse({ username: 'bob' })
-    assert.deepEqual(calls.created, [{ listenPort: 50300 }], 'the configured listen port reaches the addon')
+    assert.deepEqual(calls.created, [{ listenPort: 50300, share: '1', shareMaxFiles: '50' }], 'the listen port and share settings reach the addon')
     assert.equal(first.tracks, 2, 'browse keeps media files only')
     assert.equal(first.size, 300)
     assert.equal(first.cached, false)
@@ -438,6 +442,28 @@ test('browse cache, listen port, and legible queued/transferring/failed jobs (fa
   } finally {
     clearInterval(keepAlive)
     await plug.stop()
+    rmSync(tmp, { recursive: true, force: true })
+    delete process.env.PEARTUBE_SLSK_SHARE
+    delete process.env.PEARTUBE_SLSK_SHARE_MAX_FILES
+  }
+})
+
+test('sharing is a relay setting: env value, UI override, and a reopen to apply it', () => {
+  const tmp = mkdtempSync(join(tmpdir(), 'slsk-settings-'))
+  try {
+    const off = createSettings(tmp, {})
+    assert.equal(off.get('slskShare'), false, 'off by default')
+    assert.equal(off.get('slskShareMaxFiles'), 2000)
+    const settings = createSettings(tmp, { PEARTUBE_SLSK_SHARE: '1', PEARTUBE_SLSK_SHARE_MAX_FILES: '300' })
+    assert.equal(settings.get('slskShare'), true, 'the env var turns it on')
+    assert.equal(settings.get('slskShareMaxFiles'), 300)
+    const res = settings.update({ slskShare: false, slskShareMaxFiles: 50 })
+    assert.deepEqual(res.changed.sort(), ['slskShare', 'slskShareMaxFiles'])
+    assert.equal(settings.get('slskShare'), false, 'the UI wins over the env var')
+    assert.deepEqual(res.restartNeeded.filter(k => k.startsWith('slskShare')).sort(), ['slskShare', 'slskShareMaxFiles'], 'the addon reads them when its client is made')
+    assert.throws(() => settings.update({ slskShareMaxFiles: 0 }), /slskShareMaxFiles/)
+    assert.throws(() => settings.update({ slskShareDir: '/' }), /unknown setting/, 'the shared folder is env-only')
+  } finally {
     rmSync(tmp, { recursive: true, force: true })
   }
 })

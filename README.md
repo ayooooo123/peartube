@@ -332,6 +332,9 @@ A saved `watchDir` is dropped too: the import folder is set only by `PEARTUBE_WA
 | `PEARTUBE_SLSK_PASS` | none | Soulseek account password (`0600` in `settings.json`, write-only in `/v1/settings`, never logged) |
 | `PEARTUBE_SLSK_SERVER` | `vps.slsknet.org:2271` | Soulseek central server `host:port` |
 | `PEARTUBE_SLSK_LISTEN_PORT` | `50300` | TCP port Soulseek peers connect back to when they send a file. Publish it (`-p 50300:50300`) and forward it on the router, or downloads never start; `0` lets the OS pick a new one each start (unpublishable). Reopens the node when changed |
+| `PEARTUBE_SLSK_SHARE` | `0` (off) | `1` lets Soulseek users browse and download the album folders (`Artist - Album (Year)/NN - Title.ext`, one level deep). Off by default so a private library is never published. Settable from the UI; reopens the node when changed |
+| `PEARTUBE_SLSK_SHARE_MAX_FILES` | `2000` | Most media files indexed and advertised when sharing is on (1 to 100000). Settable from the UI; reopens the node when changed |
+| `PEARTUBE_SLSK_SHARE_DIR` | `PEARTUBE_WATCH_DIR`, else `<PEARTUBE_STORAGE>/staging` | Folder whose album folders are shared. Env only: the API cannot point sharing at another folder |
 | `UBIT_CONFIG_DIR` | `<PEARTUBE_STORAGE>/ubit` | Config and scratch folder passed to `bare-ubit` / `ubit` |
 | `UBIT_BIN` | bundled `bare-ubit` | Override path or binary name for page link metadata and downloads |
 | `PEARTUBE_ALLOWED_PEERS` | none | Comma-separated 64-hex Noise public keys allowed through the swarm firewall |

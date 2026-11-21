@@ -464,7 +464,11 @@ test('suspend and resume reconstructs 2-hop guard circuits and streams newly pub
   assert.equal(guards.every(g => g.stats().activeCircuits <= 2), true, 'closed circuits leave zero stale activeCircuits on guards')
 
   // Verify mutable DHT & RV registrations stay strictly bounded across 10s (2-3 background poll cycles)
-  // instead of re-publishing on every 4s discovery poll.
+  // instead of re-publishing on every 4s discovery poll. A new hourly rendezvous epoch (wall-clock UTC hour)
+  // renews the card on purpose, so start the window after a boundary that would fall inside it, then let
+  // the next poll settle that renewal (CI crossed 16:00:00 UTC once and saw one extra mutablePut).
+  const toEpoch = 3_600_000 - (Date.now() % 3_600_000)
+  if (toEpoch < 12_000) await wait(toEpoch + 6000)
   const mutBefore = guards.reduce((n, g) => n + g.stats().putMutableCount, 0)
   const rvBefore = guards.reduce((n, g) => n + g.stats().rvRegisterCount, 0)
   await wait(9500)

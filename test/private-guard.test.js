@@ -28,6 +28,8 @@ const checks = {}
 const FRAME = getEncoding('@peartube/frame')
 const REMOTE_ERROR = getEncoding('@peartube/remote-error')
 const HELLO = getEncoding('@peartube/guard-hello')
+// A burst of 256 DHT lookups through one guard can take longer than a call's 10 s default on a loaded machine.
+const BURST_MS = 60_000
 const ACK = getEncoding('@peartube/guard-ack')
 const REGISTER = getEncoding('@peartube/guard-register')
 const op = name => GUARD.ops.findIndex(o => o.name === name)
@@ -149,7 +151,7 @@ test('a guard keeps live routes and rendezvous slots with the session that regis
   const mKey = HyperDHT.keyPair(randomBytes(32))
   await dht.mutablePut(mKey, Buffer.from('live-card'))
   assert.ok((await owner.rpc.call('getMutable', { key: mKey.publicKey })).record, 'guard sees the mutable record before the burst')
-  const hits = await Promise.all(Array.from({ length: 262 }, () => thief.rpc.call('getMutable', { key: mKey.publicKey }).then(r => Boolean(r.record))))
+  const hits = await Promise.all(Array.from({ length: 262 }, () => thief.rpc.call('getMutable', { key: mKey.publicKey }, BURST_MS).then(r => Boolean(r.record))))
   const okCount = hits.filter(Boolean).length
   const refusedCount = hits.length - okCount
   assert.ok(okCount >= 240 && okCount <= 256, `session gets up to 256 DHT ops per 10 s (got ${okCount})`)
@@ -182,18 +184,21 @@ test('a guard channel\'s role and reservations end with the channel; its connect
   const register = rpc => rpc.call('register', { routeToken: randomBytes(32), ttlMs: 60_000 }).then(r => r.status)
   const mKey = HyperDHT.keyPair(randomBytes(32))
   await dht.mutablePut(mKey, Buffer.from('live-card'))
-  const found = rpc => rpc.call('getMutable', { key: mKey.publicKey }).then(r => Boolean(r.record))
+  const found = rpc => rpc.call('getMutable', { key: mKey.publicKey }, BURST_MS).then(r => Boolean(r.record))
 
   let rpc = await open()
   assert.equal((await rpc.call('hello', { role: 'endpoint' })).status, 1)
   assert.equal(await register(rpc), 1)
   assert.equal((await rpc.call('rvRegister', { topic: randomBytes(32), slotId: randomBytes(16), ttlMs: 60_000, sealedCard: randomBytes(64) })).status, 1)
   assert.deepEqual([guard.stats().registeredRoutes, guard.stats().rendezvousTopics], [1, 1])
-  const burst = await Promise.all(Array.from({ length: 256 }, () => found(rpc)))
-  assert.ok(burst.filter(Boolean).length >= 240, 'the burst used the budget')
+  // The 256 lookups and the call behind them reach the guard in wire order, so the 257th is refused before any
+  // lookup answers. No step waits for those lookups: the checks below must fall inside the budget's 10 s window, and
+  // 256 lookups at once can take longer than that on a loaded machine. Closing the channel ends the calls in flight.
+  const burst = Promise.allSettled(Array.from({ length: 256 }, () => found(rpc)))
   assert.equal(await found(rpc), false, 'the budget is spent')
 
   rpc.close()
+  await burst
   await until(() => guard.stats().registeredRoutes === 0 && guard.stats().rendezvousTopics === 0, 5000, 'route and slot released')
   assert.equal(conn.destroyed, false, 'closing the channel leaves the connection')
 

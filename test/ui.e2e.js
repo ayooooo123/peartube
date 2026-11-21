@@ -222,6 +222,8 @@ async function launchBrowser () {
   const issues = []
   // Every URL the page asks for, so the run can prove it never contacts YouTube or its image host.
   const requests = []
+  // Each request's life, by CDP request id, so a slow page load can name the request it waited on.
+  const net = new Map()
   ws.onmessage = ev => {
     const m = JSON.parse(ev.data)
     if (m.id && pending.has(m.id)) {
@@ -233,7 +235,24 @@ async function launchBrowser () {
     if (m.method === 'Runtime.consoleAPICalled' && (m.params.type === 'error' || m.params.type === 'warning')) issues.push(m.params.type + ': ' + m.params.args.map(a => a.value ?? a.description).join(' '))
     if (m.method === 'Runtime.exceptionThrown') issues.push('exception: ' + (m.params.exceptionDetails.exception?.description || m.params.exceptionDetails.text))
     if (m.method === 'Log.entryAdded' && (m.params.entry.level === 'error' || m.params.entry.level === 'warning')) issues.push(m.params.entry.level + ': ' + m.params.entry.text + ' ' + (m.params.entry.url || ''))
-    if (m.method === 'Network.requestWillBeSent') requests.push(m.params.request.url)
+    if (m.method === 'Network.requestWillBeSent') {
+      requests.push(m.params.request.url)
+      // A redirect reuses the id: the hop that follows starts its own life.
+      net.set(m.params.requestId, { url: m.params.request.url, method: m.params.request.method, start: Date.now(), ts: m.params.timestamp, end: null, status: null })
+    }
+    if (m.method === 'Network.responseReceived' && net.has(m.params.requestId)) {
+      const r = net.get(m.params.requestId)
+      const t = m.params.response.timing
+      r.status = m.params.response.status
+      r.headersAt = Date.now()
+      // How long it waited for a connection before it was sent, and how long the relay took to answer once sent.
+      if (t) Object.assign(r, { queuedMs: Math.round((t.requestTime - r.ts) * 1000 + Math.max(0, t.sendStart)), serverMs: Math.round(t.receiveHeadersEnd - t.sendEnd) })
+    }
+    if ((m.method === 'Network.loadingFinished' || m.method === 'Network.loadingFailed') && net.has(m.params.requestId)) {
+      const r = net.get(m.params.requestId)
+      r.end = Date.now()
+      if (m.method === 'Network.loadingFailed') r.failed = m.params.canceled ? 'cancelled' : m.params.errorText
+    }
   }
   const send = (method, params = {}) => new Promise((resolve, reject) => {
     const id = ++seq
@@ -255,6 +274,24 @@ async function launchBrowser () {
   return {
     issues,
     requests,
+    // Every request alive during [from, to]: path, method, ms, status or "pending at load end", when its headers came
+    // (a body that ends long after them is the relay slow to send it), slowest first. A page left behind ends its
+    // event stream without CDP saying so, so an unfinished request older than 30 s is left out.
+    during (from, to) {
+      return [...net.values()].filter(r => r.start <= to && (r.end == null ? r.start >= from - 30_000 : r.end >= from)).map(r => {
+        const u = new URL(r.url)
+        const open = r.end == null || r.end > to
+        return {
+          path: u.protocol.startsWith('http') ? u.pathname + u.search : u.protocol,
+          method: r.method,
+          ms: (open ? to : r.end) - r.start,
+          status: open ? 'pending at load end' : r.failed || r.status,
+          ...(r.start < from ? { before: 'started on the page before' } : {}),
+          ...(r.headersAt ? { headersMs: r.headersAt - r.start } : {}),
+          ...(r.queuedMs != null ? { queuedMs: r.queuedMs, serverMs: r.serverMs } : {})
+        }
+      }).sort((a, b) => b.ms - a.ms)
+    },
     async hide () { blank = blank || JSON.parse(await devtools('/json/new?about:blank', 'PUT')).id; await devtools('/json/activate/' + blank) },
     async show () { await devtools('/json/activate/' + target.id) },
     send,
@@ -759,10 +796,12 @@ test('relay web UI: settings, plugins as intents, identification, music sources,
     assert.equal(await evaluate(`${chip('youtube')}.getAttribute('aria-pressed')`), 'true', 'and back on')
     result.checks.sourceChips = true
 
-    // One search; YouTube's part shows as soon as it lands, every row labelled as the lossy copy it would save.
+    // One search; YouTube's part shows as soon as it lands, every row labelled as the lossy copy it would save. Only
+    // YouTube is searched here (Soulseek is not set up); that a group shows while another still waits is proven below
+    // with a stubbed two-source stream.
     const ytSearch = async query => { await type('#srcInput', query); await click('#srcBtn') }
     await ytSearch('test band')
-    await waitFor(`document.querySelectorAll('#srcGroup-youtube .yt-pick-row').length === 3`, 'YouTube rows streamed in', 5000)
+    await waitFor(`document.querySelectorAll('#srcGroup-youtube .yt-pick-row').length === 3`, 'YouTube rows shown', 5000)
     const rows = await evaluate(`[...document.querySelectorAll('#ytResults .item')].map(i => i.innerText)`)
     for (const row of rows) assert.ok(row.includes('YouTube') && row.includes('AAC 128 kbps') && row.includes('lossy'), 'YouTube row says what a save gives: ' + row)
     const groupText = await evaluate(`(() => { let t = $('srcGroups').innerText; for (const n of document.querySelectorAll('#srcGroups .item .name')) t = t.replace(n.firstChild.textContent, ''); return t })()`)
@@ -770,22 +809,38 @@ test('relay web UI: settings, plugins as intents, identification, music sources,
     assert.equal(await evaluate(`[...document.querySelectorAll('#srcGroups .item')].every(i => ['Soulseek', 'YouTube'].includes((i.querySelector('.src-tag') || {}).textContent))`), true, 'every row names its source in words')
     assert.equal(await evaluate(`[...document.querySelectorAll('#srcGroups .yt-thumb')].every(t => t.querySelector('img') || t.querySelector('.yt-ph'))`), true, 'every thumbnail is a relay picture or the drawn placeholder')
     assert.equal(await evaluate(`$('ytNote').firstChild.textContent`), 'Peers not searched. YouTube copies are lossy AAC 128 kbps.', 'the advice says peers were not asked')
-    assert.match(await evaluate(`$('srcSummary').textContent`), /Soulseek off.*YouTube 3 videos/)
+    // A source that is only not set up says so, with the way to set it up; "off" is kept for the owner's own choice.
+    assert.match(await evaluate(`$('srcSummary').textContent`), /^Soulseek not set up: set up in Settings·YouTube 3 videos$/)
+    assert.equal(await evaluate(`$('srcSummary').querySelector('a[href="#settings"]')?.textContent`), 'set up in Settings', 'the summary leads to the setup')
+    const reviewShotDir = join(srcShotDir, 'review-fixes')
+    mkdirSync(reviewShotDir, { recursive: true })
+    await shot('04-summary-not-set-up-1440-dark', true, reviewShotDir)
+    // The status line is for screen readers unless it carries an error: clipped to 1 px, still in the page.
+    const msgBox = `(() => { const m = $('srcMsg'); const r = m.getBoundingClientRect(); return { text: m.textContent, err: m.classList.contains('err'), w: r.width, h: r.height, clip: getComputedStyle(m).clip, live: m.getAttribute('role') } })()`
+    const quiet = await evaluate(msgBox)
+    assert.ok(quiet.text && !quiet.err && quiet.w <= 1 && quiet.h <= 1 && quiet.clip.startsWith('rect(0') && quiet.live === 'status', 'a status that is no error is read, not shown: ' + JSON.stringify(quiet))
+    await evaluate(`searchSources('test band', []); true`)
+    const loud = await evaluate(msgBox)
+    assert.ok(loud.err && loud.w > 1 && loud.h > 1 && loud.clip === 'auto', 'an error on the status line is shown: ' + JSON.stringify(loud))
+    result.checks.statusLineHidden = { quiet, loud }
     result.checks.sourcesStreamed = rows.length
 
     // Nothing moves under the pointer or the finger when the slower group lands on top. A stream stubbed in the page
     // (no network) answers YouTube at once and Soulseek on demand, with 30 peer folders: tall enough to push a phone's
     // rows thousands of pixels down if nothing held them. As in a real search, the first YouTube row sits mid-screen
     // under its heading and the note, and the note changes (and wraps at 390, with a button) when the peers land:
-    // a heading held still would let the note push the row down by however much the note grew.
+    // a heading held still would let the note push the row down by however much the note grew. Each search gets rows
+    // of its own ("stub.<tag>.…"), so the wait below sees this search's YouTube rows on screen while Soulseek still
+    // spins, and the stream stays open until land(): a page that waited for the whole reply fails it.
     const srcStub = `window.__srcStub = (() => {
       const real = window.fetch
       let push = null
-      const yt = Array.from({ length: 12 }, (_, i) => ({ source: 'youtube', videoId: 'stubVid' + String(i).padStart(4, '0'), title: 'Stub Band - Song ' + (i + 1), length: 200 + i, thumbnail: '', channel: null }))
       const files = []
       for (let f = 0; f < 30; f++) for (let k = 0; k < 6; k++) files.push({ source: 'soulseek', username: 'peer' + f, filename: 'Music/Stub Band/Album ' + f + '/0' + k + ' - Song.flac', size: 3e7, bit_depth: 16, sample_rate: 44100, slots: true, queue: 0, length: 200 })
       window.fetch = (url, opts) => {
         if (String(url) !== '/v1/search/sources') return real(url, opts)
+        const tag = JSON.parse(opts.body).query.split(' ').pop()
+        const yt = Array.from({ length: 12 }, (_, i) => ({ source: 'youtube', videoId: 'stub.' + tag + '.' + i, title: 'Stub Band - Song ' + (i + 1), length: 200 + i, thumbnail: '', channel: null }))
         const enc = new TextEncoder()
         const body = new ReadableStream({ start (c) {
           c.enqueue(enc.encode('event: source\\ndata: ' + JSON.stringify({ source: 'youtube', results: yt }) + '\\n\\n'))
@@ -805,7 +860,9 @@ test('relay web UI: settings, plugins as intents, identification, music sources,
       await viewport(width, height, 'dark')
       await evaluate(srcStub)
       await evaluate(`searchSources('stub band ${key}', ['soulseek', 'youtube']); true`)
-      await waitFor(`document.querySelectorAll('#ytResults .item').length === 12 && !!document.querySelector('#srcGroup-soulseek .slsk-spin')`, 'YouTube landed, peers pending', 5000)
+      // This search's own YouTube rows, drawn, while the peers' group still waits on the open stream.
+      const firstOnly = `document.querySelectorAll('#ytResults .item[data-vid^="stub.${key}."]').length === 12 && !!document.querySelector('#srcGroup-soulseek .slsk-spin') && !document.querySelector('#slskResults')`
+      await waitFor(firstOnly, 'YouTube landed, peers pending', 5000)
       const before = await evaluate(`(() => { const c = ${firstPick}; c.scrollIntoView({ block: 'center', behavior: 'instant' }); const b = c.getBoundingClientRect(); return { top: b.top, x: b.left + b.width / 2, y: b.top + b.height / 2 } })()`)
       const noteBefore = await evaluate(noteNow)
       // A mouse resting on the row; else no pointer, as a phone whose finger has left the glass.
@@ -827,7 +884,7 @@ test('relay web UI: settings, plugins as intents, identification, music sources,
     await viewport(1440, 900, 'dark')
     await evaluate(srcStub)
     await evaluate(`searchSources('stub band press', ['soulseek', 'youtube']); true`)
-    await waitFor(`document.querySelectorAll('#ytResults .item').length === 12`, 'YouTube landed for the press check', 5000)
+    await waitFor(`document.querySelectorAll('#ytResults .item[data-vid^="stub.press."]').length === 12 && !!document.querySelector('#srcGroup-soulseek .slsk-spin') && !document.querySelector('#slskResults')`, 'YouTube landed for the press check, peers pending', 5000)
     const head = await evaluate(`(() => { const h = $('srcHead-youtube'); h.scrollIntoView({ block: 'center', behavior: 'instant' }); const r = h.getBoundingClientRect(); return { x: r.left + 10, y: r.top + r.height / 2 } })()`)
     await send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: head.x, y: head.y })
     await send('Input.dispatchMouseEvent', { type: 'mousePressed', x: head.x, y: head.y, button: 'left', clickCount: 1 })
@@ -888,9 +945,71 @@ test('relay web UI: settings, plugins as intents, identification, music sources,
     for (const row of [...plain, ...withLibrary, ...bySong]) assert.doesNotMatch(row.join(' '), /\bHQ\b|\bHD\b|lyrics|official|full album|black screen|[\u0300-\u036f"]/i, 'no upload noise reaches a suggestion: ' + row)
     result.checks.suggestions = { titles: critiqueTitles, plain, withLibrary }
 
-    // Failure hints match whole words only: a rate limit or a full disk is not an age gate.
-    const hints = await evaluate(`[ytFailHint('ERROR: Unable to download webpage: HTTP Error 429'), ytFailHint('No space left on device (storage full)'), ytFailHint('Sign in to confirm your age. This video may be inappropriate'), ytFailHint('ERROR: Private video. Sign in if you have been granted access')]`)
-    assert.deepEqual(hints, ['', '', 'Needs a signed-in account; this relay has none.', 'Private or members-only video.'], 'failure hints')
+    // Unbracketed upload noise goes wherever it stands; real words that only look like it stay.
+    const noisy = [
+      ['Pink Floyd - Time 1080p BEST QUALITY', 'Pink Floyd - Time'],
+      ['1080p BEST QUALITY Pink Floyd - Comfortably Numb', 'Pink Floyd - Comfortably Numb'],
+      ['Daft Punk - Get Lucky [1080p] BEST QUALITY', 'Daft Punk - Get Lucky'],
+      ['Queen - Bohemian Rhapsody 4K HD Remastered 2011', 'Queen - Bohemian Rhapsody'],
+      ['Nirvana - Come As You Are | Official Music Video | 720p60', 'Nirvana - Come As You Are'],
+      ['Adele - Hello Lyric Video HQ Audio', 'Adele - Hello'],
+      ['Radiohead - OK Computer Full Album High Quality', 'Radiohead - OK Computer'],
+      ['BTS - Dynamite M/V 60fps', 'BTS - Dynamite'],
+      ['Miles Davis - So What (Live 1959) 320 kbps', 'Miles Davis - So What (Live 1959)'],
+      ['Prince - 1999 (2019 Remaster)', 'Prince - 1999'],
+      ['Lyrical Gangsta - HDMI Blues', 'Lyrical Gangsta - HDMI Blues'],
+      ['Official Secrets - Remasters of War', 'Official Secrets - Remasters of War']
+    ]
+    const cleaned = await evaluate(`${JSON.stringify(noisy.map(n => n[0]))}.map(ytCleanTitle)`)
+    assert.deepEqual(cleaned, noisy.map(n => n[1]), 'title noise stripped wherever it stands, real words kept')
+    result.checks.titleNoise = noisy.map(([before], i) => ({ before, after: cleaned[i] }))
+
+    // Failure sentences, matched against the relay's own words (refused network, age gate) and YouTube's; whole
+    // words only: a rate limit or a full disk is none of them.
+    const fails = [
+      ['YouTube is refusing downloads from this relay\'s network (its bot check). Search still works; saving needs another network.', 'YouTube blocks saves from this relay’s network. Try later, or from another network.'],
+      ['YouTube is refusing downloads from this network', 'YouTube blocks saves from this relay’s network. Try later, or from another network.'],
+      ['YouTube did not send “Dawn”: Sign in to confirm your age. This video may be inappropriate for some users.', 'This video is age-restricted, which needs an account. Pick another upload.'],
+      ['ERROR: Private video. Sign in if you have been granted access to this video', 'This video is private or was removed. Pick another upload.'],
+      ['Video unavailable. This video has been removed by the uploader', 'This video is private or was removed. Pick another upload.'],
+      ['Video unavailable. The uploader has not made this video available in your country', 'This video is blocked where the relay is. Pick another upload.'],
+      ['The folder “Test Band - Morning [YouTube]” already holds another album', 'The album folder already holds other files. Change the album name or year.'],
+      ['Source stalled', 'YouTube stopped sending. Try again.'],
+      ['ERROR: Unable to download webpage: HTTP Error 429', ''],
+      ['No space left on device (storage full)', '']
+    ]
+    assert.deepEqual(await evaluate(`${JSON.stringify(fails.map(f => f[0]))}.map(ytFailHint)`), fails.map(f => f[1]), 'failure sentences')
+    // On a card the sentence leads and YouTube's words wait under "Details", also for a skipped track; the
+    // opened message survives the once-a-second redraw.
+    // Drawn and read in one go: the 4 s refresh puts the relay's own jobs back.
+    const cards = await evaluate(`(() => { window.__keptJobs = S.jobs; S.jobs = [
+      { jobId: 'e2e-age', plugin: 'youtube', status: 'failed', phase: 'failed', title: 'Test Band · Morning', fileCount: 1, error: ${JSON.stringify(fails[2][0])}, created: Date.now() },
+      { jobId: 'e2e-skip', plugin: 'youtube', status: 'done', phase: 'done', title: 'Test Band · Evening', fileCount: 2, skipped: [{ track: 2, title: 'Dusk', error: ${JSON.stringify(fails[1][0])} }], created: Date.now() - 1000 }
+    ]; renderSrcJobs(); document.querySelector('[data-job="e2e-age"] details').open = true; renderSrcJobs()
+      document.querySelector('#srcJobs').scrollIntoView({ block: 'center', behavior: 'instant' })
+      return [...document.querySelectorAll('#srcJobs [data-job^="e2e-"]')].map(c => ({ text: c.querySelector('.info').innerText, why: c.querySelector('details.why')?.open }))
+    })()`)
+    assert.match(cards[0].text, /This video is age-restricted, which needs an account\. Pick another upload\.\nDetails\nYouTube did not send “Dawn”: Sign in to confirm your age/, 'the sentence leads, the provider text is the detail')
+    assert.equal(cards[0].why, true, 'an opened message stays open across a redraw')
+    assert.match(cards[1].text, /Not saved: Dusk\. YouTube blocks saves from this relay’s network\. Try later, or from another network\.\nDetails/, 'a skipped track says why in plain words')
+    assert.equal(cards[1].why, false)
+    await shot('03-job-card-plain-errors-1440-dark', true, reviewShotDir)
+    await evaluate(`S.jobs = window.__keptJobs; renderSrcJobs(); true`)
+    result.checks.failSentences = { fails, cards }
+
+    // A started button follows its job, and gets its normal state back when the job leaves the list (dismissed or
+    // trimmed) once a list asked for after the start says so; a list older than the start changes nothing.
+    const sync = await evaluate(`(() => {
+      const mk = key => h('button', { 'data-src-key': key, 'data-label': 'Mirror' }, 'Mirror')
+      const gone = mk('s:e2e-gone'), early = mk('s:e2e-early')
+      slskStarted.set('e2e-gone', { id: 'e2e-none', at: S.jobsAsked - 1 })
+      slskStarted.set('e2e-early', { id: 'e2e-none', at: S.jobsAsked + 1 })
+      srcSyncButton(gone); srcSyncButton(early)
+      const out = [gone.textContent, gone.disabled, slskStarted.has('e2e-gone'), early.textContent, early.disabled]
+      slskStarted.delete('e2e-early')
+      return out
+    })()`)
+    assert.deepEqual(sync, ['Mirror', false, false, 'Mirroring', true], 'a peer mirror that left the list gives its button back')
     await viewport(1440, 900, 'dark')
     await evaluate('scrollTo(0, 0); true')
 
@@ -922,6 +1041,14 @@ test('relay web UI: settings, plugins as intents, identification, music sources,
     const morning = await waitApi(async () => { const list = (await entries()).filter(e => e.title === 'Test Band · Morning'); return list.length === 2 && list }, 'YouTube album imported')
     assert.ok(morning.every(e => e.id.startsWith('yt:')), 'a YouTube album is pinned to a yt: release')
     assert.deepEqual(morning.sort((a, b) => a.episode - b.episode).map(e => e.music.title), ['Dusk', 'Dawn'], 'tracks numbered in the dialog order')
+    // Dismissing the finished job gives the rows' Save buttons back; they no longer wait on a job that is gone.
+    const dawnSave = `document.querySelector('#ytResults [data-src-key="y:tbDawn00001"]')`
+    await waitFor(`${dawnSave}?.disabled === true`, 'the Save button follows its job')
+    const followed = await evaluate(`${dawnSave}.textContent`)
+    await clickText('Dismiss', '#srcJobs')
+    await waitFor(`!${dawnSave}.disabled && ${dawnSave}.textContent === ${dawnSave}.dataset.label`, 'a dismissed save gives its button back', 10_000)
+    await shot('01-dismissed-job-button-back-1440-dark', true, reviewShotDir)
+    result.checks.dismissedJobButton = { followed, after: await evaluate(`${dawnSave}.textContent`) }
     await open('#music')
     const card = name => `[...document.querySelectorAll('.album-card')].find(c => c.querySelector('.album-name').textContent === '${name}')`
     await waitFor(`${card('Morning')}?.querySelector('[data-aq]').textContent === 'YouTube · AAC 128 kbps'`, 'YouTube album labelled on the shelf')
@@ -943,6 +1070,7 @@ test('relay web UI: settings, plugins as intents, identification, music sources,
     assert.deepEqual(await evaluate(`[$('ytArtist').value, $('ytAlbum').value, $('ytTrack-0').value, $('ytSaveBtn').textContent, document.querySelector('#ytTracks .tn').textContent, document.querySelectorAll('#ytTracks .ic-btn').length, $('ytTracksHint').hidden]`),
       ['Test Band', 'First Light', 'Dawn', 'Save track', '1', 0, true], 'one song already in an album is filed under it, with its number, and nothing to reorder')
     assert.match(await evaluate(`$('ytSaveNote').innerText`), /^Dawn is already track 1 here(, in FLAC .+?)?\. This adds a second copy\.$/, 'the dialog says the song is already here')
+    assert.equal(await evaluate(`document.querySelector('#ytTracks .yt-dup').hidden`), true, 'a song only here in FLAC is no duplicate')
     await shot('03-save-single-in-library-1440-dark', true, join(srcShotDir, 'fixes'))
     await send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 })
     await send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 })
@@ -964,6 +1092,24 @@ test('relay web UI: settings, plugins as intents, identification, music sources,
     await waitFor(`/^FLAC 16-bit 44.1 kHz · also YouTube$/.test(${card('First Light')}?.querySelector('[data-aq]').textContent || '')`, 'merged album says what it is, then also YouTube')
     assert.equal(await evaluate(`(() => { const yt = ${card('First Light')}.querySelector('.aq-yt'); const line = yt.parentElement.getBoundingClientRect(); const r = yt.getBoundingClientRect(); return r.width > 0 && r.right <= line.right + 0.5 })()`), true, '"also YouTube" is never cut off on the card')
     assert.equal(await evaluate(`document.querySelectorAll('.album-card').length`), 2, 'the YouTube copy joins the FLAC album, not a new one')
+    // Saving the same video into that album again: its row says it is already here from YouTube and Save sends
+    // nothing, until the owner ticks "Save again".
+    await ytSearch('test band')
+    await waitFor(`document.querySelectorAll('#ytResults .yt-pick-row').length === 3`, 'YouTube rows for the duplicate check', 5000)
+    await click('#ytResults .item:nth-child(1) .acts button')
+    await waitFor(`$('ytSave').open && $('ytAlbum').value === 'First Light' && !document.querySelector('#ytTracks .yt-dup').hidden`, 'the duplicate is named on its row')
+    const jobsBefore = await evaluate(`S.jobs.length`)
+    assert.doesNotMatch(await evaluate(`$('ytSaveNote').innerText`), /adds a second copy/, 'a duplicate left out is not said to add a copy')
+    await click('#ytSaveBtn')
+    await sleep(500)
+    assert.deepEqual(await evaluate(`[$('ytSave').open, S.jobs.length, $('ytSaveMsg').textContent, document.activeElement === document.querySelector('#ytTracks .yt-dup input')]`),
+      [true, jobsBefore, 'This song is already saved from YouTube. Tick Save again to add another copy.', true], 'a duplicate is not sent')
+    await shot('07-save-duplicate-left-out-1440-dark', true, reviewShotDir)
+    await click('#ytTracks .yt-dup input')
+    await waitFor(`/^Dawn is already track 1 here.*This adds a second copy\\./.test($('ytSaveNote').innerText)`, 'the override says it adds a copy')
+    await click('#ytSaveCancel')
+    await waitFor(`!$('ytSave').open`, 'duplicate dialog closed')
+    result.checks.duplicateSave = 'left out on its row; Save sends nothing until Save again is ticked'
     await evaluate(`${card('First Light')}.querySelector('.album-open').setAttribute('data-e2e', 'merged'); true`)
     await click('[data-e2e="merged"]')
     await waitFor(`(document.querySelector('#detail[open] [data-ay]')?.textContent || '').includes('FLAC plays first')`, 'merged sheet says which copy plays', 20_000)
@@ -1078,14 +1224,18 @@ test('relay web UI: settings, plugins as intents, identification, music sources,
       for (const scheme of ['light', 'dark']) {
         await viewport(width, height, scheme)
         for (const tab of ['library', 'music', 'channels', 'sharing', 'tv', 'settings']) {
-          const loadStart = Date.now()
-          await open('#' + tab)
-          const loadMs = Date.now() - loadStart
-          await sleep(600)
           const where = width + ' ' + scheme + ' ' + tab
+          const loadStart = Date.now()
+          // A load that never completes keeps what it waited on too.
+          await open('#' + tab).catch(err => { result.viewports.push({ where, loadMs: Date.now() - loadStart, slowRequests: browser.during(loadStart, Date.now()) }); throw err })
+          const loadEnd = Date.now()
+          const loadMs = loadEnd - loadStart
+          // A load over 3 s keeps every request it saw, so a failure names what it waited on.
+          const slowRequests = loadMs > 3000 ? browser.during(loadStart, loadEnd) : undefined
+          await sleep(600)
           const audit = await tasteAudit(where)
           await shot(`${tab}-${width}-${scheme}`)
-          result.viewports.push({ where, loadMs, ...audit })
+          result.viewports.push({ where, loadMs, ...(slowRequests ? { slowRequests } : {}), ...audit })
         }
         await open('#music')
         await type('#srcInput', 'test band')
@@ -1107,8 +1257,11 @@ test('relay web UI: settings, plugins as intents, identification, music sources,
     assert.deepEqual(external, [], 'the page never contacts YouTube or its image host')
     result.consoleIssues = [...browser.issues]
     // Twenty reloads in one tab: a live-update stream left open per visit would stall the sixth for about a minute.
-    const slowest = Math.max(...result.viewports.map(v => v.loadMs))
-    assert.ok(slowest < 5000, 'slowest page load took ' + slowest + ' ms')
+    const slowest = result.viewports.reduce((a, v) => v.loadMs > a.loadMs ? v : a)
+    // A stream the page before held open lives long by design; name the slowest request of the load itself.
+    const waitedOn = slowest.slowRequests && (slowest.slowRequests.find(r => !r.before) || slowest.slowRequests[0])
+    assert.ok(slowest.loadMs < 5000, 'slowest page load took ' + slowest.loadMs + ' ms (' + slowest.where + ')' +
+      (waitedOn ? '; slowest request ' + waitedOn.method + ' ' + waitedOn.path + ' ' + waitedOn.ms + ' ms, ' + waitedOn.status + (waitedOn.headersMs != null ? ', headers after ' + waitedOn.headersMs + ' ms' : '') : ''))
     assert.deepEqual(browser.issues, [], 'console errors or warnings')
     mark('tasteGates')
 

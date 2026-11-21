@@ -530,11 +530,16 @@ export const page = `<!doctype html>
   .yt-tracks ol { list-style: none; margin: 0 0 8px; padding: 0; display: flex; flex-direction: column; gap: 8px; }
   .yt-tracks li { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
   .yt-tracks .tn { width: 22px; flex: none; text-align: right; color: var(--dim); font-variant-numeric: tabular-nums; font-weight: 600; }
-  .yt-tracks li input { flex: 1 1 200px; width: auto; min-width: 0; }
+  .yt-tracks li > input { flex: 1 1 200px; width: auto; min-width: 0; }
   .yt-tracks .dur { color: var(--dim); font-size: 13px; font-variant-numeric: tabular-nums; min-width: 36px; }
   .yt-tracks .mv { display: inline-flex; gap: 4px; }
   .ic-btn { width: 32px; height: 32px; padding: 0; border-radius: 8px; border: 1px solid var(--line); background: transparent; color: var(--text); font: inherit; font-size: 14px; cursor: pointer; display: inline-flex; align-items: center; justify-content: center; }
   .ic-btn[aria-disabled='true'] { opacity: .4; cursor: default; }
+  .yt-tracks .yt-dup { flex-basis: 100%; margin-left: 30px; display: flex; flex-wrap: wrap; gap: 4px 12px; align-items: center; font-size: 13px; color: var(--dim); }
+  .yt-tracks .yt-dup[hidden] { display: none; }
+  .yt-dup label { display: inline-flex; gap: 6px; align-items: center; color: var(--text); cursor: pointer; }
+  .why summary { cursor: pointer; width: max-content; max-width: 100%; }
+  .why > div { margin-top: 4px; overflow-wrap: anywhere; }
   .yt-save-acts { position: sticky; bottom: 0; z-index: 2; margin: 12px -22px -22px; padding: 12px 22px 22px; background: var(--surface); border-top: 1px solid var(--line); }
   .album-meta[data-aq]:not(:empty) { display: flex; }
   .album-meta .aq-main { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
@@ -565,7 +570,7 @@ export const page = `<!doctype html>
     .yt-pick .grow { flex-basis: 100%; }
     .yt-save { padding: 18px 16px; }
     .yt-save-acts { margin: 12px -16px -18px; padding: 12px 16px 18px; }
-    .yt-tracks li input { flex-basis: calc(100% - 30px); }
+    .yt-tracks li > input { flex-basis: calc(100% - 30px); }
     .yt-tracks .dur { margin-left: 30px; }
     .yt-tracks .mv { margin-left: auto; }
   }
@@ -1058,6 +1063,8 @@ addEventListener('hashchange', showTab)
 async function refresh () {
   if (pressing || player) { refreshQueued = true; return }
   try {
+    // A job missing from a list asked for after it started is gone (dismissed or trimmed), not yet to come.
+    const asked = Date.now()
     const [st, src, ent, jb, pl, set, ident] = await Promise.all([
       api('/v1/status'), api('/v1/sources'), api('/v1/entries'), api('/v1/jobs'),
       api('/v1/plugins').catch(() => ({ plugins: [] })),
@@ -1065,7 +1072,7 @@ async function refresh () {
       S.settings ? api('/v1/settings').catch(() => S.settings) : null,
       S.settings ? api('/v1/identity').catch(() => S.identity) : null
     ])
-    Object.assign(S, { status: st, sources: src, entries: ent.results || [], jobs: jb.jobs || [], plugins: pl.plugins || [], offline: false })
+    Object.assign(S, { status: st, sources: src, entries: ent.results || [], jobs: jb.jobs || [], jobsAsked: asked, plugins: pl.plugins || [], offline: false })
     if (set) S.settings = set
     if (ident) S.identity = ident
     noticeJobs(!S.loaded)
@@ -1918,7 +1925,7 @@ function slskMirrorBtn (g, pick, label, msgId, name) {
     b.textContent = 'Starting'
     const r = await act(b, () => api('/v1/providers/soulseek/mirror', { body: { username: g.username, title: g.title, files: files.map(f => ({ filename: f.filename, size: f.size })) } }), msgId)
     if (!r || !r.job) { b.textContent = b.dataset.label; return }
-    slskStarted.set(g.key, r.job.jobId)
+    slskStarted.set(g.key, { id: r.job.jobId, at: Date.now() })
     if (!S.jobs.some(j => j.jobId === r.job.jobId)) S.jobs.unshift(r.job)
     renderMirrors()
     pollMirrors()
@@ -2179,7 +2186,12 @@ function renderSrcSummary () {
   const parts = sourcesHere().map(n => {
     const g = run.groups.get(n)
     const label = sourceLabel(n)
-    if (!g) return h('span', null, label + ' off')
+    // A source with no group was not asked: say why, and lead to the fix when there is one.
+    if (!g) {
+      const st = sourceState(n).state
+      if (st === 'setup') return h('span', null, label + ' not set up: ', h('a', { href: '#settings', onclick: ev => { ev.preventDefault(); openSourceSetup() } }, 'set up in Settings'))
+      return h('span', null, label + (st === 'unavailable' ? ' not on this device' : st === 'off' ? ' off' : ' not searched'))
+    }
     const what = g.state === 'pending' ? '…' : g.state === 'error' ? 'failed' : n === 'youtube' ? plural(g.results.length, 'video', 'videos') : slskCount(g.results, ', ')
     return h('a', { href: '#srcGroup-' + n, onclick: ev => { ev.preventDefault(); focusSrcHead(n) } }, label + ' ' + what)
   })
@@ -2408,13 +2420,20 @@ let ytSave = null // { tracks: [{ r, title }], opener, done }
 const YT_BRACKET = /[([][^()[\\]]*\\b(official|video|audio|lyrics?|visuali[sz]er|hd|hq|4k|remaster(ed)?|full\\s+album|black\\s+screen)\\b[^()[\\]]*[)\\]]/gi
 const YT_YEAR = /[([]\\s*((19|20)[0-9]{2})\\s*[)\\]]/g
 const YT_TAIL = /(\\s*[-–—|~:•]\\s*|\\s+)(full\\s+album|official\\s+(music\\s+)?(video|audio)|lyrics?(\\s+video)?|hd|hq|4k)$/i
+// Upload noise wherever it stands, unbracketed too ("Time 1080p BEST QUALITY"): resolutions and frame rates,
+// quality boasts, "official video", "lyric video", "full album", remasters. Whole phrases only, so "HDMI", "Lyrical",
+// "Official Secrets" or "Remasters" stay.
+const YT_NOISE = /\\b(?:(?:best|high|highest|top|super|ultra|max(?:imum)?|great)\\s+(?:sound\\s+|audio\\s+)?quality|(?:hq|hd|hi[- ]?res|4k|8k|uhd|fhd|full\\s+hd|ultra\\s+hd|[0-9]{3,4}p(?:\\s?(?:60|50|30)(?:\\s?fps)?)?|[0-9]{2,3}\\s?fps|[0-9]{3}\\s?kbps)(?:\\s+(?:audio|sound|version|quality))?|official\\s+(?:music\\s+|lyrics?\\s+|hd\\s+|4k\\s+)?(?:video|audio|visuali[sz]er|clip|m\\/v)|official\\s+lyrics?|lyrics?\\s+video|with\\s+lyrics|full\\s+(?:album|ep|lp)|(?:(?:19|20)[0-9]{2}\\s+)?(?:digitally\\s+)?remaster(?:ed)?(?:\\s+(?:19|20)[0-9]{2})?(?:\\s+version)?|m\\/v)\\b/gi
 const YT_MARKS = /[\\u0300-\\u036f\\u1ab0-\\u1aff\\u1dc0-\\u1dff\\u20d0-\\u20ff\\ufe20-\\ufe2f]/g
 const ytUnquote = s => { const m = s.match(/^["“”„«‹'‘’]\\s*(.+?)\\s*["“”»›'‘’]$/); return m ? m[1] : s }
 function ytClean (title) {
   // NFC first, so an accent that has its own letter (é) stays and only decoration left over is dropped.
   let s = String(title || '').normalize('NFC').replace(YT_MARKS, '')
   const year = (s.match(/[([]\\s*((19|20)[0-9]{2})\\s*[)\\]]/) || [])[1] || ''
-  s = s.replace(YT_BRACKET, ' ').replace(YT_YEAR, ' ').replace(/\\s+/g, ' ').trim()
+  s = s.replace(YT_BRACKET, ' ').replace(YT_YEAR, ' ').replace(YT_NOISE, ' ')
+  // What the noise leaves behind: empty or padded brackets, doubled or leading separators.
+  s = s.replace(/[([]\\s*[)\\]]/g, ' ').replace(/([([])\\s+/g, '$1').replace(/\\s+([)\\]])/g, '$1')
+    .replace(/\\s*([-–—|~:•])(?:\\s*[-–—|~:•])+\\s*/g, ' $1 ').replace(/^\\s*[-–—|~:•]+\\s*/, '').replace(/\\s+/g, ' ').trim()
   for (let was = ''; was !== s;) { was = s; s = s.replace(YT_TAIL, '').replace(/\\s*[-–—|~:•]$/, '').trim() }
   return { text: ytUnquote(s), year }
 }
@@ -2563,18 +2582,24 @@ function openYtSave (rows, opener) {
   else $('ytArtist').focus()
 }
 // Where each track lands. Saved into an album the library already has, a song it holds takes that song's number (the
-// copies then share one row) and a new one goes after the album's last track; otherwise the dialog's order.
+// copies then share one row) and a new one goes after the album's last track; otherwise the dialog's order. A song
+// the album already has from YouTube is a duplicate: left out unless the owner ticks "Save again" on its row.
 function ytPlan () {
   const list = ytSave.tracks
   const has = libraryHas($('ytArtist').value.trim(), $('ytAlbum').value.trim())
   const twins = list.map(() => null)
-  if (!has) return { has, nums: list.map((_, i) => i + 1), twins }
+  const dups = list.map(() => false)
+  const plan = () => ({ has, nums, twins, dups, send: list.filter((t, k) => !dups[k] || t.again) })
+  let nums = list.map((_, i) => i + 1)
+  if (!has) return plan()
   const disc = has.items.filter(i => i.season == null || i.season <= 1)
-  const nums = list.map(() => 0)
+  nums = list.map(() => 0)
   const used = new Set()
   list.forEach((t, k) => {
     const f = fold(t.title.trim() || ytCleanTitle(t.r.title))
-    const i = disc.find(x => [x.e, ...x.alts].some(e => fold(trackName(e)) === f))
+    const named = x => [x.e, ...x.alts].some(e => fold(trackName(e)) === f)
+    dups[k] = has.items.some(x => named(x) && [x.e, ...x.alts].some(isYt))
+    const i = disc.find(named)
     if (i && i.episode >= 1 && i.episode <= 999 && !used.has(i.episode)) { twins[k] = i; nums[k] = i.episode; used.add(i.episode) }
   })
   let last = Math.max(0, ...disc.map(i => i.episode || 0))
@@ -2585,12 +2610,16 @@ function ytPlan () {
     nums[k] = Math.min(last, 999)
     used.add(nums[k])
   })
-  return { has, nums, twins }
+  return plan()
 }
-// The numbers beside the titles and the line under them follow the plan, redrawn in place so typing keeps focus.
+// The numbers beside the titles, each row's duplicate line, the Save button and the line under them follow the plan,
+// redrawn in place so typing keeps focus.
 function ytNumber (plan) {
   const n = ytSave.tracks.length
   $('ytTracks').querySelectorAll('li > .tn').forEach((s, k) => { s.textContent = String(plan.nums[k]) })
+  $('ytTracks').querySelectorAll('li > .yt-dup').forEach((d, k) => { d.hidden = !plan.dups[k] })
+  const m = plan.send.length
+  $('ytSaveBtn').textContent = n === 1 ? 'Save track' : m === n ? 'Save ' + n + ' as album' : 'Save ' + plural(m, 'track', 'tracks')
   $('ytTracksHint').hidden = n === 1
   $('ytTracksHint').textContent = plan.has ? 'Numbered to fit the album already here.' : 'Numbered in this order on disc 1.'
 }
@@ -2598,7 +2627,6 @@ function renderYtSaveTracks (focus) {
   const list = ytSave.tracks
   const n = list.length
   $('ytSaveSub').textContent = plural(n, 'track', 'tracks') + ' · lossy ' + YT_CODEC
-  $('ytSaveBtn').textContent = n === 1 ? 'Save track' : 'Save ' + n + ' as album'
   $('ytTracksLegend').textContent = n === 1 ? 'Track' : 'Tracks'
   const icon = (kind, i, text, label, off, fn) => h('button', { class: 'ic-btn', 'data-mv': kind + '-' + i, 'aria-label': label, 'aria-disabled': off ? 'true' : null, onclick: () => { if (!off) fn() } }, text)
   $('ytTracks').replaceChildren(...list.map((t, i) => {
@@ -2612,7 +2640,11 @@ function renderYtSaveTracks (focus) {
       n > 1 ? h('span', { class: 'mv' },
         icon('up', i, '↑', 'Move ' + name + ' up', i === 0, () => ytMove(i, -1, 'up')),
         icon('down', i, '↓', 'Move ' + name + ' down', i === n - 1, () => ytMove(i, 1, 'down')),
-        icon('rm', i, '✕', 'Remove ' + name, false, () => ytRemove(i))) : null)
+        icon('rm', i, '✕', 'Remove ' + name, false, () => ytRemove(i))) : null,
+      // Shown by the plan when the album already has this song from YouTube; the tick is the owner's override.
+      h('div', { class: 'yt-dup', hidden: true },
+        h('span', null, 'Already saved from YouTube; left out.'),
+        h('label', null, h('input', { type: 'checkbox', checked: Boolean(t.again), 'aria-label': 'Save ' + name + ' again', onchange: ev => { t.again = ev.target.checked; ytSaveNotes() } }), ' Save again')))
   }))
   ytNumber(ytPlan())
   if (focus) { const b = $('ytTracks').querySelector('[data-mv="' + focus + '"]'); if (b) b.focus() }
@@ -2640,7 +2672,8 @@ function ytSaveNotes () {
   ytNumber(plan)
   if (plan.has) {
     const q = commonQuality(plan.has)
-    const twins = ytSave.tracks.map((t, k) => plan.twins[k] ? [t, plan.twins[k]] : null).filter(Boolean)
+    // A song already here from YouTube says so on its own row, unless the owner chose to save it again.
+    const twins = ytSave.tracks.map((t, k) => plan.twins[k] && (!plan.dups[k] || t.again) ? [t, plan.twins[k]] : null).filter(Boolean)
     for (const [t, i] of twins.slice(0, 3)) {
       const what = copyQuality(i.e, infoData.get(i.e.key)) || q
       lines.push((t.title.trim() || 'This song') + ' is already track ' + i.episode + ' here' + (what ? ', in ' + what : '') + '. This adds a second copy.')
@@ -2674,16 +2707,24 @@ $('ytSaveForm').onsubmit = async ev => {
   if (year && !/^\\d{4}$/.test(year)) return fail('ytYear', 'Year is four digits, e.g. 1959.')
   const empty = ytSave.tracks.findIndex(t => !t.title.trim())
   if (empty !== -1) return fail('ytTrack-' + empty, 'Every track needs a title.')
+  const plan = ytPlan()
+  if (!plan.send.length) {
+    say('ytSaveMsg', ytSave.tracks.length === 1 ? 'This song is already saved from YouTube. Tick Save again to add another copy.' : 'Every song is already saved from YouTube. Tick Save again on one to add it.', true)
+    return $('ytTracks').querySelector('.yt-dup input').focus()
+  }
   say('ytSaveMsg', '')
   const btn = $('ytSaveBtn')
   const label = btn.textContent
   btn.textContent = 'Saving…'
-  const plan = ytPlan()
-  const body = { artist, album, ...(year ? { year } : {}), tracks: ytSave.tracks.map((t, i) => ({ videoId: t.r.videoId, title: t.title.trim(), track: plan.nums[i] })) }
-  const r = await act(btn, () => api('/v1/providers/youtube/mirror', { body }), 'ytSaveMsg')
+  const body = { artist, album, ...(year ? { year } : {}), tracks: plan.send.map(t => ({ videoId: t.r.videoId, title: t.title.trim(), track: plan.nums[ytSave.tracks.indexOf(t)] })) }
+  // A refusal the owner can act on (the album folder holds other files) leads; the relay's words stay as detail.
+  let r = null
+  btn.disabled = true
+  try { r = await api('/v1/providers/youtube/mirror', { body }) } catch (err) { ytSayFail('ytSaveMsg', err.message) } finally { btn.disabled = false }
   btn.textContent = label
   if (!r || !r.job) return
-  for (const t of ytSave.tracks) { ytPicked.delete(t.r.videoId); ytStarted.set(t.r.videoId, r.job.jobId) }
+  for (const t of ytSave.tracks) ytPicked.delete(t.r.videoId)
+  for (const t of plan.send) ytStarted.set(t.r.videoId, { id: r.job.jobId, at: Date.now() })
   ytSave.done = true
   $('ytSave').close()
   if (!S.jobs.some(j => j.jobId === r.job.jobId)) S.jobs.unshift(r.job)
@@ -2774,6 +2815,8 @@ function slskFolderItem (g) {
     return n === g.files.length ? 'Mirror folder' : n ? 'Mirror ' + plural(n, 'track', 'tracks') : 'None selected'
   }
   const mirror = slskMirrorBtn(g, picked, label(), 'slskBrowseMsg')
+  // Nothing picked keeps the button off, also when a finished mirror gives it back.
+  mirror.toggleAttribute('data-none', !picked().length)
   if (!picked().length) mirror.disabled = true
   const where = slskLeaf(g.dir, 2)
   const facts = [plural(g.files.length, 'track', 'tracks'), slskQuality(g), size(g.bytes), g.secs ? slskMinutes(g.secs) : ''].filter(Boolean).join(' · ')
@@ -2792,8 +2835,10 @@ function slskFolderItem (g) {
           h('input', { type: 'checkbox', checked: !off.has(f.filename), onchange: ev => {
             if (ev.target.checked) off.delete(f.filename)
             else off.add(f.filename)
+            mirror.toggleAttribute('data-none', !picked().length)
+            mirror.dataset.label = label()
             if (slskStarted.has(g.key)) return
-            mirror.textContent = mirror.dataset.label = label()
+            mirror.textContent = mirror.dataset.label
             mirror.disabled = !picked().length
           } }),
           h('span', { class: 'grow' }, slskLeaf(slskPath(f.filename)))),
@@ -2871,14 +2916,25 @@ function jobProgress (j) {
   if (n > 30) return h('div', { class: 'bar-track', ...aria }, h('div', { style: 'width:' + Math.round(doneN / n * 100) + '%' }))
   return h('div', { class: 'bar-steps', ...aria }, Array.from({ length: n }, (_, i) => h('i', { class: i < doneN ? 'done' : i === doneN && j.status === 'transferring' ? 'now' : '' })))
 }
-// Whole words and YouTube's own phrases only: "age" inside "storage" or "webpage" is no age gate.
+// What went wrong, as a sentence the owner can act on, from YouTube's or the relay's own words (kept as detail).
+// Whole words and phrases only: "age" inside "storage" or "webpage" is no age gate. The order matters: YouTube says
+// "Video unavailable" before a country block too.
 const YT_FAIL_HINTS = [
-  [/not a bot/i, 'YouTube is refusing this relay for now. Try later.'],
-  [/\\bcountry\\b|not available in your/i, 'Not available where this relay is.'],
-  [/\\bage\\b|confirm your age|age[- ]restricted/i, 'Needs a signed-in account; this relay has none.'],
-  [/\\bprivate video\\b|\\bvideo is private\\b|\\bmembers[- ]only\\b|join this channel/i, 'Private or members-only video.']
+  [/refusing downloads|\\bbot check\\b|not a bot/i, 'YouTube blocks saves from this relay’s network. Try later, or from another network.'],
+  [/\\bcountry\\b|not available in your|geo[- ]?restrict/i, 'This video is blocked where the relay is. Pick another upload.'],
+  [/confirm your age|\\bage[- ](restricted|gated?)\\b|inappropriate for some users/i, 'This video is age-restricted, which needs an account. Pick another upload.'],
+  [/\\bprivate video\\b|\\bvideo is private\\b|\\bmembers[- ]only\\b|join this channel|\\bremoved\\b|no longer available|video unavailable|\\bterminated\\b|does not exist/i, 'This video is private or was removed. Pick another upload.'],
+  [/already holds/i, 'The album folder already holds other files. Change the album name or year.'],
+  [/\\bstalled\\b|timed out|\\btimeout\\b|ETIMEDOUT/i, 'YouTube stopped sending. Try again.']
 ]
 const ytFailHint = error => ((YT_FAIL_HINTS.find(([re]) => re.test(String(error || ''))) || [])[1]) || ''
+// The provider's or relay's own words, one press away under the sentence.
+const ytWhy = (lines, fk) => h('details', { class: 'meta why' }, h('summary', { 'data-fk': fk || null }, 'Details'), lines.map(t => h('div', { class: 'wrap' }, t)))
+function ytSayFail (id, error) {
+  const hint = ytFailHint(error)
+  say(id, hint || error, true)
+  if (hint) $(id).append(ytWhy([error]))
+}
 // The song a one-track save is of, from its file name ("04 - Revenga.m4a"): such a card names the song, not just
 // the album it went into.
 const ytJobSong = j => j.plugin === 'youtube' && j.fileCount === 1 && j.file ? j.file.replace(/^[0-9]+ - /, '').replace(/[.][a-z0-9]{2,4}$/i, '') : ''
@@ -2892,6 +2948,8 @@ function srcJobItem (j) {
   const song = ytJobSong(j)
   const track = yt ? (song ? '' : j.file || '') : [j.fileCount > 1 ? 'Track ' + j.fileIndex + ' of ' + j.fileCount : '', j.file].filter(Boolean).join(' · ')
   const skipped = yt && j.status === 'done' ? j.skipped || [] : []
+  const hinted = skipped.filter(s => ytFailHint(s.error))
+  const failHint = j.status === 'failed' && yt ? ytFailHint(j.error) : ''
   const btn = (label, fn) => h('button', { class: 'btn' + (label === 'Open album' ? '' : ' quiet'), 'data-fk': j.jobId + ':' + label, onclick: fn }, label)
   return h('div', { class: 'item job src-job', 'data-job': j.jobId, 'data-status': j.status },
     h('div', { class: 'info' },
@@ -2900,26 +2958,28 @@ function srcJobItem (j) {
       active && track ? h('div', { class: 'meta wrap' }, track) : null,
       active && slskAmount(j) ? h('div', { class: 'meta slsk-amount' }, slskAmount(j)) : null,
       active ? jobProgress(j) : null,
-      skipped.map(s => h('div', { class: 'meta wrap' }, 'Not saved: ' + s.title + (s.error ? ' (' + s.error + ')' : ''))),
+      skipped.map(s => h('div', { class: 'meta wrap' }, 'Not saved: ' + s.title + (ytFailHint(s.error) ? '. ' + ytFailHint(s.error) : s.error ? ' (' + s.error + ')' : ''))),
+      hinted.length ? ytWhy(hinted.map(s => s.title + ': ' + s.error), j.jobId + ':why') : null,
       j.status === 'done' && j.note && !skipped.length ? h('div', { class: 'meta wrap' }, j.note) : null,
-      j.status === 'failed' && j.error ? h('div', { class: 'meta err wrap slsk-error' }, j.error) : null,
-      j.status === 'failed' && yt && ytFailHint(j.error) ? h('div', { class: 'meta wrap' }, ytFailHint(j.error)) : null,
+      j.status === 'failed' && j.error ? h('div', { class: 'meta err wrap slsk-error' }, failHint || j.error) : null,
+      failHint ? ytWhy([j.error], j.jobId + ':why') : null,
       j.status === 'failed' && unreachable ? h('div', { class: 'meta wrap slsk-fix' }, ...slskPortFix(p.listenPort || p.listenPortSetting || j.listenPort)) : null),
     h('div', { class: 'acts' },
       album ? btn('Open album', () => { const t = tileOf(album); if (t) openDetail(t.key) }) : null,
       btn(active ? 'Cancel' : 'Dismiss', e => act(e.currentTarget, async () => { await api('/v1/jobs/' + j.jobId, { method: 'DELETE' }); refresh() }))))
 }
-// A button that started a job follows it; "s:" keys are Soulseek folders, "y:" keys YouTube videos.
+// A button that started a job follows it; "s:" keys are Soulseek folders, "y:" keys YouTube videos. A job that
+// failed, was cancelled, or left the list (dismissed, or trimmed by the relay) gives the button back.
 function srcSyncButton (b) {
   const key = b.dataset.srcKey
   const started = key.startsWith('y:') ? ytStarted : slskStarted
-  const id = started.get(key.slice(2))
-  if (!id) return
-  const j = S.jobs.find(x => x.jobId === id)
-  if (j && (j.status === 'failed' || j.status === 'cancelled')) {
+  const was = started.get(key.slice(2))
+  if (!was) return
+  const j = S.jobs.find(x => x.jobId === was.id)
+  if (j ? j.status === 'failed' || j.status === 'cancelled' : S.jobsAsked > was.at) {
     started.delete(key.slice(2))
     b.textContent = b.dataset.label
-    b.disabled = false
+    b.disabled = b.hasAttribute('data-none')
     return
   }
   b.textContent = j ? jobState(j).short : key.startsWith('y:') ? 'Waiting' : 'Mirroring'
@@ -2934,7 +2994,10 @@ function renderSrcJobs () {
   const jobs = S.jobs.filter(j => SOURCE_NAMES.has(j.plugin) && (j.status !== 'done' || j.created > recent))
     .sort((a, b) => MIRROR_ACTIVE.has(b.status) - MIRROR_ACTIVE.has(a.status) || b.created - a.created).slice(0, 5)
   box.hidden = !jobs.length
+  // Opened details stay open too.
+  const opened = new Set([...box.querySelectorAll('details[open]')].map(d => d.closest('[data-job]').dataset.job))
   box.replaceChildren(...jobs.map(srcJobItem))
+  for (const d of box.querySelectorAll('details')) d.open = opened.has(d.closest('[data-job]').dataset.job)
   const again = fk && (fk.startsWith('name:') ? box.querySelector('[data-job="' + fk.slice(5) + '"] .name') : [...box.querySelectorAll('[data-fk]')].find(b => b.dataset.fk === fk))
   if (again) again.focus()
   for (const b of document.querySelectorAll('button[data-src-key]')) srcSyncButton(b)
@@ -2953,7 +3016,8 @@ async function pollMirrors () {
   try {
     while (S.jobs.some(srcActive)) {
       await new Promise(resolve => setTimeout(resolve, 1000))
-      try { S.jobs = (await api('/v1/jobs')).jobs || [] } catch { failed = true; break }
+      const asked = Date.now()
+      try { S.jobs = (await api('/v1/jobs')).jobs || []; S.jobsAsked = asked } catch { failed = true; break }
       noticeJobs(false)
       if (!pressing) renderMirrors()
     }

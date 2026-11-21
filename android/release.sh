@@ -3,6 +3,8 @@
 #   sh android/release.sh                    default engine in native.lock (or $PEARTUBE_ENGINE)
 #   sh android/release.sh --engine rust      pinned Rust native engine (-rust-arm64.apk)
 #   sh android/release.sh --engine both      both JS and Rust release APKs side by side
+# Gradle signs only when the script passes -Ppeartube.signRelease; every other Gradle run
+# (help, debug, -Ppeartube.dev) reads no password.
 # Gradle signs with ~/.gradle/gradle.properties (peartube.keystore, peartube.keyAlias) and the two passwords
 # (peartube.keystorePassword, peartube.keyPassword) from there or from the login Keychain (service peartube-release).
 # check-signer.sh then refuses any APK not signed by the release key.
@@ -40,7 +42,7 @@ if [ -x /usr/libexec/java_home ]; then JAVA_HOME=$(/usr/libexec/java_home -v 17)
 export ANDROID_HOME
 version=$(node -p 'require("../package.json").version')
 
-./gradlew --console=plain :app:assembleRelease "-Ppeartube.engine=$engine" ${native_local:+"-Ppeartube.nativeLocal=$native_local"}
+./gradlew --console=plain :app:assembleRelease -Ppeartube.signRelease "-Ppeartube.engine=$engine" ${native_local:+"-Ppeartube.nativeLocal=$native_local"}
 mkdir -p build/release-apk
 suffix=""
 [ "$engine" = "rust" ] && suffix="-rust"

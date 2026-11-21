@@ -102,8 +102,8 @@ abstract class CargoTask @Inject constructor(private val exec: ExecOperations) :
 
 val nativeCrate = File(checkout, "android/native")
 
-// Release signing: keystore path and alias from ~/.gradle/gradle.properties, passwords from there or the
-// login Keychain (buildSrc ReleaseSigning.kt).
+// Only -Ppeartube.signRelease enables release signing. Without it, or with -Ppeartube.dev,
+// Gradle reads no release passwords (buildSrc ReleaseSigning.kt).
 val signing = releaseSigning()
 
 android {

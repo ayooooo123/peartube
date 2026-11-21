@@ -424,11 +424,15 @@ export function createYoutubePlugin ({
   async function stop () {
     closed = true
     for (const j of jobs.values()) {
-      if (j.status === 'queued' || j.status === 'transferring') {
+      // A save waiting for another import has placed nothing: closing ends it as a cancel, as Cancel would.
+      if (j.status === 'queued' || j.status === 'transferring' || (j.status === 'announcing' && j.phase === 'waiting')) {
         j.controller.aborted = true
         j.controller.onabort?.()
+        if (j.status === 'announcing') Object.assign(j, { status: 'cancelled', phase: 'cancelled' })
       }
     }
+    // Each job above ends at its next step (a killed download, the wait's next check), so this is short; it keeps
+    // a job from writing after the host has closed.
     await chain
   }
 

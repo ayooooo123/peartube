@@ -151,8 +151,8 @@ export const page = `<!doctype html>
   .badge.live { display: inline-flex; align-items: center; gap: 5px; background: var(--live); color: #fff; border: 0; align-self: flex-start; margin-bottom: 2px; }
   .badge.live::before { content: ''; width: 5px; height: 5px; border-radius: 50%; background: #fff; }
   .r-card.live .r-track { display: none; }
-  #detail { width: min(760px, calc(100% - 24px)); max-height: calc(100% - 48px); padding: 0; border: 1px solid var(--line); border-radius: var(--r-panel); background: var(--surface); color: var(--text); box-shadow: 0 40px 90px rgba(0,0,0,.5); }
-  #detail::backdrop { background: color-mix(in srgb, #05060a 72%, transparent); backdrop-filter: blur(6px); }
+  #detail, #ytSave { width: min(760px, calc(100% - 24px)); max-height: calc(100% - 48px); padding: 0; border: 1px solid var(--line); border-radius: var(--r-panel); background: var(--surface); color: var(--text); box-shadow: 0 40px 90px rgba(0,0,0,.5); }
+  #detail::backdrop, #ytSave::backdrop { background: color-mix(in srgb, #05060a 72%, transparent); backdrop-filter: blur(6px); }
   #detail .bar { padding: 14px 14px 0 22px; justify-content: flex-end; }
   #detailBody { padding: 0 22px 22px; }
   .detail-head { display: flex; gap: 20px; align-items: flex-start; margin-bottom: 20px; }
@@ -160,7 +160,7 @@ export const page = `<!doctype html>
   .detail-head h3 { font-size: 24px; font-weight: 700; letter-spacing: -0.015em; line-height: 1.2; margin: 2px 0 8px; }
   .rows { display: flex; flex-direction: column; }
   .row-item { display: flex; gap: 12px; align-items: center; padding: 12px 0; border-top: 1px solid var(--line); }
-  #detail .meta { white-space: normal; font-size: 13px; line-height: 1.5; }
+  #detail .meta, #ytSave .meta { white-space: normal; font-size: 13px; line-height: 1.5; }
   .file-info { display: grid; gap: 6px; margin-top: 16px; padding-top: 12px; border-top: 1px solid var(--line); font-size: 13px; line-height: 1.5; }
   .rows .file-info { margin-top: 0; padding: 0 0 12px; border-top: 0; }
   .info-row { display: grid; grid-template-columns: 88px minmax(0, 1fr); gap: 12px; }
@@ -432,20 +432,20 @@ export const page = `<!doctype html>
     .album-acts .btn.primary { flex: 1; }
     .rows.tracks .row-item { gap: 8px; padding: 6px 4px; }
   }
-  /* ==== Soulseek sources (SourcesBrowse) ==== */
+  /* ==== Sources: Soulseek and YouTube search, save and progress ==== */
   .slsk-port { margin-top: 12px; font-size: 13px; color: var(--dim); line-height: 1.45; overflow-wrap: anywhere; }
   .slsk-port.alert { background: var(--raised); border-left: 4px solid var(--warn); border-radius: 8px; padding: 10px 12px; color: var(--text); }
   .slsk-port code { font-size: 12.5px; background: var(--surface); padding: 1px 5px; border-radius: 4px; }
   .meta.wrap { white-space: normal; overflow-wrap: anywhere; }
-  .slsk-jobs { margin-top: 12px; }
-  .slsk-jobs .item.job { align-items: flex-start; }
+  .src-jobs { margin-top: 12px; }
+  .src-jobs .item.job { align-items: flex-start; }
   .slsk-state { font-size: 13.5px; font-weight: 600; margin-top: 2px; overflow-wrap: anywhere; }
   .slsk-state.ok { color: var(--ok); }
   .slsk-state.bad { color: var(--bad); }
   .slsk-state.warn { color: var(--warn); }
   .slsk-amount { font-variant-numeric: tabular-nums; }
-  .slsk-jobs .bar-track { height: 5px; }
-  .slsk-jobs .bar-track.wait > div { background: var(--dim); }
+  .src-jobs .bar-track { height: 5px; }
+  .src-jobs .bar-track.wait > div { background: var(--dim); }
   .slsk-fix { color: var(--text); }
   .slsk-fix code { font-size: 12px; background: var(--raised); padding: 1px 5px; border-radius: 4px; }
   .slsk-tools { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; margin: 10px 0; }
@@ -472,10 +472,91 @@ export const page = `<!doctype html>
     .slsk-file { flex-wrap: wrap; }
     .slsk-file .meta { max-width: none; flex-basis: 100%; padding-left: 28px; }
     .slsk-tools select { width: 100%; }
-    .slsk-jobs .item.job { flex-wrap: wrap; }
-    .slsk-jobs .item.job .acts { width: 100%; justify-content: flex-start; }
+    .src-jobs .item.job { flex-wrap: wrap; }
+    .src-jobs .item.job .acts { width: 100%; justify-content: flex-start; }
   }
-  /* ==== end Soulseek sources ==== */
+  .src-in { display: flex; gap: 6px 10px; align-items: center; flex-wrap: wrap; }
+  .src-in .chips { margin-top: 0; }
+  .chip .st { font-weight: 500; opacity: .85; }
+  .chip.setup { border-style: dashed; }
+  .chip[aria-disabled='true'] { opacity: .6; cursor: default; }
+  .chip .warn-ic { color: var(--warn); }
+  .src-summary { display: flex; flex-wrap: wrap; gap: 4px 10px; margin-top: 12px; font-size: 13.5px; color: var(--dim); }
+  .src-summary a { color: var(--text); font-weight: 600; text-decoration: none; }
+  .src-summary a:hover { text-decoration: underline; }
+  .src-summary .sep { opacity: .55; }
+  .src-group { margin-top: 22px; }
+  .src-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; }
+  .src-head h3 { margin: 0; font-size: 16px; display: inline-flex; align-items: baseline; gap: 8px; }
+  .src-head h3:focus { outline: none; }
+  .src-head h3:focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; }
+  .src-head .count { margin-left: auto; color: var(--dim); font-size: 13px; font-variant-numeric: tabular-nums; display: inline-flex; align-items: center; gap: 8px; }
+  .src-note { color: var(--dim); font-size: 13px; margin-top: 4px; overflow-wrap: anywhere; display: flex; flex-wrap: wrap; gap: 6px 10px; align-items: center; }
+  .src-note .btn { min-height: 32px; padding: 0 12px; font-size: 13px; }
+  .src-group > .list { margin-top: 10px; }
+  .src-group .msg { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: center; }
+  .src-tag { margin-right: 6px; }
+  .src-glyph { width: 40px; height: 40px; flex: none; border-radius: 10px; background: var(--raised); color: var(--dim); display: flex; align-items: center; justify-content: center; }
+  .src-glyph svg { width: 20px; height: 20px; }
+  .item.src-row { align-items: flex-start; }
+  .yt-pick-row { flex: 1 1 320px; min-width: 0; min-height: 72px; display: flex; gap: 12px; align-items: center; cursor: pointer; font-weight: inherit; font-size: inherit; }
+  .yt-pick-row > input { width: 20px; height: 20px; flex: none; margin: 0; accent-color: var(--brand); }
+  .yt-pick-row .info { flex: 1; min-width: 0; }
+  .yt-pick-row .meta { display: block; }
+  .yt-pick-row .name .tag { margin-left: 6px; }
+  .yt-thumb { position: relative; border-radius: 8px; }
+  .yt-thumb.sm { width: 48px; height: 27px; border-radius: 4px; }
+  .yt-ph { width: 0; height: 0; border-left: 16px solid var(--dim); border-top: 10px solid transparent; border-bottom: 10px solid transparent; opacity: .7; }
+  .yt-thumb.sm .yt-ph { border-left-width: 9px; border-top-width: 6px; border-bottom-width: 6px; }
+  .yt-thumb img { z-index: 1; }
+  .yt-dur { position: absolute; z-index: 2; right: 4px; bottom: 4px; padding: 1px 5px; border-radius: 4px; background: rgba(0,0,0,.72); color: var(--on-media); font-size: 11px; font-weight: 600; font-variant-numeric: tabular-nums; }
+  .yt-pick { position: sticky; bottom: 12px; z-index: 5; display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: center; margin-top: 12px; padding: 10px 12px; background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-card); box-shadow: 0 10px 30px rgba(0,0,0,.25); }
+  body.np-on .yt-pick { bottom: calc(var(--np-h) + 12px); }
+  .yt-pick .grow { flex: 1 1 140px; min-width: 0; font-weight: 600; font-size: 14px; overflow-wrap: anywhere; }
+  #ytSaveClose { position: absolute; top: 14px; right: 14px; }
+  .yt-save { padding: 22px; }
+  .yt-save h3 { font-size: 20px; margin: 0 96px 4px 0; }
+  #ytSaveNote { margin: 12px 0 0; }
+  #ytSaveNote div + div { margin-top: 4px; }
+  #ytSaveHint { display: block; margin: -6px 0 14px; }
+  #ytSaveSub { margin-bottom: 16px; }
+  #ytSaveNote { margin-bottom: 16px; }
+  .yt-tracks { border: 0; padding: 0; margin: 0 0 6px; min-width: 0; }
+  .yt-tracks legend { font-weight: 600; font-size: 14px; padding: 0; margin-bottom: 8px; }
+  .yt-tracks ol { list-style: none; margin: 0 0 8px; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+  .yt-tracks li { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+  .yt-tracks .tn { width: 22px; flex: none; text-align: right; color: var(--dim); font-variant-numeric: tabular-nums; font-weight: 600; }
+  .yt-tracks li input { flex: 1 1 200px; width: auto; min-width: 0; }
+  .yt-tracks .dur { color: var(--dim); font-size: 13px; font-variant-numeric: tabular-nums; min-width: 36px; }
+  .yt-tracks .mv { display: inline-flex; gap: 4px; }
+  .ic-btn { width: 32px; height: 32px; padding: 0; border-radius: 8px; border: 1px solid var(--line); background: transparent; color: var(--text); font: inherit; font-size: 14px; cursor: pointer; display: inline-flex; align-items: center; justify-content: center; }
+  .ic-btn[aria-disabled='true'] { opacity: .4; cursor: default; }
+  .yt-save-acts { margin-top: 12px; }
+  .bar-steps { display: flex; gap: 3px; margin-top: 10px; }
+  .bar-steps > i { flex: 1; height: 5px; border-radius: 2px; background: var(--raised); }
+  .bar-steps > i.done { background: var(--brand); }
+  .bar-steps > i.now { background: var(--brand-soft); background-image: linear-gradient(90deg, transparent, var(--brand), transparent); background-size: 200% 100%; animation: srcSheen 1.4s linear infinite; }
+  .bar-track.indef { position: relative; }
+  .bar-track.indef > div { width: 30%; animation: srcSlide 1.4s ease-in-out infinite; }
+  @keyframes srcSheen { from { background-position: 100% 0; } to { background-position: -100% 0; } }
+  @keyframes srcSlide { from { transform: translateX(-100%); } to { transform: translateX(340%); } }
+  @media (prefers-reduced-motion: reduce) {
+    .bar-steps > i.now { animation: none; background: var(--dim); }
+    .bar-track.indef > div { animation: none; width: 100%; background: var(--dim); }
+  }
+  @media (pointer: coarse) {
+    .chip { min-height: 40px; }
+    .ic-btn { width: 44px; height: 44px; }
+  }
+  @media (max-width: 640px) {
+    .yt-pick .btn { flex: 1; }
+    .yt-pick .grow { flex-basis: 100%; }
+    .yt-save { padding: 18px 16px; }
+    .yt-tracks li input { flex-basis: calc(100% - 30px); }
+    .yt-tracks .dur { margin-left: 30px; }
+    .yt-tracks .mv { margin-left: auto; }
+  }
+  /* ==== end Sources ==== */
   /* ==== Delete (DeleteAndSingleMirror) ==== */
   .track-del { flex: none; min-width: 32px; height: 32px; padding: 0 6px; display: inline-flex; align-items: center; justify-content: center; border: 0; border-radius: 8px; background: transparent; color: var(--dim); font: inherit; font-size: 13px; font-weight: 600; cursor: pointer; opacity: 0; transition: opacity var(--t-fast) var(--ease); }
   .track-del svg { width: 18px; height: 18px; }
@@ -583,25 +664,29 @@ export const page = `<!doctype html>
       <input id="musicFilter" type="search" aria-label="Search music" placeholder="Chop Suey!">
     </div>
     <div class="shelf" id="albums"></div>
-    <h2>Find albums</h2>
-    <!-- ==== Soulseek sources (SourcesBrowse) ==== -->
-    <form id="slskForm" class="card">
+    <h2>Find music</h2>
+    <!-- ==== Sources: one search over Soulseek and YouTube ==== -->
+    <form id="srcForm" class="card">
       <div class="field">
-        <label for="slskInput">Artist or album</label>
-        <div class="row"><input class="grow" id="slskInput" type="search" spellcheck="false" placeholder="John Coltrane Blue Train" required><button class="btn primary" type="submit" id="slskBtn">Search</button></div>
-        <span class="hint" id="slskHint">Finds albums on peers and mirrors them here.</span>
+        <label for="srcInput">Artist or album</label>
+        <div class="row"><input class="grow" id="srcInput" type="search" spellcheck="false" placeholder="John Coltrane Blue Train" required><button class="btn primary" type="submit" id="srcBtn">Search</button></div>
+        <div class="src-in" id="srcIn" hidden><span class="label" id="srcInLabel">Search in</span><div class="chips" id="srcChips" role="group" aria-labelledby="srcInLabel"></div></div>
+        <span class="hint" id="srcHint">Finds albums on peers and mirrors them here.</span>
+        <div class="meta wrap" id="srcNote" hidden></div>
       </div>
       <div class="slsk-port" id="slskPort" role="note" hidden></div>
-      <div class="list slsk-jobs" id="slskJobs" aria-label="Mirrors" hidden></div>
-      <div class="msg" id="slskMsg" role="status"></div>
-      <div class="slsk-tools" id="slskTools" hidden>
-        <select id="slskSort" aria-label="Sort albums"><option value="ready">Ready to send first</option><option value="quality">Best quality first</option><option value="size">Largest first</option></select>
-        <span class="hint">A queue means the peer sends to others first.</span>
+      <div class="list src-jobs" id="srcJobs" aria-label="Adding" hidden></div>
+      <div class="msg" id="srcMsg" role="status"></div>
+      <nav class="src-summary" id="srcSummary" aria-label="Results by source" hidden></nav>
+      <div id="srcGroups"></div>
+      <div class="yt-pick" id="ytPick" role="region" aria-label="Selected videos" hidden>
+        <span class="grow" id="ytPickText"></span>
+        <button class="btn primary" type="button" id="ytPickSave">Save track</button>
+        <button class="btn quiet" type="button" id="ytPickClear">Clear</button>
       </div>
-      <div class="list" id="slskResults"></div>
     </form>
     <div class="card slsk-browse" id="slskBrowse" hidden></div>
-    <!-- ==== end Soulseek sources ==== -->
+    <!-- ==== end Sources ==== -->
   </section>
 
   <section id="tab-channels" data-panel="channels" hidden>
@@ -704,6 +789,22 @@ export const page = `<!doctype html>
 <dialog id="detail" aria-labelledby="detailTitle">
   <div class="bar"><button class="btn quiet" id="detailClose" type="button">Close</button></div>
   <div id="detailBody"></div>
+</dialog>
+<dialog id="ytSave" aria-labelledby="ytSaveTitle">
+  <form id="ytSaveForm" class="yt-save" novalidate>
+    <h3 id="ytSaveTitle">Save from YouTube</h3>
+    <div class="meta" id="ytSaveSub"></div>
+    <div class="slsk-port alert" id="ytSaveNote" role="note" hidden></div>
+    <div class="field"><label for="ytArtist">Artist</label><input id="ytArtist" type="text" required autocomplete="off" spellcheck="false" placeholder="System of a Down"></div>
+    <div class="field"><label for="ytAlbum">Album</label><input id="ytAlbum" type="text" required autocomplete="off" spellcheck="false" placeholder="Mezmerize"></div>
+    <div class="field"><label for="ytYear">Year (optional)</label><input id="ytYear" type="text" inputmode="numeric" maxlength="4" autocomplete="off" placeholder="2005"></div>
+    <span class="hint" id="ytSaveHint" hidden></span>
+    <fieldset class="yt-tracks"><legend>Tracks</legend><ol id="ytTracks"></ol><span class="hint">Numbered in this order on disc 1.</span></fieldset>
+    <div class="msg" id="ytSaveMsg" role="alert"></div>
+    <div class="vh" id="ytSaveLive" role="status"></div>
+    <div class="row yt-save-acts"><button class="btn primary" type="submit" id="ytSaveBtn">Save track</button><button class="btn quiet" type="button" id="ytSaveCancel">Cancel</button></div>
+    <button class="btn quiet" type="button" id="ytSaveClose">Close</button>
+  </form>
 </dialog>
 <div id="castBar" hidden></div>
 <div class="np" id="np" role="region" aria-label="Music player" hidden>
@@ -817,19 +918,24 @@ function duration (s) {
 
 let token = localStorage.getItem('peartube.token') || ''
 let needsToken = false
+// The token header every owner route needs; a 401 shows the sign-in form. api() and the streamed search share them.
+function authHeaders (json) {
+  const headers = {}
+  if (json) headers['content-type'] = 'application/json'
+  if (token) headers.authorization = 'Bearer ' + token
+  return headers
+}
+function signInFirst () {
+  needsToken = true
+  $('authForm').hidden = false
+  return new Error('Sign in with the access token first.')
+}
 // Every call goes through here: the token rides along, a 401 asks for it, errors come back as messages.
 async function api (path, { method, body } = {}) {
-  const headers = {}
-  if (body !== undefined) headers['content-type'] = 'application/json'
-  if (token) headers.authorization = 'Bearer ' + token
-  const res = await fetch(path, { method: method || (body !== undefined ? 'POST' : 'GET'), headers, body: body !== undefined ? JSON.stringify(body) : undefined })
+  const res = await fetch(path, { method: method || (body !== undefined ? 'POST' : 'GET'), headers: authHeaders(body !== undefined), body: body !== undefined ? JSON.stringify(body) : undefined })
   let data = null
   try { data = await res.json() } catch {}
-  if (res.status === 401) {
-    needsToken = true
-    $('authForm').hidden = false
-    throw new Error('Sign in with the access token first.')
-  }
+  if (res.status === 401) throw signInFirst()
   if (!res.ok) throw new Error((data && data.error) || 'The relay answered ' + res.status)
   return data
 }
@@ -903,6 +1009,15 @@ for (const evName of ['pointerup', 'pointercancel', 'blur']) {
 
 const S = { status: {}, sources: { sources: [], discovered: [], published: [] }, entries: [], jobs: [], plugins: [], cast: null, settings: null, identity: null }
 const plugin = name => S.plugins.find(p => p.name === name) || {}
+// The music sources this page can search, in the order their groups are drawn: the one that can hold the better
+// copy first. Display names only; the ids stay off screen.
+const SOURCES = [['soulseek', 'Soulseek'], ['youtube', 'YouTube']]
+const SOURCE_NAMES = new Set(SOURCES.map(s => s[0]))
+const sourceLabel = name => (SOURCES.find(s => s[0] === name) || [name, 'This source'])[1]
+// A copy saved from YouTube is AAC at about 128 kbps whatever its header says, and its id says where it came from.
+const YT_CODEC = 'AAC 128 kbps'
+const YT_LABEL = 'YouTube · ' + YT_CODEC
+const isYt = e => String((e && e.id) || '').startsWith('yt:')
 const setting = key => S.settings && S.settings.settings[key]
 const sval = key => setting(key) ? setting(key).value : undefined
 
@@ -941,7 +1056,7 @@ async function refresh () {
   }
   if (pressing || player) { refreshQueued = true; return }
   render()
-  if (S.jobs.some(slskActive)) pollMirrors()
+  if (S.jobs.some(srcActive)) pollMirrors()
   if (tab === 'settings') refreshSettingsView()
 }
 let settingsShown = ''
@@ -984,13 +1099,14 @@ function renderPills () {
     pills.push(h('span', { class: 'pill' + (st.peers || st.lanPeers ? ' ok' : '') }, h('b', null, String((st.peers || 0))), ' ', (st.peers === 1 ? 'peer' : 'peers'), st.lanPeers ? ' · ' + st.lanPeers + ' nearby' : ''))
     pills.push(h('span', { class: 'pill rate' }, '↓ ', h('b', null, rate(st.downBps)), ' ↑ ', h('b', null, rate(st.upBps))))
   }
-  // A mirror runs for minutes; the header says so on every tab, and a press goes to its progress.
-  const mirrors = S.jobs.filter(j => j.plugin === 'soulseek' && MIRROR_ACTIVE.has(j.status))
-  if (!S.offline && mirrors.length) {
-    const total = mirrors.every(j => j.total > 0) ? mirrors.reduce((n, j) => n + j.total, 0) : 0
-    const pct = total ? Math.min(99, Math.floor(mirrors.reduce((n, j) => n + (j.bytes || 0), 0) / total * 100)) : null
-    const btn = h('button', { class: 'pill busy', type: 'button' }, 'Mirroring' + (mirrors.length > 1 ? ' ' + mirrors.length + ' albums' : '') + (pct != null ? ' ' + pct + '%' : ''))
-    btn.onclick = () => { location.hash = '#music'; setTimeout(() => $('slskJobs').scrollIntoView({ block: 'center' }), 0) }
+  // An album being added runs for minutes; the header says so on every tab, and a press goes to its progress. A
+  // percentage only when every running job knows its total (a YouTube save never does).
+  const adding = S.jobs.filter(srcActive)
+  if (!S.offline && adding.length) {
+    const total = adding.every(j => j.total > 0) ? adding.reduce((n, j) => n + j.total, 0) : 0
+    const pct = total ? Math.min(99, Math.floor(adding.reduce((n, j) => n + (j.bytes || 0), 0) / total * 100)) : null
+    const btn = h('button', { class: 'pill busy', type: 'button' }, 'Adding' + (adding.length > 1 ? ' ' + adding.length + ' albums' : '') + (pct != null ? ' ' + pct + '%' : ''))
+    btn.onclick = () => { location.hash = '#music'; setTimeout(() => $('srcJobs').scrollIntoView({ block: 'center' }), 0) }
     pills.push(btn)
   }
   const restart = S.settings ? S.settings.restartNeeded.length : 0
@@ -1003,16 +1119,17 @@ function renderPills () {
   $('pills').replaceChildren(...pills)
 }
 const MIRROR_ACTIVE = new Set(['queued', 'running', 'transferring', 'announcing'])
-// When a mirror lands or fails, say so on whichever tab is open. The first load only learns what is already there.
+// When an album lands or fails, say so on whichever tab is open. The first load only learns what is already there.
 const jobWas = new Map()
 function noticeJobs (first) {
   for (const j of S.jobs) {
-    if (j.plugin !== 'soulseek') continue
+    if (!SOURCE_NAMES.has(j.plugin)) continue
     const was = jobWas.get(j.jobId)
     jobWas.set(j.jobId, j.status)
     if (first || was === j.status || (was && !MIRROR_ACTIVE.has(was))) continue
-    if (j.status === 'done') toast('Added “' + (j.title || 'the album') + '” to your library')
-    else if (j.status === 'failed') toast('Could not mirror “' + (j.title || 'the album') + '”' + (j.error ? ': ' + j.error : ''))
+    const title = '“' + (j.title || 'the album') + '”'
+    if (j.status === 'done') toast('Added ' + title + ' to your library')
+    else if (j.status === 'failed') toast((j.plugin === 'youtube' ? 'Could not save ' + title + ' from YouTube' : 'Could not mirror ' + title) + (j.error ? ': ' + j.error : ''))
   }
 }
 
@@ -1153,7 +1270,7 @@ $('copyForm').onsubmit = async ev => {
 
 // ---- Library: jobs and entries
 // Copying: the file is already in a followed channel, so the relay takes that copy from peers instead of downloading.
-// Album mirrors have their own card under Find albums (slskJobItem); this list is everything else.
+// Albums from music sources have their own card under Find music (srcJobItem); this list is everything else.
 const JOB_TEXT = { queued: 'Waiting', copying: 'Copying from peers', running: 'Downloading', announcing: 'Publishing', done: 'Added', failed: 'Failed', cancelled: 'Cancelled' }
 function jobItem (j) {
   const active = j.status === 'queued' || j.status === 'copying' || j.status === 'running' || j.status === 'announcing'
@@ -1174,7 +1291,7 @@ function jobItem (j) {
 }
 function renderJobs () {
   const recent = Date.now() - 6 * 3600_000
-  const jobs = S.jobs.filter(j => j.plugin !== 'soulseek' && (j.status !== 'done' || j.created > recent)).sort((a, b) => b.created - a.created).slice(0, 20)
+  const jobs = S.jobs.filter(j => !SOURCE_NAMES.has(j.plugin) && (j.status !== 'done' || j.created > recent)).sort((a, b) => b.created - a.created).slice(0, 20)
   $('jobsWrap').hidden = !jobs.length
   $('jobCount').textContent = jobs.length ? String(jobs.length) : ''
   $('jobs').replaceChildren(...jobs.map(jobItem))
@@ -1245,9 +1362,23 @@ function mergeAlbums (tiles) {
     const items = []
     for (const i of all) {
       const prev = items[items.length - 1]
-      if (prev && prev.season === i.season && prev.episode === i.episode && fold(trackName(prev.e)) === fold(trackName(i.e))) prev.copies++
-      else items.push({ ...i, copies: 1 })
+      if (prev && prev.season === i.season && prev.episode === i.episode && fold(trackName(prev.e)) === fold(trackName(i.e))) {
+        prev.copies++
+        prev.alts.push(i.e)
+      } else items.push({ ...i, copies: 1, alts: [] })
     }
+    // A YouTube copy is numbered by whoever saved it, so the same song can sit under another number than the
+    // release's own. Matched by name, it becomes one more copy of that row; the copy saved here (or the larger) plays.
+    const named = new Map()
+    for (const i of items) if (!isYt(i.e) && !named.has(fold(trackName(i.e)))) named.set(fold(trackName(i.e)), i)
+    const rows = items.filter(i => {
+      const twin = isYt(i.e) && !i.alts.some(a => !isYt(a)) ? named.get(fold(trackName(i.e))) : null
+      if (!twin) return true
+      if (saved(i.e) && !saved(twin.e)) [twin.e, i.e] = [i.e, twin.e]
+      twin.copies += i.copies
+      twin.alts.push(i.e, ...i.alts)
+      return false
+    })
     return {
       key: parts[0].key,
       kind: 'album',
@@ -1255,13 +1386,14 @@ function mergeAlbums (tiles) {
       title: artist ? artist + ' · ' + album : album,
       artist,
       album,
-      releases: parts.length,
+      // A YouTube copy beside a release is one more copy, not one more release.
+      releases: parts.filter(p => !p.items.every(i => isYt(i.e))).length,
       // Every announce this tile folded, across all its releases: a delete must reach the sibling release ids, not just
       // the one that happened to sort first, or the tile regroups from the survivors and the album reappears.
       keys: parts.flatMap(p => p.items.map(i => i.e.key)),
-      items,
-      saved: items.filter(i => saved(i.e)).length,
-      partial: items.some(i => !saved(i.e) && i.e.cachedBytes),
+      items: rows,
+      saved: rows.filter(i => saved(i.e)).length,
+      partial: rows.some(i => !saved(i.e) && i.e.cachedBytes),
       seed: sleeveHash(fold(artist) + '\\n' + fold(album))
     }
   })
@@ -1428,11 +1560,16 @@ function shortQuality (d) {
   if (!a) return ''
   return [a.codec, a.depth ? a.depth + '-bit' : '', a.rate ? (a.rate / 1000) + ' kHz' : ''].filter(Boolean).join(' ')
 }
+// What a copy is, for the shelf, the sheet and a track's line: a YouTube copy is named by where it came from.
+const copyQuality = (e, d) => isYt(e) ? YT_LABEL : shortQuality(d)
+// An album that holds a YouTube copy beside another one (rows playing it, or kept as a second copy of a row).
+const hasYt = t => t.items.some(i => isYt(i.e) || (i.alts || []).some(isYt))
+const allYt = t => t.items.every(i => isYt(i.e) && !(i.alts || []).some(a => !isYt(a)))
 // One read per album at a time: the card is painted when it lands, and asked again on a later draw if it did not.
 const qualityAsked = new Set()
 function albumQuality (t) {
-  const e = t.items[0].e
-  if (infoData.has(e.key)) return commonQuality(t)
+  const e = (t.items.find(i => !isYt(i.e)) || t.items[0]).e
+  if (isYt(e) || infoData.has(e.key)) return commonQuality(t)
   if (qualityAsked.has(e.key)) return ''
   qualityAsked.add(e.key)
   infoEntries.set(e.key, e)
@@ -1443,10 +1580,12 @@ function albumQuality (t) {
   })
   return ''
 }
-// Saved here is the normal state of a mirrored album, so it is said only when it is not true.
+// Saved here is the normal state of a mirrored album, so it is said only when it is not true. An album that also
+// holds a YouTube copy says so after what most of it is.
 function albumLine (t) {
   const [state, tone] = tileState(t)
-  return [tone === 'ok' ? '' : state, albumQuality(t)].filter(Boolean).join(' · ')
+  const q = albumQuality(t)
+  return [tone === 'ok' ? '' : state, q, hasYt(t) && !allYt(t) && q !== YT_LABEL ? 'also YouTube' : ''].filter(Boolean).join(' · ')
 }
 function albumPlayBtn (t) {
   const list = t.items.map(i => i.e).filter(e => !e.locked)
@@ -1638,7 +1777,7 @@ $('libFilter').oninput = () => { libShown = 60; renderLibrary() }
 // as the place to listen, and the Soulseek search below it as the way to add more.
 let musicSignature = ''
 function renderMusic (force) {
-  renderSlskStatus()
+  renderSourcesStatus()
   const all = libraryTiles().filter(t => t.kind === 'album')
   const q = $('musicFilter').value.trim().toLowerCase()
   const list = all.filter(t => !q || albumMatches(t, q))
@@ -1693,16 +1832,16 @@ $('globalForm').onsubmit = ev => {
   act($('globalBtn'), askGlobal, 'globalMsg')
 }
 
-// ==== Soulseek sources (SourcesBrowse): search, browse a peer's folders, mirror, port and job legibility ====
-// POST /v1/providers/soulseek/{search,browse,mirror}. Peer paths use backslashes; they are shown with slashes. A
-// search row is the matching files of one peer folder; Browse lists that peer's whole share by folder, so an album's
-// track count, size and per-file depth/rate/length can be checked (and files deselected) before mirroring.
+// ==== Sources: one search over Soulseek and YouTube, browse a peer's folders, save, port and job legibility ====
+// POST /v1/search/sources (streamed: each source's part as it finishes), /v1/providers/soulseek/{browse,mirror} and
+// /v1/providers/youtube/mirror. Peer paths use backslashes; they are shown with slashes. A Soulseek row is the
+// matching files of one peer folder; Browse lists that peer's whole share by folder. A YouTube row is one video.
 const slskPath = s => String(s || '').split('\\\\').join('/')
 const slskDir = f => slskPath(f).split('/').slice(0, -1).join('/')
 const slskLeaf = (path, n) => path.split('/').filter(s => s && !s.startsWith('@@')).slice(-(n || 1)).join(' / ')
 const slskKey = (username, dir) => username + '\\n' + dir.toLowerCase()
 const slskStarted = new Map()
-let slskLast = null
+const ytStarted = new Map()
 let slskView = null
 function slskRate (bitDepth, sampleRate, bitrate) {
   if (bitDepth && sampleRate) return bitDepth + '-bit/' + (sampleRate / 1000) + ' kHz'
@@ -1727,11 +1866,21 @@ function slskFolders (files) {
   return [...groups.values()]
 }
 const slskQuality = g => g.rates.length > 1 ? g.rates[0] + ' (mixed)' : g.rates[0]
+// The most common file type of a folder, as a word: "FLAC", "MP3".
+function slskFormat (g) {
+  const n = new Map()
+  for (const f of g.files) {
+    const ext = (String(f.filename || '').match(/[.]([a-z0-9]{2,5})$/i) || [])[1]
+    if (ext) n.set(ext.toUpperCase(), (n.get(ext.toUpperCase()) || 0) + 1)
+  }
+  return [...n].sort((a, b) => b[1] - a[1]).map(x => x[0])[0] || ''
+}
+const LOSSLESS_FORMATS = new Set(['FLAC', 'WAV', 'ALAC', 'AIFF'])
 
 // The button that starts a mirror then follows it ("Queued at 12", "34%", "Saved") across redraws, so the row that
 // was pressed answers at once; a failed or cancelled mirror gives the button back.
 function slskMirrorBtn (g, pick, label, msgId) {
-  const b = h('button', { class: 'btn primary', 'data-slsk-key': g.key, 'data-label': label, onclick: async () => {
+  const b = h('button', { class: 'btn primary', 'data-src-key': 's:' + g.key, 'data-label': label, onclick: async () => {
     const files = pick()
     if (!files.length || slskStarted.has(g.key)) return
     // The first mirror of a session signs in first, which can take seconds; the press is answered at once.
@@ -1743,47 +1892,574 @@ function slskMirrorBtn (g, pick, label, msgId) {
     renderMirrors()
     pollMirrors()
   } }, label)
-  slskSyncButton(b)
+  srcSyncButton(b)
   return b
 }
 
-const slskSorts = { quality: (a, b) => b.score - a.score || b.bytes - a.bytes, size: (a, b) => b.bytes - a.bytes }
-function renderSourceResults () {
-  if (!slskLast) return
-  const groups = slskFolders(slskLast.candidates)
-  const sorter = slskSorts[$('slskSort').value]
-  if (sorter) groups.sort(sorter)
-  const secs = Math.max(1, Math.round(slskLast.ms / 1000)) + ' s'
-  const peers = new Set(slskLast.candidates.map(c => c.username)).size
-  say('slskMsg', groups.length ? plural(groups.length, 'album', 'albums') + ' from ' + plural(peers, 'peer', 'peers') + ' in ' + secs + '.' : 'No matching albums found in ' + secs + '.')
-  $('slskTools').hidden = !groups.length
-  $('slskResults').replaceChildren(...groups.map(g => h('div', { class: 'item' },
-    h('div', { class: 'info' },
-      h('div', { class: 'name' }, g.title),
-      h('div', { class: 'meta' }, [g.slots ? 'Slots open' : 'Slots full', g.queue ? 'Queue ' + g.queue : 'No queue', slskQuality(g), size(g.bytes), plural(g.files.length, 'matching track', 'matching tracks'), g.username].join(' · '))),
-    h('div', { class: 'acts' },
-      h('button', { class: 'btn', onclick: () => openSlskBrowse(g.username, g.dir) }, 'Browse'),
-      slskMirrorBtn(g, () => g.files, g.files.length === 1 ? 'Mirror track' : 'Mirror', 'slskMsg')))))
+// ---- Chips: which sources a search asks. The user's "off" choices are kept, so a source that becomes usable later
+// (Soulseek after setup) arrives on, and an explicit no sticks across reloads.
+const SRC_OFF_KEY = 'peartube.sourcesOff'
+function sourcesOff () {
+  try { const v = JSON.parse(localStorage.getItem(SRC_OFF_KEY) || '[]'); return Array.isArray(v) ? v : [] } catch { return [] }
 }
-$('slskSort').onchange = renderSourceResults
-$('slskForm').onsubmit = ev => {
+function setSourceOff (name, off) {
+  const set = new Set(sourcesOff())
+  if (off) set.add(name)
+  else set.delete(name)
+  try { localStorage.setItem(SRC_OFF_KEY, JSON.stringify([...set])) } catch {}
+}
+const SRC_UNAVAILABLE = { soulseek: 'Soulseek needs a relay with its add-on.', youtube: 'YouTube search needs the relay, not this device.' }
+// on | off | setup | unavailable, from /v1/plugins and the remembered off-set; null when the relay has no such source.
+function sourceState (name) {
+  const p = plugin(name)
+  if (!p.name) return null
+  if (p.status === 'unavailable') return { state: 'unavailable', note: p.message || SRC_UNAVAILABLE[name] }
+  if (p.configured === false) return { state: 'setup', note: '' }
+  const degraded = p.status === 'degraded'
+  const blocked = p.canSave === false
+  const note = blocked ? (p.message || 'YouTube is refusing saves from this network. Search still works.')
+    : degraded ? (p.message || 'YouTube found nothing lately; its search may be out of date.') : ''
+  return { state: sourcesOff().includes(name) ? 'off' : 'on', degraded, blocked, note }
+}
+const sourcesHere = () => SOURCES.map(s => s[0]).filter(n => sourceState(n))
+const sourcesOn = () => sourcesHere().filter(n => sourceState(n).state === 'on')
+function openSourceSetup () {
+  location.hash = '#settings'
+  const until = Date.now() + 3000
+  const find = () => {
+    const card = document.querySelector('.card[data-group="Sources"]')
+    if (card) { card.scrollIntoView({ block: 'start' }); const f = card.querySelector('input'); if (f) f.focus({ preventScroll: true }) } else if (Date.now() < until) setTimeout(find, 100)
+  }
+  setTimeout(find, 0)
+}
+function sourceChip (name) {
+  const st = sourceState(name)
+  const label = sourceLabel(name)
+  if (st.state === 'setup') return h('button', { class: 'chip setup', 'data-src': name, 'aria-label': 'Set up ' + label + ' in Settings', onclick: openSourceSetup }, label + ' · ', h('span', { class: 'st' }, 'Set up'))
+  if (st.state === 'unavailable') return h('button', { class: 'chip', 'data-src': name, 'aria-disabled': 'true', 'aria-describedby': 'srcNote' }, label + ' · ', h('span', { class: 'st' }, 'Not on this device'))
+  const on = st.state === 'on'
+  const warn = st.blocked ? 'Saves blocked' : st.degraded ? 'May miss results' : ''
+  return h('button', { class: 'chip', 'data-src': name, 'aria-pressed': String(on), 'aria-label': 'Search ' + label + (warn ? ', ' + warn.toLowerCase() : ''), onclick: () => toggleSource(name) },
+    on ? '✓ ' : '', warn ? [h('span', { class: 'warn-ic', 'aria-hidden': 'true' }, '⚠'), ' '] : null, label, warn ? [' · ', h('span', { class: 'st' }, warn)] : null)
+}
+// Turning a source on while results are shown searches it alone for the same words; turning it off drops its group
+// at once, and its answer is ignored if it lands later.
+function toggleSource (name) {
+  const off = sourceState(name).state === 'on'
+  setSourceOff(name, off)
+  renderSourcesStatus()
+  if (!srcRun) return
+  if (off) { srcRun.groups.delete(name); renderSrcGroups() } else searchSources(srcRun.query, [name])
+}
+function renderSourceChips () {
+  const here = sourcesHere()
+  const box = $('srcChips')
+  const focused = box.contains(document.activeElement) ? document.activeElement.dataset.src : ''
+  $('srcIn').hidden = here.length < 2
+  box.replaceChildren(...here.map(sourceChip))
+  if (focused) { const again = box.querySelector('[data-src="' + focused + '"]'); if (again) again.focus() }
+  const on = sourcesOn()
+  const usable = here.filter(n => ['on', 'off'].includes(sourceState(n).state))
+  $('srcHint').textContent = on.length === 2 ? 'Finds albums on peers and tracks on YouTube.'
+    : on[0] === 'soulseek' ? 'Finds albums on peers and mirrors them here.'
+      : on[0] === 'youtube' ? 'Finds YouTube videos and saves their audio here.'
+        : usable.length ? 'Pick a source to search.'
+          : here.some(n => sourceState(n).state === 'setup') ? 'Set up a source in Settings to search.' : 'No search source works on this device.'
+  const notes = here.map(n => sourceState(n).note).filter(Boolean)
+  $('srcNote').hidden = !notes.length
+  $('srcNote').replaceChildren(...notes.map(t => h('div', null, t)))
+}
+
+// ---- One search, answered per source as each finishes. Groups keep a fixed order (the better-copy source first)
+// and fill their slot when their answer lands, so nothing moves under the finger when the slow one arrives. The
+// status line says the start, each arrival and failures; the ticking seconds stay out of it.
+let srcRun = null // { query, groups: Map(name -> group), ctrls, said }
+let srcAsks = 0
+let srcTimer = 0
+let slskSortBy = 'ready'
+async function readEvents (res, on) {
+  const reader = res.body.pipeThrough(new TextDecoderStream()).getReader()
+  let buf = ''
+  for (;;) {
+    const { value, done } = await reader.read()
+    if (done) return
+    buf += value
+    let at
+    while ((at = buf.indexOf('\\n\\n')) !== -1) {
+      const block = buf.slice(0, at)
+      buf = buf.slice(at + 2)
+      let event = 'message'
+      let data = ''
+      for (const line of block.split('\\n')) {
+        if (line.startsWith('event:')) event = line.slice(6).trim()
+        else if (line.startsWith('data:')) data += line.slice(5).trim()
+      }
+      if (data) on(event, JSON.parse(data))
+    }
+  }
+}
+function srcSay (run, line, bad) {
+  run.said = line
+  say('srcMsg', line, bad)
+}
+async function searchSources (query, names) {
+  if (!names || !srcRun || srcRun.query !== query) {
+    if (srcRun) for (const c of srcRun.ctrls) c.abort()
+    srcRun = { query, groups: new Map(), ctrls: new Set(), said: '' }
+    ytThumbsPrune()
+  }
+  const run = srcRun
+  const list = names || sourcesOn()
+  if (!list.length) { say('srcMsg', 'Pick a source to search.', true); renderSrcGroups(); return }
+  const ask = ++srcAsks
+  for (const n of list) run.groups.set(n, { state: 'pending', started: Date.now(), ask, results: [], truncated: false, error: null })
+  srcSay(run, 'Searching ' + list.map(sourceLabel).join(' and ') + ' for “' + query + '”.')
+  renderSrcGroups(list)
+  srcTick()
+  const ctrl = new AbortController()
+  run.ctrls.add(ctrl)
+  const land = part => {
+    const g = srcRun === run && run.groups.get(part.source)
+    if (!g || g.ask !== ask) return
+    g.ms = Date.now() - g.started
+    g.results = part.results || []
+    g.truncated = Boolean(part.truncated)
+    g.error = part.error || null
+    g.state = g.error ? 'error' : 'done'
+    srcSay(run, srcArrival(part.source, g))
+    renderSrcGroups([part.source])
+  }
+  try {
+    const res = await fetch('/v1/search/sources', { method: 'POST', headers: authHeaders(true), body: JSON.stringify({ query, sources: list, stream: true }), signal: ctrl.signal })
+    if (res.status === 401) throw signInFirst()
+    if (!res.ok) {
+      let data = null
+      try { data = await res.json() } catch {}
+      throw new Error((data && data.error) || 'The relay answered ' + res.status)
+    }
+    if ((res.headers.get('content-type') || '').includes('application/json')) {
+      const all = await res.json()
+      for (const n of all.sources || list) land({ source: n, results: (all.results || []).filter(r => r.source === n), truncated: Boolean(all.truncated && all.truncated[n]), error: (all.errors || []).find(e => e.source === n) })
+    } else await readEvents(res, (event, data) => { if (event === 'source') land(data) })
+    // A stream cut before a source answered leaves it with an error, not a spinner forever.
+    for (const n of list) { const g = run.groups.get(n); if (g && g.ask === ask && g.state === 'pending') land({ source: n, results: [], error: { status: 502, message: 'The relay stopped answering' } }) }
+  } catch (err) {
+    if (err.name === 'AbortError' || srcRun !== run) return
+    for (const n of list) { const g = run.groups.get(n); if (g && g.ask === ask && g.state === 'pending') run.groups.delete(n) }
+    srcSay(run, err.message, true)
+    renderSrcGroups()
+  } finally { run.ctrls.delete(ctrl) }
+}
+function srcArrival (name, g) {
+  const label = sourceLabel(name)
+  if (g.error) return label + ' search failed.'
+  if (!g.results.length) return label + ' found nothing.'
+  if (name === 'youtube') return label + ': ' + plural(g.results.length, 'video', 'videos') + '.'
+  const folders = slskFolders(g.results).length
+  return label + ': ' + plural(folders, 'album', 'albums') + ' from ' + plural(new Set(g.results.map(r => r.username)).size, 'peer', 'peers') + '.'
+}
+// One timer for every pending group: it rewrites only the hidden-from-readers seconds in the headers.
+function srcTick () {
+  if (srcTimer) return
+  srcTimer = setInterval(() => {
+    const run = srcRun
+    let pending = false
+    for (const [name, g] of run ? run.groups : []) {
+      if (g.state !== 'pending') continue
+      pending = true
+      const s = document.querySelector('#srcHead-' + name + ' ~ .count [data-secs]')
+      if (s) s.textContent = Math.round((Date.now() - g.started) / 1000) + ' s'
+    }
+    if (!pending) { clearInterval(srcTimer); srcTimer = 0 }
+  }, 1000)
+}
+$('srcForm').onsubmit = ev => {
   ev.preventDefault()
-  const query = $('slskInput').value.trim()
+  const query = $('srcInput').value.trim()
   if (!query) return
-  try { localStorage.setItem('peartube.slskQuery', query) } catch {}
-  const started = Date.now()
-  const tick = () => say('slskMsg', 'Searching peers… ' + Math.round((Date.now() - started) / 1000) + ' s. Replies trickle in for about 25 s.')
-  tick()
-  const timer = setInterval(tick, 1000)
-  act($('slskBtn'), async () => {
-    try {
-      const r = await api('/v1/providers/soulseek/search', { body: { query } })
-      slskLast = { query, candidates: r.candidates || [], ms: Date.now() - started }
-    } finally { clearInterval(timer) }
-    renderSourceResults()
-  }, 'slskMsg')
+  try { localStorage.setItem('peartube.srcQuery', query) } catch {}
+  searchSources(query)
 }
-try { $('slskInput').value = localStorage.getItem('peartube.slskQuery') || '' } catch {}
+try { $('srcInput').value = localStorage.getItem('peartube.srcQuery') || '' } catch {}
+
+// ---- Groups: one section per source in SOURCES order; only the named ones are redrawn, so a row being pressed in
+// one group is not rebuilt when the other answers.
+function renderSrcGroups (only) {
+  const run = srcRun
+  const names = run ? SOURCES.map(s => s[0]).filter(n => run.groups.has(n)) : []
+  const secs = names.map(n => {
+    let sec = $('srcGroup-' + n)
+    const fresh = !sec
+    if (fresh) sec = h('section', { class: 'src-group', id: 'srcGroup-' + n, 'aria-labelledby': 'srcHead-' + n })
+    if (fresh || !only || only.includes(n)) fillSrcGroup(n, sec)
+    return sec
+  })
+  const box = $('srcGroups')
+  if (box.children.length !== secs.length || secs.some((s, i) => box.children[i] !== s)) box.replaceChildren(...secs)
+  renderYtNote()
+  renderSrcSummary()
+  renderYtPick()
+}
+function renderSrcSummary () {
+  const run = srcRun
+  const nav = $('srcSummary')
+  nav.hidden = !run || sourcesHere().length < 2
+  if (nav.hidden) return nav.replaceChildren()
+  const parts = sourcesHere().map(n => {
+    const g = run.groups.get(n)
+    const label = sourceLabel(n)
+    if (!g) return h('span', null, label + ' off')
+    const what = g.state === 'pending' ? '…' : g.state === 'error' ? 'failed' : n === 'youtube' ? plural(g.results.length, 'video', 'videos') : plural(slskFolders(g.results).length, 'album', 'albums')
+    return h('a', { href: '#srcGroup-' + n, onclick: ev => { ev.preventDefault(); focusSrcHead(n) } }, label + ' ' + what)
+  })
+  nav.replaceChildren(...parts.flatMap((p, i) => i ? [h('span', { class: 'sep', 'aria-hidden': 'true' }, '·'), p] : [p]))
+}
+function focusSrcHead (name) {
+  const head = $('srcHead-' + name)
+  if (!head) return
+  head.scrollIntoView({ block: 'start', behavior: 'smooth' })
+  head.focus({ preventScroll: true })
+}
+const SRC_GLYPH = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 6.5A1.5 1.5 0 0 1 4.5 5h4.6l2 2h8.4A1.5 1.5 0 0 1 21 8.5v9a1.5 1.5 0 0 1-1.5 1.5h-15A1.5 1.5 0 0 1 3 17.5z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg>'
+// The relay's own reason, without repeating the source's name in front of it.
+const srcReason = (name, err) => String(err.message || '').replace(new RegExp('^' + sourceLabel(name) + ' search failed: ', 'i'), '')
+function fillSrcGroup (name, sec) {
+  const g = srcRun.groups.get(name)
+  const label = sourceLabel(name)
+  const secs = Math.max(1, Math.round((g.ms || 0) / 1000)) + ' s'
+  let count
+  if (g.state === 'pending') {
+    count = [h('span', { class: 'slsk-spin', 'aria-hidden': 'true' }), name === 'youtube' ? 'Searching YouTube… ' : 'Searching peers… ', h('span', { 'data-secs': '', 'aria-hidden': 'true' }, Math.round((Date.now() - g.started) / 1000) + ' s')]
+  } else if (g.state === 'done' && g.results.length) {
+    count = name === 'youtube' ? plural(g.results.length, 'video', 'videos') + ' · ' + secs
+      : [plural(slskFolders(g.results).length, 'album', 'albums'), plural(new Set(g.results.map(r => r.username)).size, 'peer', 'peers'), secs].join(' · ')
+  }
+  const head = h('div', { class: 'src-head' },
+    h('h3', { id: 'srcHead-' + name, tabindex: '-1' }, label, name === 'youtube' ? h('span', { class: 'tag' }, 'Lossy') : null),
+    count ? h('span', { class: 'count' }, count) : null)
+  const again = h('button', { class: 'btn quiet', onclick: () => searchSources(srcRun.query, [name]) }, 'Try again')
+  const kids = [head]
+  if (name === 'youtube') kids.push(h('div', { class: 'src-note', id: 'ytNote' }))
+  if (g.state === 'pending') {
+    if (name === 'soulseek') kids.push(h('div', { class: 'meta' }, 'Replies trickle in for about 25 s.'))
+  } else if (g.state === 'error') {
+    const setup = name === 'soulseek' && g.error.status === 400 && /not configured|not set up/i.test(g.error.message)
+    const text = setup ? label + ' is not set up.' : g.error.status === 504 ? label + ' did not answer in ' + secs + '.' : label + ' search failed: ' + srcReason(name, g.error)
+    kids.push(h('div', { class: 'msg err', role: 'alert' }, h('span', null, text), setup ? h('button', { class: 'btn', onclick: openSourceSetup }, 'Open Settings') : again))
+  } else if (!g.results.length) {
+    if (name === 'youtube') {
+      kids.push(h('div', { class: 'msg' }, 'No videos found for “' + srcRun.query + '”.' + (sourceState('youtube').degraded ? ' YouTube search may be out of date.' : '')))
+    } else {
+      kids.push(h('div', { class: 'msg' }, 'No matching albums found in ' + secs + '.'), h('div', { class: 'meta' }, 'Try fewer words, such as the album name.'))
+    }
+  } else if (name === 'youtube') {
+    if (g.truncated) kids.push(h('div', { class: 'meta wrap' }, 'Showing the first ' + g.results.length + ' videos. Add a word to narrow it.'))
+    kids.push(h('div', { class: 'list', id: 'ytResults' }, g.results.map(ytRow)))
+  } else {
+    if (g.truncated) kids.push(h('div', { class: 'meta wrap' }, 'Showing the first ' + g.results.length + ' files. Add a word to narrow it.'))
+    kids.push(...renderSlskResults(g))
+  }
+  ytThumbsLetGo(sec)
+  sec.replaceChildren(...kids)
+}
+
+// ---- Soulseek group: one row per peer folder. What the copy is on the first line, whether it will come on the second.
+const slskSorts = { quality: (a, b) => b.score - a.score || b.bytes - a.bytes, size: (a, b) => b.bytes - a.bytes }
+function renderSlskResults (part) {
+  const groups = slskFolders(part.results)
+  const sorter = slskSorts[slskSortBy]
+  if (sorter) groups.sort(sorter)
+  const sort = h('select', { id: 'slskSort', 'aria-label': 'Sort albums', onchange: ev => { slskSortBy = ev.target.value; renderSrcGroups(['soulseek']); $('slskSort').focus() } },
+    [['ready', 'Ready to send first'], ['quality', 'Best quality first'], ['size', 'Largest first']].map(([v, t]) => h('option', { value: v, selected: v === slskSortBy }, t)))
+  const glyph = () => { const s = h('span', { class: 'src-glyph', 'aria-hidden': 'true' }); s.innerHTML = SRC_GLYPH; return s }
+  return [
+    h('div', { class: 'slsk-tools', id: 'slskTools' }, sort, h('span', { class: 'hint' }, 'A queue means the peer sends to others first.')),
+    h('div', { class: 'list', id: 'slskResults' }, groups.map(g => {
+      const lossy = g.files.filter(f => f.lossy === true).length * 2 > g.files.length
+      const what = [[slskFormat(g), slskQuality(g)].filter(Boolean).join(' '), plural(g.files.length, 'matching track', 'matching tracks'), size(g.bytes), lossy ? 'lossy' : ''].filter(Boolean).join(' · ')
+      const ready = g.slots && !g.queue ? 'Ready now · no queue' : (g.slots ? 'Slots open' : 'Slots full') + ' · ' + (g.queue ? 'queue ' + g.queue : 'no queue')
+      return h('div', { class: 'item src-row' },
+        glyph(),
+        h('div', { class: 'info' },
+          h('div', { class: 'name' }, g.title),
+          h('div', { class: 'meta wrap' }, h('span', { class: 'tag src-tag' }, 'Soulseek'), what),
+          h('div', { class: 'meta wrap' }, ready + ' · from ' + g.username)),
+        h('div', { class: 'acts' },
+          h('button', { class: 'btn', 'aria-label': 'Browse ' + g.username + '’s ' + g.title, onclick: () => openSlskBrowse(g.username, g.dir) }, 'Browse'),
+          slskMirrorBtn(g, () => g.files, g.files.length === 1 ? 'Mirror track' : 'Mirror', 'srcMsg')))
+    }))]
+}
+// The FLAC-like format peers offered for this search, if any: the reason to look above before saving a lossy copy.
+function peersLossless () {
+  const g = srcRun && srcRun.groups.get('soulseek')
+  if (!g || g.state !== 'done') return ''
+  const n = new Map()
+  for (const f of slskFolders(g.results)) { const x = slskFormat(f); if (LOSSLESS_FORMATS.has(x)) n.set(x, (n.get(x) || 0) + 1) }
+  return [...n].sort((a, b) => b[1] - a[1]).map(x => x[0])[0] || ''
+}
+// The YouTube group's advice follows the Soulseek group's state, so a lossy save is a choice made knowing the rest.
+function renderYtNote () {
+  const box = $('ytNote')
+  if (!box) return
+  const g = srcRun.groups.get('soulseek')
+  const st = sourceState('soulseek')
+  const show = h('button', { class: 'btn quiet', onclick: () => focusSrcHead('soulseek') }, 'Show peer copies')
+  let text = 'YouTube copies are lossy ' + YT_CODEC + '.'
+  let btn = null
+  if (st && !g) {
+    text = 'Peers not searched. ' + text
+    if (st.state === 'setup') btn = h('button', { class: 'btn quiet', onclick: openSourceSetup }, 'Set up Soulseek')
+  } else if (g && g.state === 'pending') text = 'Peers are still answering; better copies may appear above.'
+  else if (g && g.state === 'error') text = 'Peers could not be searched. ' + text
+  else if (g && !g.results.length) text = 'Only YouTube has this. Copies are lossy ' + YT_CODEC + '.'
+  else if (g) {
+    const fmt = peersLossless()
+    text = fmt ? 'Peers have ' + fmt + ' copies above. These are lossy ' + YT_CODEC + '.' : 'Peers have copies above. Compare before saving.'
+    btn = show
+  }
+  box.replaceChildren(...[h('span', null, text), btn].filter(Boolean))
+}
+
+// ---- YouTube rows: the whole row selects the video as a track; Save track saves it alone. The label is the
+// promise of what a save gives, so it is fixed, not read from the row. No row links out to YouTube.
+const ytPicked = new Map() // videoId -> { row, query }, in the order picked: that order numbers the tracks
+const ytFull = r => r.length >= 1200 || /full album/i.test(r.title)
+function ytRow (r) {
+  const n = [...ytPicked.keys()].indexOf(r.videoId) + 1
+  const full = ytFull(r)
+  const save = h('button', { class: 'btn', 'data-src-key': 'y:' + r.videoId, 'data-label': full ? 'Save as one track' : 'Save track', 'aria-label': 'Save “' + r.title + '” as a track', onclick: ev => openYtSave([r], ev.currentTarget) }, full ? 'Save as one track' : 'Save track')
+  srcSyncButton(save)
+  return h('div', { class: 'item src-row yt-item', 'data-vid': r.videoId },
+    h('label', { class: 'yt-pick-row' },
+      h('input', { type: 'checkbox', checked: n > 0, 'aria-label': 'Select “' + r.title + '”', onchange: ev => ytPick(r, ev.target.checked) }),
+      ytThumbBox(r),
+      h('span', { class: 'info' },
+        h('span', { class: 'name' }, r.title, full ? h('span', { class: 'tag' }, 'Full album video') : null, n ? h('span', { class: 'tag' }, 'Track ' + n) : null),
+        h('span', { class: 'meta wrap' }, h('span', { class: 'tag src-tag' }, 'YouTube'), YT_CODEC + ' · lossy'),
+        h('span', { class: 'meta wrap' }, [duration(r.length), r.channel].filter(Boolean).join(' · ')))),
+    h('div', { class: 'acts' }, save))
+}
+function ytPick (r, on) {
+  if (on) ytPicked.set(r.videoId, { row: r, query: srcRun ? srcRun.query : '' })
+  else ytPicked.delete(r.videoId)
+  say('srcMsg', plural(ytPicked.size, 'video', 'videos') + ' selected.')
+  renderYtRows(r.videoId)
+  renderYtPick()
+}
+// Redraws the YouTube rows in place (track numbers follow the picks) and keeps focus on the same checkbox.
+function renderYtRows (focusVid) {
+  const list = $('ytResults')
+  const g = srcRun && srcRun.groups.get('youtube')
+  if (!list || !g) return
+  ytThumbsLetGo(list)
+  list.replaceChildren(...g.results.map(ytRow))
+  const box = focusVid && list.querySelector('[data-vid="' + focusVid + '"] input')
+  if (box) box.focus()
+}
+function renderYtPick () {
+  const n = ytPicked.size
+  $('ytPick').hidden = !n
+  if (!n) return
+  const earlier = [...ytPicked.values()].filter(p => !srcRun || p.query !== srcRun.query).length
+  $('ytPickText').textContent = n + ' selected' + (earlier ? ' · ' + earlier + ' from an earlier search' : '')
+  $('ytPickSave').textContent = n === 1 ? 'Save track' : 'Save ' + n + ' as album'
+}
+$('ytPickSave').onclick = ev => openYtSave([...ytPicked.values()].map(p => p.row), ev.currentTarget)
+$('ytPickClear').onclick = () => {
+  ytPicked.clear()
+  say('srcMsg', '0 videos selected.')
+  renderYtRows()
+  renderYtPick()
+  $('srcInput').focus()
+}
+
+// ---- Thumbnails: fetched from the relay with the token (never from YouTube's image host), lazily, four at a time,
+// kept as object URLs per video. Until one lands, or when there is none (204), the row shows a drawn placeholder.
+const ytThumbs = new Map() // videoId -> object URL, or null for none
+const ytThumbWait = []
+let ytThumbBusy = 0
+const ytThumbIO = 'IntersectionObserver' in window ? new IntersectionObserver(entries => {
+  for (const x of entries) if (x.isIntersecting) { ytThumbIO.unobserve(x.target); ytThumbAsk(x.target.dataset.thumb, x.target.dataset.vid) }
+}, { rootMargin: '300px' }) : null
+function ytThumbBox (r, small) {
+  const box = h('div', { class: 'poster thumb yt-thumb' + (small ? ' sm' : ''), 'aria-hidden': 'true', 'data-vid': r.videoId, 'data-thumb': r.thumbnail || '' },
+    h('span', { class: 'yt-ph' }), small ? null : h('span', { class: 'yt-dur' }, duration(r.length)))
+  const url = ytThumbs.get(r.videoId)
+  if (url) box.prepend(h('img', { class: 'sleeve-img', alt: '', src: url }))
+  else if (url === undefined && r.thumbnail) { if (ytThumbIO) ytThumbIO.observe(box); else ytThumbAsk(r.thumbnail, r.videoId) }
+  return box
+}
+// Rows about to be redrawn stop being watched, so the observer never holds boxes that left the page.
+function ytThumbsLetGo (root) {
+  if (ytThumbIO) for (const box of root.querySelectorAll('.yt-thumb')) ytThumbIO.unobserve(box)
+}
+function ytThumbAsk (path, vid) {
+  if (!path || ytThumbs.has(vid) || ytThumbWait.some(w => w[1] === vid)) return
+  ytThumbWait.push([path, vid])
+  ytThumbPump()
+}
+function ytThumbPump () {
+  while (ytThumbBusy < 4 && ytThumbWait.length) {
+    const [path, vid] = ytThumbWait.shift()
+    ytThumbBusy++
+    fetch(path, { headers: authHeaders() })
+      .then(res => res.status === 200 ? res.blob().then(b => URL.createObjectURL(b)) : null)
+      .catch(() => null)
+      .then(url => {
+        ytThumbs.set(vid, url)
+        if (url) for (const box of document.querySelectorAll('.yt-thumb[data-vid="' + vid + '"]')) if (!box.querySelector('img')) box.prepend(h('img', { class: 'sleeve-img', alt: '', src: url }))
+      })
+      .finally(() => { ytThumbBusy--; ytThumbPump() })
+  }
+}
+// A new search lets go of the last one's pictures, except those of picked videos, which the save dialog shows.
+function ytThumbsPrune () {
+  ytThumbWait.length = 0
+  for (const [vid, url] of ytThumbs) {
+    if (ytPicked.has(vid)) continue
+    if (url) URL.revokeObjectURL(url)
+    ytThumbs.delete(vid)
+  }
+}
+
+// ---- Save dialog: the videos become the tracks of an album the owner names. Suggestions come from the titles and
+// are only ever prefilled into fields the owner can change; the relay never guesses them.
+let ytSave = null // { tracks: [{ r, title }], opener, prefilled, done }
+const YT_NOISE = /\\s*[([]\\s*(official\\s+(music\\s+)?(video|audio)|lyric\\s+video|lyrics|visuali[sz]er|hd|hq|4k)\\s*[)\\]]/gi
+const ytCleanTitle = s => String(s || '').replace(YT_NOISE, '').replace(/\\s+/g, ' ').trim()
+const ytSplit = s => { const m = s.match(/^(.+?)\\s+[-–—]\\s+(.+)$/); return m ? [m[1].trim(), m[2].trim()] : [null, s] }
+const YT_FULL = /\\s*[([]\\s*full\\s+album\\s*[)\\]]|\\s*[([]\\s*(19|20)[0-9]{2}\\s*[)\\]]/gi
+function ytSuggest (rows) {
+  const parts = rows.map(r => ytSplit(ytCleanTitle(r.title)))
+  const votes = new Map()
+  for (const [left] of parts) if (left) votes.set(fold(left), (votes.get(fold(left)) || 0) + 1)
+  const top = [...votes].sort((a, b) => b[1] - a[1])[0]
+  let artist = ''
+  let titles = rows.map(r => ytCleanTitle(r.title))
+  if (top && top[1] * 2 >= rows.length) {
+    artist = parts.find(p => p[0] && fold(p[0]) === top[0])[0]
+    titles = parts.map((p, i) => p[0] && fold(p[0]) === top[0] ? p[1] : titles[i])
+  } else {
+    const ch = rows.map(r => r.channel).find(Boolean)
+    if (ch) artist = ch.replace(/\\s+-\\s+Topic$/i, '').replace(/(VEVO|\\s+Official)$/i, '').trim()
+  }
+  let album = ''
+  let year = ''
+  let single = false
+  if (rows.length === 1 && /full album/i.test(rows[0].title)) {
+    album = titles[0].replace(YT_FULL, '').trim()
+    titles = [album]
+    year = (rows[0].title.match(/\\b(19|20)[0-9]{2}\\b/) || [''])[0]
+  } else if (rows.length === 1) {
+    album = titles[0]
+    single = true
+  }
+  return { artist, album, year, titles, single, prefilled: Boolean(artist || album || year) }
+}
+function openYtSave (rows, opener) {
+  if (!rows.length) return
+  const s = ytSuggest(rows)
+  ytSave = { tracks: rows.map((r, i) => ({ r, title: s.titles[i] })), opener, done: false }
+  $('ytArtist').value = s.artist
+  $('ytAlbum').value = s.album
+  $('ytYear').value = s.year
+  $('ytSaveHint').hidden = !s.prefilled
+  $('ytSaveHint').textContent = s.single ? 'A single usually uses the song name as album.' : 'Suggested from the video titles. Check them.'
+  say('ytSaveMsg', '')
+  $('ytSaveLive').textContent = ''
+  renderYtSaveTracks()
+  ytSaveNotes()
+  $('ytSave').showModal()
+  $('ytArtist').focus()
+}
+function renderYtSaveTracks (focus) {
+  const list = ytSave.tracks
+  const n = list.length
+  $('ytSaveSub').textContent = plural(n, 'track', 'tracks') + ' · lossy ' + YT_CODEC
+  $('ytSaveBtn').textContent = n === 1 ? 'Save track' : 'Save ' + n + ' tracks'
+  const icon = (kind, i, text, label, off, fn) => h('button', { class: 'ic-btn', 'data-mv': kind + '-' + i, 'aria-label': label, 'aria-disabled': off ? 'true' : null, onclick: () => { if (!off) fn() } }, text)
+  $('ytTracks').replaceChildren(...list.map((t, i) => {
+    const name = t.title.trim() || ytCleanTitle(t.r.title)
+    return h('li', null,
+      h('span', { class: 'tn', 'aria-hidden': 'true' }, String(i + 1)),
+      ytThumbBox(t.r, true),
+      h('input', { type: 'text', id: 'ytTrack-' + i, value: t.title, required: true, autocomplete: 'off', spellcheck: 'false', placeholder: ytCleanTitle(t.r.title), 'aria-label': 'Title of track ' + (i + 1), oninput: ev => { t.title = ev.target.value } }),
+      h('span', { class: 'dur' }, duration(t.r.length)),
+      h('span', { class: 'mv' },
+        icon('up', i, '↑', 'Move ' + name + ' up', i === 0, () => ytMove(i, -1, 'up')),
+        icon('down', i, '↓', 'Move ' + name + ' down', i === n - 1, () => ytMove(i, 1, 'down')),
+        icon('rm', i, '✕', 'Remove ' + name, n === 1, () => ytRemove(i))))
+  }))
+  if (focus) { const b = $('ytTracks').querySelector('[data-mv="' + focus + '"]'); if (b) b.focus() }
+}
+function ytMove (i, by, kind) {
+  const list = ytSave.tracks
+  const j = i + by
+  ;[list[i], list[j]] = [list[j], list[i]]
+  renderYtSaveTracks(kind + '-' + j)
+  $('ytSaveLive').textContent = (list[j].title.trim() || 'The track') + ' is now track ' + (j + 1) + '.'
+}
+function ytRemove (i) {
+  ytSave.tracks.splice(i, 1)
+  renderYtSaveTracks('rm-' + Math.min(i, ytSave.tracks.length - 1))
+  ytSaveNotes()
+}
+// The album already on the shelf under the same artist and name (the shelf's own grouping), or null.
+const libraryHas = (artist, album) => libraryTiles().find(t => t.kind === 'album' && fold(t.artist) === fold(artist) && fold(t.album) === fold(album)) || null
+function ytSaveNotes () {
+  const lines = []
+  if (plugin('youtube').canSave === false) lines.push('YouTube is refusing saves from this network right now.')
+  const has = libraryHas($('ytArtist').value.trim(), $('ytAlbum').value.trim())
+  if (has) lines.push('Your library has this album' + (commonQuality(has) ? ': ' + commonQuality(has) : '') + '.')
+  if (peersLossless()) lines.push('Peers offered ' + peersLossless() + ' for this search.')
+  if (ytSave.tracks.some(t => ytFull(t.r))) lines.push('One long video saves as one track.')
+  $('ytSaveNote').hidden = !lines.length
+  $('ytSaveNote').replaceChildren(...lines.map(t => h('div', null, t)))
+}
+let ytNoteTimer = 0
+for (const id of ['ytArtist', 'ytAlbum']) $(id).addEventListener('input', () => { clearTimeout(ytNoteTimer); ytNoteTimer = setTimeout(() => { if (ytSave) ytSaveNotes() }, 300) })
+$('ytSaveForm').onsubmit = async ev => {
+  ev.preventDefault()
+  const artist = $('ytArtist').value.trim()
+  const album = $('ytAlbum').value.trim()
+  const year = $('ytYear').value.trim()
+  const fail = (id, text) => { say('ytSaveMsg', text, true); $(id).focus() }
+  if (!artist) return fail('ytArtist', 'Add the artist, e.g. System of a Down.')
+  if (!album) return fail('ytAlbum', 'Add the album name, e.g. Mezmerize.')
+  if (year && !/^\\d{4}$/.test(year)) return fail('ytYear', 'Year is four digits, e.g. 2005.')
+  const empty = ytSave.tracks.findIndex(t => !t.title.trim())
+  if (empty !== -1) return fail('ytTrack-' + empty, 'Every track needs a title.')
+  say('ytSaveMsg', '')
+  const btn = $('ytSaveBtn')
+  const label = btn.textContent
+  btn.textContent = 'Saving…'
+  const body = { artist, album, ...(year ? { year } : {}), tracks: ytSave.tracks.map((t, i) => ({ videoId: t.r.videoId, title: t.title.trim(), track: i + 1 })) }
+  const r = await act(btn, () => api('/v1/providers/youtube/mirror', { body }), 'ytSaveMsg')
+  btn.textContent = label
+  if (!r || !r.job) return
+  for (const t of ytSave.tracks) { ytPicked.delete(t.r.videoId); ytStarted.set(t.r.videoId, r.job.jobId) }
+  ytSave.done = true
+  $('ytSave').close()
+  if (!S.jobs.some(j => j.jobId === r.job.jobId)) S.jobs.unshift(r.job)
+  renderMirrors()
+  renderYtRows()
+  renderYtPick()
+  pollMirrors()
+  toast('Saving “' + album + '” from YouTube')
+  const name = document.querySelector('[data-job="' + r.job.jobId + '"] .name')
+  if (name) name.focus()
+}
+const ytSaveCancel = () => $('ytSave').close()
+$('ytSaveCancel').onclick = ytSaveCancel
+$('ytSaveClose').onclick = ytSaveCancel
+// Esc, Cancel and Close give focus back to the control that opened the dialog (or its redrawn twin).
+$('ytSave').addEventListener('close', () => {
+  if (!ytSave || ytSave.done) return
+  const o = ytSave.opener
+  const twin = o && !o.isConnected && o.dataset.srcKey ? document.querySelector('[data-src-key="' + o.dataset.srcKey + '"]') : null
+  const back = o && o.isConnected ? o : twin
+  if (back) back.focus()
+})
 
 // Browse: the relay caches a peer's list for a few minutes, so reopening is instant; the first fetch can take
 // seconds (up to 30), so it shows a ticking spinner, and a peer that does not answer is said plainly.
@@ -1885,14 +2561,27 @@ function slskFolderItem (g) {
     files)
 }
 
-// ---- Mirror progress: one card per album mirror, redrawn every second from /v1/jobs while any is active.
-// A queue place is the peer saying yes, later, so it reads as a place in line, never as a stall; only a minute of
-// silence with no place is a warning. A failure shows the relay's own reason, plus the port fix when this session
-// has evidence peers cannot reach the relay (inbound failures and no transfer yet).
-function slskActive (j) { return j.plugin === 'soulseek' && MIRROR_ACTIVE.has(j.status) }
+// ---- Progress: one card per album being added from a source, redrawn every second from /v1/jobs while any is
+// active. A queue place is the peer saying yes, later, so it reads as a place in line, never as a stall; only a minute
+// of silence with no place is a warning. A YouTube save has no size until it is done, so it counts tracks, never a
+// percentage. A failure shows the relay's own reason, plus the port fix when this session has evidence peers cannot
+// reach the relay (inbound failures and no transfer yet), or a plain line for YouTube's known refusals.
+function srcActive (j) { return SOURCE_NAMES.has(j.plugin) && MIRROR_ACTIVE.has(j.status) }
 const slskFor = ms => ms < 90_000 ? Math.round(ms / 1000) + ' s' : Math.round(ms / 60_000) + ' min'
 const slskPct = j => j.total ? Math.min(j.status === 'done' ? 100 : 99, Math.floor((j.bytes || 0) / j.total * 100)) : null
-// What a mirror is doing: a sentence for its card and a word or two for the button that started it.
+// What a job is doing: a sentence for its card and a word or two for the button that started it.
+const jobState = j => j.plugin === 'youtube' ? ytJobState(j) : slskJobState(j)
+function ytJobState (j) {
+  const n = j.fileCount || 1
+  const skipped = (j.skipped || []).length
+  if (j.status === 'done' && skipped) return { tone: 'warn', text: 'Saved ' + (n - skipped) + ' of ' + plural(n, 'track', 'tracks'), short: 'Saved ' + (n - skipped) + ' of ' + n }
+  if (j.status === 'done') return { tone: 'ok', text: 'Saved · ' + plural(n, 'track', 'tracks') + ' · ' + size(j.size || j.bytes || 0) + ' · ' + YT_LABEL, short: 'Saved' }
+  if (j.status === 'failed') return { tone: 'bad', text: 'Failed', short: 'Failed' }
+  if (j.status === 'cancelled') return { tone: '', text: 'Cancelled', short: 'Cancelled' }
+  if (j.status === 'announcing') return { tone: '', text: 'Adding to your library', short: 'Adding' }
+  if (j.status === 'transferring') return n > 1 ? { tone: '', text: 'Downloading track ' + j.fileIndex + ' of ' + n + ' from YouTube', short: 'Track ' + j.fileIndex + ' of ' + n } : { tone: '', text: 'Downloading from YouTube', short: 'Saving' }
+  return { tone: '', text: 'Waiting to start', short: 'Waiting' }
+}
 function slskJobState (j) {
   const pct = slskPct(j)
   if (j.status === 'done') return { tone: 'ok', text: 'Saved · ' + plural(j.fileCount || 1, 'track', 'tracks') + ' · ' + size(j.size || j.bytes || 0), short: 'Saved' }
@@ -1916,59 +2605,92 @@ function slskAmount (j) {
   return [got, note].filter(Boolean).join(' · ')
 }
 const slskPortFix = n => ['Publish port ' + n + ' (', h('code', null, '-p ' + n + ':' + n), ') and forward it on your router.']
-const slskAlbumEntry = j => j.sha256s && j.sha256s.length ? S.entries.find(e => j.sha256s.includes(e.sha256)) : null
-function slskJobItem (j) {
-  const st = slskJobState(j)
+// The album a finished job added: by the files it saved, else (YouTube) by the release it was pinned to.
+const jobAlbumEntry = j => (j.sha256s && j.sha256s.length ? S.entries.find(e => j.sha256s.includes(e.sha256)) : null) ||
+  (j.plugin === 'youtube' && j.id ? S.entries.find(e => e.seriesKey === j.id) : null) || null
+// Progress a reader can trust: bytes of a known total (Soulseek), else tracks done of tracks asked (YouTube).
+function jobProgress (j) {
+  if (j.plugin !== 'youtube') {
+    return h('div', { class: 'bar-track' + (j.status === 'transferring' || j.status === 'announcing' ? '' : ' wait') }, h('div', { style: 'width:' + (j.status === 'announcing' ? 100 : slskPct(j) || 0) + '%' }))
+  }
+  const n = j.fileCount || 1
+  const doneN = j.status === 'announcing' ? n : j.status === 'transferring' ? (j.fileIndex || 1) - 1 : 0
+  const text = plural(doneN, 'track', 'tracks') + ' of ' + n + ' saved'
+  if (n === 1) {
+    return j.status === 'announcing'
+      ? h('div', { class: 'bar-track', role: 'progressbar', 'aria-valuetext': 'Adding' }, h('div', { style: 'width:100%' }))
+      : h('div', { class: 'bar-track indef' + (j.status === 'queued' ? ' wait' : ''), role: 'progressbar', 'aria-valuetext': j.status === 'queued' ? 'Waiting' : 'Downloading' }, h('div'))
+  }
+  const aria = { role: 'progressbar', 'aria-valuemin': '0', 'aria-valuemax': String(n), 'aria-valuenow': String(doneN), 'aria-valuetext': text }
+  if (n > 30) return h('div', { class: 'bar-track', ...aria }, h('div', { style: 'width:' + Math.round(doneN / n * 100) + '%' }))
+  return h('div', { class: 'bar-steps', ...aria }, Array.from({ length: n }, (_, i) => h('i', { class: i < doneN ? 'done' : i === doneN && j.status === 'transferring' ? 'now' : '' })))
+}
+const YT_FAIL_HINTS = [
+  [/not a bot/i, 'YouTube is refusing this relay for now. Try later.'],
+  [/country|not available in your/i, 'Not available where this relay is.'],
+  [/age|sign in to confirm your age/i, 'Needs a signed-in account; this relay has none.'],
+  [/private|members/i, 'Private or members-only video.']
+]
+const ytFailHint = error => ((YT_FAIL_HINTS.find(([re]) => re.test(String(error || ''))) || [])[1]) || ''
+function srcJobItem (j) {
+  const yt = j.plugin === 'youtube'
+  const st = jobState(j)
   const active = MIRROR_ACTIVE.has(j.status)
-  const pct = slskPct(j)
   const p = plugin('soulseek')
-  const unreachable = p.inboundFailures > 0 && p.transfersOk === 0
-  const album = j.status === 'done' ? slskAlbumEntry(j) : null
-  const track = [j.fileCount > 1 ? 'Track ' + j.fileIndex + ' of ' + j.fileCount : '', j.file].filter(Boolean).join(' · ')
+  const unreachable = !yt && p.inboundFailures > 0 && p.transfersOk === 0
+  const album = j.status === 'done' ? jobAlbumEntry(j) : null
+  const track = yt ? j.file || '' : [j.fileCount > 1 ? 'Track ' + j.fileIndex + ' of ' + j.fileCount : '', j.file].filter(Boolean).join(' · ')
+  const skipped = yt && j.status === 'done' ? j.skipped || [] : []
   const btn = (label, fn) => h('button', { class: 'btn' + (label === 'Open album' ? '' : ' quiet'), 'data-fk': j.jobId + ':' + label, onclick: fn }, label)
-  return h('div', { class: 'item job slsk-job', 'data-job': j.jobId, 'data-status': j.status },
+  return h('div', { class: 'item job src-job', 'data-job': j.jobId, 'data-status': j.status },
     h('div', { class: 'info' },
-      h('div', { class: 'name' }, j.title || 'Album'),
+      h('div', { class: 'name', tabindex: '-1' }, j.title || 'Album'),
       h('div', { class: 'slsk-state' + (st.tone ? ' ' + st.tone : '') }, st.text),
-      active && track ? h('div', { class: 'meta' }, track) : null,
+      active && track ? h('div', { class: 'meta wrap' }, track) : null,
       active && slskAmount(j) ? h('div', { class: 'meta slsk-amount' }, slskAmount(j)) : null,
-      active ? h('div', { class: 'bar-track' + (j.status === 'transferring' || j.status === 'announcing' ? '' : ' wait') }, h('div', { style: 'width:' + (j.status === 'announcing' ? 100 : pct || 0) + '%' })) : null,
-      j.status === 'done' && j.note ? h('div', { class: 'meta wrap' }, j.note) : null,
+      active ? jobProgress(j) : null,
+      skipped.map(s => h('div', { class: 'meta wrap' }, 'Not saved: ' + s.title + (s.error ? ' (' + s.error + ')' : ''))),
+      j.status === 'done' && j.note && !skipped.length ? h('div', { class: 'meta wrap' }, j.note) : null,
       j.status === 'failed' && j.error ? h('div', { class: 'meta err wrap slsk-error' }, j.error) : null,
+      j.status === 'failed' && yt && ytFailHint(j.error) ? h('div', { class: 'meta wrap' }, ytFailHint(j.error)) : null,
       j.status === 'failed' && unreachable ? h('div', { class: 'meta wrap slsk-fix' }, ...slskPortFix(p.listenPort || p.listenPortSetting || j.listenPort)) : null),
     h('div', { class: 'acts' },
       album ? btn('Open album', () => { const t = tileOf(album); if (t) openDetail(t.key) }) : null,
       btn(active ? 'Cancel' : 'Dismiss', e => act(e.currentTarget, async () => { await api('/v1/jobs/' + j.jobId, { method: 'DELETE' }); refresh() }))))
 }
-function slskSyncButton (b) {
-  const key = b.dataset.slskKey
-  const id = slskStarted.get(key)
+// A button that started a job follows it; "s:" keys are Soulseek folders, "y:" keys YouTube videos.
+function srcSyncButton (b) {
+  const key = b.dataset.srcKey
+  const started = key.startsWith('y:') ? ytStarted : slskStarted
+  const id = started.get(key.slice(2))
   if (!id) return
   const j = S.jobs.find(x => x.jobId === id)
   if (j && (j.status === 'failed' || j.status === 'cancelled')) {
-    slskStarted.delete(key)
+    started.delete(key.slice(2))
     b.textContent = b.dataset.label
     b.disabled = false
     return
   }
-  b.textContent = j ? slskJobState(j).short : 'Mirroring'
+  b.textContent = j ? jobState(j).short : key.startsWith('y:') ? 'Waiting' : 'Mirroring'
   b.disabled = true
 }
-function renderSlskJobs () {
-  const box = $('slskJobs')
-  const fk = box.contains(document.activeElement) ? document.activeElement.dataset.fk : ''
+function renderSrcJobs () {
+  const box = $('srcJobs')
+  // Focus survives the once-a-second redraw: a card's button, or the name a new save moved focus to.
+  const at = box.contains(document.activeElement) ? document.activeElement : null
+  const fk = at ? at.dataset.fk || (at.classList.contains('name') ? 'name:' + at.closest('[data-job]').dataset.job : '') : ''
   const recent = Date.now() - 3600_000
-  const jobs = S.jobs.filter(j => j.plugin === 'soulseek' && (j.status !== 'done' || j.created > recent))
+  const jobs = S.jobs.filter(j => SOURCE_NAMES.has(j.plugin) && (j.status !== 'done' || j.created > recent))
     .sort((a, b) => MIRROR_ACTIVE.has(b.status) - MIRROR_ACTIVE.has(a.status) || b.created - a.created).slice(0, 5)
   box.hidden = !jobs.length
-  box.replaceChildren(...jobs.map(slskJobItem))
-  const again = fk && [...box.querySelectorAll('[data-fk]')].find(b => b.dataset.fk === fk)
+  box.replaceChildren(...jobs.map(srcJobItem))
+  const again = fk && (fk.startsWith('name:') ? box.querySelector('[data-job="' + fk.slice(5) + '"] .name') : [...box.querySelectorAll('[data-fk]')].find(b => b.dataset.fk === fk))
   if (again) again.focus()
-  for (const b of document.querySelectorAll('button[data-slsk-key]')) slskSyncButton(b)
+  for (const b of document.querySelectorAll('button[data-src-key]')) srcSyncButton(b)
 }
 function renderMirrors () {
   renderPills()
-  if (tab === 'music') renderSlskStatus()
+  if (tab === 'music') renderSourcesStatus()
 }
 // Cheap and independent of the full refresh, which holds still while a film plays. When the last mirror ends, one
 // full refresh loads the new album's tracks so its card can open it.
@@ -1978,7 +2700,7 @@ async function pollMirrors () {
   slskPolling = true
   let failed = false
   try {
-    while (S.jobs.some(slskActive)) {
+    while (S.jobs.some(srcActive)) {
       await new Promise(resolve => setTimeout(resolve, 1000))
       try { S.jobs = (await api('/v1/jobs')).jobs || [] } catch { failed = true; break }
       noticeJobs(false)
@@ -2002,20 +2724,15 @@ function slskPortNote (p) {
   }
   return { alert: false, kids: ['Peers send files to this relay on port ' + port + '; keep it reachable.'] }
 }
-function renderSlskStatus () {
-  const p = plugin('soulseek')
-  $('slskHint').textContent = p.status === 'unavailable'
-    ? 'Unavailable on this device.'
-    : p.configured
-      ? 'Finds albums on peers and mirrors them here.'
-      : 'Add your account in Settings to search.'
-  const note = slskPortNote(p)
+function renderSourcesStatus () {
+  renderSourceChips()
+  const note = slskPortNote(plugin('soulseek'))
   $('slskPort').hidden = !note
   $('slskPort').classList.toggle('alert', Boolean(note && note.alert))
   $('slskPort').replaceChildren(...(note ? note.kids : []))
-  renderSlskJobs()
+  renderSrcJobs()
 }
-// ==== end Soulseek sources ====
+// ==== end Sources ====
 
 // ---- Library: details sheet (play, cast, copy; a show's episodes by season)
 let detailKey = null
@@ -2157,6 +2874,7 @@ const trackNo = e => e.season != null && e.episode != null
 // bitrate of a lossy one, plus the bitrate the file's own size works out to. The header is read once per file and
 // cached; until it arrives the cell is empty rather than a guess.
 function qualityOf (e, d) {
+  if (isYt(e)) return YT_LABEL + ' · lossy copy'
   if (!d || !d.media) return ''
   const secs = d.media.duration
   const a = (d.media.audio || [])[0]
@@ -2170,19 +2888,21 @@ function qualityOf (e, d) {
   return [a && a.codec, base, containerLossless ? 'lossless container' : br, containerLossless ? br + ' file' : ''].filter(Boolean).join(' · ')
 }
 // A row's second line says only what sets the track apart: an artist who is not the album's, a copy that is not
-// what the rest of the album is (one 16-bit track on a 24-bit album), not saved here yet, or held twice. On a
-// clean album every row is one line. The full verdict ("lossless container", bitrate) is the line's tooltip, and
-// the album's own is the sheet's header.
-function trackMeta (e, d, albumArtist, copies, common) {
+// what the rest of the album is (one 16-bit track on a 24-bit album, a YouTube copy on a FLAC album), not saved here
+// yet, or held twice. On a clean album every row is one line. The full verdict ("lossless container", bitrate) is
+// the line's tooltip, and the album's own is the sheet's header.
+function trackMeta (i, d, albumArtist, common) {
+  const e = i.e
   const artist = e.music && e.music.artist
-  const q = shortQuality(d)
-  return [artist && artist !== albumArtist ? artist : '', q !== common ? q : '', saved(e) ? '' : where(e), copies > 1 ? copies + ' copies' : ''].filter(Boolean).join(' · ')
+  const q = copyQuality(e, d)
+  const ytAlso = !isYt(e) && i.alts.some(isYt)
+  return [artist && artist !== albumArtist ? artist : '', q !== common ? q : '', saved(e) ? '' : where(e), ytAlso ? 'Also from YouTube' : i.copies > 1 ? i.copies + ' copies' : ''].filter(Boolean).join(' · ')
 }
 // What most of an album's tracks are, among the headers read so far.
 function commonQuality (t) {
   const n = new Map()
   for (const i of t.items) {
-    const q = shortQuality(infoData.get(i.e.key))
+    const q = copyQuality(i.e, infoData.get(i.e.key))
     if (q) n.set(q, (n.get(q) || 0) + 1)
   }
   return [...n].sort((a, b) => b[1] - a[1]).map(x => x[0])[0] || ''
@@ -2204,7 +2924,7 @@ function trackRow (i, t, common) {
     btn,
     h('div', { class: 'grow', style: 'min-width:0' },
       h('div', { class: 'label' }, trackName(e), h('span', { class: 'tag now', hidden: true })),
-      h('div', { class: 'meta', 'data-q': e.key, title: qualityOf(e, d) }, trackMeta(e, d, t.artist, i.copies, common))),
+      h('div', { class: 'meta', 'data-q': e.key, title: qualityOf(e, d) }, trackMeta(i, d, t.artist, common))),
     h('span', { class: 'track-dur', 'data-dur': e.key }, duration(trackSecs(d))),
     dl,
     trackDeleteBtn(e))
@@ -2217,8 +2937,24 @@ function albumHeadLine (t) {
 }
 function albumVerdict (t) {
   const common = commonQuality(t)
-  const i = t.items.find(x => shortQuality(infoData.get(x.e.key)) === common) || t.items[0]
+  if (common === YT_LABEL) return 'From ' + YT_LABEL
+  const i = t.items.find(x => !isYt(x.e) && shortQuality(infoData.get(x.e.key)) === common) || t.items.find(x => !isYt(x.e)) || t.items[0]
   return qualityOf(i.e, infoData.get(i.e.key))
+}
+// Under the verdict, only when an album mixes a YouTube copy with another: which one plays, and what exists only
+// on YouTube.
+function albumAlso (t) {
+  if (!hasYt(t) || allYt(t)) return ''
+  const known = t.items.flatMap(i => [i.e, ...i.alts]).find(e => !isYt(e) && shortQuality(infoData.get(e.key)))
+  const codec = known ? shortQuality(infoData.get(known.key)).split(' ')[0] : ''
+  const playsYt = t.items.filter(i => isYt(i.e))
+  const onNet = playsYt.filter(i => i.alts.some(a => !isYt(a))).length
+  const only = playsYt.length - onNet
+  const lines = []
+  if (t.items.some(i => !isYt(i.e) && i.alts.some(isYt))) lines.push('Also from ' + YT_LABEL + '. ' + (codec ? codec + ' plays first.' : 'The other copy plays first.'))
+  if (onNet) lines.push((codec ? 'A ' + codec : 'Another') + ' copy is on the network.')
+  if (only) lines.push(plural(only, 'track', 'tracks') + ' only from ' + YT_LABEL + '.')
+  return lines.join(' ')
 }
 // Headers land one by one after the sheet opens; each redraws the lines that depend on them, never the rows.
 function paintAlbumSheet (t) {
@@ -2228,11 +2964,13 @@ function paintAlbumSheet (t) {
   if (am) am.textContent = albumHeadLine(t)
   const av = box.querySelector('[data-av]')
   if (av) av.textContent = albumVerdict(t)
+  const ay = box.querySelector('[data-ay]')
+  if (ay) { ay.textContent = albumAlso(t); ay.hidden = !ay.textContent }
   for (const i of t.items) {
     const d = infoData.get(i.e.key)
     for (const line of box.querySelectorAll('[data-q]')) {
       if (line.dataset.q !== i.e.key) continue
-      line.textContent = trackMeta(i.e, d, t.artist, i.copies, common)
+      line.textContent = trackMeta(i, d, t.artist, common)
       line.title = qualityOf(i.e, d)
     }
     for (const cell of box.querySelectorAll('[data-dur]')) if (cell.dataset.dur === i.e.key) cell.textContent = duration(trackSecs(d))
@@ -2257,7 +2995,8 @@ function albumHead (t) {
       h('div', { class: 'album-by' }, t.artist || 'Unknown artist')),
     h('div', { class: 'ah-meta' },
       h('div', { class: 'meta', 'data-am': t.key }, albumHeadLine(t)),
-      h('div', { class: 'meta', 'data-av': t.key }, albumVerdict(t))),
+      h('div', { class: 'meta', 'data-av': t.key }, albumVerdict(t)),
+      h('div', { class: 'meta', 'data-ay': t.key, hidden: !albumAlso(t) }, albumAlso(t))),
     list.length || del
       ? h('div', { class: 'album-acts' },
         list.length ? h('button', { class: 'btn primary', 'data-album': t.key, onclick: () => queue.length && (tileOf(queue[queueIndex]) || {}).key === t.key ? musicToggle() : startQueue(list, list[0], t.title) }, icons, h('span', null, 'Play')) : null,
@@ -2550,8 +3289,8 @@ function renderQueue () {
         num, h('span', { class: 'nq-name' }, trackName(e)), h('span', { class: 'nq-dur' }, secs ? duration(secs) : '')))
   }))
 }
-// The library tile that holds a track, whatever its grouping key is.
-const tileOf = e => libraryTiles().find(t => t.items.some(i => i.e.key === e.key))
+// The library tile that holds a track, whatever its grouping key is, as the copy a row plays or a second copy of it.
+const tileOf = e => libraryTiles().find(t => t.items.some(i => i.e.key === e.key || (i.alts || []).some(a => a.key === e.key)))
 const openAlbum = () => { const e = queue[queueIndex]; const t = e && tileOf(e); if (t) openDetail(t.key, e.season) }
 $('npArt').onclick = openAlbum
 $('npTitle').onclick = openAlbum
@@ -2566,13 +3305,15 @@ $('npSeek').addEventListener('change', () => { seekDragging = false; musicSeek(N
 $('npVol').value = String(Math.round((Number.isFinite(musicStore.vol) ? musicStore.vol : 1) * 100))
 $('npVol').addEventListener('input', () => { musicAudio().volume = Number($('npVol').value) / 100; saveMusic(true) })
 addEventListener('pointerdown', ev => { if (!$('npQueue').hidden && !ev.target.closest('#npQueue, #npQueueBtn')) toggleQueue(false) })
-// Music keys, whenever a typed key would not land in a text field: space plays or pauses, the arrows step 10 s.
+// Music keys, whenever a typed key would not land in a text field or a control: space plays or pauses, the arrows
+// step 10 s. A focused button or link keeps Space for itself, so a chip or a checkbox never pauses the music.
 addEventListener('keydown', ev => {
   if (!queue.length || player || ev.altKey || ev.ctrlKey || ev.metaKey || ev.defaultPrevented) return
   const t = ev.target
   const range = t.tagName === 'INPUT' && t.type === 'range'
   if ((!range && /^(INPUT|SELECT|TEXTAREA)$/.test(t.tagName)) || t.isContentEditable) return
   if (ev.key === 'Escape' && !$('npQueue').hidden) { ev.preventDefault(); toggleQueue(false); $('npQueueBtn').focus() }
+  else if (/^(BUTTON|A)$/.test(t.tagName)) return
   else if (ev.key === ' ') { ev.preventDefault(); musicToggle() }
   else if (!range && (ev.key === 'ArrowLeft' || ev.key === 'ArrowRight')) { ev.preventDefault(); musicSeek(audioEl.currentTime + (ev.key === 'ArrowLeft' ? -10 : 10)) }
 })
@@ -2660,8 +3401,15 @@ function infoPanel (e) {
   if (!infoData.has(e.key)) loadInfo(e.key)
   return box
 }
-async function loadInfo (key, read) {
-  if (infoBusy.has(key) && !read) return
+// A read already in flight is shared, so a caller waiting on it (the shelf's quality line) hears when it lands.
+const infoPending = new Map()
+function loadInfo (key, read) {
+  if (infoBusy.has(key) && !read) return infoPending.get(key)
+  const p = readInfo(key, read)
+  infoPending.set(key, p)
+  return p
+}
+async function readInfo (key, read) {
   infoBusy.add(key)
   try {
     infoData.set(key, await api('/v1/entries/info?key=' + encodeURIComponent(key) + (read ? '&read=1' : '')))
@@ -2669,6 +3417,7 @@ async function loadInfo (key, read) {
     infoData.set(key, { error: err.message })
   } finally {
     infoBusy.delete(key)
+    infoPending.delete(key)
   }
   const e = infoEntries.get(key)
   for (const box of $('detailBody').querySelectorAll('[data-info]')) {

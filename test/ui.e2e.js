@@ -6,10 +6,15 @@
 //   3. Content identification against a stubbed Cinemeta and a stub `ubit` (`UBIT_BIN`): an exact match is
 //      published as `imdb:tt…` (the id MediaStorm searches by), an unknown file as a plain clip, a page link
 //      through ubit's metadata and NDJSON downloader.
-//   4. Taste gates on every tab at 1440×900 and 390×844 in light and dark: no console errors or warnings, no
+//   4. Music sources against the stub `ubit`: source chips and their memory, a streamed two-source search, YouTube
+//      rows with relay-fetched thumbnails and the fixed lossy label, a failing source on its own, the save dialog
+//      (suggestions, reorder, single track, Escape), job cards without a percentage, and library labels for
+//      YouTube copies, alone and merged with a FLAC album.
+//   5. Taste gates on every tab at 1440×900 and 390×844 in light and dark: no console errors or warnings, no
 //      sideways scroll, no internal plugin ids in visible text, no hint over 12 words, every field labelled
-//      with an example placeholder.
-// Writes `desktop/target/e2e/ui-result.json` and screenshots to `desktop/target/e2e/ui-audit/after/`.
+//      with an example placeholder; again with search results on screen and with the save dialog open.
+// Writes `desktop/target/e2e/ui-result.json`, screenshots to `desktop/target/e2e/ui-audit/after/`, and the sources
+// screens to `desktop/target/e2e/sources-ux/`.
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { execFileSync, spawn } from 'node:child_process'
@@ -24,7 +29,8 @@ import { createInterface } from 'node:readline'
 const root = new URL('..', import.meta.url).pathname
 const outDir = join(root, 'desktop/target/e2e')
 const shotDir = join(outDir, 'ui-audit/after')
-const PLUGIN_IDS = ['http-acquire', 'channel-backfill', 'blob-rechunk', 'watch-dir', 'feed-mirror', 'p2p-replicate', 'hiverelay-seed', 'soulseek']
+const srcShotDir = join(outDir, 'sources-ux')
+const PLUGIN_IDS = ['http-acquire', 'channel-backfill', 'blob-rechunk', 'watch-dir', 'feed-mirror', 'p2p-replicate', 'hiverelay-seed', 'soulseek', 'youtube']
 const TOKEN = randomBytes(16).toString('hex')
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms))
 
@@ -117,7 +123,8 @@ function startStub () {
   return new Promise(resolve => srv.listen(0, '127.0.0.1', () => { stub.base = 'http://127.0.0.1:' + srv.address().port; resolve(stub) }))
 }
 
-// A `ubit` stub that speaks the real `ubit info --json` and `ubit get --json` contracts for the stub page.
+// A `ubit` stub that speaks the real `ubit info --json` and `ubit get --json` contracts for the stub page, and for
+// YouTube: `info ytsearch:<q>` answers three videos (a query with "fail" fails), `get -a` writes a short M4A.
 function fakeUbit (dir, stubBase) {
   const info = {
     id: 'aqz-KE-bpKQ',
@@ -131,14 +138,38 @@ function fakeUbit (dir, stubBase) {
     isLive: false,
     formats: [{ id: '22', ext: 'mp4', proto: 'http', url: stubBase + '/page-video.mp4', vcodec: 'avc1', acodec: 'mp4a', height: 360 }]
   }
+  const search = { entries: [
+    { id: 'tbDawn00001', title: 'Test Band - Dawn (Official Audio)', duration: 200 },
+    { id: 'tbDusk00002', title: 'Test Band - Dusk', duration: 190 },
+    { id: 'tbFirst0003', title: 'Test Band - First Light (Full Album)', duration: 2200 }
+  ] }
   const bin = join(dir, 'ubit')
   const script = [
     '#!/usr/bin/env node',
-    'const fs = require("node:fs"), path = require("node:path");',
+    'const fs = require("node:fs"), path = require("node:path"), { execFileSync } = require("node:child_process");',
     `const info = ${JSON.stringify(info)};`,
+    `const search = ${JSON.stringify(search)};`,
     `const mediaUrl = ${JSON.stringify(stubBase + '/page-video.mp4')};`,
     'const args = process.argv.slice(2);',
+    'if (args[0] === "info" && String(args[1]).startsWith("ytsearch:")) {',
+    '  if (/fail/i.test(args[1])) { console.error("error: boom"); process.exit(1); }',
+    '  console.log(JSON.stringify(search)); process.exit(0);',
+    '}',
     'if (args[0] === "info") { console.log(JSON.stringify(info)); process.exit(0); }',
+    'if (args[0] === "get" && args.includes("-a")) {',
+    '  const o = args.indexOf("-o");',
+    '  const outDir = o !== -1 ? args[o + 1] : process.cwd();',
+    '  fs.mkdirSync(outDir, { recursive: true });',
+    '  const id = new URL(args[1]).searchParams.get("v");',
+    '  const dst = path.join(outDir, id + ".m4a");',
+    // Each save is its own file (a unique comment), so two saves of one video are two copies, not one blob.
+    '  execFileSync("ffmpeg", ["-loglevel", "error", "-y", "-f", "lavfi", "-i", "sine=frequency=330:sample_rate=44100:duration=3", "-c:a", "aac", "-b:a", "128k", "-metadata", "comment=" + id + Date.now() + Math.random(), dst]);',
+    '  const size = fs.statSync(dst).size;',
+    '  console.log(JSON.stringify({ event: "start", url: args[1] }));',
+    '  console.log(JSON.stringify({ event: "progress", downloaded: size, total: size, fraction: 1, speed: size }));',
+    '  console.log(JSON.stringify({ event: "done", path: dst, seconds: 0.01, size }));',
+    '  process.exit(0);',
+    '}',
     'if (args[0] === "get") {',
     '  const o = args.indexOf("-o");',
     '  const outDir = o !== -1 ? args[o + 1] : process.cwd();',
@@ -187,6 +218,8 @@ async function launchBrowser () {
   let seq = 0
   const pending = new Map()
   const issues = []
+  // Every URL the page asks for, so the run can prove it never contacts YouTube or its image host.
+  const requests = []
   ws.onmessage = ev => {
     const m = JSON.parse(ev.data)
     if (m.id && pending.has(m.id)) {
@@ -198,6 +231,7 @@ async function launchBrowser () {
     if (m.method === 'Runtime.consoleAPICalled' && (m.params.type === 'error' || m.params.type === 'warning')) issues.push(m.params.type + ': ' + m.params.args.map(a => a.value ?? a.description).join(' '))
     if (m.method === 'Runtime.exceptionThrown') issues.push('exception: ' + (m.params.exceptionDetails.exception?.description || m.params.exceptionDetails.text))
     if (m.method === 'Log.entryAdded' && (m.params.entry.level === 'error' || m.params.entry.level === 'warning')) issues.push(m.params.entry.level + ': ' + m.params.entry.text + ' ' + (m.params.entry.url || ''))
+    if (m.method === 'Network.requestWillBeSent') requests.push(m.params.request.url)
   }
   const send = (method, params = {}) => new Promise((resolve, reject) => {
     const id = ++seq
@@ -207,6 +241,7 @@ async function launchBrowser () {
   await send('Runtime.enable')
   await send('Log.enable')
   await send('Page.enable')
+  await send('Network.enable', { maxTotalBufferSize: 1_000_000, maxResourceBufferSize: 100_000 })
   const evaluate = async expression => {
     const r = await send('Runtime.evaluate', { expression, awaitPromise: true, returnByValue: true })
     if (r.exceptionDetails) throw new Error(r.exceptionDetails.exception?.description || r.exceptionDetails.text)
@@ -217,6 +252,7 @@ async function launchBrowser () {
   const devtools = (path, method = 'GET') => fetch(`http://127.0.0.1:${port}${path}`, { method }).then(r => r.text())
   return {
     issues,
+    requests,
     async hide () { blank = blank || JSON.parse(await devtools('/json/new?about:blank', 'PUT')).id; await devtools('/json/activate/' + blank) },
     async show () { await devtools('/json/activate/' + target.id) },
     send,
@@ -230,8 +266,9 @@ async function launchBrowser () {
   }
 }
 
-test('relay web UI: settings, plugins as intents, identification, and taste gates', { timeout: 300_000 }, async () => {
+test('relay web UI: settings, plugins as intents, identification, music sources, and taste gates', { timeout: 420_000 }, async () => {
   mkdirSync(shotDir, { recursive: true })
+  mkdirSync(srcShotDir, { recursive: true })
   const storage = mkdtempSync(join(tmpdir(), 'peartube-ui-storage-'))
   const binDir = mkdtempSync(join(tmpdir(), 'peartube-ui-bin-'))
   // The import folder is env-only; the file lands just before the scan, so the scan is what imports it.
@@ -335,10 +372,37 @@ test('relay web UI: settings, plugins as intents, identification, and taste gate
   }
   const goTab = async name => { await clickText(name, '.tabs'); await sleep(300) }
   const entries = async () => (await getJson('/v1/entries')).results
-  async function shot (name, viewportOnly = false) {
-    const file = join(shotDir, name + '.png')
+  async function shot (name, viewportOnly = false, dir = shotDir) {
+    const file = join(dir, name + '.png')
     writeFileSync(file, Buffer.from((await send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: !viewportOnly })).data, 'base64'))
     result.screenshots.push(file.slice(root.length))
+  }
+  // The taste gates, on whatever is on screen now.
+  async function tasteAudit (where) {
+    const audit = await evaluate(`(() => {
+      const visible = e => e.offsetParent !== null || getComputedStyle(e).position === 'fixed'
+      const words = s => s.trim().split(/\\s+/).filter(Boolean).length
+      const text = document.body.innerText
+      const fields = [...document.querySelectorAll('input, select, textarea')].filter(e => visible(e) && !['checkbox', 'radio', 'range', 'hidden'].includes(e.type))
+      return {
+        scrollWidth: document.documentElement.scrollWidth,
+        clientWidth: document.documentElement.clientWidth,
+        pluginIds: ${JSON.stringify(PLUGIN_IDS)}.filter(id => text.includes(id)),
+        longHints: [...document.querySelectorAll('.hint, p, [title]')].filter(visible).map(e => e.matches('[title]') ? e.title : e.textContent).filter(t => words(t) > 12),
+        unlabeled: fields.filter(e => !(e.labels && e.labels.length) && !e.getAttribute('aria-label')).map(e => e.id),
+        noPlaceholder: fields.filter(e => e.tagName === 'INPUT' && !e.placeholder).map(e => e.id),
+        rawJson: /[{]"[a-zA-Z]+":/.test(text),
+        stray: text.match(/\\b(null|undefined|NaN)\\b/g) || []
+      }
+    })()`)
+    assert.ok(audit.scrollWidth <= audit.clientWidth, where + ': sideways scroll ' + audit.scrollWidth + ' > ' + audit.clientWidth)
+    assert.deepEqual(audit.pluginIds, [], where + ': internal plugin ids visible')
+    assert.deepEqual(audit.longHints, [], where + ': hints over 12 words')
+    assert.deepEqual(audit.unlabeled, [], where + ': unlabelled fields')
+    assert.deepEqual(audit.noPlaceholder, [], where + ': fields without an example')
+    assert.equal(audit.rawJson, false, where + ': raw JSON on screen')
+    assert.deepEqual(audit.stray, [], where + ': a missing value printed as text')
+    return audit
   }
 
   try {
@@ -668,6 +732,113 @@ test('relay web UI: settings, plugins as intents, identification, and taste gate
     await shot('music-bar-1440-dark', true)
     result.checks.musicBar = bar
     mark('musicBar')
+
+    // 4. Music sources. Soulseek has no account here, so it offers setup; YouTube runs on the stub `ubit`.
+    const issuesBefore = browser.issues.length
+    const chip = name => `document.querySelector('#srcChips [data-src="${name}"]')`
+    await goTab('Music')
+    await waitFor(`!!${chip('youtube')}`, 'source chips')
+    assert.deepEqual(await evaluate(`[${chip('youtube')}.textContent, ${chip('youtube')}.getAttribute('aria-pressed')]`), ['✓ YouTube', 'true'], 'YouTube is on by default')
+    assert.deepEqual(await evaluate(`[${chip('soulseek')}.textContent, ${chip('soulseek')}.getAttribute('aria-pressed')]`), ['Soulseek · Set up', null], 'Soulseek without an account offers setup, not a toggle')
+    // Space on a focused chip toggles the chip, not the music the bar holds.
+    const pausedBefore = await evaluate(`audioEl.paused`)
+    await evaluate(`${chip('youtube')}.focus(); true`)
+    await send('Input.dispatchKeyEvent', { type: 'keyDown', key: ' ', code: 'Space', windowsVirtualKeyCode: 32, text: ' ' })
+    await send('Input.dispatchKeyEvent', { type: 'keyUp', key: ' ', code: 'Space', windowsVirtualKeyCode: 32 })
+    await sleep(300)
+    assert.equal(await evaluate(`${chip('youtube')}.getAttribute('aria-pressed')`), 'false', 'Space toggles a focused chip')
+    assert.equal(await evaluate(`audioEl.paused`), pausedBefore, 'Space on a chip leaves the music alone')
+    // The choice survives a reload.
+    await open('#music')
+    await waitFor(`!!${chip('youtube')}`, 'source chips after reload')
+    assert.equal(await evaluate(`${chip('youtube')}.getAttribute('aria-pressed')`), 'false', 'a source turned off stays off')
+    assert.equal(await evaluate(`localStorage.getItem('peartube.sourcesOff')`), '["youtube"]')
+    await click(`#srcChips [data-src="youtube"]`)
+    assert.equal(await evaluate(`${chip('youtube')}.getAttribute('aria-pressed')`), 'true', 'and back on')
+    result.checks.sourceChips = true
+
+    // One search; YouTube's part shows as soon as it lands, every row labelled as the lossy copy it would save.
+    const ytSearch = async query => { await type('#srcInput', query); await click('#srcBtn') }
+    await ytSearch('test band')
+    await waitFor(`document.querySelectorAll('#srcGroup-youtube .yt-pick-row').length === 3`, 'YouTube rows streamed in', 5000)
+    const rows = await evaluate(`[...document.querySelectorAll('#ytResults .item')].map(i => i.innerText)`)
+    for (const row of rows) assert.ok(row.includes('YouTube') && row.includes('AAC 128 kbps') && row.includes('lossy'), 'YouTube row says what a save gives: ' + row)
+    const groupText = await evaluate(`(() => { let t = $('srcGroups').innerText; for (const n of document.querySelectorAll('#srcGroups .item .name')) t = t.replace(n.firstChild.textContent, ''); return t })()`)
+    assert.doesNotMatch(groupText, /lossless|\bHQ\b|high quality/i, 'no YouTube copy is called lossless or high quality')
+    assert.equal(await evaluate(`[...document.querySelectorAll('#srcGroups .item')].every(i => ['Soulseek', 'YouTube'].includes((i.querySelector('.src-tag') || {}).textContent))`), true, 'every row names its source in words')
+    assert.equal(await evaluate(`[...document.querySelectorAll('#srcGroups .yt-thumb')].every(t => t.querySelector('img') || t.querySelector('.yt-ph'))`), true, 'every thumbnail is a relay picture or the drawn placeholder')
+    assert.equal(await evaluate(`$('ytNote').firstChild.textContent`), 'Peers not searched. YouTube copies are lossy AAC 128 kbps.', 'the advice says peers were not asked')
+    assert.match(await evaluate(`$('srcSummary').textContent`), /Soulseek off.*YouTube 3 videos/)
+    result.checks.sourcesStreamed = rows.length
+
+    // A source that fails says so in its own group; the search as a whole is not an error.
+    await ytSearch('fail band')
+    await waitFor(`($('srcGroup-youtube')?.querySelector('[role=alert]')?.textContent || '').includes('YouTube search failed')`, 'YouTube failure in its group', 5000)
+    assert.equal(await evaluate(`$('srcMsg').classList.contains('err')`), false, 'one failed source is not a failed search')
+    result.checks.sourceErrorIsolated = await evaluate(`$('srcGroup-youtube').querySelector('[role=alert]').textContent`)
+
+    // Save two videos as an album: suggestions from the titles, a reorder that keeps focus, track numbers in order.
+    await ytSearch('test band')
+    await waitFor(`document.querySelectorAll('#ytResults .yt-pick-row').length === 3`, 'YouTube rows again', 5000)
+    await click('#ytResults .item:nth-child(1) input')
+    await click('#ytResults .item:nth-child(2) input')
+    assert.equal(await evaluate(`$('ytPickText').textContent`), '2 selected')
+    await click('#ytPickSave')
+    await waitFor(`$('ytSave').open`, 'save dialog')
+    clicks = 0
+    assert.deepEqual(await evaluate(`[$('ytArtist').value, $('ytTrack-0').value, $('ytTrack-1').value]`), ['Test Band', 'Dawn', 'Dusk'], 'artist and cleaned titles suggested')
+    await type('#ytAlbum', 'Morning')
+    await type('#ytYear', '2020')
+    await click('[data-mv="up-1"]')
+    assert.deepEqual(await evaluate(`[$('ytTrack-0').value, document.activeElement.dataset.mv]`), ['Dusk', 'up-0'], 'a moved track keeps focus on its own button')
+    await click('#ytSaveBtn')
+    result.interactions.ytSave = clicks
+    await waitFor(`!$('ytSave').open && /YouTube/.test($('srcJobs').innerText)`, 'YouTube job card', 10_000)
+    assert.ok(!(await evaluate(`$('srcJobs').innerText`)).includes('%'), 'a YouTube job never shows a percentage')
+    await waitFor(`$('toast').textContent.includes('to your library')`, 'album added toast', 30_000)
+    const morning = await waitApi(async () => { const list = (await entries()).filter(e => e.title === 'Test Band · Morning'); return list.length === 2 && list }, 'YouTube album imported')
+    assert.ok(morning.every(e => e.id.startsWith('yt:')), 'a YouTube album is pinned to a yt: release')
+    assert.deepEqual(morning.sort((a, b) => a.episode - b.episode).map(e => e.music.title), ['Dusk', 'Dawn'], 'tracks numbered in the dialog order')
+    await open('#music')
+    const card = name => `[...document.querySelectorAll('.album-card')].find(c => c.querySelector('.album-name').textContent === '${name}')`
+    await waitFor(`${card('Morning')}?.querySelector('[data-aq]').textContent === 'YouTube · AAC 128 kbps'`, 'YouTube album labelled on the shelf')
+    await evaluate(`${card('Morning')}.querySelector('.album-open').setAttribute('data-e2e', 'morning'); true`)
+    await click('[data-e2e="morning"]')
+    await waitFor(`document.querySelector('#detail[open] [data-av]')?.textContent === 'From YouTube · AAC 128 kbps'`, 'YouTube album sheet verdict')
+    assert.equal(await evaluate(`/lossless/i.test($('detailBody').innerText)`), false, 'nothing on a YouTube album says lossless')
+    await shot('album-youtube-1440-dark', true, srcShotDir)
+    await click('#detailClose')
+    result.checks.youtubeAlbum = morning.map(e => e.id)
+
+    // One video, saved on its own into the FLAC album already here: Escape first gives focus back, then the save
+    // folds into that album as a second copy of its track.
+    await ytSearch('test band')
+    await waitFor(`document.querySelectorAll('#ytResults .yt-pick-row').length === 3`, 'YouTube rows for one track', 5000)
+    await click('#ytResults .item:nth-child(1) .acts button')
+    await waitFor(`$('ytSave').open`, 'single-track dialog')
+    assert.deepEqual(await evaluate(`[$('ytAlbum').value, $('ytSaveBtn').textContent]`), ['Dawn', 'Save track'], 'one track suggests its song as the album')
+    await send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 })
+    await send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 })
+    await waitFor(`!$('ytSave').open`, 'Escape closes the dialog')
+    assert.equal(await evaluate(`document.activeElement.dataset.srcKey`), 'y:tbDawn00001', 'focus returns to the button that opened it')
+    await click('#ytResults .item:nth-child(1) .acts button')
+    await waitFor(`$('ytSave').open`, 'single-track dialog again')
+    await evaluate(`$('ytAlbum').value = ''; true`)
+    await type('#ytAlbum', 'First Light')
+    await click('#ytSaveBtn')
+    await waitApi(async () => (await entries()).some(e => e.title === 'Test Band · First Light' && e.id.startsWith('yt:')), 'YouTube copy of a FLAC track')
+    await open('#music')
+    await waitFor(`/^FLAC 16-bit 44.1 kHz · also YouTube$/.test(${card('First Light')}?.querySelector('[data-aq]').textContent || '')`, 'merged album says what it is, then also YouTube')
+    assert.equal(await evaluate(`document.querySelectorAll('.album-card').length`), 2, 'the YouTube copy joins the FLAC album, not a new one')
+    await evaluate(`${card('First Light')}.querySelector('.album-open').setAttribute('data-e2e', 'merged'); true`)
+    await click('[data-e2e="merged"]')
+    await waitFor(`(document.querySelector('#detail[open] [data-ay]')?.textContent || '').includes('FLAC plays first')`, 'merged sheet says which copy plays', 20_000)
+    assert.equal(await evaluate(`[...document.querySelectorAll('#detailBody [data-q]')].some(m => m.textContent === 'Also from YouTube')`), true, 'the track with a YouTube copy says so')
+    await shot('album-merged-1440-dark', true, srcShotDir)
+    await click('#detailClose')
+    result.checks.mergedAlbum = await evaluate(`${card('First Light')}.querySelector('[data-aq]').textContent`)
+    assert.deepEqual(browser.issues.slice(issuesBefore), [], 'console errors or warnings in the sources flow')
+    mark('musicSources')
     await open('#library')
 
     // Follow a feed.
@@ -751,7 +922,8 @@ test('relay web UI: settings, plugins as intents, identification, and taste gate
 
     for (const [name, n] of Object.entries(result.interactions)) assert.ok(n <= 3, name + ' took ' + n + ' interactions')
 
-    // 4. Taste gates on every tab, both sizes, both schemes.
+    // 5. Taste gates on every tab, both sizes, both schemes; then the Music tab with results on screen and with the
+    // save dialog open.
     browser.issues.length = 0
     for (const [width, height] of [[1440, 900], [390, 844]]) {
       for (const scheme of ['light', 'dark']) {
@@ -761,33 +933,29 @@ test('relay web UI: settings, plugins as intents, identification, and taste gate
           await open('#' + tab)
           const loadMs = Date.now() - loadStart
           await sleep(600)
-          const audit = await evaluate(`(() => {
-            const visible = e => e.offsetParent !== null || getComputedStyle(e).position === 'fixed'
-            const words = s => s.trim().split(/\\s+/).filter(Boolean).length
-            const text = document.body.innerText
-            const fields = [...document.querySelectorAll('input, select, textarea')].filter(e => visible(e) && !['checkbox', 'radio', 'range', 'hidden'].includes(e.type))
-            return {
-              scrollWidth: document.documentElement.scrollWidth,
-              clientWidth: document.documentElement.clientWidth,
-              pluginIds: ${JSON.stringify(PLUGIN_IDS)}.filter(id => text.includes(id)),
-              longHints: [...document.querySelectorAll('.hint, p, [title]')].filter(visible).map(e => e.matches('[title]') ? e.title : e.textContent).filter(t => words(t) > 12),
-              unlabeled: fields.filter(e => !(e.labels && e.labels.length) && !e.getAttribute('aria-label')).map(e => e.id),
-              noPlaceholder: fields.filter(e => e.tagName === 'INPUT' && !e.placeholder).map(e => e.id),
-              rawJson: /[{]"[a-zA-Z]+":/.test(text)
-            }
-          })()`)
           const where = width + ' ' + scheme + ' ' + tab
-          assert.ok(audit.scrollWidth <= audit.clientWidth, where + ': sideways scroll ' + audit.scrollWidth + ' > ' + audit.clientWidth)
-          assert.deepEqual(audit.pluginIds, [], where + ': internal plugin ids visible')
-          assert.deepEqual(audit.longHints, [], where + ': hints over 12 words')
-          assert.deepEqual(audit.unlabeled, [], where + ': unlabelled fields')
-          assert.deepEqual(audit.noPlaceholder, [], where + ': fields without an example')
-          assert.equal(audit.rawJson, false, where + ': raw JSON on screen')
+          const audit = await tasteAudit(where)
           await shot(`${tab}-${width}-${scheme}`)
           result.viewports.push({ where, loadMs, ...audit })
         }
+        await open('#music')
+        await type('#srcInput', 'test band')
+        await click('#srcBtn')
+        await waitFor(`document.querySelectorAll('#ytResults .yt-pick-row').length === 3`, 'results for the taste gates', 5000)
+        await click('#ytResults .item:nth-child(1) input')
+        await click('#ytResults .item:nth-child(3) input')
+        await sleep(400)
+        await tasteAudit(width + ' ' + scheme + ' music with results')
+        await shot(`music-sources-${width}-${scheme}`, false, srcShotDir)
+        await click('#ytPickSave')
+        await waitFor(`$('ytSave').open`, 'save dialog for the taste gates')
+        await tasteAudit(width + ' ' + scheme + ' save dialog')
+        await shot(`yt-save-${width}-${scheme}`, true, srcShotDir)
+        await click('#ytSaveCancel')
       }
     }
+    const external = browser.requests.filter(u => /ytimg\.com|youtube\.com/i.test(u))
+    assert.deepEqual(external, [], 'the page never contacts YouTube or its image host')
     result.consoleIssues = [...browser.issues]
     // Twenty reloads in one tab: a live-update stream left open per visit would stall the sixth for about a minute.
     const slowest = Math.max(...result.viewports.map(v => v.loadMs))

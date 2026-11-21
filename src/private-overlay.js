@@ -3,20 +3,24 @@
 //   - Endpoints never expose their E2E Noise identity on the public DHT; every outbound dial, rendezvous
 //     lookup, and owner-signed mutable descriptor write exits through an auto-discovered /24-diverse Guard.
 //   - Destination guards enforce role separation, advertised-guard membership, and /24 bucket separation on hops.
+// Guards and endpoints talk on one `peartube/private-guard/v2` channel per connection (src/control-channel.js, ops in
+// spec/protocols.js): an endpoint or a hop opens it and says hello; the guard answers, and asks the endpoint
+// (incOpen) and tells it (circuitDead) on the same channel. A peer on another version refuses the channel, so a guard
+// on the old version is simply not usable.
 import EventEmitter from 'node:events'
 import { createHash } from 'node:crypto'
 import HyperDHT from 'hyperdht'
 import NoiseSecretStream from '@hyperswarm/secret-stream'
-import Protomux from 'protomux'
 import hypercoreCrypto from 'hypercore-crypto'
 import c from 'compact-encoding'
 import sodium from 'sodium-native'
 import b4a from 'b4a'
+import { GUARD } from '../spec/protocols.js'
+import { openChannel, serveChannel } from './control-channel.js'
 import { ipv6Groups } from './protocol.js'
 
-const PROTOCOL = 'peartube/private-guard/v1'
 const CARD_DOMAIN = b4a.from('peartube/private-route-card/v1\0')
-const GUARD_TOPICS = [0, 1, 2, 3].map(i => HyperDHT.hash(b4a.from(`peartube/private-guard/v1/${i}`)))
+const GUARD_TOPICS = [0, 1, 2, 3].map(i => HyperDHT.hash(b4a.from(`peartube/private-guard/v2/${i}`)))
 const [, , NS_MUTABLE_PUT] = hypercoreCrypto.namespace('hyperswarm/dht', [4, 5, 6, 0, 1, 10])
 
 const ROUTE_TTL_MS = 10 * 60_000
@@ -28,30 +32,15 @@ const MAX_RV_SLOTS_PER_TOPIC = 64
 const MAX_CIRCUITS_TOTAL = 1024
 const MAX_CIRCUITS_PER_CONN = 32
 const MAX_CARD_BYTES = 512
-const MAX_RPC_FRAME = 64 * 1024
+const MAX_CARDS = 64
+const MAX_U32 = 0xffffffff
 const MAX_DHT_OPS_PER_10S = 256
 
-const OP_HELLO = 1
-const OP_REGISTER = 2
-const OP_REGISTER_ACK = 3
-const OP_PUT_MUTABLE = 4
-const OP_PUT_MUTABLE_ACK = 5
-const OP_GET_MUTABLE = 6
-const OP_GET_MUTABLE_REPLY = 7
-const OP_RV_REGISTER = 8
-const OP_RV_REGISTER_ACK = 9
-const OP_RV_UNREGISTER = 10
-const OP_RV_LOOKUP = 11
-const OP_RV_LOOKUP_REPLY = 12
-const OP_RV_FETCH = 13
-const OP_RV_FETCH_REPLY = 14
-const OP_DIAL_OPEN = 15
-const OP_DIAL_READY = 16
-const OP_HOP_OPEN = 17
-const OP_HOP_READY = 18
-const OP_INC_OPEN = 19
-const OP_INC_READY = 20
-const OP_CIRCUIT_DEAD = 21
+// The guard's answers: an ack, and the 0 / 1 / 2 (not diverse) of a dial, hop or incoming circuit.
+const ACK_NO = { status: 0 }
+const ACK_OK = { status: 1 }
+const NOT_READY = { status: 0, udxId: 0 }
+const NOT_DIVERSE = { status: 2, udxId: 0 }
 
 const sha256 = (...parts) => {
   const h = createHash('sha256')
@@ -59,25 +48,30 @@ const sha256 = (...parts) => {
   return h.digest()
 }
 const rand = n => { const b = b4a.allocUnsafe(n); sodium.randombytes_buf(b); return b }
-const u32 = n => { const b = b4a.allocUnsafe(4); b.writeUInt32BE(n >>> 0, 0); return b }
+const isU32 = n => Number.isInteger(n) && n >= 0 && n <= MAX_U32
+const isCard = b => b4a.isBuffer(b) && b.byteLength >= 1 && b.byteLength <= MAX_CARD_BYTES
 
+// The bytes HyperDHT signs for a mutable put: kept exactly, the guard's channel only carries seq, signature and value.
 const mutSignEnc = {
   preencode (s, m) { c.uint.preencode(s, m.seq); c.buffer.preencode(s, m.value) },
   encode (s, m) { c.uint.encode(s, m.seq); c.buffer.encode(s, m.value) }
 }
-const frameEnc = {
-  preencode (s, m) { c.uint.preencode(s, m.op); c.uint.preencode(s, m.id); c.buffer.preencode(s, m.payload || b4a.alloc(0)) },
-  encode (s, m) { c.uint.encode(s, m.op); c.uint.encode(s, m.id); c.buffer.encode(s, m.payload || b4a.alloc(0)) },
-  decode (s) {
-    if (s.end - s.start > MAX_RPC_FRAME) { s.start = s.end; return null }
-    try { return { op: c.uint.decode(s), id: c.uint.decode(s), payload: c.buffer.decode(s) } } catch { s.start = s.end; return null }
-  }
+
+const GUARD_CHANNEL = {
+  spec: GUARD,
+  label: 'Guard',
+  refused: 'Guard refused the private-guard channel',
+  duplicate: 'A private-guard channel is already open with this peer',
+  timedOut: 'Timed out opening the private-guard channel'
 }
-const bufArrEnc = {
-  preencode (s, a) { c.uint.preencode(s, a.length); for (const x of a) c.buffer.preencode(s, x) },
-  encode (s, a) { c.uint.encode(s, a.length); for (const x of a) c.buffer.encode(s, x) },
-  decode (s) { const n = Math.min(128, c.uint.decode(s)), o = []; for (let i = 0; i < n; i++) o.push(c.buffer.decode(s)); return o }
-}
+// Opens the guard channel on `conn` (an endpoint or a hop asking a guard), with what this side answers on it.
+// `onClose` runs when the channel closes after it opened.
+const openGuardChannel = (conn, { handlers, events, onClose } = {}, timeoutMs = 4000) => openChannel(conn, { ...GUARD_CHANNEL, handlers, events, onClose }, timeoutMs)
+const isClosed = rpc => !rpc || rpc.closed || rpc.conn.destroyed
+// A circuit answer: its UDX stream id is checked before its status. Ready is status 1 with a nonzero id; status 2
+// (no diverse path) counts only in the answer to a dial.
+const ready = rep => isU32(rep.udxId) && rep.status === 1 && rep.udxId > 0
+const notDiverse = rep => isU32(rep.udxId) && rep.status === 2
 
 function signDhtMutable (seq, value, secretKey) {
   const signable = b4a.allocUnsafe(64)
@@ -169,49 +163,6 @@ function allocRawStream (dht, ctrlConn, framed) {
   return s
 }
 
-function attachRpcChannel (conn, onRequest) {
-  const mux = Protomux.from(conn)
-  const pending = new Map()
-  let nextId = 1, closed = false, msg = null
-  const openChannel = () => {
-    if (closed || conn.destroyed || mux.opened({ protocol: PROTOCOL })) return
-    const ch = mux.createChannel({
-      protocol: PROTOCOL,
-      onclose () {
-        closed = true
-        for (const [, p] of pending) { clearTimeout(p.timer); p.reject(new Error('Guard channel closed')) }
-        pending.clear()
-      }
-    })
-    if (!ch) return
-    msg = ch.addMessage({
-      encoding: frameEnc,
-      onmessage (f) {
-        if (!f) return
-        const w = pending.get(f.id)
-        if (w && w.replyOp === f.op) { pending.delete(f.id); clearTimeout(w.timer); w.resolve(f.payload); return }
-        Promise.resolve(onRequest?.(f, send)).catch(() => {})
-      }
-    })
-    ch.open()
-  }
-  // Pair before opening so an eager peer frame arriving mid-handshake never hits an unpaired Protomux slot.
-  mux.pair({ protocol: PROTOCOL }, openChannel)
-  openChannel()
-  const send = (op, id, payload = b4a.alloc(0)) => { if (!closed && !conn.destroyed && msg) msg.send({ op, id, payload }) }
-  const request = (op, replyOp, payload = b4a.alloc(0), ms = 10_000) => {
-    if (closed || conn.destroyed || !msg) return Promise.reject(new Error('Control channel closed'))
-    const id = nextId++
-    return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => { pending.delete(id); reject(new Error(`RPC ${op} timeout`)) }, ms)
-      timer.unref?.()
-      pending.set(id, { replyOp, timer, resolve, reject })
-      msg.send({ op, id, payload })
-    })
-  }
-  return { conn, send, request, isClosed: () => closed || conn.destroyed }
-}
-
 const isLocalBootstrap = (host, bootstrap) =>
   host === '127.0.0.1' || host === '::1' || (Array.isArray(bootstrap) && bootstrap.some(b => String(b?.host || b).startsWith('127.')))
 
@@ -230,7 +181,7 @@ export async function createPrivateGuard ({
   const dht = new HyperDHT({ host: bindHost, bootstrap, port, ephemeral: false, firewalled: false })
   await dht.ready()
 
-  const routes = new Map(), rvTopics = new Map(), activeCircuits = new Set(), sessions = new Set(), hopPeers = new Map()
+  const routes = new Map(), rvTopics = new Map(), activeCircuits = new Set(), conns = new Set(), hopPeers = new Map()
   const verifiedGuardCache = new Map()
   let closing = false, putMutableCount = 0, rvRegisterCount = 0, failMutablePutsRemaining = 0
 
@@ -290,16 +241,20 @@ export async function createPrivateGuard ({
   async function getHopPeer (targetGuardKey) {
     const hex = b4a.toString(targetGuardKey, 'hex')
     const cur = hopPeers.get(hex)
-    if (cur && !cur.rpc.isClosed()) return cur
+    if (cur && !isClosed(cur.rpc)) return cur
     if (cur?.connecting) return cur.connecting
     const entry = { conn: null, rpc: null, connecting: null, drops: new Set() }
     entry.connecting = (async () => {
       const conn = dht.connect(targetGuardKey, { keyPair })
       conn.on('error', () => {}); conn.setKeepAlive(5000)
-      const rpc = attachRpcChannel(conn, null)
       const ok = await Promise.race([conn.opened, new Promise(r => { const t = setTimeout(() => r(false), 6000); t.unref?.() })])
       if (!ok || conn.destroyed || closing) { conn.destroy(); throw new Error('Guard unreachable') }
-      await rpc.request(OP_HELLO, OP_HELLO, b4a.from('hop'), 4000)
+      let rpc
+      try {
+        // The guard on the other end closed this channel: nothing else runs on this connection.
+        rpc = await openGuardChannel(conn, { onClose: () => conn.destroy() })
+        if ((await rpc.call('hello', { role: 'hop' }, 4000)).status !== 1) throw new Error('Guard refused the hop')
+      } catch (err) { conn.destroy(); throw err }
       conn.once('close', () => {
         if (hopPeers.get(hex) === entry) hopPeers.delete(hex)
         for (const d of [...entry.drops]) d()
@@ -314,89 +269,111 @@ export async function createPrivateGuard ({
   const server = dht.createServer({ firewall: () => false }, conn => {
     if (closing) { conn.destroy(); return }
     conn.on('error', () => {}); conn.setKeepAlive(5000)
-    const session = { conn, rpc: null, role: null, ownedRoutes: new Set(), ownedRvSlots: new Set(), drops: new Set(), circuits: 0, dhtOps: [] }
+    conns.add(conn)
+    conn.once('close', () => conns.delete(conn))
+    // The DHT-operation budget is the connection's: opening the channel again does not reset it.
+    const dhtOps = []
     const allowDhtOp = () => {
       const now = Date.now()
-      while (session.dhtOps.length && now - session.dhtOps[0] > 10_000) session.dhtOps.shift()
-      if (session.dhtOps.length >= MAX_DHT_OPS_PER_10S) return false
-      session.dhtOps.push(now)
+      while (dhtOps.length && now - dhtOps[0] > 10_000) dhtOps.shift()
+      if (dhtOps.length >= MAX_DHT_OPS_PER_10S) return false
+      dhtOps.push(now)
       return true
     }
-    sessions.add(session)
+    // What a guard channel grants is its session's: the role hello set, the routes and rendezvous slots it
+    // registered, its circuits. A session starts empty when the channel opens and is released when the channel
+    // closes; the connection stays, and a channel opened again on it has no role until a new hello.
+    const sessionOf = new WeakMap() // channel -> session
+    const openSession = control => { sessionOf.set(control, { conn, rpc: control, role: null, ownedRoutes: new Set(), ownedRvSlots: new Set(), drops: new Set(), circuits: 0 }) }
+    const releaseSession = control => {
+      const session = sessionOf.get(control)
+      for (const d of [...session.drops]) d()
+      for (const t of session.ownedRoutes) if (routes.get(t)?.session === session) routes.delete(t)
+      for (const pair of session.ownedRvSlots) { const i = pair.indexOf(':'); removeRvSlot(pair.slice(0, i), pair.slice(i + 1), session) }
+    }
 
-    session.rpc = attachRpcChannel(conn, async (f, send) => {
-      if (closing) return
-      const p = f.payload
-      if (f.op === OP_HELLO) {
-        const wantedRole = b4a.toString(p) === 'hop' ? 'hop' : 'endpoint'
-        if (wantedRole === 'hop') {
+    // What the guard answers on this connection. Each op checks its session's role, and the bounds of its struct
+    // after decode; a refusal is an ack or a ready with status 0, as before. A handler that awaits checks that its
+    // channel is still open before it grants anything to the session.
+    const handlers = {
+      async hello ({ role }, control) {
+        const session = sessionOf.get(control)
+        if (closing) throw new Error('Guard is closing')
+        if (role !== 'hop' && role !== 'endpoint') return ACK_NO
+        if (role === 'hop') {
+          // A hop claim must come from an advertised guard in a bucket of its own; anything else is cut off.
           if (!bucketOfConn(conn) || !(await isAdvertisedGuard(conn.remotePublicKey))) {
-            conn.destroy(); return
+            conn.destroy(); return ACK_NO
           }
+          if (control.closed) return ACK_NO
         }
-        session.role = wantedRole
-        onControlPeer?.({ role: wantedRole, remotePublicKey: b4a.toString(conn.remotePublicKey, 'hex'), remoteHost: conn.rawStream?.remoteHost || null, remotePort: conn.rawStream?.remotePort || 0 })
-        send(OP_HELLO, f.id, b4a.from('ok'))
-      } else if (f.op === OP_REGISTER) {
-        if (session.role !== 'endpoint' || p.byteLength !== 36) return send(OP_REGISTER_ACK, f.id, b4a.from([0]))
-        const tokHex = b4a.toString(p.subarray(0, 32), 'hex')
+        session.role = role
+        onControlPeer?.({ role, remotePublicKey: b4a.toString(conn.remotePublicKey, 'hex'), remoteHost: conn.rawStream?.remoteHost || null, remotePort: conn.rawStream?.remotePort || 0 })
+        return ACK_OK
+      },
+      register ({ routeToken, ttlMs }, control) {
+        const session = sessionOf.get(control)
+        if (closing || session.role !== 'endpoint' || !isU32(ttlMs)) return ACK_NO
+        const tokHex = b4a.toString(routeToken, 'hex')
         // A live token belongs to the session that registered it: another session can neither take it over nor
         // refresh it past the caps. An expired one is free again and counts as a new registration.
         const cur = routes.get(tokHex)
         const mine = cur?.session === session
-        if (cur && !mine && cur.expiresAt > Date.now()) return send(OP_REGISTER_ACK, f.id, b4a.from([0]))
-        if (!mine && (routes.size - (cur ? 1 : 0) >= MAX_ROUTES_TOTAL || session.ownedRoutes.size >= MAX_ROUTES_PER_CONN)) return send(OP_REGISTER_ACK, f.id, b4a.from([0]))
+        if (cur && !mine && cur.expiresAt > Date.now()) return ACK_NO
+        if (!mine && (routes.size - (cur ? 1 : 0) >= MAX_ROUTES_TOTAL || session.ownedRoutes.size >= MAX_ROUTES_PER_CONN)) return ACK_NO
         if (cur && !mine) cur.session.ownedRoutes.delete(tokHex)
-        routes.set(tokHex, { session, expiresAt: Date.now() + Math.max(15_000, Math.min(ROUTE_TTL_MS, p.readUInt32BE(32))) })
+        routes.set(tokHex, { session, expiresAt: Date.now() + Math.max(15_000, Math.min(ROUTE_TTL_MS, ttlMs)) })
         session.ownedRoutes.add(tokHex)
-        send(OP_REGISTER_ACK, f.id, b4a.from([1]))
-      } else if (f.op === OP_PUT_MUTABLE) {
-        if (session.role !== 'endpoint' || p.byteLength <= 100 || !allowDhtOp()) return send(OP_PUT_MUTABLE_ACK, f.id, b4a.from([0]))
-        const publicKey = p.subarray(0, 32), seq = p.readUInt32BE(32), signature = p.subarray(36, 100), value = p.subarray(100)
-        if (value.byteLength > MAX_CARD_BYTES || !verifyDhtMutable(signature, seq, value, publicKey)) return send(OP_PUT_MUTABLE_ACK, f.id, b4a.from([0]))
-        if (failMutablePutsRemaining > 0) { failMutablePutsRemaining--; return send(OP_PUT_MUTABLE_ACK, f.id, b4a.from([0])) }
-        try { await dht.mutablePut({ publicKey }, value, { seq, signMutable: () => signature }); putMutableCount++; send(OP_PUT_MUTABLE_ACK, f.id, b4a.from([1])) } catch { send(OP_PUT_MUTABLE_ACK, f.id, b4a.from([0])) }
-      } else if (f.op === OP_GET_MUTABLE) {
-        if (session.role !== 'endpoint' || p.byteLength !== 32 || !allowDhtOp()) return send(OP_GET_MUTABLE_REPLY, f.id, b4a.from([0]))
+        return ACK_OK
+      },
+      async putMutable ({ publicKey, seq, signature, value }, control) {
+        const session = sessionOf.get(control)
+        // As released: an empty value is refused for free, a value over 512 bytes spends a DHT slot first.
+        if (closing || session.role !== 'endpoint' || !isU32(seq) || !value.byteLength || !allowDhtOp() || !isCard(value)) return ACK_NO
+        if (!verifyDhtMutable(signature, seq, value, publicKey)) return ACK_NO
+        if (failMutablePutsRemaining > 0) { failMutablePutsRemaining--; return ACK_NO }
+        try { await dht.mutablePut({ publicKey }, value, { seq, signMutable: () => signature }); putMutableCount++; return ACK_OK } catch { return ACK_NO }
+      },
+      async getMutable ({ key }, control) {
+        if (closing || sessionOf.get(control).role !== 'endpoint' || !allowDhtOp()) return { record: null }
         try {
-          const r = await dht.mutableGet(p, { latest: true })
-          send(OP_GET_MUTABLE_REPLY, f.id, r?.value ? b4a.concat([b4a.from([1]), u32(r.seq), r.signature, r.value]) : b4a.from([0]))
-        } catch { send(OP_GET_MUTABLE_REPLY, f.id, b4a.from([0])) }
-      } else if (f.op === OP_RV_REGISTER) {
-        if (session.role !== 'endpoint' || p.byteLength <= 52 || p.byteLength - 52 > MAX_CARD_BYTES) return send(OP_RV_REGISTER_ACK, f.id, b4a.from([0]))
-        const rvTopic = p.subarray(0, 32), slotId = p.subarray(32, 48), ttl = p.readUInt32BE(48), sealedCard = b4a.from(p.subarray(52))
-        const tHex = b4a.toString(rvTopic, 'hex'), sHex = b4a.toString(slotId, 'hex')
+          const r = await dht.mutableGet(key, { latest: true })
+          return r?.value && isU32(r.seq) && isCard(r.value) ? { record: { seq: r.seq, signature: r.signature, value: r.value } } : { record: null }
+        } catch { return { record: null } }
+      },
+      async rvRegister ({ topic, slotId, ttlMs, sealedCard }, control) {
+        const session = sessionOf.get(control)
+        if (closing || session.role !== 'endpoint' || !isU32(ttlMs) || !isCard(sealedCard)) return ACK_NO
+        const tHex = b4a.toString(topic, 'hex'), sHex = b4a.toString(slotId, 'hex')
         let e = rvTopics.get(tHex)
         if (!e) {
-          if (rvTopics.size >= MAX_RV_TOPICS) return send(OP_RV_REGISTER_ACK, f.id, b4a.from([0]))
-          e = { topicBuf: b4a.from(rvTopic), slots: new Map(), announcing: false, lastAnnounceAt: 0 }
+          if (rvTopics.size >= MAX_RV_TOPICS) return ACK_NO
+          e = { topicBuf: b4a.from(topic), slots: new Map(), announcing: false, lastAnnounceAt: 0 }
           rvTopics.set(tHex, e)
         }
         // Same rule for rendezvous slots: a live slot is its registering session's alone.
         const slot = e.slots.get(sHex)
-        if (slot && slot.session !== session && slot.expiresAt > Date.now()) return send(OP_RV_REGISTER_ACK, f.id, b4a.from([0]))
-        if (!slot && e.slots.size >= MAX_RV_SLOTS_PER_TOPIC) return send(OP_RV_REGISTER_ACK, f.id, b4a.from([0]))
+        if (slot && slot.session !== session && slot.expiresAt > Date.now()) return ACK_NO
+        if (!slot && e.slots.size >= MAX_RV_SLOTS_PER_TOPIC) return ACK_NO
         if (slot && slot.session !== session) slot.session.ownedRvSlots.delete(`${tHex}:${sHex}`)
-        e.slots.set(sHex, { sealedCard, session, expiresAt: Date.now() + Math.max(15_000, Math.min(ROUTE_TTL_MS, ttl)) })
+        e.slots.set(sHex, { sealedCard: b4a.from(sealedCard), session, expiresAt: Date.now() + Math.max(15_000, Math.min(ROUTE_TTL_MS, ttlMs)) })
         session.ownedRvSlots.add(`${tHex}:${sHex}`)
         await ensureRvAnnounced(tHex, e)
-        rvRegisterCount++; send(OP_RV_REGISTER_ACK, f.id, b4a.from([1]))
-      } else if (f.op === OP_RV_UNREGISTER) {
-        if (session.role === 'endpoint' && p.byteLength === 48) {
-          const tHex = b4a.toString(p.subarray(0, 32), 'hex'), sHex = b4a.toString(p.subarray(32, 48), 'hex')
-          session.ownedRvSlots.delete(`${tHex}:${sHex}`); removeRvSlot(tHex, sHex, session)
-        }
-      } else if (f.op === OP_RV_FETCH) {
-        if (session.role !== 'hop') return send(OP_RV_FETCH_REPLY, f.id, c.encode(bufArrEnc, []))
-        const e = p.byteLength === 32 ? rvTopics.get(b4a.toString(p, 'hex')) : null
+        rvRegisterCount++
+        return ACK_OK
+      },
+      rvFetch ({ key }, control) {
+        if (closing || sessionOf.get(control).role !== 'hop') return { cards: [] }
+        const e = rvTopics.get(b4a.toString(key, 'hex'))
         const now = Date.now(), cards = []
-        if (e) for (const [k, v] of e.slots) { if (v.expiresAt <= now) e.slots.delete(k); else cards.push(v.sealedCard) }
-        send(OP_RV_FETCH_REPLY, f.id, c.encode(bufArrEnc, cards))
-      } else if (f.op === OP_RV_LOOKUP) {
-        if (session.role !== 'endpoint' || p.byteLength !== 32 || !allowDhtOp()) return send(OP_RV_LOOKUP_REPLY, f.id, c.encode(bufArrEnc, []))
-        const seen = new Map(), now = Date.now(), local = rvTopics.get(b4a.toString(p, 'hex'))
-        if (local) for (const [k, v] of local.slots) { if (v.expiresAt <= now) local.slots.delete(k); else seen.set(b4a.toString(v.sealedCard, 'hex'), v.sealedCard) }
-        const rGuards = new Map(), q = dht.lookup(p), qt = setTimeout(() => q.destroy(), 4000); qt.unref?.()
+        if (e) for (const [k, v] of e.slots) { if (v.expiresAt <= now) e.slots.delete(k); else if (cards.length < MAX_CARDS) cards.push(v.sealedCard) }
+        return { cards }
+      },
+      async rvLookup ({ key }, control) {
+        if (closing || sessionOf.get(control).role !== 'endpoint' || !allowDhtOp()) return { cards: [] }
+        const seen = new Map(), now = Date.now(), local = rvTopics.get(b4a.toString(key, 'hex'))
+        if (local) for (const [k, v] of local.slots) { if (v.expiresAt <= now) local.slots.delete(k); else if (seen.size < MAX_CARDS) seen.set(b4a.toString(v.sealedCard, 'hex'), v.sealedCard) }
+        const rGuards = new Map(), q = dht.lookup(key), qt = setTimeout(() => q.destroy(), 4000); qt.unref?.()
         try {
           for await (const rep of q) for (const peer of rep.peers) {
             if (peer?.publicKey && !b4a.equals(peer.publicKey, keyPair.publicKey) && rGuards.size < 8) rGuards.set(b4a.toString(peer.publicKey, 'hex'), peer.publicKey)
@@ -404,58 +381,54 @@ export async function createPrivateGuard ({
         } catch {} finally { clearTimeout(qt) }
         await Promise.allSettled([...rGuards.values()].map(async gk => {
           const hop = await getHopPeer(gk)
-          const raw = await hop.rpc.request(OP_RV_FETCH, OP_RV_FETCH_REPLY, p, 4000)
-          for (const card of c.decode(bufArrEnc, raw)) if (seen.size < 64) seen.set(b4a.toString(card, 'hex'), card)
+          const { cards } = await hop.rpc.call('rvFetch', { key }, 4000)
+          for (const card of cards) if (seen.size < MAX_CARDS && isCard(card)) seen.set(b4a.toString(card, 'hex'), card)
         }))
-        send(OP_RV_LOOKUP_REPLY, f.id, c.encode(bufArrEnc, [...seen.values()]))
-      } else if (f.op === OP_DIAL_OPEN) {
-        if (session.role !== 'endpoint' || p.byteLength < 68) return send(OP_DIAL_READY, f.id, b4a.alloc(5))
-        const targetGuardKey = p.subarray(0, 32), routeToken = p.subarray(32, 64), callerUdxId = p.readUInt32BE(64)
-        const callerObservedSelfBucket = p.byteLength > 68 ? b4a.toString(p.subarray(68)) : ''
-        if (!callerUdxId || b4a.equals(targetGuardKey, keyPair.publicKey) || activeCircuits.size >= MAX_CIRCUITS_TOTAL || session.circuits >= MAX_CIRCUITS_PER_CONN) {
-          return send(OP_DIAL_READY, f.id, b4a.alloc(5))
-        }
+        return { cards: [...seen.values()] }
+      },
+      async dialOpen ({ guardKey, routeToken, udxId: callerUdxId, bucket: callerObservedSelfBucket }, control) {
+        const session = sessionOf.get(control)
+        if (closing || session.role !== 'endpoint' || !isU32(callerUdxId)) return NOT_READY
+        if (!callerUdxId || b4a.equals(guardKey, keyPair.publicKey) || activeCircuits.size >= MAX_CIRCUITS_TOTAL || session.circuits >= MAX_CIRCUITS_PER_CONN) return NOT_READY
         let gaLeft = null, gaRight = null
         try {
-          const hop = await getHopPeer(targetGuardKey)
+          const hop = await getHopPeer(guardKey)
           const nextBucket = bucketOfConn(hop.conn)
           const ownB = ownDiversityBucket()
-          if (!nextBucket || (callerObservedSelfBucket && callerObservedSelfBucket === nextBucket) || (ownB && ownB === nextBucket)) {
-            return send(OP_DIAL_READY, f.id, b4a.from([2, 0, 0, 0, 0]))
-          }
+          if (!nextBucket || (callerObservedSelfBucket && callerObservedSelfBucket === nextBucket) || (ownB && ownB === nextBucket)) return NOT_DIVERSE
           gaLeft = allocRawStream(dht, conn, false)
           gaRight = allocRawStream(dht, hop.conn, false)
           HyperDHT.connectRawStream(conn, gaLeft, callerUdxId)
-          const rep = await hop.rpc.request(OP_HOP_OPEN, OP_HOP_READY, b4a.concat([routeToken, u32(gaRight.id)]), 8000)
-          if (rep.byteLength !== 5 || rep[0] !== 1) throw new Error('Hop rejected')
-          HyperDHT.connectRawStream(hop.conn, gaRight, rep.readUInt32BE(1))
+          const rep = await hop.rpc.call('hopOpen', { routeToken, udxId: gaRight.id }, 8000)
+          if (!ready(rep) || control.closed) throw new Error('Hop rejected, or this channel closed')
+          HyperDHT.connectRawStream(hop.conn, gaRight, rep.udxId)
           gaLeft.relayTo(gaRight); gaRight.relayTo(gaLeft)
           const left = gaLeft, right = gaRight
           const rec = { left, right }
           activeCircuits.add(rec); session.circuits++
-          const aUdx = callerUdxId
           const drop = () => {
             if (!activeCircuits.delete(rec)) return
             session.drops.delete(drop); hop.drops.delete(drop)
             left.off('close', drop); right.off('close', drop)
             session.circuits = Math.max(0, session.circuits - 1)
-            session.rpc.send(OP_CIRCUIT_DEAD, 0, u32(aUdx))
+            session.rpc?.emit('circuitDead', { udxId: callerUdxId })
             left.destroy(); right.destroy()
           }
           session.drops.add(drop); hop.drops.add(drop)
           left.once('close', drop); right.once('close', drop)
-          send(OP_DIAL_READY, f.id, b4a.concat([b4a.from([1]), u32(left.id)]))
           gaLeft = null; gaRight = null
+          return { status: 1, udxId: left.id }
         } catch {
           gaLeft?.destroy(); gaRight?.destroy()
-          send(OP_DIAL_READY, f.id, b4a.alloc(5))
+          return NOT_READY
         }
-      } else if (f.op === OP_HOP_OPEN) {
-        if (session.role !== 'hop' || p.byteLength !== 36) return send(OP_HOP_READY, f.id, b4a.alloc(5))
-        const routeToken = p.subarray(0, 32), callerUdxId = p.readUInt32BE(32)
+      },
+      async hopOpen ({ routeToken, udxId: callerUdxId }, control) {
+        const session = sessionOf.get(control)
+        if (closing || session.role !== 'hop' || !isU32(callerUdxId)) return NOT_READY
         const route = routes.get(b4a.toString(routeToken, 'hex'))
-        if (!callerUdxId || !route || route.expiresAt <= Date.now() || route.session.conn === conn || route.session.rpc.isClosed() || activeCircuits.size >= MAX_CIRCUITS_TOTAL || route.session.circuits >= MAX_CIRCUITS_PER_CONN) {
-          return send(OP_HOP_READY, f.id, b4a.alloc(5))
+        if (!callerUdxId || !route || route.expiresAt <= Date.now() || route.session.conn === conn || isClosed(route.session.rpc) || activeCircuits.size >= MAX_CIRCUITS_TOTAL || route.session.circuits >= MAX_CIRCUITS_PER_CONN) {
+          return NOT_READY
         }
         let gbLeft = null, gbRight = null
         try {
@@ -466,9 +439,9 @@ export async function createPrivateGuard ({
           gbLeft = allocRawStream(dht, conn, false)
           gbRight = allocRawStream(dht, route.session.conn, false)
           HyperDHT.connectRawStream(conn, gbLeft, callerUdxId)
-          const rep = await route.session.rpc.request(OP_INC_OPEN, OP_INC_READY, b4a.concat([routeToken, u32(gbRight.id)]), 8000)
-          if (rep.byteLength !== 5 || rep[0] !== 1) throw new Error('Endpoint rejected')
-          const bUdx = rep.readUInt32BE(1)
+          const rep = await route.session.rpc.call('incOpen', { routeToken, udxId: gbRight.id }, 8000)
+          if (!ready(rep) || control.closed || isClosed(route.session.rpc)) throw new Error('Endpoint rejected, or a channel closed')
+          const bUdx = rep.udxId
           HyperDHT.connectRawStream(route.session.conn, gbRight, bUdx)
           gbLeft.relayTo(gbRight); gbRight.relayTo(gbLeft)
           const left = gbLeft, right = gbRight
@@ -480,26 +453,28 @@ export async function createPrivateGuard ({
             left.off('close', drop); right.off('close', drop)
             session.circuits = Math.max(0, session.circuits - 1)
             route.session.circuits = Math.max(0, route.session.circuits - 1)
-            route.session.rpc.send(OP_CIRCUIT_DEAD, 0, u32(bUdx))
+            route.session.rpc?.emit('circuitDead', { udxId: bUdx })
             left.destroy(); right.destroy()
           }
           session.drops.add(drop); route.session.drops.add(drop)
           left.once('close', drop); right.once('close', drop)
-          send(OP_HOP_READY, f.id, b4a.concat([b4a.from([1]), u32(left.id)]))
           gbLeft = null; gbRight = null
+          return { status: 1, udxId: left.id }
         } catch {
           gbLeft?.destroy(); gbRight?.destroy()
-          send(OP_HOP_READY, f.id, b4a.alloc(5))
+          return NOT_READY
         }
       }
-    })
-
-    conn.once('close', () => {
-      sessions.delete(session)
-      for (const d of [...session.drops]) d()
-      for (const t of session.ownedRoutes) if (routes.get(t)?.session === session) routes.delete(t)
-      for (const pair of session.ownedRvSlots) { const i = pair.indexOf(':'); removeRvSlot(pair.slice(0, i), pair.slice(i + 1), session) }
-    })
+    }
+    const events = {
+      rvUnregister ({ topic, slotId }, control) {
+        const session = sessionOf.get(control)
+        if (session.role !== 'endpoint') return
+        const tHex = b4a.toString(topic, 'hex'), sHex = b4a.toString(slotId, 'hex')
+        session.ownedRvSlots.delete(`${tHex}:${sHex}`); removeRvSlot(tHex, sHex, session)
+      }
+    }
+    serveChannel(conn, { ...GUARD_CHANNEL, handlers, events, onOpen: openSession, onClose: releaseSession })
   })
 
   await server.listen(keyPair)
@@ -537,7 +512,7 @@ export async function createPrivateGuard ({
       closing = true; clearInterval(refreshTimer)
       for (const r of [...activeCircuits]) { r.left.destroy(); r.right.destroy() }
       activeCircuits.clear()
-      for (const s of [...sessions]) s.conn.destroy()
+      for (const conn of [...conns]) conn.destroy()
       for (const h of hopPeers.values()) h.conn?.destroy()
       hopPeers.clear()
       if (announceGuard) {
@@ -608,44 +583,51 @@ export async function createPrivateSwarm ({
     const bucket = ok && !conn.destroyed && !closing && !suspended ? bucketOf(conn) : null
     if (!bucket) { conn.destroy(); return null }
     const g = { publicKey: b4a.from(pubKey), hex: b4a.toString(pubKey, 'hex'), bucket, conn, rpc: null, streamsByUdxId: new Map() }
-    g.rpc = attachRpcChannel(conn, async (f, send) => {
-      if (f.op === OP_CIRCUIT_DEAD) {
-        if (f.payload.byteLength === 4) g.streamsByUdxId.get(f.payload.readUInt32BE(0))?.destroy()
-        return
+    // The guard asks this endpoint to take an incoming circuit for its route, and tells it when a circuit dies.
+    const handlers = {
+      incOpen ({ routeToken: token, udxId: callerUdxId }) {
+        if (closing || suspended || !b4a.equals(token, routeToken) || !isU32(callerUdxId) || !callerUdxId) return NOT_READY
+        let rawB = null
+        try {
+          rawB = allocRawStream(transportDht, conn, true)
+          HyperDHT.connectRawStream(conn, rawB, callerUdxId)
+          const streamB = rawB, udxId = streamB.id
+          const enc = new NoiseSecretStream(false, streamB, { keyPair, keepAlive: 2500 })
+          enc.setTimeout(8000)
+          g.streamsByUdxId.set(udxId, enc)
+          enc.once('close', () => { g.streamsByUdxId.delete(udxId); if (!streamB.destroyed) streamB.destroy() })
+          admitInnerStream(enc, null)
+          rawB = null
+          return { status: 1, udxId }
+        } catch { rawB?.destroy(); return NOT_READY }
       }
-      if (f.op !== OP_INC_OPEN) return
-      if (closing || suspended || f.payload.byteLength !== 36 || !b4a.equals(f.payload.subarray(0, 32), routeToken)) return send(OP_INC_READY, f.id, b4a.alloc(5))
-      const callerUdxId = f.payload.readUInt32BE(32)
-      let rawB = null
-      try {
-        rawB = allocRawStream(transportDht, conn, true)
-        HyperDHT.connectRawStream(conn, rawB, callerUdxId)
-        const streamB = rawB, udxId = streamB.id
-        const enc = new NoiseSecretStream(false, streamB, { keyPair, keepAlive: 2500 })
-        enc.setTimeout(8000)
-        g.streamsByUdxId.set(udxId, enc)
-        enc.once('close', () => { g.streamsByUdxId.delete(udxId); if (!streamB.destroyed) streamB.destroy() })
-        admitInnerStream(enc, null)
-        send(OP_INC_READY, f.id, b4a.concat([b4a.from([1]), u32(udxId)]))
-        rawB = null
-      } catch { rawB?.destroy(); send(OP_INC_READY, f.id, b4a.alloc(5)) }
-    })
-    try { await g.rpc.request(OP_HELLO, OP_HELLO, b4a.from('endpoint'), 4000) } catch { conn.destroy(); return null }
+    }
+    const events = { circuitDead: ({ udxId }) => { if (isU32(udxId)) g.streamsByUdxId.get(udxId)?.destroy() } }
+    // A guard on another version refuses the channel: it is not usable, and this endpoint never goes around it. One
+    // that closes the channel later is not usable either: its connection closes at once, and stops counting.
+    try {
+      g.rpc = await openGuardChannel(conn, { handlers, events, onClose: () => conn.destroy() })
+      if ((await g.rpc.call('hello', { role: 'endpoint' }, 4000)).status !== 1) throw new Error('Guard refused the endpoint')
+    } catch { conn.destroy(); return null }
     conn.once('close', () => {
       for (const s of [...g.streamsByUdxId.values()]) s.destroy()
       g.streamsByUdxId.clear()
       const i = guards.indexOf(g); if (i !== -1) guards.splice(i, 1)
       if (!closing && !suspended) {
-        if (guards.length < 2) state = 'BOOTSTRAPPING'
+        if (usableGuards() < 2) state = 'BOOTSTRAPPING'
         pollAll().catch(() => {})
       }
     })
     return g
   }
 
+  // Guards this client can use now: in the list, channel open, connection not destroyed. Every "two guards" gate
+  // counts these: a guard whose channel or connection just closed may still be in the list.
+  const usableGuards = () => guards.filter(g => !isClosed(g.rpc)).length
+
   async function discoverGuards () {
-    for (let i = guards.length - 1; i >= 0; i--) if (guards[i].rpc.isClosed()) guards.splice(i, 1)
-    if (guards.length >= 2) return true
+    for (let i = guards.length - 1; i >= 0; i--) if (isClosed(guards[i].rpc)) guards.splice(i, 1)
+    if (usableGuards() >= 2) return true
     const candidates = new Map()
     await Promise.allSettled(GUARD_TOPICS.map(async t => {
       const q = transportDht.lookup(t), qt = setTimeout(() => q.destroy(), 4000); qt.unref?.()
@@ -655,17 +637,17 @@ export async function createPrivateSwarm ({
     for (let i = list.length - 1; i > 0; i--) { const j = rand(4).readUInt32BE(0) % (i + 1); [list[i], list[j]] = [list[j], list[i]] }
     const used = new Set(guards.map(g => g.bucket))
     for (const pk of list) {
-      if (guards.length >= 2 || closing || suspended) break
+      if (usableGuards() >= 2 || closing || suspended) break
       const g = await connectCandidateGuard(pk)
       if (!g) continue
       if (used.has(g.bucket)) { g.conn.destroy(); continue }
       used.add(g.bucket); guards.push(g)
     }
-    return guards.length >= 2
+    return usableGuards() >= 2
   }
 
   async function publishPresence () {
-    if (closing || suspended || guards.length < 2) return false
+    if (closing || suspended || usableGuards() < 2) return false
     const primary = guards[0]
     const now = Date.now()
     const tokHex = b4a.toString(routeToken, 'hex')
@@ -678,14 +660,14 @@ export async function createPrivateSwarm ({
       now >= nextRenewalAt
 
     if (needCardRenewal) {
-      const ack = await primary.rpc.request(OP_REGISTER, OP_REGISTER_ACK, b4a.concat([routeToken, u32(ROUTE_TTL_MS)]), 5000)
-      if (!ack[0]) throw new Error('Guard rejected route')
+      const ack = await primary.rpc.call('register', { routeToken, ttlMs: ROUTE_TTL_MS }, 5000)
+      if (ack.status !== 1) throw new Error('Guard rejected route')
       const seq = cardSeq++
       const candidateCardBytes = encodeSignedCard({ innerKeyPair: keyPair, guardPublicKey: primary.publicKey, routeToken, seq, expiresAt: now + ROUTE_TTL_MS })
       const sealedPeer = sealBox(candidateCardBytes, sha256('peartube/private-peer-seal/v1/', keyPair.publicKey))
       const mutSig = signDhtMutable(seq, sealedPeer, keyPair.secretKey)
-      const mutAck = await primary.rpc.request(OP_PUT_MUTABLE, OP_PUT_MUTABLE_ACK, b4a.concat([keyPair.publicKey, u32(seq), mutSig, sealedPeer]), 8000)
-      if (!mutAck.byteLength || mutAck[0] !== 1) throw new Error('Guard failed to publish mutable card')
+      const mutAck = await primary.rpc.call('putMutable', { publicKey: keyPair.publicKey, seq, signature: mutSig, value: sealedPeer }, 8000)
+      if (mutAck.status !== 1) throw new Error('Guard failed to publish mutable card')
       cachedCardBytes = candidateCardBytes
       lastPublishedGuardHex = primary.hex
       lastPublishedTokenHex = tokHex
@@ -697,12 +679,15 @@ export async function createPrivateSwarm ({
       if (!needCardRenewal && src.lastGuard === primary && src.lastEpoch === epoch && src.lastTokenHex === tokHex && now < src.nextRvRenewalAt) continue
       const rvTopic = sha256('peartube/private-rv/v1/', src.sourceKeyBuf, epoch)
       const sealedCard = sealBox(cachedCardBytes, sha256('peartube/private-rv-seal/v1/', src.sourceKeyBuf))
-      const ok = await primary.rpc.request(OP_RV_REGISTER, OP_RV_REGISTER_ACK, b4a.concat([rvTopic, src.slotId, u32(ROUTE_TTL_MS), sealedCard]), 6000).then(r => Boolean(r[0]), () => false)
+      const ok = await primary.rpc.call('rvRegister', { topic: rvTopic, slotId: src.slotId, ttlMs: ROUTE_TTL_MS, sealedCard }, 6000).then(r => r.status === 1, () => false)
       if (ok) {
         src.lastEpoch = epoch; src.lastGuard = primary; src.lastTokenHex = tokHex
         src.nextRvRenewalAt = now + Math.floor(ROUTE_TTL_MS / 2)
       }
     }
+    // A guard may have gone during the awaits above: READY only with two still usable; else the state stays what
+    // that guard's close set.
+    if (usableGuards() < 2) return false
     state = 'READY'
     return true
   }
@@ -729,27 +714,24 @@ export async function createPrivateSwarm ({
     if (closing || suspended) return
     const hex = b4a.toString(card.innerPublicKey, 'hex')
     if (b4a.equals(card.innerPublicKey, keyPair.publicKey) || activeByPeer.has(hex) || dialingPeers.has(hex) || firewall(card.innerPublicKey)) return
-    if (guards.length < 2 && !(await ensureGuardsAndPublish())) return
-    const candidates = guards.filter(g => !g.rpc.isClosed() && !b4a.equals(g.publicKey, card.guardPublicKey))
+    if (usableGuards() < 2 && !(await ensureGuardsAndPublish())) return
+    const candidates = guards.filter(g => !isClosed(g.rpc) && !b4a.equals(g.publicKey, card.guardPublicKey))
     if (!candidates.length) return
     dialingPeers.add(hex)
     try {
       for (const sourceGuard of candidates) {
         let rawA = null
+        // A guard may have gone while an earlier candidate was asked: no dial with fewer than two usable.
+        if (usableGuards() < 2) return
         try {
           rawA = allocRawStream(transportDht, sourceGuard.conn, true)
-          const rep = await sourceGuard.rpc.request(
-            OP_DIAL_OPEN,
-            OP_DIAL_READY,
-            b4a.concat([card.guardPublicKey, card.routeToken, u32(rawA.id), b4a.from(sourceGuard.bucket)]),
-            10_000
-          )
-          if (rep.byteLength !== 5 || rep[0] !== 1) {
+          const rep = await sourceGuard.rpc.call('dialOpen', { guardKey: card.guardPublicKey, routeToken: card.routeToken, udxId: rawA.id, bucket: sourceGuard.bucket }, 10_000)
+          if (!ready(rep)) {
             rawA.destroy()
-            if (rep[0] === 2) continue
+            if (notDiverse(rep)) continue
             return
           }
-          HyperDHT.connectRawStream(sourceGuard.conn, rawA, rep.readUInt32BE(1))
+          HyperDHT.connectRawStream(sourceGuard.conn, rawA, rep.udxId)
           const streamA = rawA, udxId = streamA.id
           const enc = new NoiseSecretStream(true, streamA, { keyPair, remotePublicKey: card.innerPublicKey, keepAlive: 2500 })
           enc.setTimeout(8000)
@@ -766,13 +748,13 @@ export async function createPrivateSwarm ({
   async function lookupAndDialPeer (pk) {
     const hex = b4a.toString(pk, 'hex')
     if (closing || suspended || activeByPeer.has(hex) || dialingPeers.has(hex)) return
-    if (guards.length < 2 && !(await ensureGuardsAndPublish())) return
-    const g = guards[0]; if (!g || g.rpc.isClosed()) return
+    if (usableGuards() < 2 && !(await ensureGuardsAndPublish())) return
+    const g = guards[0]; if (!g || isClosed(g.rpc)) return
     try {
-      const rep = await g.rpc.request(OP_GET_MUTABLE, OP_GET_MUTABLE_REPLY, pk, 6000)
-      if (rep.byteLength <= 69 || rep[0] !== 1) return
-      const seq = rep.readUInt32BE(1), sig = rep.subarray(5, 69), val = rep.subarray(69)
-      if (!verifyDhtMutable(sig, seq, val, pk)) return
+      const { record } = await g.rpc.call('getMutable', { key: pk }, 6000)
+      if (!record || !isU32(record.seq) || !isCard(record.value)) return
+      if (!verifyDhtMutable(record.signature, record.seq, record.value, pk)) return
+      const val = record.value
       const plain = openBox(val, sha256('peartube/private-peer-seal/v1/', pk))
       const card = plain && decodeAndVerifyCard(plain, Date.now(), pk)
       if (card && acceptValidCard(card)) await dialCard(card)
@@ -780,14 +762,14 @@ export async function createPrivateSwarm ({
   }
 
   async function refreshSourceDiscovery (src) {
-    if (closing || suspended || (guards.length < 2 && !(await ensureGuardsAndPublish()))) return
-    const g = guards[0]; if (!g || g.rpc.isClosed()) return
+    if (closing || suspended || (usableGuards() < 2 && !(await ensureGuardsAndPublish()))) return
+    const g = guards[0]; if (!g || isClosed(g.rpc)) return
     const epNow = Math.floor(Date.now() / RV_EPOCH_MS), sealKey = sha256('peartube/private-rv-seal/v1/', src.sourceKeyBuf)
     for (const ep of [String(epNow), String(epNow - 1)]) {
       try {
-        const raw = await g.rpc.request(OP_RV_LOOKUP, OP_RV_LOOKUP_REPLY, sha256('peartube/private-rv/v1/', src.sourceKeyBuf, ep), 6000)
+        const { cards } = await g.rpc.call('rvLookup', { key: sha256('peartube/private-rv/v1/', src.sourceKeyBuf, ep) }, 6000)
         const now = Date.now()
-        for (const s of c.decode(bufArrEnc, raw)) {
+        for (const s of cards) {
           const plain = openBox(s, sealKey), card = plain && decodeAndVerifyCard(plain, now, null)
           if (card && acceptValidCard(card)) dialCard(card).catch(() => {})
         }
@@ -798,7 +780,7 @@ export async function createPrivateSwarm ({
   async function pollAll () {
     if (closing || suspended) return
     await ensureGuardsAndPublish()
-    if (guards.length < 2) return
+    if (usableGuards() < 2) return
     await Promise.allSettled([
       ...[...joinedSources.values()].map(s => refreshSourceDiscovery(s)),
       ...[...explicitPeers.values()].map(pk => lookupAndDialPeer(pk))
@@ -814,7 +796,7 @@ export async function createPrivateSwarm ({
       exposureReport: () => Object.freeze({
         hops: 2,
         directDestinationSends: 0,
-        guards: guards.length,
+        guards: usableGuards(),
         transportPort: transportDht.address()?.port || transportDht.localAddress()?.port || 0
       })
     })
@@ -836,8 +818,8 @@ export async function createPrivateSwarm ({
     async leaveSource (id) {
       const src = joinedSources.get(id); if (!src) return
       joinedSources.delete(id)
-      if (src.lastGuard && !src.lastGuard.rpc.isClosed() && src.lastEpoch) {
-        src.lastGuard.rpc.send(OP_RV_UNREGISTER, 0, b4a.concat([sha256('peartube/private-rv/v1/', src.sourceKeyBuf, src.lastEpoch), src.slotId]))
+      if (src.lastGuard && !isClosed(src.lastGuard.rpc) && src.lastEpoch) {
+        src.lastGuard.rpc.emit('rvUnregister', { topic: sha256('peartube/private-rv/v1/', src.sourceKeyBuf, src.lastEpoch), slotId: src.slotId })
       }
     },
     join: topic => ({ topic, isServer: false, isClient: true, refresh: () => pollAll(), destroy: () => Promise.resolve() }),
@@ -882,28 +864,41 @@ export async function publishStandaloneRouteCard ({
   const dht = new HyperDHT({ host, bootstrap, port: [0, 0] })
   await dht.ready()
   const conn = dht.connect(guardPublicKey, { keyPair: HyperDHT.keyPair(rand(32)) })
-  conn.on('error', () => {}); conn.setKeepAlive(5000); await conn.opened
+  conn.on('error', () => {}); conn.setKeepAlive(5000)
+  const close = async () => { conn.destroy(); await dht.destroy({ force: true }) }
   const routeToken = rand(32)
-  const rpc = attachRpcChannel(conn, async (f, send) => {
-    if (f.op !== OP_INC_OPEN || f.payload.byteLength !== 36) return
-    let raw = null
-    try {
-      raw = allocRawStream(dht, conn, true)
-      HyperDHT.connectRawStream(conn, raw, f.payload.readUInt32BE(32))
-      const stream = raw
-      const enc = new NoiseSecretStream(false, stream, { keyPair: responderKeyPair, keepAlive: 5000 })
-      enc.on('error', () => {}); enc.once('close', () => { if (!stream.destroyed) stream.destroy() })
-      enc.opened.then(ok => { if (ok && !enc.destroyed) onInnerConnection?.(enc); else enc.destroy() }).catch(() => enc.destroy())
-      send(OP_INC_READY, f.id, b4a.concat([b4a.from([1]), u32(stream.id)])); raw = null
-    } catch { raw?.destroy(); send(OP_INC_READY, f.id, b4a.alloc(5)) }
-  })
-  await rpc.request(OP_HELLO, OP_HELLO, b4a.from('endpoint'), 4000)
-  await rpc.request(OP_REGISTER, OP_REGISTER_ACK, b4a.concat([routeToken, u32(ROUTE_TTL_MS)]), 4000)
-  const seq = 1
-  const card = encodeSignedCard({ innerKeyPair: advertisedKeyPair, guardPublicKey, routeToken, seq, expiresAt: Date.now() + ROUTE_TTL_MS })
-  const sealed = sealBox(card, sha256('peartube/private-peer-seal/v1/', advertisedKeyPair.publicKey))
-  await rpc.request(OP_PUT_MUTABLE, OP_PUT_MUTABLE_ACK, b4a.concat([advertisedKeyPair.publicKey, u32(seq), signDhtMutable(seq, sealed, advertisedKeyPair.secretKey), sealed]), 6000)
-  return async () => { conn.destroy(); await dht.destroy({ force: true }) }
+  const handlers = {
+    incOpen ({ udxId: callerUdxId }) {
+      if (!isU32(callerUdxId) || !callerUdxId) return NOT_READY
+      let raw = null
+      try {
+        raw = allocRawStream(dht, conn, true)
+        HyperDHT.connectRawStream(conn, raw, callerUdxId)
+        const stream = raw
+        const enc = new NoiseSecretStream(false, stream, { keyPair: responderKeyPair, keepAlive: 5000 })
+        enc.on('error', () => {}); enc.once('close', () => { if (!stream.destroyed) stream.destroy() })
+        enc.opened.then(ok => { if (ok && !enc.destroyed) onInnerConnection?.(enc); else enc.destroy() }).catch(() => enc.destroy())
+        raw = null
+        return { status: 1, udxId: stream.id }
+      } catch { raw?.destroy(); return NOT_READY }
+    }
+  }
+  // Each step must be accepted (status 1). On any failure the connection and the DHT close before the error.
+  try {
+    await conn.opened
+    const rpc = await openGuardChannel(conn, { handlers })
+    const accepted = async (name, value, ms) => { if ((await rpc.call(name, value, ms)).status !== 1) throw new Error(`Guard refused ${name}`) }
+    await accepted('hello', { role: 'endpoint' }, 4000)
+    await accepted('register', { routeToken, ttlMs: ROUTE_TTL_MS }, 4000)
+    const seq = 1
+    const card = encodeSignedCard({ innerKeyPair: advertisedKeyPair, guardPublicKey, routeToken, seq, expiresAt: Date.now() + ROUTE_TTL_MS })
+    const sealed = sealBox(card, sha256('peartube/private-peer-seal/v1/', advertisedKeyPair.publicKey))
+    await accepted('putMutable', { publicKey: advertisedKeyPair.publicKey, seq, signature: signDhtMutable(seq, sealed, advertisedKeyPair.secretKey), value: sealed }, 6000)
+  } catch (err) {
+    await close()
+    throw err
+  }
+  return close
 }
 
 export async function attemptDirectHopBypass ({ host = '127.0.0.1', bootstrap, targetPeerPublicKey }) {
@@ -916,27 +911,27 @@ export async function attemptDirectHopBypass ({ host = '127.0.0.1', bootstrap, t
     const card = plain && decodeAndVerifyCard(plain, Date.now(), targetPeerPublicKey)
     if (!card) throw new Error('Target card invalid')
 
-    // 1. Endpoint session attempting forbidden OP_HOP_OPEN directly on destination Guard:
+    // 1. Endpoint session attempting the forbidden hopOpen directly on the destination guard:
     let endpointBypassAccepted = false
     const c1 = dht.connect(card.guardPublicKey, { keyPair: HyperDHT.keyPair(rand(32)) })
     c1.on('error', () => {}); await c1.opened
-    const rpc1 = attachRpcChannel(c1, null)
-    await rpc1.request(OP_HELLO, OP_HELLO, b4a.from('endpoint'), 3000)
+    const rpc1 = await openGuardChannel(c1, {}, 3000)
+    await rpc1.call('hello', { role: 'endpoint' }, 3000)
     const raw1 = allocRawStream(dht, c1, true)
-    const rep1 = await rpc1.request(OP_HOP_OPEN, OP_HOP_READY, b4a.concat([card.routeToken, u32(raw1.id)]), 3000)
-    if (rep1.byteLength === 5 && rep1[0] === 1) endpointBypassAccepted = true
+    const rep1 = await rpc1.call('hopOpen', { routeToken: card.routeToken, udxId: raw1.id }, 3000)
+    if (rep1.status === 1) endpointBypassAccepted = true
     raw1.destroy(); c1.destroy()
 
-    // 2. Unadvertised keypair claiming 'hop' role directly on destination Guard:
+    // 2. Unadvertised keypair claiming the 'hop' role directly on the destination guard:
     let spoofedHopAccepted = false
     const c2 = dht.connect(card.guardPublicKey, { keyPair: HyperDHT.keyPair(rand(32)) })
     c2.on('error', () => {}); await c2.opened
-    const rpc2 = attachRpcChannel(c2, null)
     try {
-      await rpc2.request(OP_HELLO, OP_HELLO, b4a.from('hop'), 3000)
+      const rpc2 = await openGuardChannel(c2, {}, 3000)
+      await rpc2.call('hello', { role: 'hop' }, 3000)
       const raw2 = allocRawStream(dht, c2, true)
-      const rep2 = await rpc2.request(OP_HOP_OPEN, OP_HOP_READY, b4a.concat([card.routeToken, u32(raw2.id)]), 3000)
-      if (rep2.byteLength === 5 && rep2[0] === 1) spoofedHopAccepted = true
+      const rep2 = await rpc2.call('hopOpen', { routeToken: card.routeToken, udxId: raw2.id }, 3000)
+      if (rep2.status === 1) spoofedHopAccepted = true
       raw2.destroy()
     } catch {}
     c2.destroy()

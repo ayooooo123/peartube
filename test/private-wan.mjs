@@ -94,7 +94,7 @@ async function main () {
       }
       const directoryMap = new Map()
       for (let s = 0; s < 4; s++) {
-        for (const p of await keys(HyperDHT.hash(Buffer.from(`peartube/private-guard/v1/${s}`)))) directoryMap.set(p.key, p)
+        for (const p of await keys(HyperDHT.hash(Buffer.from(`peartube/private-guard/v2/${s}`)))) directoryMap.set(p.key, p)
       }
       const directory = [...directoryMap.values()]
       const epoch = String(Math.floor(Date.now() / 3_600_000))

@@ -39,7 +39,7 @@ const tmp = () => mkdtempSync(join(tmpdir(), 'peartube-relay-settings-'))
 process.env.PEARTUBE_ALLOW_PRIVATE_URLS = '1'
 const wait = ms => new Promise(resolve => setTimeout(resolve, ms))
 const artifact = join(root, 'desktop/target/e2e/relay-settings-result.json')
-const GUARD_TOPICS = [0, 1, 2, 3].map(i => HyperDHT.hash(Buffer.from(`peartube/private-guard/v1/${i}`)))
+const guardTopics = version => [0, 1, 2, 3].map(i => HyperDHT.hash(Buffer.from(`peartube/private-guard/${version}/${i}`)))
 const results = { startedAt: new Date().toISOString() }
 
 after(() => {
@@ -75,11 +75,12 @@ async function until (fn, ms, label) {
   }
 }
 
-async function guardKeysOnDht (bootstrap) {
+// The guards announced on the guard topics of `version` (v2 now; v1 was the released one).
+async function guardKeysOnDht (bootstrap, version = 'v2') {
   const dht = new HyperDHT({ bootstrap, host: '127.0.0.1' })
   const keys = new Set()
   try {
-    for (const topic of GUARD_TOPICS) {
+    for (const topic of guardTopics(version)) {
       for await (const reply of dht.lookup(topic)) for (const peer of reply.peers) keys.add(peer.publicKey.toString('hex'))
     }
   } finally {
@@ -268,6 +269,7 @@ test('relay settings apply in place; its guard serves private peers while the re
   assert.match(guard?.publicKey || '', /^[0-9a-f]{64}$/, 'status names the running guard')
   assert.ok(guard.port > 0)
   assert.ok((await guardKeysOnDht(testnet.bootstrap)).has(guard.publicKey), 'the guard is announced')
+  assert.equal((await guardKeysOnDht(testnet.bootstrap, 'v1')).has(guard.publicKey), false, 'on the v2 guard topics only')
 
   const seeder = await createNode({ storage: tmp(), bootstrap: testnet.bootstrap, privateRouting: true })
   nodes.push(seeder)

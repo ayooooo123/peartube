@@ -128,7 +128,7 @@ test('fail-closed <2 guards and non-loopback /24 prefix diversity enforcement', 
 
   // End-to-end non-loopback /24 WAN simulation (`allowLoopback: false`):
   // Two guards in the SAME /24 (198.51.100.10 & 198.51.100.20) MUST fail closed;
-  // once a second /24 guard (203.0.113.40) joins, OP_DIAL_OPEN succeeds across distinct /24s with allowLoopback=false!
+  // once a second /24 guard (203.0.113.40) joins, dialOpen succeeds across distinct /24s with allowLoopback=false!
   const wanTestnet = await createTestnet(4)
   const seedSame1 = randomBytes(32), seedSame2 = randomBytes(32), seedDiverse = randomBytes(32)
   const keyToWanIp = new Map([
@@ -274,15 +274,22 @@ test('standalone bin/private-relay.js forwarders: zero disk writes, fresh-boot 2
   assert.equal(coldRes.status, 200)
   assert.equal(sha256Hex(Buffer.from(await coldRes.arrayBuffer())), sha256Hex(secondSeederBytes))
 
-  const discoveredGuards = new Set()
-  for (let s = 0; s < 4; s++) {
-    for await (const reply of observer.lookup(HyperDHT.hash(Buffer.from(`peartube/private-guard/v1/${s}`)))) {
-      for (const peer of reply.peers) discoveredGuards.add(Buffer.from(peer.publicKey).toString('hex'))
+  // The guards on the guard topics of `version`: v2 now, v1 the released one, which a ready guard no longer uses.
+  const guardsOn = async version => {
+    const keys = new Set()
+    for (let s = 0; s < 4; s++) {
+      for await (const reply of observer.lookup(HyperDHT.hash(Buffer.from(`peartube/private-guard/${version}/${s}`)))) {
+        for (const peer of reply.peers) keys.add(Buffer.from(peer.publicKey).toString('hex'))
+      }
     }
+    return keys
   }
+  const discoveredGuards = await guardsOn('v2')
   assert.equal(discoveredGuards.has(seederPubHex), false)
   assert.equal(discoveredGuards.has(readerPubHex), false)
   for (const k of guardPubSet) assert.ok(discoveredGuards.has(k), 'stateless guard forwarders are discoverable on global guard topics')
+  const oldTopicGuards = await guardsOn('v1')
+  for (const k of guardPubSet) assert.equal(oldTopicGuards.has(k), false, 'and on the v2 guard topics only')
   evidence.scenarios.statelessDaemonStreaming = {
     passed: true,
     guardDirFileCounts: guardDirs.map(d => readdirSync(d).length),
@@ -384,14 +391,14 @@ test('adversarial outbound joinPeer trap and wrong inner Noise key rejection', {
     await cleanupSpoof()
   }
 
-  // Direct 1-hop token-bypass probe: hostile monitor decrypts seeder's route card and tries calling OP_HOP_OPEN
+  // Direct 1-hop token-bypass probe: hostile monitor decrypts seeder's route card and tries calling hopOpen
   // directly on seeder's Guard (both as an 'endpoint' session and spoofing 'hop' from an unadvertised keypair).
   const bypassProbe = await attemptDirectHopBypass({
     bootstrap: testnet.bootstrap,
     targetPeerPublicKey: seeder.swarm.keyPair.publicKey
   })
-  assert.equal(bypassProbe.endpointBypassAccepted, false, 'destination guard rejects OP_HOP_OPEN from endpoint sessions')
-  assert.equal(bypassProbe.spoofedHopAccepted, false, 'destination guard rejects OP_HELLO(hop) + OP_HOP_OPEN from unadvertised non-guard callers')
+  assert.equal(bypassProbe.endpointBypassAccepted, false, 'destination guard rejects hopOpen from endpoint sessions')
+  assert.equal(bypassProbe.spoofedHopAccepted, false, 'destination guard rejects hello(hop) + hopOpen from unadvertised non-guard callers')
 
   evidence.scenarios.outboundTrapAndKeyPin = {
     passed: true,
@@ -473,7 +480,7 @@ test('suspend and resume reconstructs 2-hop guard circuits and streams newly pub
   assert.equal(mutAfter, mutBefore, 'steady-state discovery polls perform zero redundant mutablePut writes before TTL renewal')
   assert.equal(rvAfter, rvBefore, 'steady-state discovery polls perform zero redundant rvRegister writes before TTL renewal')
 
-  // Failure-then-retry check: if guards return [0] on OP_PUT_MUTABLE during resume, publishPresence
+  // Failure-then-retry check: if guards answer status 0 to putMutable during resume, publishPresence
   // MUST NOT cache a bogus 5-minute renewal window — the next 4s poll must retry and reach READY.
   await reader.swarm.suspend()
   for (const g of guards) g.failNextMutablePut(1)

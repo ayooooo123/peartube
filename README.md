@@ -387,7 +387,7 @@ with Open album.
 | `GET /v1/identity`, `POST /v1/identity/{writers,epoch,recover}`, `DELETE /v1/identity/writers/:key` | Channel writer ACL, 12-word recovery phrase (`?reveal=1` / `recover`), and paid subscriber epoch pass rotation; same token and origin gate as `/v1/settings` |
 | `POST /v1/restart` | Reopens the node, jobs, plugins and cast stack in the running process; same auth and origin rules as settings |
 | `POST /v1/identify` `{url}` | Link contents: parsed name, Cinemeta `candidates` and `match`, or a plain `clip:` fallback |
-| `POST /v1/search/global` `{query, id}` | Search relays this relay does not follow (`peartube/search/v1`): rows with `magnetUrl`, `relays` and the title fields, after about 1.2 s. The same query again within 10 s returns the answers that arrived since; after that it asks the relays again, so a file a relay got since shows up (a relay rebuilds its list at most every 15 s). Token when one is set, else private addresses only, and only from the relay's own page; a new query at most every 3 s per address |
+| `POST /v1/search/global` `{query, id}` | Search relays this relay does not follow (`peartube/search/v2`; a relay on an older version is not asked): rows with `magnetUrl`, `relays` and the title fields, after about 1.2 s. The same query again within 10 s returns the answers that arrived since; after that it asks the relays again, so a file a relay got since shows up (a relay rebuilds its list at most every 15 s). Token when one is set, else private addresses only, and only from the relay's own page; a new query at most every 3 s per address |
 | `GET /v1/search?id=imdb:tt…`, `GET /v1/entries` | Channel entries with `streamUrl` (on this port's `/v1/blob`); one result per file (`id` + `sha256`) |
 | `POST /v1/entries/remove` `{key}` \| `{seriesKey}` \| `{ids: [...]}` | Owner/mod removal of one entry, a whole album (`seriesKey`, e.g. `mb:<release>`) or a list of ids, in one call. Every announce this channel holds for each file goes, and the node purges its core (or clears its blocks) unless another announce still uses them. A file this relay mirrored (in `<storage>/staging`, listed in its album folder's `.peartube-mirrored.json`, or in a folder pinned by `.peartube-album.json`) is deleted with its `mirror-watch.json` row so no scan imports it again, and an emptied album folder goes too; a file the owner put in the import folder stays, its row kept so no scan re-imports it until the file changes. Returns `{removed: [{key, id, sha256, title, file: 'deleted'\|'kept'\|null}], notRemoved: [{key, id, reason}], filesDeleted}`; another channel's entries land in `notRemoved` |
 | `POST /v1/acquire` `{id, title, private, source}` | Fetch, store (optionally epoch-encrypted) and announce; `page: true` downloads and muxes a page through `ubit` on every attempt |
@@ -426,9 +426,11 @@ P2P node with a player. Smart TV browsers are not supported: a receiver needs na
 
 A cast uses one connection. The sender's node connects to the receiver's node as to any peer: on
 the LAN when mDNS (`_peartube-cast._tcp`) shows the receiver, else by its key over the swarm.
-Pairing and remote control run on a Protomux channel of that connection (`src/cast-control.js`),
-and the film reaches the TV over the same connection and the swarm. The receiver has no control
-port and no LAN HTTP: its only HTTP port is on loopback, for its own player.
+Pairing and remote control run on a Protomux channel of that connection (`peartube-cast/v2`,
+`src/cast-control.js`), and the film reaches the TV over the same connection and the swarm. The
+receiver has no control port and no LAN HTTP: its only HTTP port is on loopback, for its own player.
+A sender and a receiver on different PearTube versions cannot cast to each other: the sender lists
+the receiver as not current and says both devices need the update.
 
 - **Pairing** is the 6-character code on the TV's screen, or a
   `peartube://receiver/<pubkey>?token=…` link, which needs no code. The receiver's node keeps one

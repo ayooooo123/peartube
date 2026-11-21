@@ -58,6 +58,8 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run lint
+      # The generated wire codecs must be what spec/build.mjs writes from the committed schema.
+      - run: npm run schema && test -z "$(git status --porcelain spec/)"
 
   # Lists contract files changed since native.lock's jsRef: needs history, not file contents, so a blobless clone.
   contract:

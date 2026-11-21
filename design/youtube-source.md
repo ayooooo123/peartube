@@ -104,8 +104,9 @@ type Common = {
   bitrate: number | null           // kbps; youtube: 128 (nominal for AAC itag 140, measured 129.5)
   sample_rate: number | null       // youtube: null
   bit_depth: number | null         // youtube: null
-  lossy: true | null               // true = known lossy (all youtube; soulseek .mp3/.aac/.ogg/.opus/.m4a);
-                                   // null = cannot tell (a .flac/.wav may be a transcode)
+  lossy: true | null               // true = known lossy (all youtube; soulseek .mp3/.aac/.opus/.wma);
+                                   // null = cannot tell (a .flac/.wav may be a transcode; .m4a and .ogg hold
+                                   // lossless codecs too: ALAC, FLAC)
 }
 type SoulseekRow = Common & { username: string, slots: boolean, queue: number, filename: string }
 type YoutubeRow  = Common & { videoId: string, url: string, channel: string | null, thumbnail: string }
@@ -123,7 +124,7 @@ How YouTube fills the Soulseek fields:
 | `sample_rate`, `bit_depth` | `null` | |
 | `length` | `duration` | |
 
-`lossy` is the one new common field. It is `true | null`, never `false`, which follows the "lossless container" rule in `qualityOf` in `src/ui.js`: FLAC proves only that the container is lossless. Soulseek rows can get it from the extension in the unified endpoint, without touching the Soulseek provider.
+`lossy` is the one new common field. It is `true | null`, never `false`, which follows the "lossless container" rule in `qualityOf` in `src/ui.js`: FLAC proves only that the container is lossless. Soulseek rows get it from the extension in the unified endpoint (`LOSSY_FILE` in `src/mirror.js`), without touching the Soulseek provider; an extension whose container can hold a lossless codec stays `null`.
 
 ### `mirror` payload and job
 

@@ -104,6 +104,9 @@ docker run -d --name peartube-relay --restart unless-stopped \
   ghcr.io/ayooooo123/peartube-relay:latest
 ```
 
+A relay is meant to run on a LAN. Exposing its ports to the WAN or the internet is at your own
+risk: for example, `GET /v1/plugins` is readable by any client that reaches the HTTP port.
+
 On a LAN host, prefer `--network host` so mDNS (`224.0.0.251:5353`) and ephemeral LAN ports
 reach the network. `docker build -t peartube-relay .` works too. The image is
 `gcr.io/distroless/cc-debian12` plus the `bare` binary and the relay: no shell, no package
@@ -368,17 +371,28 @@ anyone on it can queue a download of any public URL.
 
 The UI has six tabs: **Library** (add and play video), **Music** (albums by artist, each with the
 cover its own FLAC files embed or a colour-and-initials sleeve, an album sheet to play from, and
-the Soulseek album search), **Channels** (your channel and the ones you follow), **Sharing** (peers,
-kept copies, HiveRelays, Stremio and M3U addresses), **TV** (pair and control) and **Settings**.
-Plugins appear only as user intents.
+**Find music**, one search over Soulseek and YouTube), **Channels** (your channel and the ones you
+follow), **Sharing** (peers, kept copies, HiveRelays, Stremio and M3U addresses), **TV** (pair and
+control) and **Settings**. Plugins appear only as user intents.
 
-A Soulseek mirror shows under the album search as a card redrawn every second while it runs: the
-peer, "Track 3 of 11", bytes of the album with a percentage, the speed, and the phase in words
-("Asking", "Queued at 12 on <peer>", "Connecting", "Downloading", "Adding to your library"). The
-Mirror button that started it follows it too, and the header says "Mirroring N%" on every tab. A
-failure shows the relay's own reason, plus "Publish port 50300" when peers have failed to reach
-this relay and nothing has transferred yet. A finished card reads "Saved · 12 tracks · 488 MB"
-with Open album.
+Find music has a chip for each source (on, off, "Set up", or a warning), remembered in the browser.
+Results stay in one group per source, Soulseek first, and each group fills when its source
+answers, so YouTube's rows show in a few seconds while peers are still being asked. A Soulseek row
+is a peer's folder (Browse, Mirror). A YouTube row is one video with its picture (fetched through
+the relay, never from YouTube by the browser), its length and the fixed label "YouTube · AAC 128
+kbps · lossy". When peers offered FLAC for the same search, the YouTube group says so. Ticked
+videos become the tracks of an album in the Save from YouTube dialog: artist, album and year are
+typed or corrected by the owner, tracks can be renamed, reordered and removed.
+
+A running save shows as a card redrawn every second: for Soulseek the peer, "Track 3 of 11", bytes
+of the album with a percentage, the speed and the phase in words ("Asking", "Queued at 12 on
+<peer>", "Connecting", "Downloading", "Adding to your library"); for YouTube the track count and
+bytes so far, with no percentage because YouTube states no size. The header says "Adding" on every
+tab. A failure shows the relay's own reason, plus "Publish port 50300" when peers have failed to
+reach this relay and nothing has transferred yet. A finished card reads "Saved · 12 tracks · 488
+MB" with Open album; a YouTube save with refused videos reads "Saved k of n tracks" and lists
+them. In the library a YouTube copy is labelled "YouTube · AAC 128 kbps", and an album that also
+has a FLAC copy plays the FLAC first.
 
 | Route | Does |
 |---|---|
@@ -388,6 +402,9 @@ with Open album.
 | `POST /v1/restart` | Reopens the node, jobs, plugins and cast stack in the running process; same auth and origin rules as settings |
 | `POST /v1/identify` `{url}` | Link contents: parsed name, Cinemeta `candidates` and `match`, or a plain `clip:` fallback |
 | `POST /v1/search/global` `{query, id}` | Search relays this relay does not follow (`peartube/search/v1`): rows with `magnetUrl`, `relays` and the title fields, after about 1.2 s. The same query again within 10 s returns the answers that arrived since; after that it asks the relays again, so a file a relay got since shows up (a relay rebuilds its list at most every 15 s). Token when one is set, else private addresses only, and only from the relay's own page; a new query at most every 3 s per address |
+| `POST /v1/search/sources` `{query, sources?, limit?, timeoutMs?, stream?}` | One search over the owner's sources (`soulseek`, `youtube`; default: all). Rows carry `source` and `lossy` (`true` or `null`, never `false`: a FLAC name proves only the container) and stay grouped by source, each in its own order. A source that fails is one entry in `errors`; the reply is still 200. `stream: true` answers as server-sent events: one `source` event per source as it finishes, then `done` |
+| `POST /v1/providers/soulseek/{search,browse,mirror}` | Search peers, list one peer's shared folders, and mirror files into the import folder |
+| `POST /v1/providers/youtube/{search,mirror}`, `GET /v1/providers/youtube/thumb/:videoId` | Search YouTube through `ubit` (one page, no account). `mirror` `{artist, album, year?, tracks: [{videoId, title, track?}]}` saves each video's AAC audio unchanged as `<Artist> - <Album> (<Year>) [YouTube]/NN - Title.m4a` under `yt:<hash>` ids. A video YouTube refuses is listed in the job's `skipped`; YouTube's bot check stops the album and sets `canSave: false` on `/v1/plugins`. `thumb` serves a result's picture through the relay (204 when none) |
 | `GET /v1/search?id=imdb:tt…`, `GET /v1/entries` | Channel entries with `streamUrl` (on this port's `/v1/blob`); one result per file (`id` + `sha256`) |
 | `POST /v1/entries/remove` `{key}` \| `{seriesKey}` \| `{ids: [...]}` | Owner/mod removal of one entry, a whole album (`seriesKey`, e.g. `mb:<release>`) or a list of ids, in one call. Every announce this channel holds for each file goes, and the node purges its core (or clears its blocks) unless another announce still uses them. A file this relay mirrored (in `<storage>/staging`, listed in its album folder's `.peartube-mirrored.json`, or in a folder pinned by `.peartube-album.json`) is deleted with its `mirror-watch.json` row so no scan imports it again, and an emptied album folder goes too; a file the owner put in the import folder stays, its row kept so no scan re-imports it until the file changes. Returns `{removed: [{key, id, sha256, title, file: 'deleted'\|'kept'\|null}], notRemoved: [{key, id, reason}], filesDeleted}`; another channel's entries land in `notRemoved` |
 | `POST /v1/acquire` `{id, title, private, source}` | Fetch, store (optionally epoch-encrypted) and announce; `page: true` downloads and muxes a page through `ubit` on every attempt |
@@ -526,7 +543,7 @@ no bank is bundled. Subtitles use platform fonts and fonts attached to the media
 | `src/http.js`, `src/ui.js` | The one-port server and the relay web UI |
 | `src/acquire.js`, `src/settings.js`, `src/identify.js` | Private job queue, settings store, link identification and Cinemeta matching |
 | `src/lan.js`, `src/cast.js`, `src/cast-control.js` | LAN discovery, Cast & TV receiver stack, its control channel |
-| `src/mirror.js`, `src/providers/soulseek.js`, `src/hiverelay.js` | Plugin host, Soulseek album provider (`SOULSEEK_SEARCH_CAP = 200`), and HiveRelay recruitment/seeding |
+| `src/mirror.js`, `src/providers/`, `src/hiverelay.js` | Plugin host and `searchSources`, the Soulseek (`SOULSEEK_SEARCH_CAP = 200`) and YouTube (`YOUTUBE_SEARCH_CAP = 20`) source providers with their shared staging rules, and HiveRelay recruitment/seeding |
 | `src/private-overlay.js`, `bin/private-relay.js` | Stateless 2-hop guard overlay and guard forwarders |
 | `bin/relay.js` | Relay daemon |
 | `worklet/` | The worklet the apps run (`worker.js`), its crypto and the QuickJS bare-kit build |

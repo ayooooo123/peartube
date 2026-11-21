@@ -240,10 +240,12 @@ export function parseTags (buf) {
 }
 
 // The album identity two rips of the same album must share, and two different albums must not. Names are folded
-// the way a person compares them: case, punctuation and spacing carry no meaning here. The year is part of it
-// because a self-titled album and its remaster are different releases; the disc and track count are not, because a
-// lossless and a lossy rip of one album may drop the bonus disc and still be the same album.
+// the way a person compares them: case, punctuation, spacing and accents carry no meaning here. Letters and digits
+// of every script are kept: folding to a-z alone made every album named in Chinese, Japanese, Korean, Cyrillic or
+// Greek the same album. The year is part of it because a self-titled album and its remaster are different
+// releases; the disc and track count are not, because a lossless and a lossy rip of one album may drop the bonus
+// disc and still be the same album.
 export const albumKey = ({ albumArtist, album, year: y }) => {
-  const fold = s => String(s || '').normalize('NFKD').toLowerCase().replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9]+/g, '')
+  const fold = s => String(s || '').normalize('NFKD').toLowerCase().replace(/\p{M}+/gu, '').replace(/[^\p{L}\p{N}]+/gu, '')
   return [fold(albumArtist), fold(album), y || ''].join('|')
 }

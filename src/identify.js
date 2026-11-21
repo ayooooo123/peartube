@@ -116,9 +116,10 @@ async function ubitInfo (url, { configDir = '', ubit = '', timeoutMs = 45_000 } 
 }
 
 // Drains a page link through `ubit get` into a private scratch hole, muxing split DASH/HLS streams natively with live NDJSON progress.
-export async function downloadPage (pageUrl, outDir, { configDir = '', ubit = '', stallTimeout = 30_000, controller = null, onProgress = null } = {}) {
+// `audio` asks for the page's audio only (`-a`: the best AAC stream, copied as it is into an M4A).
+export async function downloadPage (pageUrl, outDir, { configDir = '', ubit = '', stallTimeout = 30_000, controller = null, onProgress = null, audio = false } = {}) {
   if (controller?.aborted) throw new Error('Cancelled')
-  const cmd = await resolveUbit(['get', pageUrl, '--no-library', '--no-playlist', '--json', '-o', outDir], { configDir, ubit })
+  const cmd = await resolveUbit(['get', pageUrl, '--no-library', '--no-playlist', '--json', ...(audio ? ['-a'] : []), '-o', outDir], { configDir, ubit })
   return new Promise((resolve, reject) => {
     if (controller?.aborted) return reject(new Error('Cancelled'))
     let child

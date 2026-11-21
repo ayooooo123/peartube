@@ -372,6 +372,9 @@ test('acquirer strips cross-origin auth on redirect, resumes mid-stream resets a
   await a.publish({ id: 'imdb:tt0000040', title: 'Foreign Cache Clip' }, Readable.from([foreignBytes]))
   const [foreignHit] = await until(async () => (await b.search('imdb:tt0000040')).length && b.search('imdb:tt0000040'))
   assert.equal((await (await fetch(foreignHit.streamUrl)).arrayBuffer()).byteLength, foreignBytes.byteLength)
+  // The cache estimate counts blocks through Hypercore's `download` event, which can land after the HTTP
+  // response ends (CI saw one 512 KiB block short), so wait for it rather than read it once.
+  await until(() => b.status().cachedBytes === foreignBytes.byteLength, 10_000).catch(() => {})
   assert.equal(b.status().cachedBytes, foreignBytes.byteLength)
 
   const bytes = randomBytes(1536 * 1024 + 19)

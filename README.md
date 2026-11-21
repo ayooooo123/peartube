@@ -573,6 +573,7 @@ sh android/release-tv.sh [--engine js|rust|both]   # signed arm64 TV receiver AP
 cd android && ./gradlew :tv:assembleDebug -Ppeartube.engine=rust   # TV receiver on the pinned peartube-native engine
 python3 sync-native.py engine [js|rust] [surface...] # show or flip default engine(s) in native.lock
 python3 sync-native.py check     # contract files changed since native.lock's jsRef (fails for a rust-default platform; every pinned rust build runs it with --strict)
+python3 release-check.py         # before tagging: fails if a pinned repo has main-line work (or an open PR) the release would leave out
 npm run app                      # macOS: builds and opens PearTube.app (npm run app:rust for Rust engine)
 sh desktop/bundle.sh [--engine js|rust|both] --zip # macOS: JS and/or Rust release zip(s)
 sh desktop/bundle.sh --receiver [--engine js|rust|both] --zip

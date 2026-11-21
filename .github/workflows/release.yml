@@ -44,6 +44,8 @@ jobs:
         with:
           fetch-depth: 0
       - id: p
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           ref_tag=""
           case "${{ github.ref }}" in refs/tags/v*) ref_tag="${{ github.ref_name }}" ;; esac
@@ -76,6 +78,8 @@ jobs:
             case "$v" in rust|both) any_rust=true ;; esac
           done
           [ "$any_rust" = "false" ] || python3 sync-native.py check --strict
+          # A tagged release must carry every pin's newest main-line work and no open pull request.
+          [ -z "$tag" ] || python3 release-check.py
 
           echo "desktop=$d" >> "$GITHUB_OUTPUT"
           echo "relay=$r" >> "$GITHUB_OUTPUT"

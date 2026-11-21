@@ -1,0 +1,36 @@
+{
+  "networkMode": "awsvpc",
+  "requiresCompatibilities": ["FARGATE"],
+  "cpu": "${CPU}",
+  "memory": "${MEMORY}",
+  "executionRoleArn": "${EXEC_ROLE_ARN}",
+  "runtimePlatform": {"cpuArchitecture": "X86_64", "operatingSystemFamily": "LINUX"},
+  "volumes": [{"name": "bpstore"}],
+  "containerDefinitions": [
+    {
+      "name": "blind-peer",
+      "image": "${IMAGE_BP}",
+      "essential": false,
+      "command": ["--trusted-peer", "${OWNER_PUB}", "--active-corestore", "--max-storage", "15000", "--auto-shutdown-minutes", "${BP_SHUTDOWN_MIN}", "--scraper-public-key", "${SCRAPER_PUB}", "--scraper-secret", "${SCRAPER_SECRET}"],
+      "mountPoints": [{"sourceVolume": "bpstore", "containerPath": "/home/blind-peer/store"}],
+      "logConfiguration": {"logDriver": "awslogs", "options": {"awslogs-group": "${LOG_GROUP}", "awslogs-region": "${AWS_REGION}", "awslogs-stream-prefix": "blind-peer"}}
+    },
+    {
+      "name": "probe",
+      "image": "${IMAGE_PROBE}",
+      "essential": true,
+      "environment": [
+        {"name": "RUN", "value": "${RUN}"},
+        {"name": "DEADLINE_MIN", "value": "${DEADLINE_MIN}"},
+        {"name": "SAMPLE_MS", "value": "5000"},
+        {"name": "CHANNEL_KEY", "value": "${CHANNEL_KEY}"},
+        {"name": "SUBSET_JSON", "value": "${SUBSET_JSON}"},
+        {"name": "RELAY_KEYS", "value": "${RELAY_KEYS}"},
+        {"name": "TOPIC_SEED", "value": "${TOPIC_SEED}"},
+        {"name": "BP_STORE", "value": "/bpstore"}
+      ],
+      "mountPoints": [{"sourceVolume": "bpstore", "containerPath": "/bpstore", "readOnly": true}],
+      "logConfiguration": {"logDriver": "awslogs", "options": {"awslogs-group": "${LOG_GROUP}", "awslogs-region": "${AWS_REGION}", "awslogs-stream-prefix": "blind-peer"}}
+    }
+  ]
+}

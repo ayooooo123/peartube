@@ -1,0 +1,18 @@
+{
+  "name": "peartube-fargate-owner",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "dependencies": {
+    "blind-peering": "2.11.0",
+    "corestore": "7.16.1",
+    "hypercore": "11.39.5",
+    "hypercore-id-encoding": "1.3.0",
+    "hyperdht": "6.36.0",
+    "protomux-wakeup": "2.9.0",
+    "dht-prometheus": "2.0.0"
+  }
+}

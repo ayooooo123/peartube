@@ -1,0 +1,26 @@
+{
+  "networkMode": "awsvpc",
+  "requiresCompatibilities": ["FARGATE"],
+  "cpu": "${CPU}",
+  "memory": "${MEMORY}",
+  "executionRoleArn": "${EXEC_ROLE_ARN}",
+  "runtimePlatform": {"cpuArchitecture": "X86_64", "operatingSystemFamily": "LINUX"},
+  "containerDefinitions": [
+    {
+      "name": "probe",
+      "image": "${IMAGE_PROBE}",
+      "essential": true,
+      "environment": [
+        {"name": "RUN", "value": "${RUN}"},
+        {"name": "DEADLINE_MIN", "value": "${DEADLINE_MIN}"},
+        {"name": "SAMPLE_MS", "value": "5000"},
+        {"name": "CHANNEL_KEY", "value": "${CHANNEL_KEY}"},
+        {"name": "SUBSET_JSON", "value": "${SUBSET_JSON}"},
+        {"name": "RELAY_KEYS", "value": "${RELAY_KEYS}"},
+        {"name": "TOPIC_SEED", "value": "${TOPIC_SEED}"},
+        {"name": "RP_MAX_CONNS", "value": "6"}
+      ],
+      "logConfiguration": {"logDriver": "awslogs", "options": {"awslogs-group": "${LOG_GROUP}", "awslogs-region": "${AWS_REGION}", "awslogs-stream-prefix": "relayed-peer"}}
+    }
+  ]
+}

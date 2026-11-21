@@ -1,0 +1,40 @@
+{
+  "networkMode": "awsvpc",
+  "requiresCompatibilities": ["FARGATE"],
+  "cpu": "${CPU}",
+  "memory": "${MEMORY}",
+  "executionRoleArn": "${EXEC_ROLE_ARN}",
+  "runtimePlatform": {"cpuArchitecture": "X86_64", "operatingSystemFamily": "LINUX"},
+  "volumes": [{"name": "shared"}],
+  "containerDefinitions": [
+    {
+      "name": "blind-relay",
+      "image": "${IMAGE_BR}",
+      "essential": false,
+      "environment": [
+        {"name": "BR_TIMEOUT_SEC", "value": "${BR_TIMEOUT_SEC}"},
+        {"name": "SCRAPER_PUB", "value": "${SCRAPER_PUB}"},
+        {"name": "SCRAPER_SECRET", "value": "${SCRAPER_SECRET}"}
+      ],
+      "mountPoints": [{"sourceVolume": "shared", "containerPath": "/shared"}],
+      "logConfiguration": {"logDriver": "awslogs", "options": {"awslogs-group": "${LOG_GROUP}", "awslogs-region": "${AWS_REGION}", "awslogs-stream-prefix": "blind-relay"}}
+    },
+    {
+      "name": "probe",
+      "image": "${IMAGE_PROBE}",
+      "essential": true,
+      "environment": [
+        {"name": "RUN", "value": "${RUN}"},
+        {"name": "DEADLINE_MIN", "value": "${DEADLINE_MIN}"},
+        {"name": "SAMPLE_MS", "value": "5000"},
+        {"name": "CHANNEL_KEY", "value": "${CHANNEL_KEY}"},
+        {"name": "SUBSET_JSON", "value": "${SUBSET_JSON}"},
+        {"name": "RELAY_KEYS", "value": "${RELAY_KEYS}"},
+        {"name": "TOPIC_SEED", "value": "${TOPIC_SEED}"},
+        {"name": "SHARED_LOG", "value": "/shared/relay.log"}
+      ],
+      "mountPoints": [{"sourceVolume": "shared", "containerPath": "/shared"}],
+      "logConfiguration": {"logDriver": "awslogs", "options": {"awslogs-group": "${LOG_GROUP}", "awslogs-region": "${AWS_REGION}", "awslogs-stream-prefix": "blind-relay"}}
+    }
+  ]
+}

@@ -1,0 +1,144 @@
+{
+ "channel": "115932df5e3b460bc057ec916881c56404f8ccbff854e096c0899b154e6852ea",
+ "pickedAt": "2026-11-21T18:20:48+00:00",
+ "rule": "entries of the channel held whole by both home relays, 100 MB <= size <= 1.2 GB, smallest first, until 2.5 GB",
+ "entries": [
+  {
+   "id": "imdb:tt0106064:s07e10",
+   "blobs": "94caa9c044938b02c9d455a651d42d4b156d45ad8866425476ab5068f9eef2a1",
+   "blockOffset": 0,
+   "blockLength": 198,
+   "size": 103510016,
+   "sha256": "06167f6376c4522aa573590196b1274f10eecdb1fa293a6768477af2bc18f0e2"
+  },
+  {
+   "id": "imdb:tt0106064:s07e38",
+   "blobs": "94295102d609754f94c415cc68b451848e36572dd512c08eb221ed359289e262",
+   "blockOffset": 0,
+   "blockLength": 202,
+   "size": 105797632,
+   "sha256": "5da52f6ec274c2d42f768d749ae1d5c4b815b4cc327bf3d689d8b5e3de4d2bd1"
+  },
+  {
+   "id": "imdb:tt0106064:s07e27",
+   "blobs": "87c6f6b37833961c5e225a5f9b931f1f7d66c239dbbebb24d6e15ada573f3e56",
+   "blockOffset": 0,
+   "blockLength": 211,
+   "size": 110344192,
+   "sha256": "7d76bc3847a5b9f842b4cc0cc3810d8e3c5afdecbcabe4ad73349939c07b266e"
+  },
+  {
+   "id": "imdb:tt0106064:s07e34",
+   "blobs": "e9852bd7a2ffb9e71e3952a3f220e792aff8e4511cf14799fd38c4a4bdd33153",
+   "blockOffset": 0,
+   "blockLength": 214,
+   "size": 112177152,
+   "sha256": "a81eeebbb9d30814bf7a399ea1bbf1926dd70a1bcc7f7f62206f5182ee78ab76"
+  },
+  {
+   "id": "imdb:tt0106064:s07e28",
+   "blobs": "0a3335e0839208be0f3a80497d5a420f76707dcbc5030f82ea00b11610714311",
+   "blockOffset": 0,
+   "blockLength": 215,
+   "size": 112707584,
+   "sha256": "29cff4da9226be16801784309342a9c1b0ffeec9c142323fadfcdf9347db79d1"
+  },
+  {
+   "id": "imdb:tt0106064:s07e39",
+   "blobs": "cc22527f73e9995629f89ad417091acada3601d8be63130a5967ad119068938d",
+   "blockOffset": 0,
+   "blockLength": 223,
+   "size": 116858880,
+   "sha256": "3a15515e226c0f0c9fefda5ec19edc336cf395112f0cb551f61b014c25a3f961"
+  },
+  {
+   "id": "imdb:tt0106064:s07e37",
+   "blobs": "8b14a83243040d2f1c1bf3b89d3c63fb87c1d3b154b80911829dd56b0f6f87ff",
+   "blockOffset": 0,
+   "blockLength": 229,
+   "size": 119541760,
+   "sha256": "a042439edf7fce661226770b2c1b6db805246293738e6134cbd2ab0e6b0d38c7"
+  },
+  {
+   "id": "imdb:tt0182576:s23e02",
+   "blobs": "35a3361ac571b9e590b4e26bf03ba0397bbdb0c47a5c228c323c0264c319f402",
+   "blockOffset": 0,
+   "blockLength": 245,
+   "size": 128142366,
+   "sha256": "93301b42058407c7ea2a2e28165c7b7296752bd24ad43f5d00f72901ae9ae3f8"
+  },
+  {
+   "id": "imdb:tt0106064:s06e42",
+   "blobs": "aed78e1b8f9d0ef0a8314ac4aa036c79d2d66d0a94c8742390d092aae1797c44",
+   "blockOffset": 0,
+   "blockLength": 311,
+   "size": 163002368,
+   "sha256": "a10f6d94331ab300a8dc806683a36f4cff7a334d160efdd0dc6c77d393eb6552"
+  },
+  {
+   "id": "imdb:tt0106064:s07e08",
+   "blobs": "2564f2f0c9834af02dad2eaff7dab8cae72cf4c50a15bf63f4b99ba2e585de8d",
+   "blockOffset": 0,
+   "blockLength": 316,
+   "size": 165384192,
+   "sha256": "b322a965653d4e106f4a7a80e9cdd85ed1526ec7efc7235aa3d520717649711e"
+  },
+  {
+   "id": "imdb:tt0106064:s07e04",
+   "blobs": "b339c9d61433a9e5ea9433a3158d1553f15595b304211995cd2e951d033cf8f1",
+   "blockOffset": 0,
+   "blockLength": 316,
+   "size": 165574656,
+   "sha256": "096523261a162ebb06b6d77411a54c978b99097896793778a56b7722e891e25e"
+  },
+  {
+   "id": "imdb:tt0182576:s12e06",
+   "blobs": "8fcc4c906d6f936285f530d86556c32c3fe9c1010135bfbbf137bc61aace8a55",
+   "blockOffset": 0,
+   "blockLength": 316,
+   "size": 165597059,
+   "sha256": "d9bebd2d85f8e00ee6d57526d087d4a73e61ab64804aebdc224984ecaec4d9db"
+  },
+  {
+   "id": "imdb:tt0106064:s07e35",
+   "blobs": "63e84ee3752d383f03db61dddb7368e76abd8bb1100950b868c15fdc4c01c34b",
+   "blockOffset": 0,
+   "blockLength": 323,
+   "size": 169287680,
+   "sha256": "400955531aa876752d2804d0cecd5d1cd076d537b1975a52047effe5995d489d"
+  },
+  {
+   "id": "imdb:tt0106064:s07e03",
+   "blobs": "9d53459f12b36758c4ca9824107f2c2e03f186673664eccaf1935f0055ee06d6",
+   "blockOffset": 0,
+   "blockLength": 324,
+   "size": 169641984,
+   "sha256": "1e68342888c1289931a5a9522214517cb0e70450a45c176347600f75897401b0"
+  },
+  {
+   "id": "imdb:tt0106064:s06e29",
+   "blobs": "9bc0f5b0e47366e1e9653d549339a2122dd6c18014a237455eccd57c63639d2e",
+   "blockOffset": 0,
+   "blockLength": 330,
+   "size": 172816384,
+   "sha256": "a41effada5821fb7051ef11a98795f45f8bb65c8c2be1726b62b749c8574c7ea"
+  },
+  {
+   "id": "imdb:tt0106064:s06e34",
+   "blobs": "179a61eaea26402d98719e96cbed349fadf2bb31361de2f6f6ae24e88f1c92c8",
+   "blockOffset": 0,
+   "blockLength": 330,
+   "size": 172972032,
+   "sha256": "e49e6a91be6606aa4e868967cfcdd603df743a43055ec5e64f5b4d0c9f73495d"
+  },
+  {
+   "id": "imdb:tt0106064:s06e36",
+   "blobs": "c6b29454345495d7f50c780a9438e8754425b65aa38fa32abb653a8b57891aec",
+   "blockOffset": 0,
+   "blockLength": 331,
+   "size": 173076480,
+   "sha256": "db4ba6e16b7b5a1bd26733d8bb62870f431c62bac3db484afc15efaf469e4f91"
+  }
+ ],
+ "totalBytes": 2426432417
+}

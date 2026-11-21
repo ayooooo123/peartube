@@ -1,0 +1,40 @@
+{
+  "networkMode": "awsvpc",
+  "requiresCompatibilities": ["FARGATE"],
+  "cpu": "${CPU}",
+  "memory": "${MEMORY}",
+  "executionRoleArn": "${EXEC_ROLE_ARN}",
+  "runtimePlatform": {"cpuArchitecture": "X86_64", "operatingSystemFamily": "LINUX"},
+  "containerDefinitions": [
+    {
+      "name": "peartube",
+      "image": "${IMAGE_PT}",
+      "essential": true,
+      "environment": [
+        {"name": "PEARTUBE_SOURCES", "value": "${CHANNEL_KEY}"},
+        {"name": "PEARTUBE_REPLICATE", "value": "${REPLICATE_KEYS}"},
+        {"name": "PEARTUBE_REPLICATE_FREE_GB", "value": "2"},
+        {"name": "PEARTUBE_REPLICATE_MBPS", "value": "0"},
+        {"name": "PEARTUBE_PUBLISH_CHANNEL", "value": "0"},
+        {"name": "PEARTUBE_RELAY_THROUGH", "value": "${RELAY_KEYS}"}
+      ],
+      "logConfiguration": {"logDriver": "awslogs", "options": {"awslogs-group": "${LOG_GROUP}", "awslogs-region": "${AWS_REGION}", "awslogs-stream-prefix": "peartube"}}
+    },
+    {
+      "name": "probe",
+      "image": "${IMAGE_PROBE}",
+      "essential": true,
+      "environment": [
+        {"name": "RUN", "value": "${RUN}"},
+        {"name": "DEADLINE_MIN", "value": "${DEADLINE_MIN}"},
+        {"name": "SAMPLE_MS", "value": "5000"},
+        {"name": "CHANNEL_KEY", "value": "${CHANNEL_KEY}"},
+        {"name": "SUBSET_JSON", "value": "${SUBSET_JSON}"},
+        {"name": "RELAY_KEYS", "value": "${RELAY_KEYS}"},
+        {"name": "TOPIC_SEED", "value": "${TOPIC_SEED}"},
+        {"name": "PT_API", "value": "http://127.0.0.1:8174"}
+      ],
+      "logConfiguration": {"logDriver": "awslogs", "options": {"awslogs-group": "${LOG_GROUP}", "awslogs-region": "${AWS_REGION}", "awslogs-stream-prefix": "peartube"}}
+    }
+  ]
+}

@@ -2724,7 +2724,7 @@ $('ytSaveForm').onsubmit = async ev => {
   let r = null
   btn.disabled = true
   try { r = await api('/v1/providers/youtube/mirror', { body }) } catch (err) { if (ytSave === mine) ytSayFail('ytSaveMsg', err.message); else toast('Could not save “' + album + '”: ' + err.message) } finally { btn.disabled = false }
-  btn.textContent = label
+  if (ytSave === mine) btn.textContent = label
   if (!r || !r.job) return
   for (const t of mine.tracks) ytPicked.delete(t.r.videoId)
   for (const t of plan.send) ytStarted.set(t.r.videoId, { id: r.job.jobId, at: Date.now() })

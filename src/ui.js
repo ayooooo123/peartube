@@ -2872,7 +2872,7 @@ function ytJobState (j) {
   if (j.status === 'done') return { tone: 'ok', text: 'Saved · ' + plural(n, 'track', 'tracks') + ' · ' + size(j.size || j.bytes || 0), what: YT_LABEL, short: 'Saved' }
   if (j.status === 'failed') return { tone: 'bad', text: 'Failed', short: 'Failed' }
   if (j.status === 'cancelled') return { tone: '', text: 'Cancelled', short: 'Cancelled' }
-  if (j.status === 'announcing') return { tone: '', text: 'Adding to your library', short: 'Adding' }
+  if (j.status === 'announcing') return j.phase === 'waiting' ? { tone: '', text: 'Waiting for another import to finish', short: 'Waiting' } : { tone: '', text: 'Adding to your library', short: 'Adding' }
   if (j.status === 'transferring') return n > 1 ? { tone: '', text: 'Downloading track ' + j.fileIndex + ' of ' + n + ' from YouTube', short: 'Track ' + j.fileIndex + ' of ' + n } : { tone: '', text: 'Downloading from YouTube', short: 'Saving' }
   return { tone: '', text: 'Waiting to start', short: 'Waiting' }
 }
@@ -2907,6 +2907,8 @@ function jobProgress (j) {
   if (j.plugin !== 'youtube') {
     return h('div', { class: 'bar-track' + (j.status === 'transferring' || j.status === 'announcing' ? '' : ' wait') }, h('div', { style: 'width:' + (j.status === 'announcing' ? 100 : slskPct(j) || 0) + '%' }))
   }
+  // Waiting for another import: every track is downloaded but none is in the library yet, so no count is shown.
+  if (j.status === 'announcing' && j.phase === 'waiting') return h('div', { class: 'bar-track indef wait', role: 'progressbar', 'aria-valuetext': 'Waiting' }, h('div'))
   const n = j.fileCount || 1
   const doneN = j.status === 'announcing' ? n : j.status === 'transferring' ? (j.fileIndex || 1) - 1 : 0
   const text = plural(doneN, 'track', 'tracks') + ' of ' + n + ' saved'
@@ -2969,7 +2971,8 @@ function srcJobItem (j) {
       j.status === 'failed' && unreachable ? h('div', { class: 'meta wrap slsk-fix' }, ...slskPortFix(p.listenPort || p.listenPortSetting || j.listenPort)) : null),
     h('div', { class: 'acts' },
       album ? btn('Open album', () => { const t = tileOf(album); if (t) openDetail(t.key) }) : null,
-      btn(active ? 'Cancel' : 'Dismiss', e => act(e.currentTarget, async () => { await api('/v1/jobs/' + j.jobId, { method: 'DELETE' }); refresh() }))))
+      // Once a job's own import runs there is nothing left to cancel, so no button offers it.
+      active && j.status === 'announcing' && j.phase !== 'waiting' ? null : btn(active ? 'Cancel' : 'Dismiss', e => act(e.currentTarget, async () => { await api('/v1/jobs/' + j.jobId, { method: 'DELETE' }); refresh() }))))
 }
 // A button that started a job follows it; "s:" keys are Soulseek folders, "y:" keys YouTube videos. A job that
 // failed, was cancelled, or left the list (dismissed, or trimmed by the relay) gives the button back.

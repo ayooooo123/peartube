@@ -182,6 +182,8 @@ export async function createMirrorHost ({
   youtube = null,
   pluginsDir = join(storage, 'plugins'),
   pollIntervalMs = 60_000,
+  // How long a provider's finished save waits for another import to finish before it gives up with nothing placed.
+  importWaitMs = 120_000,
   onchange = null,
   // Called with the host before the startup backfill and folder import, so a caller can close it while they run.
   onstarting = null
@@ -462,6 +464,21 @@ export async function createMirrorHost ({
     } finally {
       scanningWatchDir = false
     }
+  }
+
+  // A provider's finished files and their import as one step. `place` (synchronous) moves the files into the import
+  // folder only once no other scan holds it, and the scan starts in the same tick, so no other scan sees a
+  // half-placed album. While it waits nothing is placed: a save that is cancelled, or that gives up after `waitMs`
+  // (a first import of a large folder can run for hours), leaves nothing behind.
+  async function placeAndScan (dir, ctx, prefix, place, { cancelled = () => false, waitMs = importWaitMs } = {}) {
+    const end = Date.now() + waitMs
+    while (scanningWatchDir) {
+      if (closed || cancelled()) throw new Error('Cancelled')
+      if (Date.now() >= end) throw Object.assign(new Error(`Another import has held the folder for ${Math.ceil(waitMs / 1000)} s. Nothing was saved; try again when it finishes.`), { status: 503 })
+      await new Promise(resolve => setTimeout(resolve, 100))
+    }
+    place()
+    return scanFolder(dir, ctx, prefix)
   }
 
   // The folder comes only from the host (PEARTUBE_WATCH_DIR), never from a run's payload: the API must not be able to
@@ -1068,7 +1085,7 @@ export async function createMirrorHost ({
     storage,
     stagingRoot: slskStaging,
     stagingLabel: slskStagingLabel,
-    scanStaging: (dir, ctx) => scanFolder(dir, ctx, watchDir && resolve(watchDir) === resolve(dir) ? '' : 'staging:'),
+    placeAndScan: (place, ctx, opts) => placeAndScan(slskStaging, ctx, watchDir && resolve(watchDir) === resolve(slskStaging) ? '' : 'staging:', place, opts),
     info: youtube?.info || null,
     download: youtube?.download || null,
     fetchBytes: url => send(url, { binary: true, timeoutMs: 8000, maxBytes: 512 * 1024 }),

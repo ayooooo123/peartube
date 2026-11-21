@@ -1,6 +1,7 @@
 import Protomux from 'protomux'
 import c from 'compact-encoding'
 import b4a from 'b4a'
+import { guardedFrame } from './guarded-frame.js'
 
 // How a relay shares its upload between people watching and bulk copying: it detects its own viewers, tells
 // connected PearTube relays over `peartube/bulk-busy` (their backfill waits while any peer is busy), and paces the
@@ -134,7 +135,8 @@ export function createTrafficGate ({ node, uploadMbps = 0 }) {
       onclose () { busyChannels.delete(conn) }
     })
     if (!channel) return
-    rec.msg = channel.addMessage({ encoding: c.uint, onmessage (v) { rec.remote = v === 1 } })
+    // A uint is at most 9 bytes. One that does not decode keeps the last claim.
+    rec.msg = channel.addMessage({ encoding: guardedFrame(c.uint, 9), onmessage (v) { if (v !== null) rec.remote = v === 1 } })
     try { channel.open() } catch {}
   }
   // A busy claim counts only from a peer that has sent this node verified blocks: any stranger can open the channel,

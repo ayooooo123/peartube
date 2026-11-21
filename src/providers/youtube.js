@@ -50,7 +50,8 @@ export function normalizeYoutubeResults (info, limit = YOUTUBE_SEARCH_CAP) {
       videoId,
       url: `https://www.youtube.com/watch?v=${videoId}`,
       channel: String(e.author || e.channel || e.uploader || '').trim().slice(0, 120) || null,
-      thumbnail: `https://i.ytimg.com/vi/${videoId}/mqdefault.jpg`
+      // Served by this relay (`thumbnail()` below), so the owner's browser never contacts YouTube's image host.
+      thumbnail: `/v1/providers/youtube/thumb/${videoId}`
     })
     if (rows.length >= limit) break
   }
@@ -64,6 +65,8 @@ export function createYoutubePlugin ({
   scanStaging = null,
   info: ubitInfo = null,
   download: downloadPage = null,
+  // `(url) => Promise<{ status, headers, body: bytes }>`: the relay's guarded fetch, for result pictures.
+  fetchBytes = null,
   searchTimeoutMs = 20_000,
   onchange = null
 }) {
@@ -354,6 +357,21 @@ export function createYoutubePlugin ({
     }
   }
 
+  // A result's picture, fetched by the relay so the owner's browser never contacts YouTube's image host. A few are
+  // kept in memory; null when there is none.
+  const thumbs = new Map()
+  async function thumbnail (videoId) {
+    if (!fetchBytes || !VIDEO_ID.test(String(videoId))) return null
+    if (!thumbs.has(videoId)) {
+      thumbs.set(videoId, fetchBytes(`https://i.ytimg.com/vi/${videoId}/mqdefault.jpg`).then(
+        res => res.status === 200 && res.body.byteLength && /^image\/(jpeg|webp|png)$/.test(String(res.headers['content-type'] || '')) ? { type: res.headers['content-type'], bytes: res.body } : null,
+        () => null
+      ))
+      while (thumbs.size > 64) thumbs.delete(thumbs.keys().next().value)
+    }
+    return thumbs.get(videoId)
+  }
+
   async function stop () {
     closed = true
     for (const j of jobs.values()) {
@@ -379,6 +397,7 @@ export function createYoutubePlugin ({
     listJobs,
     getJob,
     cancelJob,
+    thumbnail,
     stop,
     info
   }

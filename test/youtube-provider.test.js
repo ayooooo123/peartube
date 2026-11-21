@@ -146,7 +146,7 @@ test('YouTube source: unified search, audio-only save into a yt: album, partial 
     videoId: 'aaaaaaaaaa1',
     url: 'https://www.youtube.com/watch?v=aaaaaaaaaa1',
     channel: null,
-    thumbnail: 'https://i.ytimg.com/vi/aaaaaaaaaa1/mqdefault.jpg'
+    thumbnail: '/v1/providers/youtube/thumb/aaaaaaaaaa1'
   })
   assert.equal(second.channel, 'John Coltrane - Topic')
   assert.equal(second.length, 550)

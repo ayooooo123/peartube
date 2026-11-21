@@ -8,8 +8,9 @@ import { checkUrlHost, guardedLookup, privateUrlsAllowed } from './ssrf.js'
 export const CINEMETA_URL = 'https://v3-cinemeta.strem.io'
 
 // A small buffered http(s) request that follows redirects. `maxBytes` bounds what a remote server can make us hold.
-// Every hop's host is checked (src/ssrf.js); `allowPrivate` defaults to PEARTUBE_ALLOW_PRIVATE_URLS.
-export function send (url, { method = 'GET', headers = {}, timeoutMs = 10_000, maxBytes = Infinity, redirects = 0, allowPrivate = privateUrlsAllowed() } = {}) {
+// Every hop's host is checked (src/ssrf.js); `allowPrivate` defaults to PEARTUBE_ALLOW_PRIVATE_URLS. `body` is text,
+// or the raw bytes with `binary`.
+export function send (url, { method = 'GET', headers = {}, timeoutMs = 10_000, maxBytes = Infinity, redirects = 0, allowPrivate = privateUrlsAllowed(), binary = false } = {}) {
   return new Promise((resolve, reject) => {
     let u
     try { u = new URL(url) } catch { return reject(new Error('Not a valid link')) }
@@ -19,7 +20,7 @@ export function send (url, { method = 'GET', headers = {}, timeoutMs = 10_000, m
     const req = (u.protocol === 'https:' ? httpsRequest : httpRequest)(u, { method, headers: { 'user-agent': 'PearTube', ...headers }, agent: false, lookup: guardedLookup(allowPrivate) }, res => {
       if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location && redirects < 5) {
         res.resume()
-        resolve(send(new URL(res.headers.location, u).href, { method, headers, timeoutMs, maxBytes, redirects: redirects + 1, allowPrivate }))
+        resolve(send(new URL(res.headers.location, u).href, { method, headers, timeoutMs, maxBytes, redirects: redirects + 1, allowPrivate, binary }))
         return
       }
       const chunks = []
@@ -31,7 +32,10 @@ export function send (url, { method = 'GET', headers = {}, timeoutMs = 10_000, m
         if (total > maxBytes) { req.destroy(new Error(`Reply exceeded ${maxBytes} bytes`)); return }
         chunks.push(buf)
       })
-      res.on('end', () => resolve({ status: res.statusCode, headers: res.headers, url: u.href, body: b4a.toString(b4a.concat(chunks), 'utf8') }))
+      res.on('end', () => {
+        const all = b4a.concat(chunks)
+        resolve({ status: res.statusCode, headers: res.headers, url: u.href, body: binary ? all : b4a.toString(all, 'utf8') })
+      })
       res.on('error', reject)
     })
     req.setTimeout?.(timeoutMs, () => req.destroy(new Error('Timed out')))

@@ -592,6 +592,23 @@ export function createApi (state) {
       res.end(lines.join('\n') + '\n')
       return
     }
+    // A source result's picture, through the relay: the owner's browser never asks the source's image host. 204 when
+    // there is none, so a missing picture is not a console error.
+    const thumbMatch = req.method === 'GET' && url.pathname.match(/^\/v1\/providers\/([a-z0-9-]+)\/thumb\/([\w-]{1,64})$/)
+    if (thumbMatch) {
+      let thumb = null
+      try {
+        requireOwner(req)
+        thumb = await state.mirror?.providerThumb(thumbMatch[1], thumbMatch[2])
+      } catch (err) {
+        res.writeHead(err.status || 400, { ...CORP, 'content-type': 'application/json' })
+        res.end(JSON.stringify({ error: err.message }))
+        return
+      }
+      res.writeHead(thumb ? 200 : 204, thumb ? { ...CORP, 'content-type': thumb.type, 'content-length': String(thumb.bytes.byteLength), 'cache-control': 'private, max-age=86400' } : CORP)
+      res.end(thumb ? thumb.bytes : undefined)
+      return
+    }
     // One search over the owner's chosen sources. `stream: true` answers as server-sent events, one `source` event
     // per source as it finishes (the fastest shows first; a peer network takes 15-25 s), then `done` with the totals.
     if (req.method === 'POST' && url.pathname === '/v1/search/sources') {

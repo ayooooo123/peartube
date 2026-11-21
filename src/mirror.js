@@ -1071,6 +1071,7 @@ export async function createMirrorHost ({
     scanStaging: (dir, ctx) => scanFolder(dir, ctx, watchDir && resolve(watchDir) === resolve(dir) ? '' : 'staging:'),
     info: youtube?.info || null,
     download: youtube?.download || null,
+    fetchBytes: url => send(url, { binary: true, timeoutMs: 8000, maxBytes: 512 * 1024 }),
     onchange
   }))
 
@@ -1146,6 +1147,7 @@ export async function createMirrorHost ({
     return [...plugins.entries()].map(([name, p]) => ({
       name,
       description: p.description || '',
+      searchable: typeof p.search === 'function',
       ...(typeof p.info === 'function' ? p.info() : {}),
       ...stats.get(name)
     }))
@@ -1258,6 +1260,10 @@ export async function createMirrorHost ({
     close,
     isMedia,
     forgetImported,
+    providerThumb (name, id) {
+      const p = plugins.get(name)
+      return typeof p?.thumbnail === 'function' ? p.thumbnail(id) : null
+    },
     searchProvider (name, payload) {
       const p = plugins.get(name)
       if (!p || typeof p.search !== 'function') throw Object.assign(new Error(`Unknown provider: ${name}`), { status: 404 })

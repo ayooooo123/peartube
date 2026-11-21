@@ -1,5 +1,6 @@
 import peartube.buildlogic.NativeEngineTask
 import peartube.buildlogic.registerNativeEngine
+import peartube.buildlogic.releaseSigning
 import javax.inject.Inject
 
 plugins {
@@ -101,9 +102,9 @@ abstract class CargoTask @Inject constructor(private val exec: ExecOperations) :
 
 val nativeCrate = File(checkout, "android/native")
 
-// Release signing from ~/.gradle/gradle.properties (peartube.keystore, .keystorePassword, .keyAlias, .keyPassword).
-val signing = listOf("keystore", "keystorePassword", "keyAlias", "keyPassword")
-    .associateWith { providers.gradleProperty("peartube.$it").orNull }
+// Release signing: keystore path and alias from ~/.gradle/gradle.properties, passwords from there or the
+// login Keychain (buildSrc ReleaseSigning.kt).
+val signing = releaseSigning()
 
 android {
     namespace = "com.peartube.app"
@@ -123,12 +124,12 @@ android {
     ndkVersion = "29.0.14206865"
 
     signingConfigs {
-        if (signing.values.all { it != null }) {
+        if (signing != null) {
             create("release") {
-                storeFile = file(signing.getValue("keystore")!!)
-                storePassword = signing.getValue("keystorePassword")
-                keyAlias = signing.getValue("keyAlias")
-                keyPassword = signing.getValue("keyPassword")
+                storeFile = file(signing.keystore)
+                storePassword = signing.storePassword
+                keyAlias = signing.keyAlias
+                keyPassword = signing.keyPassword
             }
         }
     }

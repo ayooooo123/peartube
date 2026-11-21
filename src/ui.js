@@ -1995,7 +1995,8 @@ function renderSourceChips () {
   const focused = box.contains(document.activeElement) ? document.activeElement.dataset.src : ''
   $('srcIn').hidden = here.length < 2
   box.replaceChildren(...here.map(sourceChip))
-  if (focused) { const again = box.querySelector('[data-src="' + focused + '"]'); if (again) again.focus() }
+  // Redrawn every second while a mirror runs: focus comes back without scrolling, or the page jumps to the chips.
+  if (focused) { const again = box.querySelector('[data-src="' + focused + '"]'); if (again) again.focus({ preventScroll: true }) }
   const on = sourcesOn()
   const usable = here.filter(n => ['on', 'off'].includes(sourceState(n).state))
   $('srcHint').textContent = on.length === 2 ? 'Finds albums on peers and tracks on YouTube.'
@@ -2993,7 +2994,8 @@ function srcSyncButton (b) {
 }
 function renderSrcJobs () {
   const box = $('srcJobs')
-  // Focus survives the once-a-second redraw: a card's button, or the name a new save moved focus to.
+  // Focus survives the once-a-second redraw: a card's button, or the name a new save moved focus to. It comes back
+  // without scrolling: a plain focus() pulled the page back to the card every second while the owner scrolled away.
   const at = box.contains(document.activeElement) ? document.activeElement : null
   const fk = at ? at.dataset.fk || (at.classList.contains('name') ? 'name:' + at.closest('[data-job]').dataset.job : '') : ''
   const recent = Date.now() - 3600_000
@@ -3005,7 +3007,7 @@ function renderSrcJobs () {
   box.replaceChildren(...jobs.map(srcJobItem))
   for (const d of box.querySelectorAll('details')) d.open = opened.has(d.closest('[data-job]').dataset.job)
   const again = fk && (fk.startsWith('name:') ? box.querySelector('[data-job="' + fk.slice(5) + '"] .name') : [...box.querySelectorAll('[data-fk]')].find(b => b.dataset.fk === fk))
-  if (again) again.focus()
+  if (again) again.focus({ preventScroll: true })
   for (const b of document.querySelectorAll('button[data-src-key]')) srcSyncButton(b)
 }
 function renderMirrors () {

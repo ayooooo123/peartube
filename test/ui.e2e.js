@@ -1036,6 +1036,27 @@ test('relay web UI: settings, plugins as intents, identification, music sources,
     await click('#ytSaveBtn')
     result.interactions.ytSave = clicks
     await waitFor(`!$('ytSave').open && /YouTube/.test($('srcJobs').innerText)`, 'YouTube job card', 10_000)
+    // While a save runs, the page redraws the job cards and source chips every second and gives focus back to the
+    // control that had it. That must not scroll: a plain focus() pulled the page back up to the card every second
+    // while the owner scrolled down. The spacer makes the page longer than a screen, as a real library is.
+    const scrolls = await evaluate(`(() => {
+      const pad = document.body.appendChild(h('div', { style: 'height:3000px' }))
+      const one = (el, box) => {
+        el.focus({ preventScroll: true })
+        scrollTo(0, document.documentElement.scrollHeight)
+        const y = scrollY, away = box.getBoundingClientRect().bottom < 0
+        renderMirrors()
+        return { y, away, after: scrollY, kept: box.contains(document.activeElement) }
+      }
+      const out = { card: one(document.querySelector('#srcJobs [data-job] .name'), $('srcJobs')), chip: one(document.querySelector('#srcChips [data-src]'), $('srcChips')) }
+      pad.remove()
+      return out
+    })()`)
+    for (const [what, s] of Object.entries(scrolls)) {
+      assert.ok(s.away && s.kept, `the focused ${what} is off screen and keeps focus across the redraw: ${JSON.stringify(s)}`)
+      assert.equal(s.after, s.y, `a redraw with the ${what} focused leaves the page where the owner scrolled it`)
+    }
+    result.checks.redrawKeepsScroll = scrolls
     assert.ok(!(await evaluate(`$('srcJobs').innerText`)).includes('%'), 'a YouTube job never shows a percentage')
     await waitFor(`$('toast').textContent.includes('to your library')`, 'album added toast', 30_000)
     const morning = await waitApi(async () => { const list = (await entries()).filter(e => e.title === 'Test Band · Morning'); return list.length === 2 && list }, 'YouTube album imported')

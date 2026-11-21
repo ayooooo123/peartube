@@ -10,7 +10,7 @@
 //   - Jobs report `queued` (waiting on the peer) / `transferring` / `failed` with a plain reason; a peer that never
 //     answers or never connects back fails the job instead of leaving it at 0 bytes
 import { createHash, randomUUID } from 'node:crypto'
-import { closeSync, existsSync, fstatSync, mkdirSync, openSync, readFileSync, readSync, renameSync, rmSync, statSync, unlinkSync, writeFileSync } from 'node:fs'
+import { closeSync, copyFileSync, existsSync, fstatSync, mkdirSync, openSync, readSync, renameSync, rmSync, statSync, unlinkSync, writeFileSync } from 'node:fs'
 import process from 'node:process'
 import { basename, extname, join } from 'node:path'
 import b4a from 'b4a'
@@ -640,7 +640,7 @@ export function createSoulseekPlugin ({
           try {
             renameSync(d.tmpPath, dst)
           } catch {
-            writeFileSync(dst, readFileSync(d.tmpPath))
+            copyFileSync(d.tmpPath, dst)
             try { unlinkSync(d.tmpPath) } catch {}
           }
           // A single file mirrored for a non-album id (a clip or film) carries that id in a sidecar.

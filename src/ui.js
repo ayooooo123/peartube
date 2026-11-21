@@ -1361,7 +1361,7 @@ function libraryTiles () {
 // tagged by release announce the same album under two ids, and both land here as one tile. A track held twice is one
 // row, playing the copy saved here (or the larger one). The album's name is what most of its tracks' titles say, so
 // one badly tagged track ("Untitled album") neither renames the album nor splits it off.
-const fold = s => String(s || '').toLowerCase().normalize('NFKD').replace(/[^a-z0-9]+/g, ' ').trim()
+const fold = s => String(s || '').toLowerCase().normalize('NFKD').replace(/[^\\p{L}\\p{N}]+/gu, ' ').trim()
 function mergeAlbums (tiles) {
   const groups = new Map()
   for (const t of [...tiles.values()]) {
@@ -2716,17 +2716,20 @@ $('ytSaveForm').onsubmit = async ev => {
   const btn = $('ytSaveBtn')
   const label = btn.textContent
   btn.textContent = 'Saving…'
-  const body = { artist, album, ...(year ? { year } : {}), tracks: plan.send.map(t => ({ videoId: t.r.videoId, title: t.title.trim(), track: plan.nums[ytSave.tracks.indexOf(t)] })) }
+  // The dialog this save belongs to: Cancel, Close and Esc still work while the relay answers, so by then
+  // another save may be on screen, and its selection and form are not this one's to touch.
+  const mine = ytSave
+  const body = { artist, album, ...(year ? { year } : {}), tracks: plan.send.map(t => ({ videoId: t.r.videoId, title: t.title.trim(), track: plan.nums[mine.tracks.indexOf(t)] })) }
   // A refusal the owner can act on (the album folder holds other files) leads; the relay's words stay as detail.
   let r = null
   btn.disabled = true
-  try { r = await api('/v1/providers/youtube/mirror', { body }) } catch (err) { ytSayFail('ytSaveMsg', err.message) } finally { btn.disabled = false }
+  try { r = await api('/v1/providers/youtube/mirror', { body }) } catch (err) { if (ytSave === mine) ytSayFail('ytSaveMsg', err.message); else toast('Could not save “' + album + '”: ' + err.message) } finally { btn.disabled = false }
   btn.textContent = label
   if (!r || !r.job) return
-  for (const t of ytSave.tracks) ytPicked.delete(t.r.videoId)
+  for (const t of mine.tracks) ytPicked.delete(t.r.videoId)
   for (const t of plan.send) ytStarted.set(t.r.videoId, { id: r.job.jobId, at: Date.now() })
-  ytSave.done = true
-  $('ytSave').close()
+  mine.done = true
+  if (ytSave === mine) $('ytSave').close()
   if (!S.jobs.some(j => j.jobId === r.job.jobId)) S.jobs.unshift(r.job)
   renderMirrors()
   renderYtRows()

@@ -8,7 +8,7 @@
 // `info` and `download` are the relay's `ubitInfo` and `downloadPage` (src/identify.js), passed in: a host without
 // them (the apps' worklet cannot run ubit) reports `unavailable`.
 import { createHash, randomUUID } from 'node:crypto'
-import { mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, statSync, unlinkSync, writeFileSync } from 'node:fs'
+import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { basename, extname, join } from 'node:path'
 import { MAX_TITLE, MEDIA_FILE } from '../protocol.js'
 import { albumKey } from '../tags.js'
@@ -283,8 +283,7 @@ export function createYoutubePlugin ({
           try {
             renameSync(g.path, dst)
           } catch {
-            writeFileSync(dst, readFileSync(g.path))
-            try { unlinkSync(g.path) } catch {}
+            copyFileSync(g.path, dst)
           }
           placed.add(basename(dst))
         }
@@ -300,7 +299,9 @@ export function createYoutubePlugin ({
           scan = await scanStaging(stagingRoot, ctx)
         }
         if (scan?.busy) throw new Error('Cancelled')
-        const refusedImport = (scan?.failed || []).filter(f => placed.has(f.file))
+        // By path inside the import folder: another album's file of the same name is not this save's.
+        const relOf = name => `${folderName}/${name}`
+        const refusedImport = (scan?.failed || []).filter(f => placed.has(f.file) && f.rel === relOf(f.file))
         for (const f of refusedImport) {
           const g = got.find(x => fileOf(x.t, x.ext) === f.file)
           job.skipped.push({ track: g?.t.track ?? null, title: g?.t.title || f.file, error: `Not imported: ${String(f.error).slice(0, 160)}` })
@@ -316,7 +317,7 @@ export function createYoutubePlugin ({
           size: doneBytes,
           bytes: doneBytes,
           total: doneBytes,
-          sha256s: (scan?.items || []).filter(it => placed.has(it.file)).map(it => it.sha256)
+          sha256s: (scan?.items || []).filter(it => placed.has(it.file) && it.rel === relOf(it.file)).map(it => it.sha256)
         })
         onchange?.()
         return { jobId, id: release, folder: folderName, files: imported, bytes: doneBytes, ingested: scan?.ingested || 0, items: scan?.items || [], skipped: job.skipped }

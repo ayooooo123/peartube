@@ -20,9 +20,9 @@ import { createSoulseekPlugin } from './providers/soulseek.js'
 import { ALBUM_PIN, MIRRORED_LIST, RELEASE_ID } from './providers/staging.js'
 import { createYoutubePlugin } from './providers/youtube.js'
 
-// File names whose codec is lossy by definition. A `.flac` or `.wav` proves only a lossless container, so those stay
-// unknown (`null`), never `false`.
-const LOSSY_FILE = /\.(mp3|m4a|aac|ogg|opus|wma)$/i
+// File names whose codec is lossy by definition. A `.flac` or `.wav` proves only a lossless container, and `.m4a`
+// and `.ogg` hold lossless codecs too (ALAC, FLAC), so those stay unknown (`null`), never `false`.
+const LOSSY_FILE = /\.(mp3|aac|opus|wma)$/i
 
 async function fetchJson (url, headers = {}) {
   const res = await send(url, { headers: { accept: 'application/json', ...headers }, timeoutMs: 60_000, maxBytes: 8 * 1024 * 1024 })
@@ -453,9 +453,9 @@ export async function createMirrorHost ({
           const op = await ctx.ingestStream({ id: meta.id, title: meta.title, stream: createReadStream(full), channel: mirrorChannel, music: meta.music || null })
           watchLedger[key] = { size: st.size, mtimeMs: Math.trunc(st.mtimeMs), id: op.id, blobs: op.blobs, sha256: op.sha256, ingestedAt: Date.now() }
           saveWatchLedger()
-          ingested.push({ file: basename(rel), id: op.id, title: op.title, size: op.size, sha256: op.sha256 })
+          ingested.push({ file: basename(rel), rel, id: op.id, title: op.title, size: op.size, sha256: op.sha256 })
         } catch (err) {
-          failed.push({ file: basename(rel), error: err?.message || String(err) })
+          failed.push({ file: basename(rel), rel, error: err?.message || String(err) })
         }
       }
       return { scanned, ingested: ingested.length, failed, items: ingested }

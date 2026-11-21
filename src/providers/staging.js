@@ -28,13 +28,29 @@ export function freePath (dir, name) {
   return candidate
 }
 
+// `s` cut to at most `max` UTF-8 bytes, between characters. A file name is limited in bytes (255 on most
+// filesystems), not in characters: 84 Chinese characters are 252 bytes.
+export function clipBytes (s, max) {
+  let bytes = 0
+  let out = ''
+  for (const ch of s) {
+    const cp = ch.codePointAt(0)
+    bytes += cp <= 0x7f ? 1 : cp <= 0x7ff ? 2 : cp <= 0xffff ? 3 : 4
+    if (bytes > max) break
+    out += ch
+  }
+  return out
+}
+
+// One folder or file name: at most 140 characters and 180 bytes, which leaves room for a track number, an
+// extension, a `[YouTube]` marker and a ` (2)` suffix under 255 bytes.
 export function safeSegment (raw, fallback) {
-  const clean = String(raw || '')
+  const clean = clipBytes(String(raw || '')
     .replace(/[/\\:*?"<>|\x00-\x1f]+/g, ' ')
     .replace(/^[.@\s]+/, '')
     .replace(/\s+/g, ' ')
     .trim()
-    .slice(0, 140)
+    .slice(0, 140), 180)
     .replace(/[.\s]+$/, '')
   return clean || fallback
 }

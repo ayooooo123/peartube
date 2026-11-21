@@ -240,6 +240,18 @@ test('YouTube source: unified search, audio-only save into a yt: album, partial 
   assert.equal((await plugin()).canSave, true)
   await call('POST', '/v1/entries/remove', { keys: (await call('GET', '/v1/entries')).data.results.filter(e => e.title.endsWith('Aged')).map(e => e.key) })
 
+  // Names in other scripts are their own albums, not all one (folding to a-z left nothing to tell them apart), and
+  // a long title in a script of three bytes a character still fits a file name.
+  const zh1 = await call('POST', '/v1/providers/youtube/mirror', { artist: '周杰倫', album: '七里香', tracks: [{ videoId: 'aaaaaaaaaa1', title: '界'.repeat(84) }], wait: true })
+  const zh2 = await call('POST', '/v1/providers/youtube/mirror', { artist: '周杰倫', album: '葉惠美', tracks: [{ videoId: 'aaaaaaaaaa2', title: '晴天' }], wait: true })
+  assert.equal(zh1.status, 200, JSON.stringify(zh1.data))
+  assert.equal(zh2.status, 200, JSON.stringify(zh2.data))
+  assert.notEqual(zh1.data.id, zh2.data.id, 'two albums named in Chinese are two albums')
+  assert.equal(zh1.data.files, 1)
+  const zhFile = readdirSync(join(watchDir, zh1.data.folder)).find(n => n.endsWith('.m4a'))
+  assert.ok(Buffer.byteLength(zhFile) <= 255, `${Buffer.byteLength(zhFile)} bytes`)
+  await call('POST', '/v1/entries/remove', { keys: (await call('GET', '/v1/entries')).data.results.filter(e => e.title.startsWith('周杰倫')).map(e => e.key) })
+
   // Cancel between tracks: the track already downloaded is not left for the next scan to import.
   const slow = await call('POST', '/v1/providers/youtube/mirror', { artist: 'John Coltrane', album: 'Cancelled', tracks: [{ videoId: 'aaaaaaaaaa1', title: 'Done' }, { videoId: 'slowslowslo', title: 'Never' }] })
   const jobOf = async id => (await call('GET', '/v1/jobs')).data.jobs.find(x => x.jobId === id)

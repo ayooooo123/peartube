@@ -56,7 +56,6 @@ const shot = name => fs.writeFileSync(path.join(opts.out, name), execFileSync('a
 function requireAppWindow () {
   const focus = adb('shell', 'dumpsys window').split('\n').find(line => line.includes('mCurrentFocus='))
   if (!focus?.includes(`${pkg}/`)) {
-    shot('system-ui.png')
     throw new Error('A system window is in front. Answer it on the phone, then run this again; no system UI was tapped.')
   }
 }
@@ -71,7 +70,6 @@ function nodes () {
   })
   list.rotation = Number(xml.match(/<hierarchy rotation="(\d)"/)?.[1] ?? 0)
   if (!list.some(n => n.pkg === pkg)) {
-    shot('system-ui.png')
     throw new Error('A system window is in front. Answer it on the phone, then run this again; no system UI was tapped.')
   }
   return list
@@ -297,19 +295,18 @@ try {
     tap(await waitFor('the Settings tracker field', trackerField))
     enterText(tracker)
     shell('input keyevent KEYCODE_BACK') // hides the keyboard
-    if (opts.bootstrap || opts.lan || opts['private-routing']) {
-      await advanced()
-      if (opts.bootstrap) {
-        tap(await scrollTo('the DHT bootstrap field', ns => fieldUnder(ns, 'DHT bootstrap')))
-        enterText(opts.bootstrap)
-        shell('input keyevent KEYCODE_BACK')
-      }
-      const lanSwitch = await lanControl()
-      if (lanSwitch.checked !== opts.lan) tap(lanSwitch)
-      if (opts['private-routing']) {
-        const privateSwitch = await scrollTo('the private routing switch', switchFor('Private DHT routing'))
-        if (!privateSwitch.checked) tap(privateSwitch)
-      }
+    await advanced()
+    if (opts.bootstrap) {
+      tap(await scrollTo('the DHT bootstrap field', ns => fieldUnder(ns, 'DHT bootstrap')))
+      enterText(opts.bootstrap)
+      shell('input keyevent KEYCODE_BACK')
+    }
+    const lanSwitch = await lanControl()
+    const wantLan = lanBefore.checked && (!opts['private-routing'] || opts.lan)
+    if (lanSwitch.checked !== wantLan) tap(lanSwitch)
+    if (opts['private-routing']) {
+      const privateSwitch = await scrollTo('the private routing switch', switchFor('Private DHT routing'))
+      if (!privateSwitch.checked) tap(privateSwitch)
     }
     tap(await scrollTo('Save', ns => ns.find(n => n.text === 'Save')))
     await fullPlayback()

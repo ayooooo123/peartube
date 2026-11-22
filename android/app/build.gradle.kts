@@ -113,6 +113,7 @@ android {
     defaultConfig {
         applicationId = "com.peartube.app"
         minSdk = 29
+        manifestPlaceholders["appLabel"] = "PearTube"
         targetSdk = 34
         val (major, minor, patch) = appVersion.split(".").map { it.toInt() }
         versionCode = major * 10_000 + minor * 100 + patch
@@ -137,7 +138,9 @@ android {
     buildTypes {
         debug {
             // The clean-install test must not use the normal dev app's data.
-            applicationIdSuffix = if (providers.gradleProperty("peartube.e2e").isPresent) ".dev.firstrun" else ".dev"
+            val e2e = providers.gradleProperty("peartube.e2e").isPresent
+            applicationIdSuffix = if (e2e) ".dev.firstrun" else ".dev"
+            if (e2e) manifestPlaceholders["appLabel"] = "PearTube test"
             versionNameSuffix = "-dev"
         }
         release {

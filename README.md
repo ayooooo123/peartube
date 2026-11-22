@@ -483,6 +483,7 @@ Apps connect to peers directly rather than routing everything through a relay: t
 catalogs, open `peartube://` links, cast, fetch the pieces playback needs, and seed cached
 pieces while online. They never run the HTTP acquirer, and cached data can be cleared in the
 app without removing subscriptions. Android and iOS open the library without an account.
+On first launch, your phone connects to peers directly; private routing starts when you first enable it in Settings and select **Save**.
 Choose **Add Channel or Link** when you want to follow a channel. A relay shows its
 channel key at `/v1/status`. LAN discovery is on by default on fresh installs and
 follows the device's address.

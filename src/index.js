@@ -243,20 +243,33 @@ async function openNode ({
     return out
   }
 
-  // Suspends swarm sockets before parking RocksDB + CORESTORE flock so iOS never slaughters backgrounded worklets.
-  async function suspend () {
-    if (ctx.life.closing || ctx.life.suspended) return
-    ctx.life.suspended = true
-    ctx.search.suspend()
-    await ctx.net.swarm.suspend()
-    await ctx.storage.store.suspend()
+  // One at a time, in the order of the calls: a resume that overtook a suspend in progress left the DHT suspended
+  // under a node that reported itself resumed (Hyperswarm sets `suspended` at once but suspends its DHT later).
+  let turn = Promise.resolve()
+  function inOrder (work) {
+    const done = turn.then(work)
+    turn = done.catch(() => {})
+    return done
   }
 
-  async function resume () {
-    if (ctx.life.closing || !ctx.life.suspended) return
-    await ctx.storage.store.resume()
-    await ctx.net.swarm.resume()
-    ctx.life.suspended = false
+  // Suspends swarm sockets before parking RocksDB + CORESTORE flock so iOS never slaughters backgrounded worklets.
+  function suspend () {
+    return inOrder(async () => {
+      if (ctx.life.closing || ctx.life.suspended) return
+      ctx.life.suspended = true
+      ctx.search.suspend()
+      await ctx.net.swarm.suspend()
+      await ctx.storage.store.suspend()
+    })
+  }
+
+  function resume () {
+    return inOrder(async () => {
+      if (ctx.life.closing || !ctx.life.suspended) return
+      await ctx.storage.store.resume()
+      await ctx.net.swarm.resume()
+      ctx.life.suspended = false
+    })
   }
 
   let closingPromise = null

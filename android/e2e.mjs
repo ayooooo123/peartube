@@ -1,17 +1,16 @@
 // End-to-end check of the Android app on a connected phone against an isolated
 // tracker (given by --tracker) or a relay's /v1/status (given by --relay).
-// A fresh dev-app install lists the entry, opens immersive playback immediately,
-// checks both orientations, and returns directly to the library. Engine details
-// live under PearTube → Under the Hood → Engine Room; route bytes live in player Info.
-// With --private-routing and no --lan, assert that uncached playback moved bytes
-// only through private circuits. Writes result.json and screenshots.
+// A fresh install must open the library, run its own node, and save network settings
+// without a channel. --first-run-only stops there. The full run then follows a tracker,
+// plays a title, checks both orientations, and returns to the library. With
+// --private-routing and no --lan, uncached playback must use only private circuits.
+// Writes result.json and screenshots.
 //
-//   node android/e2e.mjs --serial <adb serial> (--tracker <hex> | --relay http://<relay>:8174) [--lan] [--private-routing] [--apk path] [--out dir]
+//   node android/e2e.mjs --serial <adb serial> (--tracker <hex> | --relay http://<relay>:8174) [--bootstrap host:port] [--lan] [--private-routing] [--apk path] [--out dir]
+//   node android/e2e.mjs --serial <adb serial> --first-run-only [--apk path] [--out dir]
 //
-// Taps go through uiautomator's view of the Compose UI (texts and edit fields), so they do
-// not depend on the screen's size. The app is com.peartube.app.dev: the debug build by
-// default, or a release build made with -Ppeartube.dev, given with --apk. Its data is
-// cleared first.
+// Build with -Ppeartube.e2e :app:assembleDebug. Put aapt from the SDK build-tools
+// on PATH. The test installs and removes only that separate debug package.
 import { execFileSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import fs from 'node:fs'
@@ -25,20 +24,29 @@ const { values: opts } = parseArgs({
     serial: { type: 'string' },
     relay: { type: 'string' },
     tracker: { type: 'string' },
+    bootstrap: { type: 'string' },
     lan: { type: 'boolean', default: false },
     'private-routing': { type: 'boolean', default: false },
+    'first-run-only': { type: 'boolean', default: false },
     apk: { type: 'string', default: path.join(here, 'app/build/outputs/apk/debug/app-debug.apk') },
     out: { type: 'string', default: path.join(here, 'build/e2e') }
   }
 })
-if (!opts.serial || (!opts.relay && !opts.tracker)) throw new Error('--serial and --tracker or --relay are required')
+if (!opts.serial) throw new Error('--serial is required')
+if (opts['first-run-only']) {
+  if (opts.relay || opts.tracker || opts.bootstrap || opts.lan || opts['private-routing']) {
+    throw new Error('--first-run-only takes no --relay, --tracker, --bootstrap, --lan or --private-routing')
+  }
+} else if (!opts.relay && !opts.tracker) {
+  throw new Error('--serial and --tracker or --relay are required unless --first-run-only is given')
+}
 
-const pkg = 'com.peartube.app.dev'
+const pkg = 'com.peartube.app.dev.firstrun'
 const activity = `${pkg}/dev.dioxus.main.MainActivity`
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms))
 const adb = (...args) => execFileSync('adb', ['-s', opts.serial, ...args], { encoding: 'utf8', maxBuffer: 64 << 20 })
 const shell = cmd => {
-  if (cmd.startsWith('input ') && cmd !== 'input keyevent KEYCODE_WAKEUP') requireAppWindow()
+  if (cmd.startsWith('input ')) requireAppWindow()
   return adb('shell', cmd)
 }
 fs.rmSync(opts.out, { recursive: true, force: true })
@@ -48,7 +56,6 @@ const shot = name => fs.writeFileSync(path.join(opts.out, name), execFileSync('a
 function requireAppWindow () {
   const focus = adb('shell', 'dumpsys window').split('\n').find(line => line.includes('mCurrentFocus='))
   if (!focus?.includes(`${pkg}/`)) {
-    shot('system-ui.png')
     throw new Error('A system window is in front. Answer it on the phone, then run this again; no system UI was tapped.')
   }
 }
@@ -63,7 +70,6 @@ function nodes () {
   })
   list.rotation = Number(xml.match(/<hierarchy rotation="(\d)"/)?.[1] ?? 0)
   if (!list.some(n => n.pkg === pkg)) {
-    shot('system-ui.png')
     throw new Error('A system window is in front. Answer it on the phone, then run this again; no system UI was tapped.')
   }
   return list
@@ -98,38 +104,24 @@ const switchFor = text => ns => {
   const label = ns.find(n => n.text === text)
   return label && ns.find(n => n.checkable && Math.abs(n.x - label.x) <= n.w / 2 && Math.abs(n.y - label.y) <= n.h / 2)
 }
+const byText = text => ns => ns.find(n => n.text === text)
+function fieldUnder (ns, label) {
+  const at = ns.find(n => n.text === label)
+  if (!at) return null
+  return ns.filter(n => n.cls === 'android.widget.EditText' && n.y > at.y).sort((a, b) => a.y - b.y)[0] ?? null
+}
+const emptyState = ns => ns.some(n => n.desc === 'Settings') &&
+  !ns.some(n => n.desc === 'Close Under the Hood') && byText('Add Channel or Link')(ns)
+const library = what => waitFor(what, emptyState, 30_000)
+const trackerField = ns => fieldUnder(ns, 'Primary channel key (optional)')
+const advanced = async () => tap(await scrollTo('advanced network options', byText('Advanced Network & Engine')))
+const lanControl = () => scrollTo('the LAN switch', switchFor('Find relays on this network'))
+const enterText = value => shell("input text '" + value.replaceAll("'", "'\\''") + "'")
 const checks = {}
-const result = { started: new Date().toISOString(), device: shell('getprop ro.product.model').trim(), relay: opts.relay || null, privateRouting: opts['private-routing'], checks }
+const result = { started: new Date().toISOString(), device: shell('getprop ro.product.model').trim(), relay: opts.relay || null, privateRouting: opts['private-routing'], firstRunOnly: opts['first-run-only'], checks }
 
-try {
-  const tracker = opts.tracker || (await (await fetch(new URL('/v1/status', opts.relay))).json()).tracker
-  result.tracker = tracker.slice(0, 8)
-  const apkPath = path.join(opts.out, 'installed.apk')
-  fs.copyFileSync(opts.apk, apkPath)
-  result.apk = { path: fs.realpathSync(opts.apk), installedPath: fs.realpathSync(apkPath), sha256: createHash('sha256').update(fs.readFileSync(apkPath)).digest('hex') }
-
-  adb('install', '-r', apkPath)
-  shell(`pm clear ${pkg}`)
-  shell('input keyevent KEYCODE_WAKEUP')
-  shell(`am start -W -n ${activity}`)
-  result.apk.version = shell(`dumpsys package ${pkg}`).match(/versionName=(\S+)/)?.[1]
-
-  // First run opens Settings.
-  const field = await waitFor('the tracker field', ns => ns.find(n => n.cls === 'android.widget.EditText'), 30_000)
-  tap(field)
-  shell(`input text ${tracker}`)
-  shell('input keyevent KEYCODE_BACK') // hides the keyboard
-  if (opts.lan || opts['private-routing']) {
-    tap(await scrollTo('advanced network options', ns => ns.find(n => n.text === 'Advanced Network & Engine')))
-    const lanSwitch = await scrollTo('the LAN switch', switchFor('Find relays on this network'))
-    if (lanSwitch.checked !== opts.lan) tap(lanSwitch)
-    if (opts['private-routing']) {
-      const privateSwitch = await scrollTo('the private routing switch', switchFor('Private DHT routing'))
-      if (!privateSwitch.checked) tap(privateSwitch)
-    }
-  }
-  tap(await scrollTo('Save', ns => ns.find(n => n.text === 'Save')))
-
+/** The fixture-backed checks: the configured app lists the entry and one title plays, turns and returns. */
+async function fullPlayback () {
   const rowPattern = /^(S\d\dE\d\d\d?|Movie|(?:Play|Resume) S\d\dE\d\d\d?)$/
   await waitFor('entries', ns => ns.find(n => rowPattern.test(n.text)))
   const listed = nodes()
@@ -239,11 +231,96 @@ try {
   shell('input keyevent KEYCODE_BACK')
   await waitFor('portrait library', ns => ns.rotation === 0, 10_000)
   checks.backToList = Boolean(await waitFor('the list again', ns => ns.find(n => n.text === 'PearTube'), 15_000))
-} catch (err) {
-  result.error = String(err?.stack || err)
 }
 
-const expected = ['listed', ...(opts.lan ? ['lan'] : []), ...(opts['private-routing'] ? ['privateRoute'] : []), 'video', 'clockAdvances', 'audio', 'fullscreen', 'backInPlace', 'backToList']
+let installed = false
+try {
+  let tracker = null
+  if (!opts['first-run-only']) {
+    tracker = opts.tracker || (await (await fetch(new URL('/v1/status', opts.relay))).json()).tracker
+    result.tracker = tracker.slice(0, 8)
+    result.bootstrap = Boolean(opts.bootstrap)
+  }
+  const apkPath = path.join(opts.out, 'installed.apk')
+  fs.copyFileSync(opts.apk, apkPath)
+  result.apk = { path: fs.realpathSync(opts.apk), installedPath: fs.realpathSync(apkPath), sha256: createHash('sha256').update(fs.readFileSync(apkPath)).digest('hex') }
+
+  const manifest = execFileSync('aapt', ['dump', 'badging', apkPath], { encoding: 'utf8' })
+  const apkId = manifest.match(/^package: name='([^']+)'/m)?.[1]
+  console.log(`Clean-install test package: ${apkId}. Only ${pkg} may be installed and removed.`)
+  if (apkId !== pkg || !manifest.includes('application-debuggable')) throw new Error('Build the isolated debug APK with -Ppeartube.e2e')
+  if (shell(`pm list packages ${pkg}`).trim()) throw new Error(`Remove the previous ${pkg} test installation first`)
+  adb('install', apkPath)
+  installed = true
+  shell(`am start -W -n ${activity}`)
+  result.apk.version = shell(`dumpsys package ${pkg}`).match(/versionName=(\S+)/)?.[1]
+
+  // Test Save independently, even if the old app opens Settings instead of the library.
+  result.firstScreen = await waitFor('the initial screen', ns => emptyState(ns) ? 'library' : trackerField(ns) ? 'settings' : null, 30_000)
+  checks.libraryFirst = result.firstScreen === 'library'
+  if (checks.libraryFirst) {
+    tap(await waitFor('the PearTube menu', byText('PearTube')))
+    // This action appears only when the worker reports a channel. Do not reveal its key.
+    checks.localChannel = Boolean(await waitFor('the local channel action', byText('Share My Channel'), 30_000))
+    tap(await waitFor('Close Under the Hood', ns => ns.find(n => n.desc === 'Close Under the Hood')))
+    tap(await library('the empty library after closing the menu'))
+    checks.emptyCta = Boolean(await waitFor('the Settings tracker field', trackerField))
+    tap(await waitFor('Cancel', byText('Cancel')))
+    tap(await library('the empty library after Cancel'))
+    checks.cancelBack = true
+    await waitFor('Settings before pressing Back', trackerField)
+    shell('input keyevent KEYCODE_BACK')
+    tap(await library('the empty library after Back'))
+    checks.systemBack = true
+  }
+
+  // Leave all channel fields untouched. Unlike the cache limit, LAN changes only on Save.
+  checks.saveEmpty = false
+  await advanced()
+  const lanBefore = await lanControl()
+  tap(lanBefore)
+  tap(await scrollTo('Save', byText('Save')))
+  await library('the empty library after Save')
+  checks.saveEmpty = true
+  shell(`am force-stop ${pkg}`)
+  shell(`am start -W -n ${activity}`)
+  tap(await library('the empty library after relaunch'))
+  await advanced()
+  const lanAfter = await lanControl()
+  checks.lanSaved = lanAfter.checked !== lanBefore.checked
+
+  if (!opts['first-run-only']) {
+    tap(await waitFor('Cancel', byText('Cancel')))
+    tap(await library('the empty library before following a tracker'))
+    tap(await waitFor('the Settings tracker field', trackerField))
+    enterText(tracker)
+    shell('input keyevent KEYCODE_BACK') // hides the keyboard
+    await advanced()
+    if (opts.bootstrap) {
+      tap(await scrollTo('the DHT bootstrap field', ns => fieldUnder(ns, 'DHT bootstrap')))
+      enterText(opts.bootstrap)
+      shell('input keyevent KEYCODE_BACK')
+    }
+    const lanSwitch = await lanControl()
+    const wantLan = lanBefore.checked && (!opts['private-routing'] || opts.lan)
+    if (lanSwitch.checked !== wantLan) tap(lanSwitch)
+    if (opts['private-routing']) {
+      const privateSwitch = await scrollTo('the private routing switch', switchFor('Private DHT routing'))
+      if (!privateSwitch.checked) tap(privateSwitch)
+    }
+    tap(await scrollTo('Save', ns => ns.find(n => n.text === 'Save')))
+    await fullPlayback()
+  }
+} catch (err) {
+  result.error = String(err?.stack || err)
+} finally {
+  if (installed) adb('uninstall', pkg)
+}
+
+const expected = [
+  'libraryFirst', 'localChannel', 'emptyCta', 'cancelBack', 'systemBack', 'saveEmpty', 'lanSaved',
+  ...(opts['first-run-only'] ? [] : ['listed', ...(opts.lan ? ['lan'] : []), ...(opts['private-routing'] ? ['privateRoute'] : []), 'video', 'clockAdvances', 'audio', 'fullscreen', 'backInPlace', 'backToList'])
+]
 result.passed = !result.error && expected.every(name => checks[name] === true)
 result.finished = new Date().toISOString()
 fs.writeFileSync(path.join(opts.out, 'result.json'), JSON.stringify(result, null, 2) + '\n')

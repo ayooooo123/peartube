@@ -48,7 +48,7 @@ class AppModel(private val app: Application) {
     val error = MutableStateFlow<String?>(null)
     val query = MutableStateFlow("")
     val global = MutableStateFlow(GlobalSearch())
-    val screen = MutableStateFlow<Screen>(if (!settings.value.hasSources) Screen.Settings else Screen.List)
+    val screen = MutableStateFlow<Screen>(Screen.List)
 
     val cast = MutableStateFlow(CastStatus())
     val pendingCast = MutableStateFlow<PendingCast?>(null)
@@ -201,7 +201,7 @@ class AppModel(private val app: Application) {
                 wasPlaying = playing
             }
         }
-        if (settings.value.hasSources) starts.trySend(settings.value)
+        starts.trySend(settings.value)
     }
 
     /** Storage contribution: persisted, then applied to the live worklet. */
@@ -570,7 +570,6 @@ class AppModel(private val app: Application) {
     var playStarted: Boolean = false
 
     private suspend fun refresh() {
-        if (!settings.value.hasSources) return
         try {
             // Keep the worklet's QuickJS thread wide open once video frames are flowing.
             if (screen.value is Screen.Play && playStarted) {

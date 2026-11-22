@@ -290,7 +290,7 @@ Core changes this needs:
 | `src/ui.js` (MusicUX owns it) | "YouTube" before codec/bitrate for `yt:` ids; a source column and filter chips on the search sheet | small |
 | `test/youtube-provider.test.js` (new) | `UBIT_BIN` = a fake script that prints fixed `info` JSON: row mapping, empty → `[]`, failure → `errors[]` while Soulseek results still return, `yt:` id hex equals `album:` hex | ~80 lines |
 
-Checks for whoever implements it: `npm run lint`, `node test/youtube-provider.test.js`, `node test/soulseek-plugin.test.js`, `node test/ui.e2e.js`. Then a live run on the relay: `curl -XPOST :8195/v1/search/sources -d '{"query":"mezmerize","sources":["soulseek","youtube"]}'`.
+Checks for whoever implements it: `npm run lint`, `node test/youtube-provider.test.js`, `node test/soulseek-plugin.test.js`, `node test/ui.e2e.js`. Then a live run on a relay (`RELAY` is its URL; the default port is 8174): `curl -XPOST "${RELAY:-http://127.0.0.1:8174}/v1/search/sources" -d '{"query":"mezmerize","sources":["soulseek","youtube"]}'`.
 
 ## 8. What to cut
 

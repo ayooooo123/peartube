@@ -1590,7 +1590,8 @@ function renderJobs () {
 // numbered from the id, since their titles are usually just the show's name.
 // A replica that has every block holds the file as fully as its owner does.
 const saved = e => e.local || e.cachedBytes >= e.size
-const readableHere = e => Boolean(e && !e.private && !e.locked && saved(e))
+const playable = e => Boolean(e?.streamUrl && !e.locked)
+const readableHere = e => playable(e) && !e.private && saved(e)
 const where = e => saved(e) ? 'Saved here' : e.cachedBytes ? 'Partly saved' : 'On the network'
 function sourceName (key) {
   const s = (S.sources.sources || []).find(x => x.key === key)
@@ -1785,7 +1786,7 @@ const covers = new Map() // tile key -> Promise of an object URL or null
 function albumCover (t) {
   if (!covers.has(t.key)) {
     covers.set(t.key, (async () => {
-      for (const i of t.items.filter(x => readableHere(x.e) && x.e.streamUrl).slice(0, 4)) {
+      for (const i of t.items.filter(x => readableHere(x.e)).slice(0, 4)) {
         const src = await flacPicture(i.e).catch(() => null)
         if (src) return src
       }
@@ -1864,7 +1865,7 @@ const copyQuality = (e, d) => isYt(e) ? YT_LABEL : shortQuality(d)
 const hasYt = t => t.items.some(i => isYt(i.e) || (i.alts || []).some(isYt))
 const allYt = t => t.items.every(i => isYt(i.e) && !(i.alts || []).some(a => !isYt(a)))
 function albumPlayBtn (t) {
-  const list = t.items.map(i => i.e).filter(e => !e.locked)
+  const list = albumTracks(t)
   if (!list.length) return null
   const b = h('button', { class: 'album-play', 'data-album': t.key, 'aria-label': 'Play ' + t.album, onclick: () => (queue.length && (tileOf(queue[queueIndex]) || {}).key === t.key) ? musicToggle() : startQueue(list, list[0], t.title) })
   const ic = h('span', { class: 'btn-ic' })
@@ -3572,6 +3573,7 @@ const resumeAtFor = e => {
   return w && w.dur > 0 && w.at / w.dur < 0.95 ? w.at : 0
 }
 function play (e, at) {
+  if (!playable(e)) return toast('This file is not available to play.')
   openPlayer(e, at == null ? resumeAtFor(e) : at)
 }
 function downloadHref (e, nameOverride) {
@@ -3679,7 +3681,7 @@ function fileRow (label, e, withHealth, labelText) {
   return h('div', null, h('div', { class: 'row-item' },
     h('div', { class: 'grow' }, h('div', { class: 'label' }, label, withHealth ? healthTag(e) : null), h('div', { class: 'meta' }, [size(e.size), where(e), accessNote, from && 'from ' + from].filter(Boolean).join(' · '))),
     h('div', { class: 'acts' },
-      e.locked ? null : h('button', { class: 'btn primary', 'data-play': true, onclick: () => play(e) }, 'Play'),
+      !playable(e) ? null : h('button', { class: 'btn primary', 'data-play': true, onclick: () => play(e) }, 'Play'),
       e.locked ? null : castButton(e),
       e.locked ? null : downloadBtn(e, true, dlName),
       h('button', { class: 'btn quiet', onclick: () => copyText(e.magnetUrl) }, 'Copy link'),
@@ -3741,8 +3743,8 @@ function trackRow (i, t, common) {
   const d = infoData.get(e.key)
   infoEntries.set(e.key, e)
   if (!d && readableHere(e)) loadInfo(e.key)
-  const go = () => isCurrent(e) ? musicToggle() : startQueue(t.items.map(x => x.e), e, t.title)
-  const btn = h('button', { class: 'track-play', 'aria-label': 'Play ' + trackName(e), onclick: ev => { ev.stopPropagation(); go() } }, h('span', { class: 'tn' }, String(i.episode)))
+  const go = () => { if (canQueue(e)) isCurrent(e) ? musicToggle() : startQueue(albumTracks(t), e, t.title) }
+  const btn = h('button', { class: 'track-play', disabled: !canQueue(e), 'aria-label': 'Play ' + trackName(e), onclick: ev => { ev.stopPropagation(); go() } }, h('span', { class: 'tn' }, String(i.episode)))
   btn.insertAdjacentHTML('beforeend', ICON_PLAY + ICON_PAUSE)
   const dl = e.streamUrl ? h('a', { class: 'track-dl', href: downloadHref(e, (trackNo(e) ? trackNo(e) + ' ' : '') + trackName(e) + ' — ' + t.title), download: '', title: 'Download', 'aria-label': 'Download ' + trackName(e) }) : null
   if (dl) dl.innerHTML = ICON_DOWNLOAD
@@ -3906,7 +3908,7 @@ let repeatList = musicStore.repeat === true
 let heldForVideo = false
 let parkedAt = 0
 let musicActivity = Number(musicStore.t) || 0
-const canQueue = e => e && e.streamUrl && !e.locked && e.season != null && e.episode != null && !String(e.id).startsWith('imdb:')
+const canQueue = e => playable(e) && e.season != null && e.episode != null && !String(e.id).startsWith('imdb:')
 const musicPosition = () => audioEl && audioEl.getAttribute('src') ? audioEl.currentTime || 0 : parkedAt
 const musicLength = () => Number.isFinite(audioEl?.duration) ? audioEl.duration : trackSecs(infoData.get(queue[queueIndex]?.key))
 function startQueue (list, start, title, verb = 'Playing') {
@@ -3980,7 +3982,7 @@ function musicToggle () {
     closePlayer()
     heldForVideo = false
     a.play().catch(() => { npState = 'paused'; paintBar() })
-    saveMusic(true)
+    saveMusic(true, true)
     paintBar()
   } else a.pause()
 }
@@ -4064,6 +4066,7 @@ function saveMusic (now, active = false) {
   const vol = audioEl ? audioEl.volume : 1
   musicStore = queue.length ? { keys: queue.map(e => e.key), i: queueIndex, at: musicPosition(), title: queueTitle, t: musicActivity, boundary: queueBoundary, repeat: repeatList, video: heldForVideo, finished: npState === 'done', vol } : { vol, repeat: repeatList }
   try { localStorage.setItem(MUSIC_KEY, JSON.stringify(musicStore)) } catch {}
+  if (now && tab === 'home') renderHome()
 }
 // Restore the same occurrence, even when a song appears twice or a song before it has left the library. Do not
 // assign the stream to an audio element until Play: even a metadata preload could fetch a remote song on a visit.
@@ -4354,7 +4357,7 @@ function paintTag (tag, e, d) {
 }
 const checkFile = e => h('button', { class: 'btn quiet', style: 'margin-left:8px', title: 'Tells peers this title is wanted, as Play does', onclick: ev => act(ev.currentTarget, () => loadInfo(e.key, true)) }, 'Check sources')
 function infoRows (e, d) {
-  if (!d && !readableHere(e)) return [h('div', { class: 'meta' }, 'File details have not been read.', S.settings && !e.locked ? checkFile(e) : null)]
+  if (!d && !readableHere(e)) return [h('div', { class: 'meta' }, 'File details have not been read.', S.settings && playable(e) ? checkFile(e) : null)]
   if (!d) return [h('div', { class: 'meta' }, 'Reading file details…')]
   if (d.error) return [h('div', { class: 'meta err' }, d.error)]
   const rows = []
@@ -4479,7 +4482,7 @@ function renderDetail () {
 
 // ---- An album: its cover stays in view beside the tracks, and what the album is sits above them. What it holds
 // is one line of facts; how it sounds and where it is sit under it, quieter.
-const albumTracks = t => t.items.map(i => i.e).filter(e => !e.locked)
+const albumTracks = t => t.items.map(i => i.e).filter(canQueue)
 function albumFacts (t) {
   const secs = albumSecs(t)
   return [plural(t.items.length, 'track', 'tracks'), secs ? Math.round(secs / 60) + ' min' : ''].filter(Boolean).join(' · ')
@@ -4532,7 +4535,7 @@ function renderArtistPage (box, name) {
   if (!albums.length) { box.replaceChildren(goneNote('artist')); return }
   const label = albums[0].artist || 'Unknown artist'
   const pairs = albums.flatMap(t => t.items.map(i => ({ t, i })))
-  const list = pairs.map(p => p.i.e).filter(e => !e.locked)
+  const list = pairs.map(p => p.i.e).filter(canQueue)
   const shown = artistAll ? pairs : pairs.slice(0, ARTIST_TRACKS)
   box.replaceChildren(h('div', { class: 'page wide' },
     h('div', { class: 'page-head' },
@@ -4557,7 +4560,7 @@ function renderArtistPage (box, name) {
 function songRow (t, i) {
   const e = i.e
   const by = (e.music && e.music.artist) || t.artist || ''
-  const btn = h('button', { class: 'track-play flat', 'aria-label': 'Play ' + trackName(e), onclick: () => isCurrent(e) ? musicToggle() : startQueue(albumTracks(t), e, t.title) })
+  const btn = h('button', { class: 'track-play flat', disabled: !canQueue(e), 'aria-label': 'Play ' + trackName(e), onclick: () => isCurrent(e) ? musicToggle() : startQueue(albumTracks(t), e, t.title) })
   btn.insertAdjacentHTML('beforeend', ICON_PLAY + ICON_PAUSE)
   btn.append(h('span', { class: 'track-name' }, trackName(e)))
   return h('div', { class: 'row-item', 'data-track': e.key, 'data-name': trackName(e) },
@@ -4616,8 +4619,8 @@ function renderTitlePage (box, t) {
       h('h2', { id: 'detailTitle', class: 'page-title big' }, t.title),
       h('div', { class: 'facts' }, [tileLine(t), tileState(t)[0], accessNote, from && 'from ' + from].filter(Boolean).join(' · '))),
     h('div', { class: 'page-acts' },
-      e.locked
-        ? h('span', { class: 'tag warn' }, 'Subscriber pass needed')
+      !playable(e)
+        ? h('span', { class: 'tag warn' }, e.locked ? 'Subscriber pass needed' : 'No playable file')
         : h('button', { class: 'btn primary', 'data-play': true, onclick: () => play(e) }, playIcon(),
           h('span', null, up.verb + (t.kind === 'show' ? ' ' + epWords(up.i) : ''))),
       up.w ? h('span', { class: 'facts quiet' }, timeLeft(up.w.dur - up.w.at)) : null,

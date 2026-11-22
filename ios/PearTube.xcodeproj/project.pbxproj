@@ -15,12 +15,11 @@
 		5FF876E637774FB382C04A04 /* CastScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4857A864DAC2831EC6814560 /* CastScreen.swift */; };
 		6307F6EB476C9997D3D69F28 /* SettingsScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = 12739CFFE5A96DF56DD4CABA /* SettingsScreen.swift */; };
 		7697EF2095410E4EF09D22F5 /* LibraryScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4B9A628BC8CD14A5C6927275 /* LibraryScreen.swift */; };
-		78C1EB0B2C42A71745635785 /* IPC.swift in Sources */ = {isa = PBXBuildFile; fileRef = AF6B7542A184D795B5C17274 /* IPC.swift */; };
-		7EEB25C38B66467FCFED418D /* Worklet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5FA6CE8EB5341FC9958CDC55 /* Worklet.swift */; };
 		821C4A891261A36BE749F134 /* PearTubeApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 94E6D71617B610AF449664AC /* PearTubeApp.swift */; };
 		96E31373BBFD672AD23B5513 /* ParityTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1229757358D33156CBE95036 /* ParityTests.swift */; };
 		A96DCCB47FE96CA902AD0C41 /* QRCode.swift in Sources */ = {isa = PBXBuildFile; fileRef = CA794DF05DA630E07BD6E746 /* QRCode.swift */; };
 		C0E96F8AD43935E19A78AFFA /* fixture.json in Resources */ = {isa = PBXBuildFile; fileRef = 8279B03476355072A7231F11 /* fixture.json */; };
+		D41D0639A126BDD74F67B9D8 /* PearTubeNative.xcframework in Frameworks */ = {isa = PBXBuildFile; fileRef = AF64A0CF16FCFED355100923 /* PearTubeNative.xcframework */; };
 		F310B67A309312AF626D7E76 /* Bonjour.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1CADB987189272EBD0B66D6B /* Bonjour.swift */; };
 /* End PBXBuildFile section */
 
@@ -42,18 +41,28 @@
 		3716ED4FBC67F1A0D2FFC3B9 /* PearTube-Bridging-Header.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = "PearTube-Bridging-Header.h"; sourceTree = "<group>"; };
 		4857A864DAC2831EC6814560 /* CastScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CastScreen.swift; sourceTree = "<group>"; };
 		4B9A628BC8CD14A5C6927275 /* LibraryScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LibraryScreen.swift; sourceTree = "<group>"; };
-		5FA6CE8EB5341FC9958CDC55 /* Worklet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Worklet.swift; sourceTree = "<group>"; };
 		6B785159FD2F01F89A06C325 /* Worker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Worker.swift; sourceTree = "<group>"; };
 		8279B03476355072A7231F11 /* fixture.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = fixture.json; sourceTree = "<group>"; };
 		94E6D71617B610AF449664AC /* PearTubeApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PearTubeApp.swift; sourceTree = "<group>"; };
 		9DB09FF22D2272D8328B6694 /* PearTubeUITests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = PearTubeUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		A8B51B81E7C4A61511DDCF7C /* PearTube.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = PearTube.app; sourceTree = BUILT_PRODUCTS_DIR; };
-		AF6B7542A184D795B5C17274 /* IPC.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IPC.swift; sourceTree = "<group>"; };
+		AF64A0CF16FCFED355100923 /* PearTubeNative.xcframework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.xcframework; name = PearTubeNative.xcframework; path = build/native/PearTubeNative.xcframework; sourceTree = "<group>"; };
 		CA794DF05DA630E07BD6E746 /* QRCode.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QRCode.swift; sourceTree = "<group>"; };
 		D169D9DC7C20208A72DEC729 /* PlayerScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlayerScreen.swift; sourceTree = "<group>"; };
 		D4A17A54BEF06AD8A74C2193 /* AppModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppModel.swift; sourceTree = "<group>"; };
 		EE630C60C7D0BE89C70C3CA9 /* NativePlayer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativePlayer.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		22F2FFCAEF10BFE98CCB3254 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				D41D0639A126BDD74F67B9D8 /* PearTubeNative.xcframework in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
 		12547AA51447B2FBE1604210 /* Runtime */ = {
@@ -62,7 +71,6 @@
 				1CADB987189272EBD0B66D6B /* Bonjour.swift */,
 				3716ED4FBC67F1A0D2FFC3B9 /* PearTube-Bridging-Header.h */,
 				6B785159FD2F01F89A06C325 /* Worker.swift */,
-				937C0C7FD35989A8A2231F51 /* BareKit */,
 			);
 			path = Runtime;
 			sourceTree = "<group>";
@@ -109,15 +117,6 @@
 			path = "build/private-e2e";
 			sourceTree = "<group>";
 		};
-		937C0C7FD35989A8A2231F51 /* BareKit */ = {
-			isa = PBXGroup;
-			children = (
-				AF6B7542A184D795B5C17274 /* IPC.swift */,
-				5FA6CE8EB5341FC9958CDC55 /* Worklet.swift */,
-			);
-			path = BareKit;
-			sourceTree = "<group>";
-		};
 		E2283F428B4A0E429298BFCD = {
 			isa = PBXGroup;
 			children = (
@@ -125,8 +124,17 @@
 				854FF30EC412B01A78307593 /* private-e2e */,
 				12547AA51447B2FBE1604210 /* Runtime */,
 				4711163FE2FBA3DF32F032C4 /* UITests */,
+				F09B077DAEB931BB467325F2 /* Frameworks */,
 				339D7E5F165F545289057D49 /* Products */,
 			);
+			sourceTree = "<group>";
+		};
+		F09B077DAEB931BB467325F2 /* Frameworks */ = {
+			isa = PBXGroup;
+			children = (
+				AF64A0CF16FCFED355100923 /* PearTubeNative.xcframework */,
+			);
+			name = Frameworks;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -155,9 +163,9 @@
 			isa = PBXNativeTarget;
 			buildConfigurationList = CF8D176A240D076364BA82C7 /* Build configuration list for PBXNativeTarget "PearTube" */;
 			buildPhases = (
-				A67644388DACB87916E9A8F3 /* Prepare shared P2P runtime and Rust player */,
+				4F303A53B1FD55947E4A0C23 /* Prepare P2P backend and Rust player */,
 				CA0668709C47D5B9BE582C4C /* Sources */,
-				4DEF0C480BE83039AA1D2DC5 /* Embed worklet and native addons */,
+				22F2FFCAEF10BFE98CCB3254 /* Frameworks */,
 			);
 			buildRules = (
 			);
@@ -220,7 +228,7 @@
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXShellScriptBuildPhase section */
-		4DEF0C480BE83039AA1D2DC5 /* Embed worklet and native addons */ = {
+		4F303A53B1FD55947E4A0C23 /* Prepare P2P backend and Rust player */ = {
 			isa = PBXShellScriptBuildPhase;
 			alwaysOutOfDate = 1;
 			buildActionMask = 2147483647;
@@ -230,26 +238,7 @@
 			);
 			inputPaths = (
 			);
-			name = "Embed worklet and native addons";
-			outputFileListPaths = (
-			);
-			outputPaths = (
-			);
-			runOnlyForDeploymentPostprocessing = 0;
-			shellPath = /bin/sh;
-			shellScript = "set -eu\nsh \"$SRCROOT/embed.sh\"";
-		};
-		A67644388DACB87916E9A8F3 /* Prepare shared P2P runtime and Rust player */ = {
-			isa = PBXShellScriptBuildPhase;
-			alwaysOutOfDate = 1;
-			buildActionMask = 2147483647;
-			files = (
-			);
-			inputFileListPaths = (
-			);
-			inputPaths = (
-			);
-			name = "Prepare shared P2P runtime and Rust player";
+			name = "Prepare P2P backend and Rust player";
 			outputFileListPaths = (
 			);
 			outputPaths = (
@@ -276,7 +265,6 @@
 				27074CB4A400D78EA7EAB627 /* AppModel.swift in Sources */,
 				F310B67A309312AF626D7E76 /* Bonjour.swift in Sources */,
 				5FF876E637774FB382C04A04 /* CastScreen.swift in Sources */,
-				78C1EB0B2C42A71745635785 /* IPC.swift in Sources */,
 				7697EF2095410E4EF09D22F5 /* LibraryScreen.swift in Sources */,
 				43040C3CD1696E0E04CDB374 /* Models.swift in Sources */,
 				0B522A22E564B3F24E58EDC9 /* NativePlayer.swift in Sources */,
@@ -285,7 +273,6 @@
 				A96DCCB47FE96CA902AD0C41 /* QRCode.swift in Sources */,
 				6307F6EB476C9997D3D69F28 /* SettingsScreen.swift in Sources */,
 				34FCEA318F6D31C54AF09B14 /* Worker.swift in Sources */,
-				7EEB25C38B66467FCFED418D /* Worklet.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -335,7 +322,7 @@
 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
 				CODE_SIGN_STYLE = Automatic;
 				COPY_PHASE_STRIP = NO;
-				CURRENT_PROJECT_VERSION = 0.4.43;
+				CURRENT_PROJECT_VERSION = 0.4.44;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
 				ENABLE_NS_ASSERTIONS = NO;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
@@ -349,7 +336,7 @@
 				GCC_WARN_UNUSED_FUNCTION = YES;
 				GCC_WARN_UNUSED_VARIABLE = YES;
 				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
-				MARKETING_VERSION = 0.4.43;
+				MARKETING_VERSION = 0.4.44;
 				MTL_ENABLE_DEBUG_INFO = NO;
 				MTL_FAST_MATH = YES;
 				PRODUCT_BUNDLE_IDENTIFIER = com.peartube.app.dev;
@@ -405,7 +392,7 @@
 				CODE_SIGN_IDENTITY = "iPhone Developer";
 				FRAMEWORK_SEARCH_PATHS = (
 					"$(inherited)",
-					"$(SRCROOT)/build/$(PLATFORM_NAME)/Frameworks",
+					"\"build/native\"",
 				);
 				INFOPLIST_FILE = build/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -418,7 +405,6 @@
 				);
 				OTHER_LDFLAGS = (
 					"$(inherited)",
-					"-framework BareKit",
 					"-lpeartube_ios",
 					"-lc++",
 					"-liconv",
@@ -449,7 +435,7 @@
 				CODE_SIGN_IDENTITY = "iPhone Developer";
 				FRAMEWORK_SEARCH_PATHS = (
 					"$(inherited)",
-					"$(SRCROOT)/build/$(PLATFORM_NAME)/Frameworks",
+					"\"build/native\"",
 				);
 				INFOPLIST_FILE = build/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -462,7 +448,6 @@
 				);
 				OTHER_LDFLAGS = (
 					"$(inherited)",
-					"-framework BareKit",
 					"-lpeartube_ios",
 					"-lc++",
 					"-liconv",
@@ -521,7 +506,7 @@
 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
 				CODE_SIGN_STYLE = Automatic;
 				COPY_PHASE_STRIP = NO;
-				CURRENT_PROJECT_VERSION = 0.4.43;
+				CURRENT_PROJECT_VERSION = 0.4.44;
 				DEBUG_INFORMATION_FORMAT = dwarf;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
 				ENABLE_TESTABILITY = YES;
@@ -541,7 +526,7 @@
 				GCC_WARN_UNUSED_FUNCTION = YES;
 				GCC_WARN_UNUSED_VARIABLE = YES;
 				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
-				MARKETING_VERSION = 0.4.43;
+				MARKETING_VERSION = 0.4.44;
 				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
 				MTL_FAST_MATH = YES;
 				ONLY_ACTIVE_ARCH = YES;

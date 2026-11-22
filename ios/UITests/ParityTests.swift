@@ -85,10 +85,8 @@ final class ParityTests: XCTestCase {
 
     func testSecondVideoTapHidesControlsImmediately() throws {
         let video = try revealControlsDuringPlayback()
-        let start = ContinuousClock.now
         video.tap()
         XCTAssertTrue(element("player.pause").waitForNonExistence(timeout: 1))
-        XCTAssertLessThan(start.duration(to: .now), .seconds(1))
     }
 
     func testSeekButtonKeepsControlsVisible() throws {

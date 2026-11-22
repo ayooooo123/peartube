@@ -803,21 +803,6 @@ export async function createMirrorHost ({
       }
     }
     const slices = [...sliceMap.values()].filter(s => !filterSet || [...s.owners].some(o => filterSet.has(o)))
-    const uniqueBlobs = [...new Set(slices.map(s => s.blobs))]
-    const cores = new Map()
-    await Promise.all(uniqueBlobs.map(async hex => {
-      const c = await node.blobCore(hex).catch(() => null)
-      if (c) cores.set(hex, c)
-    }))
-    slices.sort((a, b) => {
-      if (a.inChannel !== b.inChannel) return a.inChannel ? -1 : 1
-      const ca = cores.get(a.blobs), cb = cores.get(b.blobs)
-      const pa = Boolean(ca && (ca.length >= a.blockOffset + a.blockLength || ca.peers?.some(p => (p.remoteLength || 0) > a.blockOffset)))
-      const pb = Boolean(cb && (cb.length >= b.blockOffset + b.blockLength || cb.peers?.some(p => (p.remoteLength || 0) > b.blockOffset)))
-      if (pa !== pb) return pa ? -1 : 1
-      return a.blobs.localeCompare(b.blobs) || (a.blockOffset - b.blockOffset)
-    })
-
     repState.totalEntries = slices.length
     repState.targetBytes = slices.reduce((sum, s) => sum + s.size, 0)
     let doneEntries = 0
@@ -827,18 +812,40 @@ export async function createMirrorHost ({
     let prunedOnce = false
     let inflightMissingBytes = 0
     const pending = []
+    // One core at a time. The node keeps 24 film cores open and closes the oldest (`blobCore`), so a pass
+    // that opened its whole library first held a closed session for every core but the newest 24: a closed
+    // session reports length 0, and once Hypercore lets that core's peer go, a download through it gets no
+    // block. Each core is opened once here and its slices are counted while that session is open; the worker
+    // takes the core again at the slice's turn.
+    const byCore = new Map()
     for (const s of slices) {
-      const core = cores.get(s.blobs)
-      if (!core) { skippedDead++; continue }
-      const have = await countLocal(core, s.blockOffset, s.blockLength)
-      if (have >= s.blockLength) {
-        doneEntries++
-        doneBytes += s.size
-      } else {
+      const list = byCore.get(s.blobs)
+      if (list) list.push(s)
+      else byCore.set(s.blobs, [s])
+    }
+    for (const [hex, list] of byCore) {
+      if (closed) break
+      const core = await node.blobCore(hex).catch(() => null)
+      if (!core) { skippedDead += list.length; continue }
+      for (const s of list) {
+        const have = await countLocal(core, s.blockOffset, s.blockLength)
+        if (have >= s.blockLength) {
+          doneEntries++
+          doneBytes += s.size
+          continue
+        }
         if (have > 0) doneBytes += Math.min(s.size, Math.round((have / s.blockLength) * s.size))
+        // A slice whose length this node knows, or that a connected peer has, goes before one that nothing vouches for.
+        s.known = core.length >= s.blockOffset + s.blockLength || Boolean(core.peers?.some(p => (p.remoteLength || 0) > s.blockOffset))
         pending.push(s)
       }
     }
+    pending.sort((a, b) => {
+      if (a.inChannel !== b.inChannel) return a.inChannel ? -1 : 1
+      if (a.known !== b.known) return a.known ? -1 : 1
+      return a.blobs.localeCompare(b.blobs) || (a.blockOffset - b.blockOffset)
+    })
+
     repState.replicatedEntries = doneEntries
     repState.replicatedBytes = doneBytes
     repState.skippedDiskFull = 0
@@ -852,10 +859,15 @@ export async function createMirrorHost ({
       while (!closed && replicateEnabled) {
         const s = pending[idx++]
         if (!s) break
-        const core = cores.get(s.blobs)
-        if (!core) continue
         const now = Date.now()
         if ((deadReplicaCores.get(s.blobs) || 0) > now) {
+          skippedDead++
+          repState.skippedUnavailable = skippedDead
+          continue
+        }
+        // The node may have closed the session that the count used: take the core again.
+        let core = await node.blobCore(s.blobs).catch(() => null)
+        if (!core) {
           skippedDead++
           repState.skippedUnavailable = skippedDead
           continue
@@ -872,6 +884,13 @@ export async function createMirrorHost ({
           if (!prunedOnce) {
             prunedOnce = true
             await pruneUnreferencedReplicaBlocks(allItems)
+            // The prune opens every listed core, so the node may have closed this one.
+            core = await node.blobCore(s.blobs).catch(() => null)
+            if (!core) {
+              skippedDead++
+              repState.skippedUnavailable = skippedDead
+              continue
+            }
           }
           if (freeDiskBytes() - inflightMissingBytes - missingBytes < minFreeBytes) {
             skippedFull++

@@ -89,12 +89,13 @@ The UI scenarios check fullscreen-only playback in portrait and landscape, the p
 
 ### First start without an account
 
-`FirstRunTests` checks two launches. The first uses fresh storage and no network arguments. It must show the library and report a running node. The second uses a different empty store. Its only network argument is the test DHT's bootstrap address. Before saving Settings, it must find the test film in global search, report a connected peer, and play the film for at least two seconds. It then saves with no channel, recovery phrase, or source. An older app skipped its initial Settings sheet when it saw a bootstrap argument. The separate first launch makes that regression visible.
+`FirstRunTests` checks first start both with and without a test DHT. A launch with fresh storage and no network arguments must show the library and report a running node. For the search test, the app’s only network argument is the test DHT’s bootstrap address. Before saving Settings, it must find the test film in global search, report a connected peer, and play the film for at least two seconds. It then saves with no channel, recovery phrase, or source. An older app skipped its initial Settings sheet when it saw a bootstrap argument. The separate first launch makes that regression visible.
 
 The simulator DHT run above includes this case. To run only the account-free tests with the search relay on a separate machine, use these steps:
 
 1. On the relay test host, supply a small film that runs for at least 15 seconds. Run `node ios/first-run-network.mjs film.mp4` to check discovery and the SHA-256 of the bytes that a fresh node reads from the search result.
 2. On that host, run `node ios/first-run-network.mjs film.mp4 --serve <test-host-IPv4>`. Keep its input open. Copy the one line of JSON to the Mac as `ios/build/private-e2e/fixture.json`. This file supplies the expected title to XCTest, not a channel or watch link to the app.
+   The JSON gives the fixture address; it does not prove that a searcher can find the film. Before the UI search, XCTest gives a separate launch on the simulator up to 120 seconds to find the exact title through that app’s loopback search API. It then terminates the probe. The measured launch uses fresh storage, submits the title once, and must find the film within the original 120 seconds.
 3. On the Mac, run `node ios/project.mjs`, then:
 
    ```sh
@@ -104,7 +105,7 @@ The simulator DHT run above includes this case. To run only the account-free tes
      -only-testing:PearTubeUITests/FirstRunTests -resultBundlePath ios/build/FirstRun.xcresult test
    ```
 
-Check that all three tests ran and none was skipped. The `first-run-playback` attachment records the peer count and the elapsed time on the native player. Stop the fixture with Ctrl-C, shut down the simulator, and remove the copied JSON.
+Check that all three tests ran and none was skipped. The `first-run-playback` attachment records the peer count and the elapsed time on the native player. After Save, the Library search field must be usable and no PearTube alert may be present. Stop the fixture with Ctrl-C, shut down the simulator, and remove the copied JSON.
 
 Test data is isolated with `-peartube-storage <basename>`. Only `-peartube-e2e` enables `Documents/e2e-state.json`; production launches do not continually write it. Snapshots redact pairing credentials and stream/pairing URLs. Relay/receiver stores, the source pairing fixture, raw XCTest bundles, and unfiltered attachments stay in a private OS temporary directory outside the evidence tree. Xcode temporarily copies the fixture into the UI-test bundle; normal cleanup deletes the generated simulator and physical-device UI-test runner products as well as the private temporary directory, leaving the actual app product and IPA untouched. Only explicitly named safe screenshots and proof records are exported; raw recordings and screenshots of pairing-code entry are not evidence artifacts. If a run is forcibly killed, remove its own private temporary directory and generated UI-test runner products before rerunning.
 

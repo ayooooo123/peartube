@@ -279,11 +279,16 @@ final class FirstRunTests: XCTestCase {
         XCTFail("Could not reach the control")
     }
 
-    private func checkNode(minimumPeers: Int) throws -> Int {
+    private func openNodeDiagnostics() -> XCUIElement {
         requireApp()
         app.buttons["library.hood"].tap()
         let raw = app.staticTexts["hood.rawState"]
         for _ in 0..<12 where !raw.exists { requireApp(); app.swipeUp() }
+        return raw
+    }
+
+    private func checkNode(minimumPeers: Int) throws -> Int {
+        let raw = openNodeDiagnostics()
         var peers = 0
         let running = NSPredicate { _, _ in
             guard raw.exists, let state = try? JSONSerialization.jsonObject(with: Data(raw.label.utf8)) as? [String: Any],
@@ -334,7 +339,47 @@ final class FirstRunTests: XCTestCase {
         XCTAssertEqual(lan.value as? String, changed)
     }
 
-    func testGlobalSearchPlaysWithoutAccount() throws {
+    @MainActor private func waitForFixture(title: String, bootstrap: String) async throws {
+        // Discard the probe's search cache and connections before the measured launch.
+        let deadline = ProcessInfo.processInfo.systemUptime + 120
+        func timeLeft() -> TimeInterval { max(0, deadline - ProcessInfo.processInfo.systemUptime) }
+        launch(bootstrap: bootstrap)
+        defer { app.terminate() }
+        let raw = openNodeDiagnostics()
+        var address: String?
+        let listening = expectation(for: NSPredicate { _, _ in
+            guard raw.exists, let state = (try? JSONSerialization.jsonObject(with: Data(raw.label.utf8))) as? [String: Any] else { return false }
+            address = state["apiUrl"] as? String
+            return address != nil
+        }, evaluatedWith: nil)
+        await fulfillment(of: [listening], timeout: timeLeft())
+        let api = try XCTUnwrap(URL(string: try XCTUnwrap(address)))
+        XCTAssertEqual(api.host, "127.0.0.1")
+        var request = URLRequest(url: api.appendingPathComponent("v1/search/global"))
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONSerialization.data(withJSONObject: ["query": title])
+
+        let finished = XCTestExpectation(description: "Fixture readiness: the probe must find \(title) within 120 seconds")
+        let probe = Task {
+            defer { finished.fulfill() }
+            while true {
+                try Task.checkCancellation()
+                let (data, response) = try await URLSession.shared.data(for: request)
+                guard (response as? HTTPURLResponse)?.statusCode == 200 else { throw URLError(.badServerResponse) }
+                let reply = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+                guard let rows = reply?["results"] as? [[String: Any]] else { throw URLError(.cannotParseResponse) }
+                if rows.contains(where: { $0["title"] as? String == title }) { return }
+                try await Task.sleep(for: .seconds(2))
+            }
+        }
+        let result = await XCTWaiter.fulfillment(of: [finished], timeout: timeLeft())
+        probe.cancel()
+        XCTAssertEqual(result, .completed, finished.expectationDescription)
+        try await probe.value
+    }
+
+    @MainActor func testGlobalSearchPlaysWithoutAccount() async throws {
         guard let url = Bundle(for: Self.self).url(forResource: "fixture", withExtension: "json"),
               let fixture = try JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any],
               let title = fixture["firstRunTitle"] as? String else {
@@ -342,6 +387,7 @@ final class FirstRunTests: XCTestCase {
         }
         let bootstrap = try XCTUnwrap(fixture["bootstrap"] as? String)
         XCTAssertFalse(bootstrap.isEmpty)
+        try await waitForFixture(title: title, bootstrap: bootstrap)
         launch(bootstrap: bootstrap)
         assertEmptyLibrary()
         let search = app.textFields["search.field"]
@@ -362,8 +408,8 @@ final class FirstRunTests: XCTestCase {
             return clock.split(separator: ":").compactMap { Int($0) }.reduce(0) { $0 * 60 + $1 }
         }
         let start = elapsed()
-        expectation(for: NSPredicate { _, _ in elapsed() >= start + 2 }, evaluatedWith: nil)
-        waitForExpectations(timeout: 40)
+        let advanced = expectation(for: NSPredicate { _, _ in elapsed() >= start + 2 }, evaluatedWith: nil)
+        await fulfillment(of: [advanced], timeout: 40)
         XCTAssertFalse(app.staticTexts["player.error"].exists)
         let evidence = XCTAttachment(string: "\(title): \(peers) public peer(s); playback from \(start) to \(elapsed()) seconds.")
         evidence.name = "first-run-playback"; evidence.lifetime = .keepAlways; add(evidence)
@@ -377,6 +423,7 @@ final class FirstRunTests: XCTestCase {
         requireApp(); app.buttons["library.settings"].tap()
         let save = app.buttons["settings.save"]
         scrollTo(save); save.tap()
-        XCTAssertTrue(closeSettings.waitForNonExistence(timeout: 10), "Save rejected the empty account")
+        XCTAssertTrue(closeSettings.waitForNonExistence(timeout: 10) && !app.alerts.firstMatch.exists &&
+                      search.exists && search.isHittable, "Save rejected the empty account")
     }
 }

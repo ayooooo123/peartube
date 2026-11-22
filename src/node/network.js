@@ -194,6 +194,8 @@ export async function createNetwork (ctx) {
     dropTopic(announced, hex)
     dropTopic(lookups, hex)
   }
+  // A reader that looked a title up itself has finished with it: the lookup ends. What this node announces stays announced.
+  const releaseContent = hex => dropTopic(lookups, hex)
   // A complete cached copy seen while the catalog is listed: a relay announces it when a slot is free.
   const offerCopy = hex => { if (announceCache) announceContent(hex, false) }
   for (const s of ctx.blobs.blobSlots) {
@@ -351,8 +353,10 @@ export async function createNetwork (ctx) {
     joinOverlayTopic,
     leaveOverlayTopic,
     announceContent,
+    lookupContent,
     wantContent,
     leaveContent,
+    releaseContent,
     offerCopy,
     joinLanTopic,
     rotateTimer,

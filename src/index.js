@@ -395,6 +395,9 @@ async function openNode ({
     discoveredSources: ctx.catalog.discoveredSources,
     openUri: ctx.catalog.openUri,
     warm: ctx.blobs.warm,
+    // For a copy job that reads a core through `blobCore`: find the core's holders for the time of the read. Neither call announces a title or ends an announce.
+    lookupContent: ctx.net.lookupContent,
+    releaseContent: ctx.net.releaseContent,
     entryHealth: ctx.blobs.entryHealth,
     // Bytes of a file this node holds now, without asking any peer.
     heldBytes: async entry => ctx.blobs.isOwnedBlob(entry.blobs) ? entry.size : ctx.blobs.entryCachedBytes(ctx.blobs.blobCores.get(entry.blobs), entry),

@@ -24,6 +24,10 @@ import { createYoutubePlugin } from './providers/youtube.js'
 // and `.ogg` hold lossless codecs too (ALAC, FLAC), so those stay unknown (`null`), never `false`.
 const LOSSY_FILE = /\.(mp3|aac|opus|wma)$/i
 
+// A slice that p2p-replicate copies is looked up by its core's topic only after it got no block for this long
+// from the peers this node already has.
+const REPLICA_LOOKUP_AFTER_MS = 5000
+
 async function fetchJson (url, headers = {}) {
   const res = await send(url, { headers: { accept: 'application/json', ...headers }, timeoutMs: 60_000, maxBytes: 8 * 1024 * 1024 })
   if (res.status < 200 || res.status >= 300) {
@@ -683,7 +687,7 @@ export async function createMirrorHost ({
   }
 
   // Double-buffered 16 MiB linear windows stay sequential on spinning platters while the pacer spaces them out.
-  async function downloadReplicaSlice (core, slice, minFreeBytes, stallMs, onProgress = null) {
+  async function downloadReplicaSlice (core, slice, minFreeBytes, stallMs, onProgress = null, onQuiet = null) {
     const endBlock = slice.blockOffset + slice.blockLength
     const countHave = () => countLocal(core, slice.blockOffset, slice.blockLength)
     let lastHave = await countHave()
@@ -738,8 +742,11 @@ export async function createMirrorHost ({
             if (freeDiskBytes() < Math.max(minFreeBytes * 0.5, 4 * 1024 * 1024 * 1024)) {
               return { ok: false, reason: 'disk_full' }
             }
-          } else if (Date.now() - lastProgressAt >= stallMs) {
-            return { ok: false, reason: 'stalled' }
+          } else {
+            const quietMs = Date.now() - lastProgressAt
+            if (quietMs >= stallMs) return { ok: false, reason: 'stalled' }
+            // Nothing arrives from the peers this node has: the caller may look for others. Called on every check until a block arrives.
+            if (quietMs >= REPLICA_LOOKUP_AFTER_MS) onQuiet?.()
           }
         }
         if (cur.err || closed) return { ok: false, reason: closed ? 'closed' : 'error' }
@@ -853,6 +860,7 @@ export async function createMirrorHost ({
 
     let idx = 0
     const activeTitles = new Set()
+    const lookedUp = new Map() // core key -> slices of this pass that look it up now
     const workerCount = Math.max(1, Math.min(replicateConcurrency, pending.length))
     async function worker () {
       // Switching replication off stops every worker at its next slice.
@@ -904,6 +912,16 @@ export async function createMirrorHost ({
         repState.activeSlices = activeTitles.size
         repState.activeTitles = [...activeTitles]
         let reportedDelta = 0
+        let looked = false
+        // Peers of this node's own channels serve a core they hold, with no topic. A slice that gets nothing
+        // from them is looked up by its core's topic, so a holder outside those channels is found. A slice
+        // that a connected peer serves is never looked up.
+        const lookUp = () => {
+          if (looked) return
+          looked = true
+          lookedUp.set(s.blobs, (lookedUp.get(s.blobs) || 0) + 1)
+          node.lookupContent?.(s.blobs)
+        }
         try {
           const res = await downloadReplicaSlice(core, s, minFreeBytes, stallMs, nowHave => {
             const curBytes = nowHave >= s.blockLength
@@ -915,7 +933,7 @@ export async function createMirrorHost ({
               reportedDelta = nextDelta
               repState.replicatedBytes = doneBytes
             }
-          })
+          }, lookUp)
           const afterHave = await countLocal(core, s.blockOffset, s.blockLength)
           const afterBytes = afterHave >= s.blockLength
             ? s.size
@@ -945,6 +963,15 @@ export async function createMirrorHost ({
           activeTitles.delete(label)
           repState.activeSlices = activeTitles.size
           repState.activeTitles = [...activeTitles]
+          // The lookup ends with the slice. What this node announces is not touched.
+          if (looked) {
+            const left = lookedUp.get(s.blobs) - 1
+            if (left > 0) lookedUp.set(s.blobs, left)
+            else {
+              lookedUp.delete(s.blobs)
+              node.releaseContent?.(s.blobs)
+            }
+          }
         }
       }
     }

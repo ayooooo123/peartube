@@ -129,7 +129,7 @@ let guardConfig = ''
 let lifecycle = Promise.resolve()
 let mirrorStarting = null
 let mirrorHost = null
-// Set once a node's close() has rejected: that node may still hold the store open.
+// Set once a node's close() has failed: that node may still hold the store open.
 let closeFailure = null
 async function shutdown () {
   if (shuttingDown) return
@@ -143,7 +143,7 @@ async function shutdown () {
   // A stop that failed is not a clean exit: a node that did not close, in this stop or in an earlier restart, may
   // still hold the store open. Say why and exit 1.
   let failure = null
-  try { await stop() } catch (err) { failure = err?.message || String(err) }
+  try { await stop() } catch (err) { failure = reasonOf(err) }
   await guardStopped
   if (failure) console.error(JSON.stringify({ msg: 'relay did not stop cleanly', error: failure }))
   process.exit(failure ? 1 : 0)
@@ -152,6 +152,12 @@ for (const signal of ['SIGINT', 'SIGTERM']) {
   process.on(signal, shutdown)
 }
 
+// Why something failed, as text for the owner. A value that cannot be read still leaves a failure to report.
+function reasonOf (err) {
+  let text = ''
+  try { text = String(err?.message || err) } catch {}
+  return text || 'the reason could not be read'
+}
 const list = value => value.length ? value : null
 const replicateValue = () => cfg('replicate') ? (cfg('replicateSources').length ? cfg('replicateSources') : true) : false
 const lanHost = () => cfg('lanHost') || lanAddress(os.networkInterfaces())
@@ -275,9 +281,9 @@ async function start () {
 
 // The node keeps serving until the plugins have stopped: closing the plugin host first ends a folder import between
 // files, so a reopen waits for one file, not the whole import.
-// A node whose close() rejects may still hold the store open, and no later close can reach it. `stop` rejects with
-// that failure, then and on every later call: a reopen opens no node on the same storage in this process (the caller
-// gets the reason), and shutdown does not exit 0.
+// A node whose close() fails (it rejects, or it throws before it returns its promise) may still hold the store open,
+// and no later close can reach it. `stop` rejects with that failure, then and on every later call: a reopen opens no
+// node on the same storage in this process (the caller gets the reason), and shutdown does not exit 0.
 async function stop () {
   await mirrorHost?.close().catch(() => {})
   await mirrorStarting
@@ -286,9 +292,11 @@ async function stop () {
   mirrorHost = null
   await cast?.close().catch(() => {})
   acquirer?.close()
-  await node?.close().catch(err => {
-    closeFailure = Object.assign(new Error(`The node did not close: ${err?.message || err}. Stop the relay process and start it again.`), { status: 500 })
-  })
+  try {
+    await node?.close()
+  } catch (err) {
+    closeFailure = Object.assign(new Error(`The node did not close: ${reasonOf(err)}. Stop the relay process and start it again.`), { status: 500 })
+  }
   api.notify('update')
   if (closeFailure) throw closeFailure
 }

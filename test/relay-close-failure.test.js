@@ -1,14 +1,18 @@
 // A relay whose node fails to close says so: it opens no other node on the same storage, and it does not exit 0.
 // The node's close() ends at its first part that rejects, so a channel that fails to close leaves the store open.
 // Each case runs bin/relay.js under Bare with its API on loopback and a testnet for its DHT. A probe plugin in its
-// plugins folder makes the channel's close() reject, and prints each plugin host it was loaded for, each call of the
-// channel's close(), its own stop, and at exit whether the node's store was closed.
+// plugins folder makes the node's close fail, and prints each plugin host it was loaded for, each time it fails the
+// close (`close-failed`), its own stop, and at exit whether the node's store was closed. In cases 1 to 5 the probe
+// fails the channel's close(), which the node's close() awaits.
 //   1. A shutdown signal. The relay must print the failure and exit 1 (it used to exit 0 with the store open).
 //   2. POST /v1/restart, twice. Each reply must name the failure, no second node may be opened, and the API must stay
 //      up. A shutdown signal after that must still end in exit 1: the node that failed to close is still open.
 //   3. A settings change that reopens the node. Its reply must carry the failure as its warning.
 //   4. A shutdown signal while a restart is stopping its plugins, before that restart closes the node. The exit must
 //      be 1, although the stop that shutdown itself asks for finds no node to close.
+//   5. The channel rejects with a value that cannot be read: every read of one of its properties throws. The relay
+//      must keep the failure all the same: it refuses both restarts, and the exit is 1.
+//   6. The node's close() throws before it returns a promise. The same must hold as in case 5.
 // Every case also fails when the relay ends by its own 3 s limit instead of exiting by itself.
 // The relay also looks for cast receivers by mDNS on the machine's LAN address, as every relay does; no case uses it.
 // Writes desktop/target/e2e/relay-close-failure-result.json.
@@ -42,22 +46,28 @@ function freePort () {
 }
 
 const reason = 'probe: the channel did not close'
+// What the relay says in place of a reason that it cannot read.
+const unreadableReason = 'the reason could not be read'
 // The probe uses only globals: Bare resolves no package from a plugins folder outside the repository. Its module
 // state lasts as long as the process, so a second node's plugin host calls the same factory again.
-// It leaves the node's own close() in place and fails the channel's, which close() awaits just before the store's.
+// By default it leaves the node's own close() in place and fails the channel's, which close() awaits just before the
+// store's.
+// With `unreadable`, the channel rejects with a value whose every property read throws. With `sync`, the probe
+// replaces the node's close() instead, with a function that throws before it returns a promise.
 // Its stop ends at once, or `holdMs` after the shutdown signal when `holdMs` is given: that holds a restart in its
 // plugin stops until the signal has arrived, however long the signal takes to come.
-const closeFailurePlugin = holdMs => `
+const closeFailurePlugin = ({ holdMs = null, unreadable = false, sync = false }) => `
 const emit = (event, more = {}) => console.log(JSON.stringify({ msg: 'probe', event, at: Date.now(), ...more }))
 const signalled = new Promise(resolve => process.once('SIGTERM', resolve))
 let hosts = 0
 export default function ({ node }) {
   const host = ++hosts
   emit('host', { host })
-  node.channel.close = async () => {
-    emit('channel-close', { host })
-    throw new Error('${reason}')
+  const fail = () => {
+    emit('close-failed', { host })
+    throw ${unreadable ? 'new Proxy({}, { get () { throw new Error(\'probe: this value cannot be read\') } })' : `new Error('${reason}')`}
   }
+  ${sync ? 'node.close = fail' : 'node.channel.close = async () => fail()'}
   process.on('exit', () => emit('exit', { host, storeClosed: node.store.closed }))
   return {
     name: 'probe-close-failure',
@@ -71,11 +81,11 @@ export default function ({ node }) {
 `
 
 // A relay process (bin/relay.js under Bare) on its own testnet, with the probe in its plugins folder.
-async function startRelay (t, holdMs = null) {
+async function startRelay (t, probe = {}) {
   const testnet = await createTestnet(3)
   const storage = mkdtempSync(join(tmpdir(), 'peartube-relay-close-failure-'))
   mkdirSync(join(storage, 'plugins'))
-  writeFileSync(join(storage, 'plugins', 'probe.mjs'), closeFailurePlugin(holdMs))
+  writeFileSync(join(storage, 'plugins', 'probe.mjs'), closeFailurePlugin(probe))
   const apiPort = await freePort()
   const proc = spawn(join(root, 'node_modules/.bin/bare'), [join(root, 'bin/relay.js')], {
     cwd: root,
@@ -142,18 +152,30 @@ const namesOf = run => run.events.map(e => e.event)
 const traceOf = run => `\n${namesOf(run).join(', ') || '(no probe events)'}\n${run.errors.slice(-5).join('\n')}`
 const json = { 'content-type': 'application/json' }
 
-// What every case must show once the relay has ended: one node only, whose channel was asked to close once and whose
-// store was still open at exit, the failure on stderr, and an exit 1 that the relay made itself.
-function checkUncleanExit (run) {
+// What every case must show once the relay has ended: one node only, which was asked to close once and whose store
+// was still open at exit, the failure on stderr with its reason, and an exit 1 that the relay made itself.
+function checkUncleanExit (run, expected = reason) {
   const { code, signal, events, errors } = run
   const trace = traceOf(run)
   assert.deepEqual(events.filter(e => e.event === 'host').map(e => e.host), [1], 'one plugin host: no second node was opened' + trace)
-  assert.equal(events.filter(e => e.event === 'channel-close').length, 1, 'the node was closed once, and its close() reached the channel' + trace)
+  assert.equal(events.filter(e => e.event === 'close-failed').length, 1, 'the node was asked to close once, and that close failed' + trace)
   const exit = events.find(e => e.event === 'exit')
   assert.ok(exit, 'the relay exited by itself' + trace)
   assert.equal(exit.storeClosed, false, 'the store was still open at exit, which is why an exit 0 would be wrong' + trace)
-  assert.equal(errors.filter(l => l.includes('relay did not stop cleanly') && l.includes(reason)).length, 1, 'the relay printed the failure once' + trace)
+  assert.equal(errors.filter(l => l.includes('relay did not stop cleanly') && l.includes(expected)).length, 1, 'the relay printed the failure once' + trace)
   assert.deepEqual({ code, signal }, { code: 1, signal: null }, 'the relay exited 1 by itself' + trace)
+}
+
+// Two restarts in a row. The relay must refuse each one with the failure, and neither may open a second node.
+async function refusedRestarts (relay, result, expected = reason) {
+  for (const attempt of ['first', 'second']) {
+    const res = await fetch(relay.base + '/v1/restart', { method: 'POST', headers: json })
+    const reply = { status: res.status, body: await res.json() }
+    result.replies.push(reply)
+    assert.equal(reply.status, 500, `the ${attempt} restart failed: ${JSON.stringify(reply)}`)
+    assert.ok(String(reply.body.error).includes('The node did not close: ' + expected), `the ${attempt} restart's reply names the failure: ${JSON.stringify(reply)}`)
+    assert.deepEqual(relay.names().filter(n => n === 'host'), ['host'], `no second node after the ${attempt} restart`)
+  }
 }
 
 test('a node that fails to close at shutdown is not a clean exit', { timeout: 120_000 }, async t => {
@@ -169,14 +191,7 @@ test('a node that fails to close at shutdown is not a clean exit', { timeout: 12
 test('a restart whose node fails to close reports it, opens no other node, and the exit is not clean', { timeout: 120_000 }, async t => {
   const result = results.restart = { pass: false, replies: [] }
   const relay = await startRelay(t)
-  for (const attempt of ['first', 'second']) {
-    const res = await fetch(relay.base + '/v1/restart', { method: 'POST', headers: json })
-    const reply = { status: res.status, body: await res.json() }
-    result.replies.push(reply)
-    assert.equal(reply.status, 500, `the ${attempt} restart failed: ${JSON.stringify(reply)}`)
-    assert.ok(String(reply.body.error).includes(reason), `the ${attempt} restart's reply names the failure: ${JSON.stringify(reply)}`)
-    assert.deepEqual(relay.names().filter(n => n === 'host'), ['host'], `no second node after the ${attempt} restart`)
-  }
+  await refusedRestarts(relay, result)
   const status = await fetch(relay.base + '/v1/status')
   assert.equal(status.status, 200, 'the API stays up without a node')
   relay.signal()
@@ -206,7 +221,7 @@ test('a shutdown signal during a restart whose node then fails to close is not a
   const result = results.signalDuringRestart = { pass: false }
   // The plugin stop ends 300 ms after the signal, well inside the 2 s that shutdown gives a restart in flight: the
   // restart closes the node, and the stop that shutdown asks for afterwards finds none.
-  const relay = await startRelay(t, 300)
+  const relay = await startRelay(t, { holdMs: 300 })
   // No reply is expected: shutdown closes the API while the restart runs.
   fetch(relay.base + '/v1/restart', { method: 'POST', headers: json }).catch(() => {})
   await relay.seen('the restart reached the plugin stop', l => l.msg === 'probe' && l.event === 'stop-started')
@@ -214,7 +229,29 @@ test('a shutdown signal during a restart whose node then fails to close is not a
   const run = await relay.ended
   Object.assign(result, run)
   checkUncleanExit(run)
-  const closed = run.events.find(e => e.event === 'channel-close')
+  const closed = run.events.find(e => e.event === 'close-failed')
   assert.ok(closed.msAfterSignal > 0, `the node was closed after the signal (${closed.msAfterSignal} ms)` + traceOf(run))
+  result.pass = true
+})
+
+test('a node-close failure whose reason cannot be read is kept all the same', { timeout: 120_000 }, async t => {
+  const result = results.unreadable = { pass: false, replies: [] }
+  const relay = await startRelay(t, { unreadable: true })
+  await refusedRestarts(relay, result, unreadableReason)
+  relay.signal()
+  const run = await relay.ended
+  Object.assign(result, run)
+  checkUncleanExit(run, unreadableReason)
+  result.pass = true
+})
+
+test('a node whose close() throws before it returns a promise is kept as a failure too', { timeout: 120_000 }, async t => {
+  const result = results.sync = { pass: false, replies: [] }
+  const relay = await startRelay(t, { sync: true })
+  await refusedRestarts(relay, result)
+  relay.signal()
+  const run = await relay.ended
+  Object.assign(result, run)
+  checkUncleanExit(run)
   result.pass = true
 })

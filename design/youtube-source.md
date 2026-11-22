@@ -5,11 +5,11 @@ Status: proposal, 2026-11-20. Research only; nothing in `src/` changed.
 ## Verdict
 
 - **ubit can already search YouTube.** The shipped `bare-ubit` WASM build answers `info --json 'ytsearch:<query>'` with up to about 20 videos in about 3 s. No new extractor is needed for YouTube search, and none should be written in JS.
-- **YouTube Music is not a v1 source.** YouTube Music is not offered in every region. In a test from a region without it, it said "not available in your area", its catalog search returned only user profiles, user playlists and podcasts, and the song and album filters returned "No results". ubit has no YouTube Music client either. Leave it out until a relay with YouTube Music access can test it.
+- **YouTube Music is not a v1 source.** In one test, YouTube Music said "not available in your area", its catalog search returned only user profiles, user playlists and podcasts, and the song and album filters returned "No results". ubit has no YouTube Music client either. Leave it out until a relay with YouTube Music access can test it.
 - **Smallest honest implementation:** a `youtube` provider in `src/providers/youtube.js` built on `ubitInfo` and `downloadPage`, which already exist in `src/identify.js`. Albums get the id namespace `yt:<20hex>`. The library labels them "YouTube · AAC 128 kbps". A new route, `POST /v1/search/sources`, runs every requested provider's existing `search` with `Promise.allSettled`.
 
 Evidence used throughout:
-- ubit source: `github.com/ayooooo123/ubit` at commit `a243219`; paths below are relative to that repository.
+- ubit source: `github.com/ayooooo123/ubit` at commit `a243219`; paths below are relative to that repository. The short names `extractors.hpp`, `models.hpp`, `main.cpp` and `engine.hpp` are files in `linux/src/`.
 - NewPipe: `github.com/TeamNewPipe/NewPipeExtractor`, pinned to commit `85025eebd6d07090dd6b7da216528d5fa2943b8f` and cited below as `NP/<file>#Lx-Ly`. Base URL: `https://github.com/TeamNewPipe/NewPipeExtractor/blob/85025eebd6d07090dd6b7da216528d5fa2943b8f/extractor/src/main/java/org/schabi/newpipe/extractor/services/youtube/`.
 
 ---
@@ -184,7 +184,7 @@ YouTube-sourced albums use the id **`yt:<hex>`**, and tracks use `yt:<hex>:sDDeT
 Why:
 - **No collision with `mb:`, `discogs:` or `album:`.** The prefixes are different, so a YouTube copy can never answer `GET /v1/search?id=mb:<release>:s01e03` or a global search for a MusicBrainz release. Someone asking for a release does not silently get 128 kbps AAC. Matching a YouTube upload to a MusicBrainz release is a claim the relay cannot check: track count, edition, remaster.
 - **Still groups correctly.** The library tile is decided by artist + album name in `mergeAlbums` (`src/ui.js`), not by release id. So the `yt:` album and a lossless `mb:` album of the same record become one tile, and each track shows its copies. The `yt:<hex>` ↔ `album:<hex>` match is a deterministic cross-reference without a lookup.
-- **Two relays agree.** It depends only on artist/album/year, not on a YouTube Music browse id, which a relay in a region without YouTube Music cannot fetch (§6, R3).
+- **Two relays agree.** It depends only on artist/album/year, not on a YouTube Music browse id, which a relay may be unable to fetch (§6, R3).
 - **Not used:** YouTube Music `MPREb_…` / `OLAK5uy_…` ids. They contain uppercase letters, `_` and `-`, so `ID` would reject them without hashing. They are geo-dependent. And hashing them gives a second id for the same album on any relay that cannot see YouTube Music.
 
 Core changes this needs:
@@ -257,7 +257,7 @@ Core changes this needs:
   - When videos flip, ubit search returns nothing and throws `No YouTube results` (`extractors.hpp:437`), which **cannot be told apart from a real empty result**.
   - Mitigation in the provider: `info()` reports `lastSearchAt`, `lastResultCount` and `emptyStreak`. Three empty results in a row for queries longer than 3 characters → `status: 'degraded'` with the message "YouTube search returned nothing 3 times; the extractor may be out of date". Fix upstream (§1, change 2).
 - **R3 · Geo and datacenter egress.**
-  - From a region without YouTube Music, `https://music.youtube.com/?ucbcb=1` serves "YouTube Music is not available in your area".
+  - In one test, `https://music.youtube.com/?ucbcb=1` served "YouTube Music is not available in your area".
   - WEB_REMIX search with NewPipe's current version `1.20260804.16.00` returns only Profile, Playlist and Podcast rows. The song and album `params` return `messageRenderer` "No results". Literal and decoded `%3D` both fail, and so do the old `EgWKAQ…` params.
   - YouTube web search and the download worked from the same IP. This is why YouTube Music is cut from v1.
   - Per-video geo blocks show up as the player's `reason`. NewPipe tells them apart by text: "country", "Music Premium", "members", "payment" (`NP/extractors/YoutubeStreamExtractor.java#L869-L927`). ubit passes the last reason through (`extractors.hpp:520-524`). Show it verbatim on the job.
@@ -290,11 +290,11 @@ Core changes this needs:
 | `src/ui.js` (MusicUX owns it) | "YouTube" before codec/bitrate for `yt:` ids; a source column and filter chips on the search sheet | small |
 | `test/youtube-provider.test.js` (new) | `UBIT_BIN` = a fake script that prints fixed `info` JSON: row mapping, empty → `[]`, failure → `errors[]` while Soulseek results still return, `yt:` id hex equals `album:` hex | ~80 lines |
 
-Checks for whoever implements it: `npm run lint`, `node test/youtube-provider.test.js`, `node test/soulseek-plugin.test.js`, `node test/ui.e2e.js`. Then a live run on a relay (`RELAY` is its URL; the default port is 8174): `curl -XPOST "${RELAY:-http://127.0.0.1:8174}/v1/search/sources" -d '{"query":"mezmerize","sources":["soulseek","youtube"]}'`.
+Checks for whoever implements it: `npm run lint`, `node test/youtube-provider.test.js`, `node test/soulseek-plugin.test.js`, `node test/ui.e2e.js`. Then a live run on a relay (`RELAY` is its URL; the default port is 8174): `curl --fail-with-body -XPOST "${RELAY:-http://127.0.0.1:8174}/v1/search/sources" -d '{"query":"mezmerize","sources":["soulseek","youtube"]}'`. A relay that has an API token answers 401 unless the request carries the token. Read the reply: the run passes only if it holds results.
 
 ## 8. What to cut
 
-- **YouTube Music search.** It is not offered in every region (§6, R3), the `params` blobs already fail, and it needs a second client (WEB_REMIX). Revisit as `ytmsearch:` inside ubit, with an availability probe that hits `music/get_search_suggestions` the way `NP/YoutubeParsingHelper.java#L622-L661` does.
+- **YouTube Music search.** It was not available in one test (§6, R3), the `params` blobs already fail, and it needs a second client (WEB_REMIX). Revisit as `ytmsearch:` inside ubit, with an availability probe that hits `music/get_search_suggestions` the way `NP/YoutubeParsingHelper.java#L622-L661` does.
 - A JS InnerTube client, pagination/continuations, "did you mean".
 - Signature/n-param/poToken work, cookies, age-gate bypass.
 - Guessing album metadata from video titles ("Artist - Song (Official Audio)"); MusicBrainz matching for YouTube albums.

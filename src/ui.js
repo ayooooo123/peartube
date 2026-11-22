@@ -210,7 +210,7 @@ export const page = `<!doctype html>
   .page-acts { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin: 18px 0 6px; }
   .page-acts .btn.primary { min-width: 128px; }
   .page-body { padding-top: 14px; }
-  .eyebrow { font-size: 11px; font-weight: 700; letter-spacing: .1em; text-transform: uppercase; color: var(--dim); margin-bottom: 6px; }
+  .eyebrow { font-size: 12px; font-weight: 700; color: var(--dim); margin-bottom: 6px; }
   .page-title.big { font-size: 32px; line-height: 1.15; margin: 0 0 6px; }
   .page-by { display: inline-block; margin-bottom: 6px; color: var(--text); font-weight: 600; font-size: 15px; text-decoration: none; }
   .page-by:hover { text-decoration: underline; }
@@ -412,7 +412,6 @@ export const page = `<!doctype html>
   .fp-caption h2, .fp-head h2 { margin: 4px 0; line-height: 1.15; overflow-wrap: anywhere; }
   .fp-head h2 { font-size: clamp(26px,4vw,48px); }
   .fp-caption .meta:empty { display: none; }
-  .fp-eyebrow { letter-spacing: .08em; text-transform: uppercase; }
   #fpSeek { width: 100%; margin: 8px 0 0; accent-color: var(--text); }
   .fp-times { justify-content: space-between; }
   #fpControls { margin: 12px 0; justify-content: center; gap: clamp(4px,1vw,16px); }
@@ -518,7 +517,7 @@ export const page = `<!doctype html>
   .artist-card:focus-visible .stack { outline: 2px solid var(--ring); outline-offset: 3px; border-radius: var(--r-card); }
   .sleeve.xl { width: 100%; height: auto; aspect-ratio: 1; border-radius: var(--r-panel); box-shadow: inset 0 0 0 1px rgba(255,255,255,.1), 0 24px 50px rgba(0,0,0,.34); }
   .sleeve.xl .sleeve-mono { font-size: 84px; }
-  .disc-head { font-size: 12px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; color: var(--dim); margin: 18px 0 6px; }
+  .disc-head { font-size: 12px; font-weight: 700; color: var(--dim); margin: 18px 0 6px; }
   .rows.tracks .row-item { gap: 12px; padding: 6px 8px; border-top: 0; border-radius: var(--r-control); cursor: pointer; }
   .rows.tracks .row-item:hover { background: var(--raised); }
   .rows.tracks .row-item.now { background: var(--brand-soft); padding: 6px 8px; }
@@ -1864,10 +1863,14 @@ const copyQuality = (e, d) => isYt(e) ? YT_LABEL : shortQuality(d)
 // An album that holds a YouTube copy beside another one (rows playing it, or kept as a second copy of a row).
 const hasYt = t => t.items.some(i => isYt(i.e) || (i.alts || []).some(isYt))
 const allYt = t => t.items.every(i => isYt(i.e) && !(i.alts || []).some(a => !isYt(a)))
+function toggleAlbum (t) {
+  if (tileOf(queue[queueIndex])?.key === t.key) musicToggle()
+  else startQueue(albumTracks(t), null, t.title)
+}
 function albumPlayBtn (t) {
-  const list = albumTracks(t)
-  if (!list.length) return null
-  const b = h('button', { class: 'album-play', 'data-album': t.key, 'aria-label': 'Play ' + t.album, onclick: () => (queue.length && (tileOf(queue[queueIndex]) || {}).key === t.key) ? musicToggle() : startQueue(list, list[0], t.title) })
+  if (!t.items.some(i => canQueue(i.e))) return null
+  const label = 'Play ' + t.album
+  const b = h('button', { class: 'album-play', 'data-album': t.key, 'aria-label': label, title: label, onclick: () => toggleAlbum(t) })
   const ic = h('span', { class: 'btn-ic' })
   ic.innerHTML = ICON_PLAY + ICON_PAUSE
   b.append(ic)
@@ -4253,7 +4256,12 @@ function paintRows () {
     const mine = Boolean(curTile) && btn.dataset.album === curTile
     const icons = btn.querySelector('.btn-ic')
     if (icons) icons.classList.toggle('on', mine && playing)
-    if (btn.lastChild !== icons) btn.lastChild.textContent = !mine ? 'Play' : playing ? 'Pause' : 'Resume'
+    const action = !mine ? 'Play' : playing ? 'Pause' : 'Resume'
+    if (btn.lastChild !== icons) musicText(btn.lastChild, action)
+    else {
+      const label = action + ' ' + btn.closest('.album-card').querySelector('.album-name').textContent
+      if (btn.title !== label) { btn.title = label; btn.setAttribute('aria-label', label) }
+    }
   }
 }
 // Use the same commands and the same labels for the dock, full player and media keys. Only fixed icon paths go
@@ -4513,7 +4521,7 @@ function renderAlbumPage (box, t) {
       allYt(t) ? h('div', { class: 'tag-row' }, h('span', { class: 'tag' }, 'Lossy')) : null,
       h('div', { class: 'facts quiet', 'data-ay': t.key, hidden: !also }, also)),
     h('div', { class: 'page-acts' },
-      list.length ? h('button', { class: 'btn primary', 'data-album': t.key, onclick: () => tileOf(queue[queueIndex])?.key === t.key ? musicToggle() : startQueue(list, list[0], t.title) }, playIcons(), h('span', null, 'Play')) : null,
+      list.length ? h('button', { class: 'btn primary', 'data-album': t.key, onclick: () => toggleAlbum(t) }, playIcons(), h('span', null, 'Play')) : null,
       list.length > 1 ? h('button', { class: 'btn', onclick: () => startQueue(shuffled(list), null, t.title) }, 'Shuffle') : null,
       moreMenu('More', [...queueOptions(list, t.title), albumDeleteBtn(t)])),
     h('div', { class: 'page-body' },

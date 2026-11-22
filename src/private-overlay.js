@@ -227,7 +227,11 @@ export async function createPrivateGuard ({
 } = {}) {
   const bindHost = host ?? (isLocalBootstrap(host, bootstrap) ? '127.0.0.1' : undefined)
   const keyPair = HyperDHT.keyPair(seed || rand(32))
-  const dht = new HyperDHT({ host: bindHost, bootstrap, port, ephemeral: false, firewalled: false })
+  // A guard behind a NAT or a firewall with no inbound rule (a cloud task, a home router) must not say it is open:
+  // HyperDHT then tells every client to dial it directly and skip the holepunch, and their packets never arrive.
+  // Only a loopback testnet has no NAT for certain; everywhere else HyperDHT finds out for itself.
+  const open = isLocalBootstrap(host, bootstrap)
+  const dht = new HyperDHT({ host: bindHost, bootstrap, port, ...(open ? { ephemeral: false, firewalled: false } : {}) })
   await dht.ready()
 
   const routes = new Map(), rvTopics = new Map(), activeCircuits = new Set(), sessions = new Set(), hopPeers = new Map()
@@ -240,7 +244,8 @@ export async function createPrivateGuard ({
     return diversityBucketForAddress(h, raw?.remotePort, allowLoopback)
   }
   const ownDiversityBucket = () => {
-    const ownAddr = dht.remoteAddress() || (allowLoopback ? server.address() : null)
+    // A firewalled guard has no remoteAddress(), but HyperDHT still knows the public host it is seen from.
+    const ownAddr = dht.remoteAddress() || (dht.host ? { host: dht.host, port: dht.port } : null) || (allowLoopback ? server.address() : null)
     return ownAddr?.host ? diversityBucketForAddress(resolveAddress ? resolveAddress(ownAddr.host, ownAddr.port, keyPair.publicKey) : ownAddr.host, ownAddr.port, allowLoopback) : null
   }
 

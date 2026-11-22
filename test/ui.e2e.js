@@ -89,11 +89,12 @@ function variableAspectClip () {
   rmSync(dir, { recursive: true, force: true })
   return bytes
 }
-// An album folder for the import folder: one tagged 8 s FLAC tone per track, `[name, hertz, name in the file name]`.
-function flacAlbum (dir, artist, album, tracks) {
+// An album folder for the import folder: one tagged FLAC tone per track, `[name, hertz, name in the file name]`.
+// `secs` is how long each track plays; the checks that play a whole queue need tracks that outlast them.
+function flacAlbum (dir, artist, album, tracks, secs = 8) {
   mkdirSync(dir, { recursive: true })
   tracks.forEach(([name, hz, file = name], i) => {
-    execFileSync('ffmpeg', ['-loglevel', 'error', '-y', '-f', 'lavfi', '-i', `sine=frequency=${hz}:sample_rate=44100:duration=8`, '-metadata', 'title=' + name, '-metadata', 'artist=' + artist,
+    execFileSync('ffmpeg', ['-loglevel', 'error', '-y', '-f', 'lavfi', '-i', `sine=frequency=${hz}:sample_rate=44100:duration=${secs}`, '-metadata', 'title=' + name, '-metadata', 'artist=' + artist,
       '-metadata', 'album=' + album, '-metadata', 'track=' + (i + 1), join(dir, `0${i + 1} - ${file}.flac`)])
   })
 }
@@ -242,12 +243,22 @@ async function launchBrowser () {
   const requests = []
   // Each request's life, by CDP request id, so a slow page load can name the request it waited on.
   const net = new Map()
+  let replies = null
   ws.onmessage = ev => {
     const m = JSON.parse(ev.data)
     if (m.id && pending.has(m.id)) {
       const { resolve, reject } = pending.get(m.id)
       pending.delete(m.id)
       m.error ? reject(new Error(m.error.message)) : resolve(m.result)
+      return
+    }
+    if (m.method === 'Fetch.requestPaused') {
+      const id = m.params.requestId
+      const body = replies?.get(m.params.request.url)
+      const done = body == null ? send('Fetch.continueRequest', { requestId: id }) : send('Fetch.fulfillRequest', {
+        requestId: id, responseCode: 200, responseHeaders: [{ name: 'Content-Type', value: 'application/json' }], body
+      })
+      done.catch(err => issues.push('test HTTP reply: ' + err.message))
       return
     }
     if (m.method === 'Runtime.consoleAPICalled' && (m.params.type === 'error' || m.params.type === 'warning')) issues.push(m.params.type + ': ' + m.params.args.map(a => a.value ?? a.description).join(' '))
@@ -312,6 +323,12 @@ async function launchBrowser () {
     },
     async hide () { blank = blank || JSON.parse(await devtools('/json/new?about:blank', 'PUT')).id; await devtools('/json/activate/' + blank) },
     async show () { await devtools('/json/activate/' + target.id) },
+    // Answer only these exact test URLs. All other requests still go to the relay, and the page runs unchanged.
+    async withJson (routes, fn) {
+      replies = new Map(Object.entries(routes).map(([url, data]) => [url, Buffer.from(JSON.stringify(data)).toString('base64')]))
+      await send('Fetch.enable', { patterns: [...replies.keys()].map(urlPattern => ({ urlPattern })) })
+      try { return await fn() } finally { await send('Fetch.disable'); replies = null }
+    },
     send,
     evaluate,
     async close () {
@@ -322,6 +339,12 @@ async function launchBrowser () {
     }
   }
 }
+
+// What a reader can see, and the name a control carries: its label when it is an icon, else its words. Both are
+// source for Runtime.evaluate, so every check reads the page the way a reader and a screen reader do.
+const VIS = `(e => { if (!e) return false; const r = e.getBoundingClientRect(); return r.width > 0 && r.height > 0 && getComputedStyle(e).visibility !== 'hidden' })`
+const NAME = `(e => (e.getAttribute('aria-label') || e.innerText || e.textContent || '').trim().replace(/\\s+/g, ' '))`
+const seen = selector => `${VIS}(document.querySelector(${JSON.stringify(selector)}))`
 
 // One tab driven as a reader drives it: real pointer presses and typed text, and the taste gates. `clicks` counts the
 // presses, for the checks that count the way to an intent.
@@ -357,6 +380,27 @@ function drive (browser, base, result, shots) {
       })()`)
       if (found) return click(`[data-e2e="${mark}"]`)
       assert.ok(Date.now() < end, 'control "' + text + '" in ' + scope)
+      await sleep(100)
+    }
+  }
+  // The same, by the name a control carries. An icon-only control has its name on aria-label, which is what the
+  // design asks for and what a reader hears; `clickText` sees only words. `whole` false matches the name's start.
+  async function clickName (name, scope = 'body', whole = true) {
+    const end = Date.now() + 5000
+    for (;;) {
+      const mark = 'e2e-' + Math.random().toString(36).slice(2)
+      const found = await evaluate(`(() => {
+        const sel = ${JSON.stringify(scope)}
+        const els = [...document.querySelectorAll(sel + ' button, ' + sel + ' a, ' + sel + ' label.switch, ' + sel + ' [role=menuitem], ' + sel + ' [role=button]')]
+        const want = ${JSON.stringify(name)}
+        const e = els.filter(x => ${VIS}(x)).find(x => ${whole ? 'true' : 'false'} ? ${NAME}(x) === want : ${NAME}(x).startsWith(want))
+        if (!e) return false
+        e.setAttribute('data-e2e', ${JSON.stringify(mark)})
+        e.scrollIntoView({ block: 'center' })
+        return e.getBoundingClientRect().width > 0
+      })()`)
+      if (found) return click(`[data-e2e="${mark}"]`)
+      assert.ok(Date.now() < end, 'control named "' + name + '" in ' + scope)
       await sleep(100)
     }
   }
@@ -433,7 +477,7 @@ function drive (browser, base, result, shots) {
     assert.deepEqual(audit.stray, [], where + ': a missing value printed as text')
     return audit
   }
-  return Object.assign(ui, { center, click, clickText, type, press, waitFor, waitApi, viewport, open, goTab, shot, tasteAudit })
+  return Object.assign(ui, { center, click, clickText, clickName, type, press, waitFor, waitApi, viewport, open, goTab, shot, tasteAudit })
 }
 
 test('relay web UI: settings, plugins as intents, identification, music sources, and taste gates', { timeout: 420_000 }, async () => {
@@ -474,7 +518,7 @@ test('relay web UI: settings, plugins as intents, identification, music sources,
   const browser = await launchBrowser()
   const { evaluate, send } = browser
   const ui = drive(browser, base, result, shotDir)
-  const { click, clickText, type, waitFor, waitApi, viewport, open, goTab, shot, tasteAudit } = ui
+  const { click, clickText, clickName, type, waitFor, waitApi, viewport, open, goTab, shot, tasteAudit } = ui
   const entries = async () => (await getJson('/v1/entries')).results
 
   try {
@@ -630,9 +674,11 @@ test('relay web UI: settings, plugins as intents, identification, music sources,
     assert.ok(info.split('\n').includes('HealthPlays from this relay'), 'the relay\'s own copy plays from the relay: ' + info)
     result.checks.fileInfo = info
     await evaluate(`(() => { window.__modalCopied = ''; document.addEventListener('copy', ev => { window.__modalCopied = ev.clipboardData?.getData('text/plain') || '' }, false); return true })()`)
+    // A page keeps its less-used actions behind More: open it, then copy.
+    await clickName('More', '#detail', false)
     await clickText('Copy link', '#detail')
     const modalCopied = await evaluate(`window.__modalCopied`)
-    assert.match(modalCopied, /^peartube:\/\/watch\//, 'Copy link inside open <dialog> must populate clipboardData over plain HTTP')
+    assert.match(modalCopied, /^peartube:\/\/watch\//, 'Copy link on a title page must populate clipboardData over plain HTTP')
     // A watch link names its public channel, so whoever opens it joins that channel's swarm and finds the peers
     // that cached the video (only publishers and relays announce a video itself).
     const linkStatus = await getJson('/v1/status')
@@ -784,7 +830,7 @@ test('relay web UI: settings, plugins as intents, identification, music sources,
     await waitFor(`[...document.querySelectorAll('#albums .album-card .album-name')].some(n => n.textContent === 'First Light')`, 'album on the Listen shelf')
     await evaluate(`[...document.querySelectorAll('#albums .album-card')].find(c => c.querySelector('.album-name').textContent === 'First Light').querySelector('.album-open').setAttribute('data-e2e', 'album'); true`)
     await click('[data-e2e="album"]')
-    await waitFor(`!!document.querySelector('#detail[open] [data-album]')`, 'album sheet')
+    await waitFor(seen('#detail [data-album]'), 'album page')
     await click('#detail [data-album]')
     await waitFor(`!!audioEl && audioEl.currentTime > 1 && !$('np').hidden`, 'album playing in the bar', 20_000)
     const bar = await evaluate(`({ pos: $('npQText').textContent, title: $('npTitle').textContent, seek: Number($('npSeek').value), at: audioEl.currentTime })`)
@@ -1040,7 +1086,7 @@ test('relay web UI: settings, plugins as intents, identification, music sources,
     // A started button follows its job, and gets its normal state back when the job leaves the list (dismissed or
     // trimmed) once a list asked for after the start says so; a list older than the start changes nothing.
     const sync = await evaluate(`(() => {
-      const mk = key => h('button', { 'data-src-key': key, 'data-label': 'Mirror' }, 'Mirror')
+      const mk = key => h('button', { 'data-src-key': key, 'data-label': 'Save album' }, 'Save album')
       const gone = mk('s:e2e-gone'), early = mk('s:e2e-early')
       slskStarted.set('e2e-gone', { id: 'e2e-none', at: S.jobsAsked - 1 })
       slskStarted.set('e2e-early', { id: 'e2e-none', at: S.jobsAsked + 1 })
@@ -1049,7 +1095,7 @@ test('relay web UI: settings, plugins as intents, identification, music sources,
       slskStarted.delete('e2e-early')
       return out
     })()`)
-    assert.deepEqual(sync, ['Mirror', false, false, 'Mirroring', true], 'a peer mirror that left the list gives its button back')
+    assert.deepEqual(sync, ['Save album', false, false, 'Saving', true], 'a finished save releases its button; a request from before the save does not')
     await viewport(1440, 900, 'dark')
     await evaluate('scrollTo(0, 0); true')
 
@@ -1112,10 +1158,10 @@ test('relay web UI: settings, plugins as intents, identification, music sources,
     result.checks.dismissedJobButton = { followed, after: await evaluate(`${dawnSave}.textContent`) }
     await open('#music')
     const card = name => `[...document.querySelectorAll('#albums .album-card')].find(c => c.querySelector('.album-name').textContent === '${name}')`
-    await waitFor(`${card('Morning')}?.querySelector('[data-aq]').textContent === 'YouTube · AAC 128 kbps'`, 'YouTube album labelled on the shelf')
+    await waitFor(`!!${card('Morning')}`, 'the YouTube album on the shelf')
     await evaluate(`${card('Morning')}.querySelector('.album-open').setAttribute('data-e2e', 'morning'); true`)
     await click('[data-e2e="morning"]')
-    await waitFor(`document.querySelector('#detail[open] [data-av]')?.textContent === 'From YouTube · AAC 128 kbps'`, 'YouTube album sheet verdict')
+    await waitFor(`${seen('#detail [data-av]')} && document.querySelector('#detail [data-av]').textContent === 'From YouTube · AAC 128 kbps'`, 'YouTube album page verdict')
     assert.equal(await evaluate(`/lossless/i.test($('detailBody').innerText)`), false, 'nothing on a YouTube album says lossless')
     await shot('album-youtube-1440-dark', true, srcShotDir)
     await click('#detailClose')
@@ -1150,9 +1196,7 @@ test('relay web UI: settings, plugins as intents, identification, music sources,
     const ytDawn = await waitApi(async () => (await entries()).find(e => e.title === 'Test Band · First Light' && e.id.startsWith('yt:')), 'YouTube copy of a FLAC track')
     assert.equal(ytDawn.episode, 1, 'the copy takes the FLAC track\'s number')
     await open('#music')
-    await waitFor(`/^FLAC 16-bit 44.1 kHz · also YouTube$/.test(${card('First Light')}?.querySelector('[data-aq]').textContent || '')`, 'merged album says what it is, then also YouTube')
-    assert.equal(await evaluate(`(() => { const yt = ${card('First Light')}.querySelector('.aq-yt'); const line = yt.parentElement.getBoundingClientRect(); const r = yt.getBoundingClientRect(); return r.width > 0 && r.right <= line.right + 0.5 })()`), true, '"also YouTube" is never cut off on the card')
-    assert.equal(await evaluate(`document.querySelectorAll('#albums .album-card').length`), 2, 'the YouTube copy joins the FLAC album, not a new one')
+    await waitFor(`${card('First Light')} && document.querySelectorAll('#albums .album-card').length === 2`, 'the YouTube copy joins the FLAC album, not a new one')
     // Saving the same video into that album again: its row says it is already here from YouTube and Save sends
     // nothing, until the owner ticks "Save again".
     await ytSearch('test band')
@@ -1176,7 +1220,9 @@ test('relay web UI: settings, plugins as intents, identification, music sources,
     await waitFor(`!$('tab-listen').hidden`, 'back on Listen', 5000)
     await evaluate(`${card('First Light')}.querySelector('.album-open').setAttribute('data-e2e', 'merged'); true`)
     await click('[data-e2e="merged"]')
-    await waitFor(`(document.querySelector('#detail[open] [data-ay]')?.textContent || '').includes('FLAC plays first')`, 'merged sheet says which copy plays', 20_000)
+    await waitFor(`(document.querySelector('#detail [data-ay]')?.textContent || '').includes('FLAC plays first')`, 'merged album page says which copy plays', 20_000)
+    assert.equal(await evaluate(`document.querySelector('#detail [data-av]').textContent`), 'FLAC 16-bit 44.1 kHz', 'the merged album says what it is before what else it holds')
+    assert.equal(await evaluate(`(() => { const ay = document.querySelector('#detail [data-ay]'); const box = $('detailBody').getBoundingClientRect(); const r = ay.getBoundingClientRect(); return r.width > 0 && r.right <= box.right + 0.5 })()`), true, 'what else the album holds is never cut off')
     assert.equal(await evaluate(`[...document.querySelectorAll('#detailBody [data-q]')].some(m => m.textContent === 'Also from YouTube')`), true, 'the track with a YouTube copy says so')
     // Its trash names the copy it removes, and the YouTube copy has a control of its own.
     const dawnRow = `document.querySelector('#detailBody [data-track][data-name="Dawn"]')`
@@ -1187,9 +1233,10 @@ test('relay web UI: settings, plugins as intents, identification, music sources,
     await click('#detailBody [data-track][data-name="Dawn"] .track-alt-del')
     await click('#detailBody [data-track][data-name="Dawn"] .track-alt-del')
     await waitApi(async () => { const list = await entries(); return !list.some(e => e.key === ytDawn.key) && list.some(e => e.title === 'Test Band · First Light' && !e.id.startsWith('yt:') && e.episode === 1) }, 'only the YouTube copy removed')
+    await waitFor(`document.querySelector('#detail [data-av]')?.textContent === 'FLAC 16-bit 44.1 kHz' && document.querySelector('#detail [data-ay]').hidden`, 'the FLAC album stands alone again', 20_000)
     await click('#detailClose')
-    await waitFor(`${card('First Light')}?.querySelector('[data-aq]').textContent === 'FLAC 16-bit 44.1 kHz'`, 'the FLAC album stands alone again')
-    result.checks.mergedAlbum = 'FLAC 16-bit 44.1 kHz · also YouTube, then the YouTube copy removed on its own'
+    await waitFor(`!!${card('First Light')}`, 'the album is back on the shelf')
+    result.checks.mergedAlbum = 'FLAC 16-bit 44.1 kHz, also from YouTube, then the YouTube copy removed on its own'
     // Words that match nothing in the library say so on Find, and Search asks outside with the same words.
     await type('#srcInput', 'zzqx')
     await waitFor(`!$('tab-find').hidden && $('findLib').textContent.includes('Nothing in your library matches “zzqx”.')`, 'Find says the library has no match', 5000)
@@ -1378,7 +1425,7 @@ test('relay web UI: settings, plugins as intents, identification, music sources,
 // The one library (design/unified-library.md). Each behaviour is one named check: `checks[name]` is true, or it is
 // what the page showed in place of what the design says. Every check runs, so one run names everything that is
 // missing, and the test fails once, at its end.
-test('relay web UI: one library with Home, Listen, Watch and Find', { timeout: 300_000 }, async () => {
+test('relay web UI: one library with Home, Listen, Watch and Find', { timeout: 900_000 }, async () => {
   const shots = join(outDir, 'ui-audit/design')
   mkdirSync(shots, { recursive: true })
   const storage = mkdtempSync(join(tmpdir(), 'peartube-ui-design-storage-'))
@@ -1412,7 +1459,7 @@ test('relay web UI: one library with Home, Listen, Watch and Find', { timeout: 3
   const result = { pass: false, relay: base, checks: {}, failed: [], consoleIssues: [], screenshots: [] }
   const browser = await launchBrowser()
   const { evaluate } = browser
-  const { click, clickText, type, press, waitFor, waitApi, viewport, open, goTab, shot, tasteAudit } = drive(browser, base, result, shots)
+  const { click, clickText, clickName, type, press, waitFor, waitApi, viewport, open, goTab, shot, tasteAudit } = drive(browser, base, result, shots)
 
   // One behaviour. `fn` returns true, or what it saw; an error it throws is what it saw, too.
   const check = async (name, fn) => {
@@ -1463,9 +1510,9 @@ test('relay web UI: one library with Home, Listen, Watch and Find', { timeout: 3
       await waitApi(async () => (await getJson('/v1/jobs/' + jobId)).status === 'done', title + ' added')
     }
     await acquire('imdb:tt1254207', 'Big Buck Bunny 2008', '/media/Big.Buck.Bunny.2008.1080p.BluRay.x264-GRP.mp4')
-    await acquire('imdb:tt0000002:s01e01', 'Night Ferry S01E01', '/media/feed-item.mp4')
-    await acquire('imdb:tt0000002:s01e02', 'Night Ferry S01E02', '/page-video.mp4')
-    await acquire('clip:harbourwalk', 'Harbour Walk', '/media/Random.Clip.Name.mp4')
+    await acquire('imdb:tt0000002:s01e01', 'Night Ferry S01E01', '/media/clip.mkv')
+    await acquire('imdb:tt0000002:s01e02', 'Night Ferry S01E02', '/media/variable.mkv')
+    await acquire('clip:harbourwalk', 'Harbour Walk', '/media/clip30.mkv')
     flacAlbum(join(watchDir, 'Test Band - First Light'), 'Test Band', 'First Light', [['Dawn', 440], ['Señal', 550, 'Senal']])
     await post('/v1/plugins/watch-dir/run', {})
     await waitApi(async () => (await getJson('/v1/entries')).results.length === 6, 'six files in the library')
@@ -1496,14 +1543,15 @@ test('relay web UI: one library with Home, Listen, Watch and Find', { timeout: 3
         { panel: 'listen', room: 'Listen', hash: '#listen' }
       ])
     })
-    // Music and video have a room each: the shelf holds no film, and the grid holds no album.
+    // Music and video have a room each: the shelf holds no film, and the grid holds no album. Listen is one flat
+    // grid of covers with the artist under each name, not a shelf cut into bands of artists.
     await check('roomContents', async () => {
       await open('#listen')
-      const listen = { count: await texts('#musicCount'), artists: await texts('#albums .artist-head h3'), albums: await texts('#albums .album-name') }
+      const listen = { count: await texts('#musicCount'), artistBands: await evaluate(`document.querySelectorAll('#albums .artist-head').length`), albums: await texts('#albums .album-name') }
       await open('#watch')
       return same({ listen, watch: await texts('#entries .tile-title') }, {
-        listen: { count: ['1 album'], artists: ['Test Band'], albums: ['First Light'] },
-        watch: ['Big Buck Bunny 2008', 'Harbour Walk', 'Night Ferry']
+        listen: { count: ['1 album'], artistBands: 0, albums: ['First Light'] },
+        watch: ['Big Buck Bunny 2008', 'Night Ferry', 'Harbour Walk']
       })
     })
     await check('oldLinks', async () => {
@@ -1646,6 +1694,758 @@ test('relay web UI: one library with Home, Listen, Watch and Find', { timeout: 3
       return same({ says, panel: at.panel, carried: await evaluate(`$('addInput').value`) === link, asked: asked(from, '/v1/').filter(p => /search|identify|acquire/.test(p)) }, { says: ['This is a link.'], panel: 'add', carried: true, asked: [] })
     })
 
+    // ==== The rest of the design: Listen's three views, the page of an album, an artist and a title, the words a
+    // save wears, and the music player with its list of coming tracks. Two more albums first: four tracks by one
+    // artist and two by another, each long enough to outlast the checks that play it.
+    flacAlbum(join(watchDir, 'Test Band - Night Signal'), 'Test Band', 'Night Signal', [['Beacon', 320], ['Lantern', 360], ['Mist', 400], ['Quay', 480]], 30)
+    flacAlbum(join(watchDir, 'Sea Choir - Tide Songs'), 'Sea Choir', 'Tide Songs', [['Foam', 300], ['Tide', 340]], 30)
+    await post('/v1/plugins/watch-dir/run', {})
+    await waitApi(async () => (await getJson('/v1/entries')).results.length === 12, 'the two albums imported')
+    await viewport(1440, 900, 'dark')
+    const quoted = JSON.stringify
+    // The names of the controls a reader can see inside `scope`.
+    const names = scope => evaluate(`[...document.querySelectorAll(${quoted(scope)} + ' button, ' + ${quoted(scope)} + ' a, ' + ${quoted(scope)} + ' select, ' + ${quoted(scope)} + ' input, ' + ${quoted(scope)} + ' summary')].filter(${VIS}).map(${NAME})`)
+    // Opens an album from its cover on the shelf, the way a reader does.
+    const openAlbum = async name => {
+      const card = `[...document.querySelectorAll('#albums .album-card')].find(c => c.querySelector('.album-name')?.textContent === ${quoted(name)})`
+      await waitFor(`!!${card}`, 'the album ' + name + ' on the shelf', 5000)
+      const key = await evaluate(card + '.dataset.tile')
+      await click('#albums [data-tile=' + quoted(key) + '] .album-open')
+      await waitFor(`$('detailTitle').textContent === ${quoted(name)} && ${seen('#detail [data-album]')}`, 'the page of ' + name, 5000)
+    }
+    // Nothing is playing when a check starts: the page keeps its list across a reload, and an album's Play
+    // resumes its own album instead of starting it again. `Stop music` in the player empties the list.
+    const stopMusic = async () => {
+      await open('#music')
+      if (!await evaluate(seen('#np'))) return
+      // Both pages have a command to stop music. On the old page it is Clear inside the queue.
+      if (await evaluate(`!!$('npStop')`)) {
+        await click('#npArt')
+        await clickName('Stop music', '[data-panel="playing"]')
+      } else {
+        await click('#npQueueBtn')
+        await click('#npClear')
+      }
+      await waitFor(`queue.length === 0 && (!audioEl || audioEl.paused)`, 'the music stopped', 5000)
+    }
+    // Starts an album from its own page, from silence, and waits for sound.
+    const playAlbum = async name => {
+      await stopMusic()
+      await open('#music')
+      await openAlbum(name)
+      await clickName('Play', '#detail')
+      await waitFor(`!!audioEl && !audioEl.paused && audioEl.currentTime > 0.3`, 'sound from ' + name, 25_000)
+    }
+    // Opens the page of one title from its tile in Watch. A tile under `Keep watching` plays at once, so this
+    // takes the title's own tile.
+    const openTitle = async name => {
+      const tile = `[...document.querySelectorAll('#entries .tile:not(:has(.tile-progress))')].find(t => t.querySelector('.tile-title')?.textContent === ${quoted(name)})`
+      await waitFor(`!!${tile}`, 'the tile for ' + name, 5000)
+      const key = await evaluate(tile + '.dataset.tile')
+      await click('#entries .tile[data-tile=' + quoted(key) + ']:not(:has(.tile-progress))')
+      await waitFor(`$('detailTitle').textContent === ${quoted(name)} && ${seen('#detail [data-play]')}`, 'the page of ' + name, 5000)
+    }
+    // The music player, from the dock.
+    const openPlayer = async () => {
+      await clickName('Open player', '#np')
+      await waitFor(`[...document.querySelectorAll('[data-panel="playing"]')].some(${VIS})`, 'the music player', 8000)
+    }
+    // The coming tracks, wherever the page shows them. The one that plays says so. A row that only names where the
+    // tracks come from (`Then · <album>`) is a label, not a track, so it is left out; `playerText` reads those.
+    const queueRows = () => evaluate(`(() => {
+      const box = [...document.querySelectorAll('[data-panel="playing"], #npQueue, [data-queue]')].filter(${VIS})[0]
+      if (!box) return 'no list of coming tracks in sight'
+      const named = r => r.querySelector('[data-name]') || (r.dataset && r.dataset.name ? r : null)
+      return [...box.querySelectorAll('li, [data-track]')].filter(${VIS}).filter(r => named(r) || r.querySelector('.nq-name')).map(r => {
+        const by = named(r)
+        const name = by ? by.dataset.name : (r.querySelector('.nq-name') || {}).textContent
+        const now = r.getAttribute('aria-current') === 'true' || !!r.querySelector('[aria-current="true"]')
+        return String(name).trim().replace(/\\s+/g, ' ') + (now ? ' (playing)' : '')
+      })
+    })()`)
+    // What the music player says, as one line, so a check can read the order of its parts.
+    const playerText = () => evaluate(`(() => {
+      const box = [...document.querySelectorAll('[data-panel="playing"]')].filter(${VIS})[0]
+      return box ? box.innerText.replace(/\\s+/g, ' ').trim() : ''
+    })()`)
+    // `Play next` or `Play last`, wherever the page keeps it: in sight, or behind that page's More.
+    const queueAction = async (word, scope) => {
+      const there = await evaluate(`[...document.querySelectorAll(${quoted(scope)} + ' button, ' + ${quoted(scope)} + ' a')].filter(${VIS}).some(e => ${NAME}(e) === ${quoted(word)})`)
+      if (!there) await clickName('More', scope, false)
+      await clickName(word, scope)
+      await sleep(500)
+    }
+
+    // Listen: one control with three views, the count, and a switch for what is saved here. Albums are one flat
+    // grid of square covers, each with the album and the artist under it.
+    await check('listenAlbums', async () => {
+      await open('#listen')
+      await shot('listen-albums-1440-dark')
+      return same({
+        views: await texts('#listenSeg button'),
+        on: await texts('#listenSeg button[aria-pressed="true"]'),
+        count: await texts('#musicCount'),
+        savedSwitch: (await names('#listenCtl')).filter(n => /saved/i.test(n)),
+        albums: await evaluate(`[...document.querySelectorAll('#albums .album-card')].map(c => c.querySelector('.album-name').textContent + ' — ' + ((c.querySelector('.album-artist') || {}).textContent || 'no artist under the name'))`),
+        artistBands: await evaluate(`document.querySelectorAll('#albums .artist-head').length`),
+        cover: await evaluate(`(() => {
+          const a = document.querySelector('#albums .album-card .sleeve, #albums .album-card img')
+          if (!a) return 'no cover'
+          const r = a.getBoundingClientRect()
+          return Math.abs(r.width - r.height) <= 1 ? 'square' : Math.round(r.width) + ' by ' + Math.round(r.height)
+        })()`)
+      }, {
+        views: ['Albums', 'Artists', 'Tracks'],
+        on: ['Albums'],
+        count: ['3 albums'],
+        savedSwitch: ['Saved here'],
+        albums: ['First Light — Test Band', 'Night Signal — Test Band', 'Tide Songs — Sea Choir'],
+        artistBands: 0,
+        cover: 'square'
+      })
+    })
+    await check('listenArtists', async () => {
+      await open('#listen')
+      await clickText('Artists', '#listenSeg')
+      await sleep(400)
+      const at = await place()
+      const saw = {
+        hash: at.hash,
+        room: at.room,
+        count: await texts('#musicCount'),
+        tiles: await texts('#albums .artist-card .album-text'),
+        links: await evaluate(`[...document.querySelectorAll('#albums a[href^="#artist/"]')].map(a => a.getAttribute('href'))`)
+      }
+      await click('#albums a[href="#artist/Sea%20Choir"]')
+      await sleep(500)
+      saw.went = (await place()).hash
+      return same(saw, {
+        hash: '#listen/artists',
+        room: 'Listen',
+        count: ['2 artists'],
+        tiles: ['Sea Choir 1 album', 'Test Band 2 albums'],
+        links: ['#artist/Sea%20Choir', '#artist/Test%20Band'],
+        went: '#artist/Sea%20Choir'
+      })
+    })
+    await check('listenTracks', async () => {
+      await open('#listen')
+      const from = browser.requests.length
+      await clickText('Tracks', '#listenSeg')
+      await sleep(400)
+      const rows = `[...document.querySelectorAll('#albums [data-track]')].filter(${VIS}).map(r => r.dataset.name)`
+      const saw = {
+        hash: (await place()).hash,
+        count: await texts('#musicCount'),
+        rows: await evaluate(rows),
+        field: await evaluate(`(() => {
+          const f = $('trackFilter')
+          if (!f || !${VIS}(f)) return 'no field to filter the tracks'
+          return { label: (((f.labels || [])[0] || {}).textContent || f.getAttribute('aria-label') || '').trim(), example: f.placeholder }
+        })()`)
+      }
+      await type('#trackFilter', 'mist')
+      await sleep(600)
+      saw.filtered = await evaluate(rows)
+      saw.asked = asked(from, '/v1/search/')
+      return same(saw, {
+        hash: '#listen/tracks',
+        count: ['8 tracks'],
+        rows: ['Beacon', 'Dawn', 'Foam', 'Lantern', 'Mist', 'Quay', 'Señal', 'Tide'],
+        field: { label: 'Filter tracks', example: 'blue in green' },
+        filtered: ['Mist'],
+        asked: []
+      })
+    })
+    // An album has a page of its own, under Listen: the word, the title, the artist as a link, one line of facts,
+    // a quieter line, the three actions, the tracks, and more by the same artist. Back leaves it in one step.
+    await check('albumPage', async () => {
+      await open('#listen')
+      await openAlbum('Night Signal')
+      await waitFor(`!!(document.querySelector('#detail [data-av]') || {}).textContent`, 'what the album is', 20_000)
+      await shot('album-page-1440-dark')
+      const at = await place()
+      const saw = {
+        panel: at.panel,
+        room: at.room,
+        page: at.hash.startsWith('#album/'),
+        word: await texts('#detail .eyebrow'),
+        title: await evaluate(`$('detailTitle').textContent`),
+        artistLink: await evaluate(`(() => { const a = document.querySelector('#detail .page-head a[href^="#artist/"]'); return a ? a.getAttribute('href') : 'no link to the artist' })()`),
+        facts: (await evaluate(`document.querySelector('#detail [data-am]').textContent`)).split(' · ')[0],
+        what: await evaluate(`document.querySelector('#detail [data-av]').textContent`),
+        where: (await evaluate(`document.querySelector('#detail [data-aq]').textContent`)).includes('Saved here'),
+        acts: (await names('#detail .page-acts')).map(n => n.split(' ')[0]),
+        tracks: await evaluate(`[...document.querySelectorAll('#detail [data-track]')].map(r => r.dataset.name)`),
+        moreBy: await texts('#detail .sec-head'),
+        moreCards: await evaluate(`[...document.querySelectorAll('#detail .album-grid .album-name')].map(e => e.textContent)`)
+      }
+      await clickName('Back', '#detail')
+      await sleep(500)
+      saw.back = (await place()).hash
+      return same(saw, {
+        panel: 'detail',
+        room: 'Listen',
+        page: true,
+        word: ['Album'],
+        title: 'Night Signal',
+        artistLink: '#artist/Test%20Band',
+        facts: '4 tracks',
+        what: 'FLAC 16-bit 44.1 kHz',
+        where: true,
+        acts: ['Play', 'Shuffle', 'More'],
+        tracks: ['Beacon', 'Lantern', 'Mist', 'Quay'],
+        moreBy: ['More by Test Band'],
+        moreCards: ['First Light'],
+        back: '#listen'
+      })
+    })
+    await check('artistPage', async () => {
+      await open('#listen')
+      await openAlbum('Night Signal')
+      await clickText('Test Band', '#detail')
+      await sleep(600)
+      const at = await place()
+      return same({
+        panel: at.panel,
+        room: at.room,
+        hash: at.hash,
+        word: await texts('#detail .eyebrow'),
+        name: await evaluate(`$('detailTitle').textContent`),
+        facts: await evaluate(`document.querySelector('#detail .facts').textContent`),
+        acts: (await names('#detail .page-acts')).map(n => n.split(' ')[0]).slice(0, 2),
+        albums: await evaluate(`[...document.querySelectorAll('#detail .album-name')].map(e => e.textContent)`),
+        tracks: await evaluate(`[...document.querySelectorAll('#detail [data-track]')].map(r => r.dataset.name)`)
+      }, {
+        panel: 'detail',
+        room: 'Listen',
+        hash: '#artist/Test%20Band',
+        word: ['Artist'],
+        name: 'Test Band',
+        facts: '2 albums · 6 tracks',
+        acts: ['Play', 'Shuffle'],
+        albums: ['First Light', 'Night Signal'],
+        tracks: ['Dawn', 'Señal', 'Beacon', 'Lantern', 'Mist', 'Quay']
+      })
+    })
+    // A title has a page of its own, under Watch. A clip says it is a clip, and nothing on it joins a music list.
+    await check('titlePage', async () => {
+      await open('#watch')
+      await openTitle('Harbour Walk')
+      const at = await place()
+      // Rule 2: a film never enters the music list, so nothing on its page adds it. Look inside More as well.
+      await clickName('More', '#detail', false)
+      await sleep(300)
+      const acts = await names('#detail')
+      const saw = {
+        panel: at.panel,
+        room: at.room,
+        page: at.hash.startsWith('#title/'),
+        word: await texts('#detail .eyebrow'),
+        title: await evaluate(`$('detailTitle').textContent`),
+        play: await evaluate(seen('#detail [data-play]')),
+        download: await evaluate(seen('#detail [data-download]')),
+        musicWords: acts.filter(n => /play next|play last|up next/i.test(n))
+      }
+      await clickName('Back', '#detail')
+      await sleep(500)
+      saw.back = (await place()).hash
+      return same(saw, { panel: 'detail', room: 'Watch', page: true, word: ['Clip'], title: 'Harbour Walk', play: true, download: true, musicWords: [], back: '#watch' })
+    })
+    await check('movieVersions', async () => {
+      const { results } = await getJson('/v1/entries')
+      const film = results.find(e => e.id === 'imdb:tt1254207')
+      const clip = results.find(e => e.id === 'clip:harbourwalk')
+      // Both files exist on the relay. List them as two versions of one film and check the actual stream choices.
+      return browser.withJson({ [base + '/v1/entries']: { results: [film, { ...clip, id: film.id, title: film.title }] } }, async () => {
+        await open('#watch/movies')
+        assert.deepEqual(await texts('#entries .tile-title'), [film.title])
+        await openTitle(film.title)
+        const rows = '#detail .page-body .row-item'
+        const streams = await evaluate(`[...document.querySelectorAll('${rows} [data-download]')].map(a => { const u = new URL(a.href); u.searchParams.delete('download'); return u.pathname + u.search }).sort()`)
+        const expected = [film, clip].map(e => { const u = new URL(e.streamUrl, base); return u.pathname + u.search }).sort()
+        return same({ page: (await place()).panel, kind: await texts('#detail .eyebrow'), count: await texts('#detail .sec-head'), streams },
+          { page: 'detail', kind: ['Movie'], count: ['2 versions'], streams: expected })
+      })
+    })
+    // Play both real files. The page must use the finished first episode, not a click on a card, to pick the second.
+    await check('nextEpisode', async () => {
+      await open('#watch/series')
+      await openTitle('Night Ferry')
+      const at = await place()
+      const action = '#detail .page-acts [data-play]'
+      const names = await texts('#detail .page-body .label')
+      assert.deepEqual(names.map(n => n.slice(0, 6)), ['S01E01', 'S01E02'])
+      assert.deepEqual(await texts(action), ['Play S1 E1'])
+      await click(action)
+      await waitFor(`$('pPlayBtn').textContent === 'Replay'`, 'the first episode finishes', 40_000)
+      await click('#pCloseBtn')
+      await waitFor(`document.querySelector('${action}')?.textContent === 'Next episode S1 E2'`, 'the next episode on the series page', 8000)
+      await click(action)
+      await waitFor(`$('pTitle').textContent.includes('S01E02')`, 'the player opens episode two', 8000)
+      await waitFor(`$('pPlayBtn').textContent === 'Replay'`, 'the second episode finishes', 40_000)
+      await click('#pCloseBtn')
+      return same({ kind: await texts('#detail .eyebrow'), panel: at.panel, room: at.room }, { kind: ['Series'], panel: 'detail', room: 'Watch' })
+    })
+    // With All: posters first and clips under their own heading. A selected kind has only that grid.
+    await check('watchGroups', async () => {
+      await open('#watch')
+      // A `Keep watching` row rides above these when something is part-watched; this check is about the rest.
+      const all = (await evaluate(`[...document.querySelectorAll('#entries section')].filter(${VIS}).map(s => s.querySelector('h2').textContent + ': ' + [...s.querySelectorAll('.tile-title')].map(e => e.textContent).join(', '))`))
+        .filter(s => !s.startsWith('Keep watching'))
+      await open('#watch/clips')
+      const one = {
+        sections: await evaluate(`[...document.querySelectorAll('#entries section')].filter(s => !/Keep watching/.test(s.textContent)).length`),
+        tiles: await texts('#entries .tile-title')
+      }
+      return same({ all, one }, {
+        all: ['Movies and series: Big Buck Bunny 2008, Night Ferry', 'Clips: Harbour Walk'],
+        one: { sections: 0, tiles: ['Harbour Walk'] }
+      })
+    })
+    await check('clipTilesAreWide', async () => {
+      await open('#watch')
+      return same(await evaluate(`[...document.querySelectorAll('#entries .tile')].filter(${VIS}).filter(t => !/Keep watching/.test(((t.closest('section') || {}).textContent) || '')).map(t => {
+        const art = t.querySelector('.tile-art, .poster')
+        if (!art) return (t.querySelector('.tile-title') || {}).textContent + ': no picture'
+        const r = art.getBoundingClientRect()
+        return (t.querySelector('.tile-title') || {}).textContent + ': ' + (r.width > r.height ? 'wider than tall' : 'taller than wide')
+      })`), ['Big Buck Bunny 2008: taller than wide', 'Night Ferry: taller than wide', 'Harbour Walk: wider than tall'])
+    })
+    // A provider reply with one album and a single track. Only these three HTTP replies are fixtures. Use the
+    // actual Find field and Browse control. Do not click Save: this checks the words, not a transfer from a peer.
+    await check('saveWords', async () => {
+      const files = ['01 Foam.flac', '02 Tide.flac', '03 Spray.flac', '01 Lone Track.flac'].map((name, i) => ({
+        source: 'soulseek', username: i < 3 ? 'albumpeer' : 'trackpeer', filename: (i < 3 ? 'Shared/Tide Songs/' : 'Shared/One Off/') + name,
+        size: 41_000_000, length: 240, bit_depth: 16, sample_rate: 44100, slots: true, queue: 0
+      }))
+      return browser.withJson({
+        [base + '/v1/plugins']: { plugins: [{ name: 'soulseek', configured: true, status: 'ok' }] },
+        [base + '/v1/search/sources']: { sources: ['soulseek'], results: files },
+        [base + '/v1/providers/soulseek/browse']: { username: 'albumpeer', files: files.slice(0, 3), tracks: 3, size: 123_000_000 }
+      }, async () => {
+        // On main the same source controls are under Music. Compare the labels, not the route that holds them.
+        await open('#find')
+        if (!await evaluate(`document.getElementById('tab-find') !== null`)) await open('#music')
+        await waitFor(`!!document.querySelector('#srcChips [data-src="soulseek"][aria-pressed="true"]')`, 'a source available to search', 5000)
+        await type('#srcInput', 'tide songs')
+        await press('Enter')
+        await waitFor(`document.querySelectorAll('#slskResults .item').length === 2`, 'album and single track offered')
+        const choices = await texts('#slskResults .item button.primary')
+        await clickText('Browse', '#slskResults')
+        await waitFor(seen('#slskFolders .slsk-folder'), 'the matching folder')
+        const folder = await texts('#slskFolders .slsk-folder button.primary')
+        if (!await evaluate(seen('#slskFolders .slsk-file'))) await clickText('Files', '#slskFolders')
+        return same({ choices, folder, tracks: await texts('#slskFolders .slsk-file button') },
+          { choices: ['Save album', 'Save track'], folder: ['Save folder'], tracks: ['Save track', 'Save track', 'Save track'] })
+      })
+    })
+    // The three rows are actual imports served by this test relay. Vary which files the catalog says it holds.
+    // Check the outbound requests, not the presence of a lock icon. A public saved file is the positive control.
+    await check('privateAndRemoteBrowse', async () => {
+      const { results } = await getJson('/v1/entries')
+      const tracks = ['Dawn', 'Beacon', 'Foam'].map((name, i) => {
+        const song = results.find(e => e.music?.title === name)
+        assert.ok(song?.streamUrl, 'imported ' + name)
+        return { ...song, private: i === 1, locked: false, local: i !== 2, cachedBytes: 0 }
+      })
+      return browser.withJson({ [base + '/v1/entries']: { results: tracks } }, async () => {
+        const from = browser.requests.length
+        // #music works on both revisions. Both must be able to open an album for the traffic comparison to count.
+        for (const title of ['First Light', 'Night Signal', 'Tide Songs']) {
+          await open('#music')
+          const id = await evaluate(`[...document.querySelectorAll('#albums .album-card')].find(c => c.querySelector('.album-name')?.textContent === ${quoted(title)})?.dataset.tile`)
+          assert.ok(id, 'the album ' + title + ' is available')
+          await click('#albums [data-tile=' + quoted(id) + '] .album-open')
+          await waitFor(`document.querySelector('#detailTitle')?.textContent === ${quoted(title)}`, 'the page for ' + title)
+          await sleep(300)
+        }
+        const urls = browser.requests.slice(from).map(u => new URL(u))
+        const saw = tracks.map(e => ({
+          cover: urls.some(u => u.pathname === '/v1/blob' && u.search === new URL(e.streamUrl, base).search),
+          details: urls.some(u => u.pathname === '/v1/entries/info' && u.searchParams.get('key') === e.key)
+        }))
+        return same(saw, [{ cover: true, details: true }, { cover: false, details: false }, { cover: false, details: false }])
+      })
+    })
+    // Watch's chips carry their counts, and the room offers what is saved here.
+    await check('watchChips', async () => {
+      await open('#watch')
+      return same({ chips: await texts('#libKinds button'), saved: await texts('#watchSaved') },
+        { chips: ['All 3', 'Movies 1', 'Series 1', 'Clips 1'], saved: ['Saved here'] })
+    })
+    await check('savedHereFilters', async () => {
+      const list = await getJson('/v1/entries')
+      const results = list.results.map(e => e.music?.artist === 'Sea Choir' || e.id === 'clip:harbourwalk'
+        ? { ...e, local: false, cachedBytes: 0 } : e)
+      return browser.withJson({ [base + '/v1/entries']: { results } }, async () => {
+        const states = []
+        for (const [room, control, tiles] of [['listen', '#listenSaved', '#albums .album-name'], ['watch', '#watchSaved', '#entries .tile-title']]) {
+          await open('#' + room)
+          const before = await texts(tiles)
+          await click(control)
+          const saved = await texts(tiles)
+          await click(control)
+          states.push({ saved, removed: before.filter(name => !saved.includes(name)), restored: isDeepStrictEqual(before, await texts(tiles)) })
+        }
+        return same(states, [
+          { saved: ['First Light', 'Night Signal'], removed: ['Tide Songs'], restored: true },
+          { saved: ['Big Buck Bunny 2008', 'Night Ferry'], removed: ['Harbour Walk'], restored: true }
+        ])
+      })
+    })
+
+    // ==== The dock and the music player.
+    // The dock shows whenever a list exists, wherever the reader is, and its controls carry the design's names.
+    await check('dockControls', async () => {
+      await playAlbum('Night Signal')
+      await goTab('Watch')
+      await sleep(400)
+      const found = await names('#np')
+      // The dock's Up next also carries how far the list is (`2 of 4`), so a name is matched by how it starts.
+      const has = w => found.some(n => n === w || n.startsWith(w + ' '))
+      return same({
+        dock: await evaluate(seen('#np')),
+        missing: ['Previous', 'Next', 'Shuffle', 'Repeat', 'Up next', 'Volume', 'Open player'].filter(w => !has(w)),
+        playOrPause: has('Play') || has('Pause'),
+        old: found.filter(n => ['Previous track', 'Next track', 'Queue'].includes(n))
+      }, { dock: true, missing: [], playOrPause: true, old: [] })
+    })
+    // Its top edge is the progress line, and that line is the seek control.
+    await check('dockProgressLine', async () => {
+      await playAlbum('Night Signal')
+      await goTab('Watch')
+      await sleep(400)
+      const measured = await evaluate(`(() => {
+        const np = $('np').getBoundingClientRect()
+        const seek = $('npSeek')
+        if (!seek || !${VIS}(seek)) return 'no seek control on the dock'
+        const r = seek.getBoundingClientRect()
+        return { belowTheTopEdge: Math.round(r.top - np.top), narrowerThanTheDock: Math.round(np.width - r.width) }
+      })()`)
+      return same({ onTheTopEdge: measured.belowTheTopEdge <= 8, acrossTheDock: measured.narrowerThanTheDock <= 4, measured },
+        { onTheTopEdge: true, acrossTheDock: true, measured })
+    })
+    // The music player is a place of its own, under Listen, and closing it leaves the music playing.
+    await check('openPlayerPlace', async () => {
+      await playAlbum('Night Signal')
+      await goTab('Watch')
+      await openPlayer()
+      await shot('music-player-1440-dark')
+      const at = await place()
+      const saw = { panel: at.panel, room: at.room, hash: at.hash, playing: await evaluate(`!!audioEl && !audioEl.paused`) }
+      await clickName('Close player', '[data-panel="playing"]')
+      await sleep(700)
+      saw.closed = (await place()).panel !== 'playing'
+      saw.stillPlaying = await evaluate(`!!audioEl && !audioEl.paused`)
+      return same(saw, { panel: 'playing', room: 'Listen', hash: '#playing', playing: true, closed: true, stillPlaying: true })
+    })
+    // Inside it: where the music comes from, the track, a seek bar with both times, and the list. The track that
+    // plays is marked and the ones that are done read quieter.
+    await check('playerParts', async () => {
+      await playAlbum('Night Signal')
+      await openPlayer()
+      await click('#fpNext')
+      await waitFor(`$('npTitle').textContent === 'Lantern'`, 'the second track', 15_000)
+      await sleep(500)
+      const text = await playerText()
+      return same({
+        playingFrom: text.includes('Playing from') && text.includes('Night Signal'),
+        track: text.includes('Lantern') && text.includes('Test Band'),
+        clocks: (text.match(/\d+:\d\d/g) || []).length >= 2,
+        seek: await evaluate(`[...document.querySelectorAll('[data-panel="playing"] input[type=range]')].filter(${VIS}).length >= 1`),
+        rows: await queueRows(),
+        past: await evaluate(`(() => {
+          const box = [...document.querySelectorAll('[data-panel="playing"]')].filter(${VIS})[0]
+          if (!box) return 'no music player'
+          const rows = [...box.querySelectorAll('li, [data-track]')].filter(${VIS}).filter(r => r.querySelector('.nq-name, [data-name]'))
+          if (rows.length < 3) return 'fewer than three tracks in sight'
+          const look = r => { const s = getComputedStyle(r.querySelector('.nq-name, [data-name]') || r); return s.color + ' ' + s.opacity }
+          return look(rows[0]) !== look(rows[2]) ? 'the track that is done reads quieter' : 'every row reads the same: ' + look(rows[0])
+        })()`),
+        text
+      }, {
+        playingFrom: true,
+        track: true,
+        clocks: true,
+        seek: true,
+        rows: ['Beacon', 'Lantern (playing)', 'Mist', 'Quay'],
+        past: 'the track that is done reads quieter',
+        text
+      })
+    })
+    // A row comes out of the list, and Clear empties what is still to come without stopping the track that plays.
+    await check('queueEdits', async () => {
+      await playAlbum('Night Signal')
+      await openPlayer()
+      const inPlayer = await names('[data-panel="playing"]')
+      const saw = { canRemoveARow: inPlayer.filter(n => n.startsWith('Remove')).includes('Remove Quay'), clear: inPlayer.includes('Clear') }
+      if (saw.canRemoveARow) {
+        await clickName('Remove Quay', '[data-panel="playing"]')
+        await sleep(500)
+      }
+      saw.afterRemove = await queueRows()
+      if (saw.clear) {
+        await clickName('Clear', '[data-panel="playing"]')
+        await sleep(600)
+      }
+      saw.afterClear = await queueRows()
+      saw.stillPlaying = await evaluate(`!!audioEl && !audioEl.paused`)
+      return same(saw, {
+        canRemoveARow: true,
+        clear: true,
+        afterRemove: ['Beacon (playing)', 'Lantern', 'Mist'],
+        afterClear: ['Beacon (playing)'],
+        stillPlaying: true
+      })
+    })
+    // An album, a track row and an artist add to the list and keep the track that plays.
+    await check('playNextFromAlbum', async () => {
+      await playAlbum('Night Signal')
+      await goTab('Listen')
+      await openAlbum('Tide Songs')
+      await queueAction('Play next', '#detail .page-acts')
+      await openPlayer()
+      return same({ rows: await queueRows(), nowPlaying: await evaluate(`$('npTitle').textContent`) },
+        { rows: ['Beacon (playing)', 'Foam', 'Tide', 'Lantern', 'Mist', 'Quay'], nowPlaying: 'Beacon' })
+    })
+    await check('playLastFromTrack', async () => {
+      await playAlbum('Night Signal')
+      await goTab('Listen')
+      await clickText('Tracks', '#listenSeg')
+      await waitFor(`!!document.querySelector('#albums [data-track][data-name="Foam"]')`, 'the track list', 8000)
+      await queueAction('Play last', '#albums [data-track][data-name="Foam"]')
+      await openPlayer()
+      const text = await playerText()
+      return same({
+        rows: await queueRows(),
+        thenBeforeIt: text.includes('Then') && text.indexOf('Then') < text.indexOf('Foam'),
+        text
+      }, { rows: ['Beacon (playing)', 'Lantern', 'Mist', 'Quay', 'Foam'], thenBeforeIt: true, text })
+    })
+    await check('playLastFromArtist', async () => {
+      await playAlbum('Night Signal')
+      await goTab('Listen')
+      await clickText('Artists', '#listenSeg')
+      await waitFor(`!!document.querySelector('#albums a[href="#artist/Sea%20Choir"]')`, 'the artists', 8000)
+      await click('#albums a[href="#artist/Sea%20Choir"]')
+      await waitFor(seen('#detail .page-acts'), 'the artist page', 10_000)
+      await queueAction('Play last', '#detail .page-acts')
+      await openPlayer()
+      return same(await queueRows(), ['Beacon (playing)', 'Lantern', 'Mist', 'Quay', 'Foam', 'Tide'])
+    })
+    // Shuffle keeps the track that plays and the same tracks; turned on it puts them in another order.
+    await check('shuffleKeepsCurrent', async () => {
+      await playAlbum('Night Signal')
+      await click('#npNext')
+      await waitFor(`$('npTitle').textContent === 'Lantern'`, 'the second track', 15_000)
+      await openPlayer()
+      const before = await queueRows()
+      const coming = rows => JSON.stringify(rows.filter(r => !r.endsWith('(playing)')))
+      let after = before
+      let another = false
+      for (let n = 0; n < 5 && !another; n++) {
+        await clickName('Shuffle', '[data-panel="playing"]')
+        await sleep(500)
+        after = await queueRows()
+        another = coming(after) !== coming(before)
+        if (!another) { await clickName('Shuffle', '[data-panel="playing"]'); await sleep(400) }
+      }
+      return same({
+        kept: after.filter(r => r.endsWith('(playing)')),
+        sameTracks: JSON.stringify([...after].sort()) === JSON.stringify([...before].sort()),
+        another,
+        before,
+        after
+      }, { kept: ['Lantern (playing)'], sameTracks: true, another: true, before, after })
+    })
+    // Repeat is a control of the player, and its state comes back to where it started.
+    await check('repeatControl', async () => {
+      await playAlbum('Night Signal')
+      await openPlayer()
+      const state = () => evaluate(`(() => {
+        const b = [...document.querySelectorAll('[data-panel="playing"] button, #np button')].filter(${VIS}).find(e => ${NAME}(e).startsWith('Repeat'))
+        if (!b) return 'no control named Repeat'
+        return ${NAME}(b) + ' / ' + (b.getAttribute('aria-pressed') || b.getAttribute('aria-checked') || b.dataset.state || b.className)
+      })()`)
+      const steps = [await state()]
+      for (let n = 0; n < 3; n++) {
+        await clickName('Repeat', '[data-panel="playing"]', false)
+        await sleep(400)
+        steps.push(await state())
+      }
+      return same({ named: !String(steps[0]).startsWith('no control'), changes: steps[1] !== steps[0], comesBack: steps.slice(1).includes(steps[0]), steps },
+        { named: true, changes: true, comesBack: true, steps })
+    })
+    // The list, the track and its place outlast a reload, and the music waits for Play. The page keeps the place
+    // without a stream (nothing is fetched until Play), so the place is read where a reader reads it: the clock.
+    const clockSeconds = text => text.trim().split(':').reduce((t, n) => 60 * t + Number(n), 0)
+    await check('queuePersists', async () => {
+      await playAlbum('Night Signal')
+      await click('#npNext')
+      // Leave a place far enough from zero that a restart at the beginning cannot pass.
+      await waitFor(`$('npTitle').textContent === 'Lantern' && audioEl.currentTime >= 3`, 'the second track playing', 25_000)
+      await click('#npPlay')
+      await waitFor(`audioEl.paused`, 'the music waits', 8000)
+      const at = await evaluate(`$('npAt').textContent`)
+      await open('#home')
+      await waitFor(`${seen('#np')} && $('npTitle').textContent === 'Lantern'`, 'the dock after a reload', 20_000)
+      await waitFor(`$('npAt').textContent !== '0:00'`, 'the track at its place again', 15_000)
+      const back = await evaluate(`({ title: $('npTitle').textContent, paused: !audioEl || audioEl.paused, at: $('npAt').textContent })`)
+      await openPlayer()
+      const rows = await queueRows()
+      const noPreload = await evaluate(`!audioEl?.getAttribute('src')`)
+      await click('#fpPlay')
+      await waitFor(`audioEl && !audioEl.paused && audioEl.readyState >= 2`, 'the saved song plays again')
+      const resumed = await evaluate(`audioEl.currentTime`)
+      return same({ title: back.title, paused: back.paused, savedPlace: clockSeconds(back.at) === clockSeconds(at), noPreload, resumesThere: Math.abs(resumed - clockSeconds(at)) < 2, rows },
+        { title: 'Lantern', paused: true, savedPlace: true, noPreload: true, resumesThere: true, rows: ['Beacon', 'Lantern (playing)', 'Mist', 'Quay'] })
+    })
+
+    // ==== How music and video share the one player.
+    // A video stops the music, which keeps its track, its time and its list, says why, and waits for Play.
+    await check('videoPausesMusic', async () => {
+      await playAlbum('Night Signal')
+      await click('#npNext')
+      await waitFor(`$('npTitle').textContent === 'Lantern' && audioEl.currentTime > 1`, 'the second track playing', 25_000)
+      const at = await evaluate(`audioEl.currentTime`)
+      await goTab('Watch')
+      await openTitle('Harbour Walk')
+      await click('#detail [data-play]')
+      await waitFor(`$('playerModal').classList.contains('open')`, 'the video player', 20_000)
+      await waitFor(`!!audioEl && audioEl.paused`, 'the music stops for the video', 10_000)
+      await waitFor(`/[1-9]/.test(($('pClock').textContent || '').split('/')[0])`, 'the video plays', 60_000)
+      await click('#pCloseBtn')
+      await sleep(900)
+      const saw = {
+        dock: await evaluate(seen('#np')),
+        track: await evaluate(`$('npTitle').textContent`),
+        kept: Math.abs(await evaluate(`(audioEl && audioEl.currentTime) || 0`) - at) <= 2,
+        says: (await evaluate(`$('np').innerText.replace(/\\s+/g, ' ')`)).includes('Paused for a video')
+      }
+      await openPlayer()
+      saw.list = await queueRows()
+      await sleep(2500)
+      saw.stillWaiting = await evaluate(`!audioEl || audioEl.paused`)
+      await click('#fpPlay')
+      await waitFor(`!!audioEl && !audioEl.paused`, 'Play starts the music again', 10_000)
+      saw.playStartsIt = true
+      return same(saw, {
+        dock: true,
+        track: 'Lantern',
+        kept: true,
+        says: true,
+        list: ['Beacon', 'Lantern (playing)', 'Mist', 'Quay'],
+        stillWaiting: true,
+        playStartsIt: true
+      })
+    })
+    // Music closes a video, and the video keeps its place under Keep playing.
+    await check('musicClosesVideo', async () => {
+      await playAlbum('Night Signal')
+      await goTab('Watch')
+      await openTitle('Harbour Walk')
+      await click('#detail [data-play]')
+      await waitFor(`$('playerModal').classList.contains('open')`, 'the video player', 20_000)
+      await waitFor(`/[1-9]/.test(($('pClock').textContent || '').split('/')[0])`, 'the video plays', 60_000)
+      await click('#pMiniBtn')
+      await sleep(600)
+      await goTab('Listen')
+      await openAlbum('Night Signal')
+      await waitFor(`player && player.primed && player.currentMediaTime() >= 3`, 'at least three seconds of the clip play', 12_000)
+      const left = await evaluate(`player.currentMediaTime()`)
+      await clickName('Resume', '#detail')
+      await waitFor(`!!audioEl && !audioEl.paused`, 'the music starts', 20_000)
+      const saw = { videoClosed: await evaluate(`!$('playerModal').classList.contains('open')`) }
+      await goTab('Home')
+      await waitFor(seen('#keep'), 'Keep playing', 15_000)
+      saw.keep = (await texts('#keep .keep-name')).sort()
+      await goTab('Watch')
+      await openTitle('Harbour Walk')
+      await click('#detail .page-acts [data-play]')
+      await waitFor(`player && player.primed && !player.seeking`, 'the selected video resumes', 20_000)
+      const resumed = await evaluate(`player.currentMediaTime()`)
+      await click('#pCloseBtn')
+      return same({ ...saw, retainedPosition: Math.abs(resumed - left) < 2, left, resumed },
+        { videoClosed: true, keep: ['Harbour Walk', 'Night Signal'], retainedPosition: true, left, resumed })
+    })
+    // Keep playing mixes both: a video with its time left in words, the album with the track it stopped on. The
+    // newest is the large one, and Watch keeps only the video under Keep watching.
+    await check('keepPlayingWords', async () => {
+      await open('#home')
+      await waitFor(seen('#keep'), 'Keep playing', 15_000)
+      if (await evaluate(`!!audioEl && !audioEl.paused`)) {
+        await click('#npPlay')
+        await waitFor(`audioEl.paused`, 'the music waits', 8000)
+      }
+      const items = await evaluate(`[...document.querySelectorAll('#keep .keep-name')].map(n => {
+        const box = n.closest('.keep-big, .keep-row') || n.parentElement
+        const sub = box.querySelector('.keep-sub')
+        return n.textContent + ' | ' + (sub ? sub.textContent : 'nothing under the name')
+      })`)
+      const film = items.find(i => i.startsWith('Harbour Walk')) || 'no video under Keep playing'
+      const music = items.find(i => i.startsWith('Night Signal')) || 'no album under Keep playing'
+      await evaluate(`(() => {
+        const n = [...document.querySelectorAll('#keep .keep-name')].find(e => e.textContent === 'Night Signal')
+        if (!n) return false
+        const b = n.closest('.keep-row') || n.closest('.keep-big').querySelector('button')
+        b.setAttribute('data-e2e', 'keep-music')
+        return true
+      })()`)
+      await click('[data-e2e="keep-music"]')
+      await waitFor(`!!audioEl && !audioEl.paused`, 'Keep playing goes on with the music', 15_000)
+      await sleep(700)
+      const hero = await evaluate(`(() => { const n = document.querySelector('#keep .keep-big .keep-name'); return n ? n.textContent : 'nothing is large' })()`)
+      await shot('keep-playing-1440-dark')
+      const head = await texts('#keepWrap h2')
+      await open('#watch')
+      const watching = await evaluate(`(() => {
+        const s = [...document.querySelectorAll('#entries section')].find(x => /Keep watching/.test((x.querySelector('h2') || {}).textContent || ''))
+        return s ? [...s.querySelectorAll('.tile-title')].map(e => e.textContent) : 'no Keep watching in Watch'
+      })()`)
+      return same({
+        head,
+        filmLeft: /\d+ (h|min) left/.test(film) && !/\d:\d\d/.test(film),
+        musicTrack: /track \d+ of \d+/i.test(music),
+        newestIsLarge: hero,
+        watching,
+        items
+      }, { head: ['Keep playing'], filmLeft: true, musicTrack: true, newestIsLarge: 'Night Signal', watching: ['Harbour Walk'], items })
+    })
+    // A film never enters the music list, and its page offers nothing that would add it.
+    await check('filmNeverInQueue', async () => {
+      await playAlbum('Night Signal')
+      await goTab('Watch')
+      await openTitle('Harbour Walk')
+      const onThePage = await names('#detail')
+      await click('#detail [data-play]')
+      await waitFor(`$('playerModal').classList.contains('open')`, 'the video player', 20_000)
+      await waitFor(`/[1-9]/.test(($('pClock').textContent || '').split('/')[0])`, 'the video plays', 60_000)
+      await click('#pCloseBtn')
+      await sleep(800)
+      await openPlayer()
+      return same({ rows: await queueRows(), musicWords: onThePage.filter(n => /play next|play last|up next/i.test(n)) },
+        { rows: ['Beacon (playing)', 'Lantern', 'Mist', 'Quay'], musicWords: [] })
+    })
+    // The video player's own words.
+    await check('videoPlayerWords', async () => {
+      await open('#watch')
+      await openTitle('Harbour Walk')
+      await click('#detail [data-play]')
+      await waitFor(`$('playerModal').classList.contains('open')`, 'the video player', 20_000)
+      await waitFor(`/[1-9]/.test(($('pClock').textContent || '').split('/')[0])`, 'the video plays', 60_000)
+      const inPlayer = await names('#playerModal')
+      const saw = {
+        audio: inPlayer.filter(n => n.startsWith('Audio')),
+        subtitles: inPlayer.filter(n => n.startsWith('Subtitle')),
+        fileInfo: inPlayer.includes('File info')
+      }
+      await shot('video-player-words-1440-dark')
+      await click('#pCloseBtn')
+      await sleep(500)
+      return same(saw, { audio: ['Audio'], subtitles: ['Subtitles'], fileInfo: true })
+    })
+
     // A narrow screen: the rooms are the row at the bottom, the bar names the place, and the relay's pages are in More.
     await viewport(390, 844, 'dark')
     await check('narrowRooms', async () => {
@@ -1692,19 +2492,120 @@ test('relay web UI: one library with Home, Listen, Watch and Find', { timeout: 3
       return same({ onHome, at: at.panel + ' ' + at.room, field, library }, { onHome: false, at: 'find Find', field: { inSight: true, wide: true, atTop: true }, library: ['Movies and series: Night Ferry'] })
     })
     await shot('find-390-dark', true)
+    // The dock on a narrow screen is one row above the rooms: cover, two lines, Play or Pause and Next. The rest
+    // of its controls are in the player.
+    await check('narrowDock', async () => {
+      await playAlbum('Night Signal')
+      await sleep(600)
+      const measured = await evaluate(`(() => {
+        const np = $('np')
+        if (!np || !${VIS}(np)) return 'no dock'
+        const box = np.getBoundingClientRect()
+        const rooms = document.querySelector('.rooms').getBoundingClientRect()
+        const acts = [...np.querySelectorAll('#npArt, .np-text, #npPlay, #npNext')].filter(${VIS})
+        const mid = acts.map(e => { const r = e.getBoundingClientRect(); return r.top + r.height / 2 })
+        return {
+          overTheRooms: Math.round(box.bottom - rooms.top),
+          parts: acts.length,
+          twoLines: $('npTitle').getBoundingClientRect().bottom <= $('npMeta').getBoundingClientRect().top + 1,
+          highestToLowest: mid.length ? Math.round(Math.max(...mid) - Math.min(...mid)) : 'no controls on the dock',
+          shown: [...np.querySelectorAll('button, a, input')].filter(${VIS}).map(${NAME})
+        }
+      })()`)
+      const shown = measured.shown || []
+      const has = w => shown.some(n => n === w || n.startsWith(w + ' '))
+      return same({
+        aboveTheRooms: measured.overTheRooms <= 1,
+        oneRow: measured.parts === 4 && measured.twoLines && measured.highestToLowest <= 16,
+        playOrPause: has('Play') || has('Pause'),
+        next: has('Next'),
+        putAway: ['Previous', 'Shuffle', 'Repeat', 'Up next', 'Volume'].filter(has),
+        measured
+      }, { aboveTheRooms: true, oneRow: true, playOrPause: true, next: true, putAway: [], measured })
+    })
+    // The music player covers the whole screen: it starts at the top, and neither the top bar, nor the rooms row,
+    // nor the dock is left over it.
+    await check('narrowPlayerCovers', async () => {
+      await playAlbum('Night Signal')
+      await openPlayer()
+      await shot('music-player-390-dark', true)
+      const measured = await evaluate(`(() => {
+        const box = [...document.querySelectorAll('[data-panel="playing"]')].filter(${VIS})[0]
+        if (!box) return 'no music player'
+        const r = box.getBoundingClientRect()
+        const rooms = document.querySelector('.rooms')
+        const rr = rooms.getBoundingClientRect()
+        const over = ${VIS}(rooms) ? document.elementFromPoint(rr.left + rr.width / 2, rr.top + rr.height / 2) : null
+        return {
+          startsAt: Math.round(r.top),
+          roomsOverThePlayer: ${VIS}(rooms) && !(over && (over === box || box.contains(over))),
+          barInSight: ${VIS}(document.querySelector('.top')),
+          dockInSight: ${VIS}($('np')),
+          sideways: Math.max(0, document.documentElement.scrollWidth - document.documentElement.clientWidth)
+        }
+      })()`)
+      return same({ fromTheTop: measured.startsAt <= 24, roomsOverThePlayer: measured.roomsOverThePlayer, barInSight: measured.barInSight, dockInSight: measured.dockInSight, sideways: measured.sideways, measured },
+        { fromTheTop: true, roomsOverThePlayer: false, barInSight: false, dockInSight: false, sideways: 0, measured })
+    })
+    // A small video picture and the dock do not cover each other: the picture stands above the dock.
+    await check('narrowMiniAboveDock', async () => {
+      await playAlbum('Night Signal')
+      await goTab('Watch')
+      await openTitle('Harbour Walk')
+      await click('#detail [data-play]')
+      await waitFor(`$('playerModal').classList.contains('open')`, 'the video player', 20_000)
+      await waitFor(`/[1-9]/.test(($('pClock').textContent || '').split('/')[0])`, 'the video plays', 60_000)
+      await click('#pMiniBtn')
+      await sleep(800)
+      const measured = await evaluate(`(() => {
+        const np = $('np')
+        if (!${VIS}(np)) return 'no dock while a small picture is on screen'
+        const a = np.getBoundingClientRect()
+        const b = $('playerModal').getBoundingClientRect()
+        return { overlap: Math.round(Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top)), pictureOverTheDock: Math.round(b.bottom - a.top) }
+      })()`)
+      await click('#pCloseBtn')
+      await sleep(400)
+      return same({ apart: measured.overlap <= 0, pictureAbove: measured.pictureOverTheDock <= 1, measured },
+        { apart: true, pictureAbove: true, measured })
+    })
+    await shot('dock-390-dark', true)
 
-    // The taste gates of the first test, on the new places with a library in them.
+    // The taste gates of the first test, on every place of this design, at both widths and in both themes.
     await check('tasteOnNewPlaces', async () => {
+      await open('#listen')
+      const album = await evaluate(`(() => { const a = document.querySelector('#albums .album-open'); return a ? a.getAttribute('href') : '#listen' })()`)
+      await open('#watch')
+      const title = await evaluate(`(() => { const a = document.querySelector('#entries a.tile[href^="#title/"]'); return a ? a.getAttribute('href') : '#watch' })()`)
+      const places = [['home', '#home'], ['listen', '#listen'], ['artists', '#listen/artists'], ['tracks', '#listen/tracks'],
+        ['album', album], ['artist', '#artist/Test%20Band'], ['watch', '#watch'], ['title', title],
+        ['find', '#find/light'], ['add', '#add'], ['playing', '#playing']]
       for (const [width, height] of [[1440, 900], [390, 844]]) {
-        await viewport(width, height, 'light')
-        for (const [name, hash] of [['home', '#home'], ['listen', '#listen'], ['watch', '#watch'], ['find', '#find/light'], ['add', '#add']]) {
-          await open(hash)
-          await sleep(300)
-          await tasteAudit(width + ' light ' + name)
-          await shot(name + '-' + width + '-light')
+        for (const scheme of ['light', 'dark']) {
+          await viewport(width, height, scheme)
+          for (const [name, hash] of places) {
+            await open(hash)
+            await sleep(250)
+            await tasteAudit(width + ' ' + scheme + ' ' + name)
+            if (scheme === 'light') await shot(name + '-' + width + '-light')
+          }
         }
       }
       return true
+    })
+    await check('showAllArtistTracks', async () => {
+      flacAlbum(join(watchDir, 'Test Band - After Hours'), 'Test Band', 'After Hours', [['Late', 350], ['Rain', 450], ['Porch', 500]], 1)
+      await post('/v1/plugins/watch-dir/run', {})
+      await waitApi(async () => (await getJson('/v1/entries')).results.some(e => e.music?.title === 'Porch'), 'one more album imported')
+      await open('#artist/Test%20Band')
+      const rows = '#detail [data-track] .track-name'
+      const first = await texts(rows)
+      await clickText('Show all 9', '#detail')
+      const all = await texts(rows)
+      return same({ first, all }, {
+        first: ['Late', 'Rain', 'Porch', 'Dawn', 'Señal', 'Beacon', 'Lantern', 'Mist'],
+        all: ['Late', 'Rain', 'Porch', 'Dawn', 'Señal', 'Beacon', 'Lantern', 'Mist', 'Quay']
+      })
     })
     await check('consoleClean', async () => same(browser.issues, []))
     result.pass = result.failed.length === 0

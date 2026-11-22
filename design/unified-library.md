@@ -20,7 +20,7 @@ The page before this change had a Library tab (video only, with the tools to add
 2. **A film never enters the music queue.** `Up next` holds tracks only. A series offers `Next episode`.
 3. **Music waits for a video.** When a video starts while music plays, the music stops and keeps its track, its time and its list. When the video closes, the small player shows the waiting track, paused, with the line `Paused for a video`. Nothing starts again by itself: only `Play` does.
 4. **Music closes a video.** When a person starts music while a video is open, the video closes and keeps its place under `Keep playing`.
-5. **Artwork.** A cover that the album's own saved files hold is shown. Otherwise the sleeve is drawn from the album's name. The page never opens a file that is not saved here to fill a shelf, and it never asks a public image host for an album cover. A film's poster comes through the relay (`/v1/poster/<id>`), as before.
+5. **Artwork.** Use an embedded cover from a public file that the relay holds. Otherwise draw a sleeve from the album's name. Do not open private or remote files to fill a shelf. Do not contact a public image host for an album cover. A film's poster still comes through the relay (`/v1/poster/<id>`).
 6. **No artist photos.** There are none in the system. An artist's picture is a stack of that artist's sleeves.
 7. **Where a return visit starts.** The first visit opens Home. A later visit with no link opens the room that the person used last.
 8. **Old links keep working.** `#music` opens Listen and `#library` opens Home.
@@ -103,9 +103,9 @@ Rules for every string: sentence case; no word of the plumbing (ports, peer name
 
 This change adds nothing to the HTTP API. The page uses what it used before: `/v1/entries`, `/v1/entries/info`, `/v1/poster/<id>`, `/v1/backdrop/<id>`, the stream links, and two keys in the browser's own storage (the position in each video, and the music list with its position).
 
-| The screen would like | What exists | What the page does |
+| Data a person might expect | What exists | What the page shows |
 |---|---|---|
-| A cover for every album | Only a picture inside a saved FLAC file, which the page reads itself | That picture when the album is saved here; a drawn sleeve otherwise |
+| A cover for every album | An embedded picture in a public FLAC file that the relay holds | The picture if one is available, or a drawn sleeve |
 | Track lengths in every list | A length only for a file that the relay holds, has open, or read before | Lengths on the album page and in the player; none in the list of all tracks |
 | Album, album artist and year as fields | Album and artist packed into the title; no year | The page splits the title, as before; no year on an album |
 | The date a title was first seen | Nothing that reaches the page | Shelves by title; no shelf called "new" |
@@ -114,13 +114,15 @@ This change adds nothing to the HTTP API. The page uses what it used before: `/v
 | Names and pictures of episodes | Nothing | The episode's number and the file's title; no picture |
 | A picture and a length for a clip | Nothing | A wide tile with the clip's first letter, and the word `Clip` |
 
-What a later change may add, and what each needs: a cover route for embedded or folder art; a first-seen date kept privately on the node; album, album artist, year and length in what a track announces; a title record (description, episodes) that the relay caches. Each must be additive. None may read a private or a remote file because a person scrolls. Each needs a row in the Rust relay's parity list. The three that change what a channel announces need a decision on the protocol first.
+Possible later additions are a route for embedded or folder art, a private date for the first time a node saw a file, fields for album and artist, and lengths in the track listings. Descriptions and episode names would need a cached title record. Each addition needs its own decision and a row in the Rust parity list. None can require the relay to open private or remote files when a person scrolls.
 
 ## 6. The page file and the Rust relay
 
 The Rust relay's image builds its page from this repository: it copies `src/ui.js` and `web/assets` into an empty folder and imports `page` from `src/ui.js`, with no other file of the app and no `node_modules`. So `src/ui.js` stays one self-contained file that exports `page`. `test/ui-page.test.js` does what the image does and fails when the page needs a file outside those two paths.
 
 Inside the file, each concern has its own named section in the styles, in the markup and in the script, so that a later change can move sections into files of their own without a hand edit. Such a split is a separate decision: it needs either a generated `src/ui.js` or one more copied path in the Rust relay's image.
+
+For this change the parity row is **shared page, no native port**. Both relays serve the same routes and the same page. Only the browser reads and writes the playback positions and the order of songs. There is no new HTTP field, channel operation, or file for the Rust relay to implement or migrate.
 
 ## 7. Kept on purpose
 

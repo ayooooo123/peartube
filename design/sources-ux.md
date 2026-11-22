@@ -2,9 +2,7 @@
 
 Status: design, 2026-11-20. UI only. The API is the contract in `design/youtube-source.md` §5 and the `POST /v1/search/sources` streaming form. Nothing in `src/` changed.
 
-Scope: the "Find albums" card on the Music tab of `src/ui.js`. It covers source selection, results arriving from two sources at different times, saving YouTube videos as an album, the progress cards, and how a YouTube copy is labelled in the library.
-
-Since `design/unified-library.md` (2026-11-22) this card has no field of its own: the page's one Find field is in the top bar, and the card is the `Not in your library` part of Find. The rest of this document holds.
+Scope: selecting a source, reading results as each source answers, saving songs, following a save and identifying a YouTube copy. The original design put these controls on the Music tab. In [Listen and Watch](unified-library.md), they sit under `Not in your library` on Find. The field in the top bar does both searches.
 
 ---
 
@@ -16,7 +14,7 @@ Since `design/unified-library.md` (2026-11-22) this card has no field of its own
 | D2 | **Quality advice is given for the whole search, inside the YouTube group header, and again in the save dialog.** The UI does not try to guess which YouTube row "is" which Soulseek album. | The relay cannot prove that a video and a peer folder are the same record. A per-row "better copy elsewhere" badge would be a guess presented as fact. A note that only says what is true ("Peers have FLAC copies above. These are lossy AAC 128 kbps.") points the user to the better copy and still lets them save the other. |
 | D3 | **Thumbnails go through the relay, never straight to `i.ytimg.com`.** The page fetches each thumbnail with its token from a new owner-only route, `GET /v1/providers/youtube/thumb/<videoId>`, and shows it as an object URL, as `flacPicture` already does. If the route answers 204 or anything else fails, the row keeps a drawn placeholder. | `COEP: credentialless` would let a no-cors `<img>` from YouTube load. But the page already has a rule that it never contacts third parties (the comment above `albumArt`: Cover Art Archive "would tell it what the relay holds"). A direct load would also send the owner's own IP and the results list to Google, and on an offline e2e run it would log network errors that fail the "no console errors" gate. A fetch to the page's own origin needs nothing from COEP. |
 | D4 | **Chips choose sources.** Each chip shows its source's state as text. A source the relay does not register gets no chip at all. With one source there is no chip row. | Turning a source off is a real choice: YouTube costs a request to Google, Soulseek costs about 25 s. A relay without YouTube looks exactly as it does today. |
-| D5 | **Save verbs follow what the action does.** Peer folders keep "Mirror": it copies the peer's file exactly. YouTube rows say "Save track" or "Save as album": YouTube re-encoded the audio, so this is not a mirror. Surfaces that show both kinds say "Adding", the word the Library jobs heading already uses. | The verb tells the user, honestly, what kind of copy they will get. |
+| D5 | **Name what the listener saves.** A peer result offers `Save track`, `Save album` or `Save folder`. YouTube offers `Save track` or `Save as album`. The progress label is `Adding`. | A listener can tell what will arrive. The copy label, not the button, says whether the source supplied lossless audio or YouTube audio. |
 | D6 | **YouTube save jobs share the Soulseek progress card (`slskJobItem`), which becomes `srcJobItem`.** Progress is counted in tracks, as a stepped bar, with no percentage. | The job shapes already match (`youtube-source.md` §2). Today a YouTube job would land in the Library "Adding" list through `renderJobs`, and that list would show the raw status word `transferring`, because `JOB_TEXT` has no entry for it. |
 
 ---

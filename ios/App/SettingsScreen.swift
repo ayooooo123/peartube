@@ -100,7 +100,7 @@ struct SettingsScreen: View {
                                     // No control for it here: keep what is saved.
                                     "cacheMaxGb": model.settings.cacheMaxGb
                                 ]
-                                var next = try await model.normalizeSettings(raw, requireChannel: true)
+                                var next = try await model.normalizeSettings(raw)
                                 next.configured = true
                                 await model.save(next)
                             } catch { model.error = error.localizedDescription }

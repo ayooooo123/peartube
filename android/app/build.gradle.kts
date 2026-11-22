@@ -136,8 +136,8 @@ android {
 
     buildTypes {
         debug {
-            // Installs beside the release app.
-            applicationIdSuffix = ".dev"
+            // The clean-install test must not use the normal dev app's data.
+            applicationIdSuffix = if (providers.gradleProperty("peartube.e2e").isPresent) ".dev.firstrun" else ".dev"
             versionNameSuffix = "-dev"
         }
         release {

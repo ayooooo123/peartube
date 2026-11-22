@@ -70,11 +70,6 @@ final class AppModel: ObservableObject {
             // phone send it the moment their worker exists). `runStart` waits for this before `start`.
             let castStorage = self.castStorage
             workerInit = Task { _ = try? await worker.request("init", ["castStorage": castStorage]) }
-            let hasLaunchArgs = ["-peartube-tracker", "-peartube-bootstrap", "-peartube-lan", "-peartube-relays", "-peartube-private"].contains(where: { name in
-                guard let i = args.firstIndex(of: name), args.indices.contains(i + 1) else { return false }
-                return true
-            })
-            showSettings = !hasLaunchArgs && !settings.configured && !settings.hasSources
             Task { await start() }
             pollTask = Task { [weak self] in
                 while !Task.isCancelled {

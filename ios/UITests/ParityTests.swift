@@ -242,3 +242,67 @@ final class ParityTests: XCTestCase {
         screenshot("settings-restart-after-cast")
     }
 }
+
+final class FirstRunTests: XCTestCase {
+    private let app = XCUIApplication()
+    private var addSource: XCUIElement { app.buttons["library.addSource"] }
+    private var closeSettings: XCUIElement { app.buttons["settings.close"] }
+
+    override func setUpWithError() throws {
+        continueAfterFailure = false
+        // Isolate storage, but pass none of the network arguments that configure a node.
+        app.launchArguments = ["-peartube-storage", "first-run-\(UUID().uuidString)"]
+        app.launch()
+        requireApp()
+    }
+
+    private func requireApp() {
+        XCTAssertFalse(XCUIApplication(bundleIdentifier: "com.apple.springboard").alerts.firstMatch.exists,
+                       "A system prompt is in front. No input was sent.")
+    }
+
+    private func assertEmptyLibrary() {
+        XCTAssertFalse(closeSettings.waitForExistence(timeout: 2), "Settings opened without a tap")
+        XCTAssertTrue(addSource.waitForExistence(timeout: 10))
+        XCTAssertTrue(addSource.isHittable, "The empty library must not be behind a sheet")
+    }
+
+    private func scrollTo(_ control: XCUIElement) {
+        for _ in 0..<8 {
+            requireApp()
+            if control.exists && control.isHittable { return }
+            app.swipeUp()
+        }
+        XCTFail("Could not reach the control in Settings")
+    }
+
+    func testFirstLaunchShowsEmptyLibraryNotSettings() {
+        assertEmptyLibrary()
+    }
+
+    func testBlankSaveKeepsNetworkSettingAfterRelaunch() throws {
+        // Test Save independently of which screen opened first.
+        if !closeSettings.exists { addSource.tap() }
+        let lan = app.switches["settings.lan"]
+        scrollTo(lan)
+        let before = try XCTUnwrap(lan.value as? String)
+        lan.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5)).tap()
+        let changed = try XCTUnwrap(lan.value as? String)
+        XCTAssertNotEqual(before, changed)
+
+        let save = app.buttons["settings.save"]
+        scrollTo(save)
+        XCTAssertTrue(save.isEnabled)
+        save.tap()
+        XCTAssertTrue(closeSettings.waitForNonExistence(timeout: 10), "Save rejected empty channel fields")
+        assertEmptyLibrary()
+
+        app.terminate()
+        app.launch()
+        requireApp()
+        assertEmptyLibrary()
+        addSource.tap()
+        scrollTo(lan)
+        XCTAssertEqual(lan.value as? String, changed)
+    }
+}

@@ -127,7 +127,10 @@ fun ListScreen(model: AppModel) {
             if (groups.isEmpty()) item {
                 Column(Modifier.padding(vertical = 40.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text(if (entries.isEmpty()) "Your next cinema moment awaits." else "Nothing here just yet.", color = Ink, fontSize = 19.sp)
-                    Text(if (status == null) "Connecting to your channels…" else if (entries.isEmpty()) "Add a channel from the PearTube menu above." else "Try another search or filter.", color = Dim)
+                    if (entries.isEmpty()) {
+                        if (settings.hasSources && status == null) Text("Connecting to your channels…", color = Dim)
+                        TextButton(onClick = { model.screen.value = Screen.Settings }) { Text("Add Channel or Link", color = Brand) }
+                    } else Text("Try another search or filter.", color = Dim)
                 }
             }
             groups.forEach { (key, episodes) ->

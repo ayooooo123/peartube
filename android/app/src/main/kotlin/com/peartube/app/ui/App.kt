@@ -23,13 +23,12 @@ import com.peartube.app.player.PlayerHost
 fun App(model: AppModel, player: PlayerHost) {
     val screen by model.screen.collectAsState()
     val error by model.error.collectAsState()
-    val settings by model.settings.collectAsState()
     val notice by model.notice.collectAsState()
     val snackbar = remember { SnackbarHostState() }
     LaunchedEffect(notice) {
         notice?.let { snackbar.showSnackbar(it); model.notice.value = null }
     }
-    BackHandler(enabled = screen is Screen.Play || screen is Screen.Cast || (screen == Screen.Settings && settings.hasSources)) {
+    BackHandler(enabled = screen != Screen.List) {
         if (screen is Screen.Cast) model.cancelCast() else model.screen.value = Screen.List
     }
     val clearBehind = screen is Screen.Play

@@ -5,6 +5,9 @@
 //      advertisement is dropped, and senders never list the receiver (or list only the dead one).
 //   2. A receiver whose address changes advertises again under the same name: dropped the same way.
 //   3. The old record goes down later: a sender drops the receiver by its id while its new record is live.
+//   4. A display name is cut inside a character (15 letters, then an emoji): the label carries half a surrogate pair,
+//      which has no UTF-8 form. The label on the wire is then not the name the receiver holds, so the receiver does
+//      not answer to the name senders read, and a reader that insists on UTF-8 can drop the whole packet.
 // Not covered here: a cache that answers the old record after the new one. The record heard last wins, so a sender
 // can hold the old LAN address until its next browse; it then reaches the receiver over the DHT instead.
 import test from 'node:test'
@@ -14,7 +17,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import createTestnet from 'hyperdht/testnet.js'
 import { createNode } from '../src/index.js'
-import { createCastController, createReceiver } from '../src/cast.js'
+import { createCastController, createReceiver, instanceName } from '../src/cast.js'
 import { createLan } from '../src/lan.js'
 import { mdnsBus } from './mdns.js'
 
@@ -93,4 +96,18 @@ test('a receiver restarted without a goodbye is listed again on a network that r
   // The receiver moves to another address and advertises again: senders follow it.
   await tv2.setHost('127.0.0.2')
   await waitFor(() => live()?.host === '127.0.0.2', 'the receiver at its new address')
+})
+
+test('an advertisement name keeps whole characters and fits a DNS label', () => {
+  const id = '0123456789abcdef0123456789abcdef'
+  const tv = '\u{1F4FA}'
+  assert.equal(instanceName('Kitchen TV', id, 'k3x'), 'Kitchen TV (012345-k3x)')
+  assert.equal(instanceName('The Very Long Living Room Television', id, 'k3x'), 'The Very Long Li (012345-k3x)')
+  // 15 units, then a character of two: the cut at 16 lands inside it.
+  assert.equal(instanceName(`ABCDEFGHIJKLMNO${tv}`, id, 'k3x'), 'ABCDEFGHIJKLMNO (012345-k3x)')
+  assert.equal(instanceName(tv.repeat(16), id, 'k3x'), `${tv.repeat(8)} (012345-k3x)`)
+  // 16 characters of 3 bytes each: the longest label there is.
+  const longest = instanceName('\u6f22'.repeat(20), id, 'k3x')
+  assert.equal(longest, `${'\u6f22'.repeat(16)} (012345-k3x)`)
+  assert.equal(Buffer.byteLength(longest), 61)
 })

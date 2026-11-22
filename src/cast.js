@@ -211,6 +211,16 @@ export function receiverKeyPair (storage) {
   return HyperDHT.keyPair(b4a.from(loadIdentity(storage).seed, 'hex'))
 }
 
+// The instance name of one advertisement: the start of the display name, the start of the device id, and a nonce no
+// advertisement had before (adNonce in src/lan.js). A DNS label holds 63 bytes, and a packet with a longer one cannot
+// be decoded: 16 UTF-16 units are 48 bytes at most. A cut inside a character leaves half a surrogate pair, which has
+// no UTF-8 form: the label on the wire is then not the name the receiver holds (V8 sends U+FFFD for the half), and
+// the receiver does not answer to the name senders read. So the half goes too. Senders show the full name from the
+// TXT record.
+export function instanceName (name, deviceId, nonce) {
+  return `${name.slice(0, 16).replace(/[\uD800-\uDBFF]$/, '')} (${deviceId.slice(0, 6)}-${nonce})`
+}
+
 function adapterForHost (host, customAdapter) {
   if (customAdapter) return typeof customAdapter === 'function' ? customAdapter(host) : customAdapter
   if (!host || host === '127.0.0.1') return selfAddressAdapter(host || '127.0.0.1')
@@ -769,8 +779,7 @@ export async function createReceiver ({
     try {
       const mdns = adapterForHost(currentHost, adapter)
       adHandle = mdns.advertise({
-        // A DNS label holds 63 bytes, and a packet with a longer one cannot be decoded: 16 characters are 48 at most.
-        name: `${identity.name.slice(0, 16)} (${identity.deviceId.slice(0, 6)}-${adNonce()})`,
+        name: instanceName(identity.name, identity.deviceId, adNonce()),
         type: CAST_SERVICE_TYPE,
         protocol: 'tcp',
         port: lan?.port || RECEIVER_PORT,

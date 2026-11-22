@@ -1,61 +1,73 @@
 import Foundation
+import PearTubeNative
 
 struct WorkerError: LocalizedError {
     let message: String
     var errorDescription: String? { message }
 }
 
-/// The P2P worker over bare-kit-swift (Runtime/BareKit). Writes go one at a time from `writes`, so
-/// lines reach the worklet in the order they were sent.
+/// The backend's line callback runs on the library's output thread; this box carries its lines to
+/// the main queue.
+private final class LineBox {
+    let onLine: (Data) -> Void
+    init(_ onLine: @escaping (Data) -> Void) { self.onLine = onLine }
+}
+
+/// The callback's bytes are borrowed and valid only inside the call, so they are copied here.
+private let lineTrampoline: pt_line_cb = { user, bytes, length in
+    guard let user, let bytes else { return }
+    let box = Unmanaged<LineBox>.fromOpaque(user).takeUnretainedValue()
+    box.onLine(Data(bytes: bytes, count: length))
+}
+
+/// The P2P backend over the C ABI (peartube-native-ffi). It speaks `worklet/worker.js`'s
+/// newline-delimited JSON unchanged; only the transport differs from the worklet it replaced.
 @MainActor
 final class Worker {
     var onEvent: (([String: Any]) -> Void)?
-    private var worklet: Worklet?
-    private var ipc: IPC?
     private let bonjour = BonjourHost()
-    private var pending = Data()
+    private var box: LineBox?
+    private var handle: UnsafeMutableRawPointer?
     private var nextID = 0
     private var requests: [Int: CheckedContinuation<Any, Error>] = [:]
-    private var writes: [Data] = []
-    private var writing = false
     private var suspended = false
     private var closed = false
 
     init() throws {
-        guard let bundle = Bundle.main.url(forResource: "worker", withExtension: "bundle") else {
-            throw WorkerError(message: "The PearTube worklet is missing from this app.")
+        let abi = pt_abi_version()
+        guard abi == UInt32(PT_ABI_VERSION) else {
+            throw WorkerError(message: "This build links an incompatible PearTube backend (ABI \(abi)).")
         }
-        let source = try Data(contentsOf: bundle)
-        let worklet: Worklet
-        let ipc: IPC
-        do {
-            worklet = try Worklet()
-            // The ipc exists before the worker runs, so nothing it writes at start is missed.
-            ipc = try IPC(worklet: worklet)
-            try worklet.start("/worker.bundle", source: source)
-        } catch {
-            throw WorkerError(message: "Cannot start the embedded P2P runtime: \(error)")
+        let box = LineBox { [weak self] data in DispatchQueue.main.async { self?.receive(data) } }
+        self.box = box
+        let config = Data(#"{"bonjour":"host"}"#.utf8)
+        var handle: UnsafeMutableRawPointer?
+        let status = config.withUnsafeBytes { raw in
+            pt_init(raw.bindMemory(to: UInt8.self).baseAddress, config.count, lineTrampoline, Unmanaged.passUnretained(box).toOpaque(), &handle)
         }
-        self.worklet = worklet
-        self.ipc = ipc
+        guard status == PT_OK, let handle else {
+            throw WorkerError(message: "Cannot start the embedded P2P backend (status \(status)).")
+        }
+        self.handle = handle
+        NSLog("PearTube Rust peer engine started (ABI %u)", abi)
+        // Host events (the system Bonjour adapter) travel back as `{event}` lines.
         bonjour.send = { [weak self] message in self?.send(message) }
-        Task { [weak self] in
-            for await data in ipc { self?.receive(data) }
-            guard let self, !self.closed else { return }
-            self.fail("The embedded P2P worker closed its connection.")
-        }
     }
 
     func request(_ method: String, _ params: [String: Any] = [:]) async throws -> Any {
         guard !closed else { throw WorkerError(message: "The P2P worker is closed.") }
         nextID += 1
         let id = nextID
-        var data = try JSONSerialization.data(withJSONObject: ["id": id, "method": method, "params": params])
-        data.append(10)
         return try await withCheckedThrowingContinuation { continuation in
             requests[id] = continuation
-            writes.append(data)
-            flush()
+            do {
+                var data = try JSONSerialization.data(withJSONObject: ["id": id, "method": method, "params": params])
+                data.append(10)
+                try write(data)
+            } catch {
+                requests.removeValue(forKey: id)
+                continuation.resume(throwing: error)
+            }
         }
     }
 
@@ -64,50 +76,32 @@ final class Worker {
         do {
             var data = try JSONSerialization.data(withJSONObject: message)
             data.append(10)
-            writes.append(data)
-            flush()
+            try write(data)
         } catch { fail(error.localizedDescription) }
     }
 
-    private func flush() {
-        guard !writing, !writes.isEmpty, let ipc, !closed else { return }
-        writing = true
-        let data = writes.removeFirst()
-        Task { [weak self] in
-            do {
-                try await ipc.write(data)
-                guard let self, !self.closed else { return }
-                self.writing = false
-                self.flush()
-            } catch {
-                guard let self, !self.closed else { return }
-                self.writing = false
-                self.fail(error.localizedDescription)
-            }
-        }
+    private func write(_ data: Data) throws {
+        guard let handle else { throw WorkerError(message: "The P2P backend is closed.") }
+        let status = data.withUnsafeBytes { pt_send_line(handle, $0.bindMemory(to: UInt8.self).baseAddress, data.count) }
+        guard status == PT_OK else { throw WorkerError(message: "The P2P backend rejected a message (status \(status)).") }
     }
 
-    private func receive(_ data: Data) {
-        guard !closed else { return }
-        pending.append(data)
-        while let newline = pending.firstIndex(of: 10) {
-            let line = Data(pending[..<newline])
-            pending.removeSubrange(...newline)
-            if line.isEmpty { continue }
-            do {
-                guard let message = try JSONSerialization.jsonObject(with: line) as? [String: Any] else {
-                    throw WorkerError(message: "The P2P worker sent an invalid message.")
-                }
-                if let event = message["event"] as? String {
-                    if event == "bonjour" { bonjour.handle(message) }
-                    else if event == "fatal" { fail(message["error"] as? String ?? "P2P runtime failed") }
-                    else { onEvent?(message) }
-                } else if let id = message["id"] as? Int, let continuation = requests.removeValue(forKey: id) {
-                    if let error = message["error"] as? String { continuation.resume(throwing: WorkerError(message: error)) }
-                    else { continuation.resume(returning: message["result"] ?? NSNull()) }
-                }
-            } catch { fail(error.localizedDescription) }
-        }
+    // The ABI delivers exactly one complete line per callback, with no terminator.
+    private func receive(_ line: Data) {
+        guard !line.isEmpty else { return }
+        do {
+            guard let message = try JSONSerialization.jsonObject(with: line) as? [String: Any] else {
+                throw WorkerError(message: "The P2P worker sent an invalid message.")
+            }
+            if let event = message["event"] as? String {
+                if event == "bonjour" { bonjour.handle(message) }
+                else if event == "fatal" { fail(message["error"] as? String ?? "P2P runtime failed") }
+                else { onEvent?(message) }
+            } else if let id = message["id"] as? Int, let continuation = requests.removeValue(forKey: id) {
+                if let error = message["error"] as? String { continuation.resume(throwing: WorkerError(message: error)) }
+                else { continuation.resume(returning: message["result"] ?? NSNull()) }
+            }
+        } catch { fail(error.localizedDescription) }
     }
 
     private func fail(_ message: String) {
@@ -118,15 +112,15 @@ final class Worker {
     }
 
     func suspend() {
-        guard !closed, !suspended else { return }
+        guard !closed, !suspended, let handle else { return }
         suspended = true
-        worklet?.suspend(linger: 5000)
+        pt_suspend(handle, 5000)
     }
 
     func resume() {
-        guard !closed, suspended else { return }
+        guard !closed, suspended, let handle else { return }
         suspended = false
-        worklet?.resume()
+        pt_resume(handle)
     }
 
     func refreshDiscovery() {
@@ -138,10 +132,15 @@ final class Worker {
         guard !closed else { return }
         bonjour.close()
         closed = true
-        fail("The P2P worker was closed.")
-        ipc?.close()
-        ipc = nil
-        // Releasing the worklet terminates it without blocking.
-        worklet = nil
+        if let handle { pt_shutdown(handle) }
+        box = nil
+        // All callbacks have submitted their lines to the main queue. Let those replies
+        // complete their requests before failing any that the engine did not answer.
+        DispatchQueue.main.async { self.fail("The P2P worker was closed.") }
+        handle = nil
+    }
+
+    deinit {
+        if let handle { withExtendedLifetime(box) { pt_shutdown(handle) } }
     }
 }

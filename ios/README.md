@@ -1,12 +1,12 @@
 # PearTube for iOS
 
-A native SwiftUI app for iOS 17 and later. It embeds the same QuickJS/Bare P2P worklet as Android and macOS, and links the shared Rust player with its UIKit `AppleBackend`. It is not a relay-only client or a web view.
+A native SwiftUI app for iOS 17 and later. This test branch uses the Rust P2P engine and the shared Rust player. It does not embed BareKit or a JavaScript worklet.
 
 This is a development target, not a published iOS release. Compilation does not establish feature or codec compatibility; use the verification below and retain its evidence. Android and macOS release artifacts are unchanged.
 
-The iPhone/iPad app is a **cast sender, library, and local player only**. It pairs with and controls dedicated TV receivers; it has no receive-cast screen or incoming-cast playback mode. Receiver functionality belongs to the Android TV app and standalone `PearTubeReceiver`. The shared worklet retains receiver commands for those dedicated clients, not as a mobile-app feature.
+The iPhone/iPad app is a **cast sender, library, and local player only**. It has no receive-cast screen or incoming-cast playback mode. Receiver functionality belongs to the Android TV app and standalone `PearTubeReceiver`.
 
-The only local playback page is the fullscreen player, in portrait or landscape. Tap the picture to reveal its controls. A single elapsed/total time readout lives inside those controls and disappears with them; there is no separate persistent clock. The overlaid Info button opens a resizable sheet for video details, formats, and episodes; audio, subtitles, and casting are also available from overlay controls. There is no inline player or fullscreen-exit toggle: Back closes playback and returns directly to the library. Nearby TV receivers appear automatically in the Cast chooser; opening the chooser or returning to the foreground refreshes Bonjour discovery without discarding saved pairings.
+The only local playback page is the fullscreen player, in portrait or landscape. Tap the picture to reveal its controls. A single elapsed/total time readout lives inside those controls and disappears with them; there is no separate persistent clock. The overlaid Info button opens a resizable sheet for video details, formats, and episodes; audio, subtitles, and casting are also available from overlay controls. There is no inline player or fullscreen-exit toggle: Back closes playback and returns directly to the library.
 
 ## Build
 
@@ -15,6 +15,7 @@ On an Apple Silicon Mac, install Xcode with an iOS simulator runtime, XcodeGen, 
 From the repository root:
 
 ```sh
+export PEARTUBE_NATIVE=/path/to/stack
 node ios/project.mjs
 xcrun simctl list devices available
 xcodebuild -project ios/PearTube.xcodeproj -scheme PearTube \
@@ -22,7 +23,7 @@ xcodebuild -project ios/PearTube.xcodeproj -scheme PearTube \
   -derivedDataPath ios/build/simulator build
 ```
 
-The preparation phase builds BareKit on QuickJS, packs `worklet/worker.js` for the selected platform, links its native addons, and builds `ios/native` as a Rust static library. The first build downloads pinned native sources. Device and simulator products are separate under `ios/build/`.
+Set `PEARTUBE_NATIVE` to the directory that contains `peartube-native` at `f479d4629` and its sibling crates at the commits in `STACK.lock`. Project generation builds the device and simulator libraries. The Xcode build links the library for its platform and builds the player. This branch has no engine switch or published iOS engine asset. Automatic TV discovery still uses raw multicast in the engine and is not expected to work on iPhone.
 
 `node ios/project.mjs` regenerates the Xcode project from the repository's `package.json` version. Do not put long-lived signing preferences into generated project files. `sync-player.py` includes the iOS manifest when updating the shared player and codec pins.
 
@@ -69,7 +70,7 @@ Free-account apps expire after **seven days** and need refreshing. Apple's limit
 
 ## Networking, storage, and lifecycle
 
-- Apple Bonjour APIs register/browse exactly `_hyperdht-mdns._udp` and `_peartube-cast._tcp`; the iOS bundle replaces raw-socket Bonjour with `ios/bonjour.cjs` and a native host bridge exposing the worklet's Bonjour interface. This avoids the restricted raw multicast entitlement; the normal **Local Network** permission is still required on an iPhone. [Apple TN3179](https://developer.apple.com/documentation/technotes/tn3179-understanding-local-network-privacy) explains the distinction.
+- LAN peer discovery uses Apple's Bonjour APIs through the host adapter. The Rust cast browser still uses raw multicast instead. The normal **Local Network** permission is still required for LAN discovery. [Apple TN3179](https://developer.apple.com/documentation/technotes/tn3179-understanding-local-network-privacy) explains the distinction.
 - Swift settings, history, SoundFont, and cast credentials live in private Application Support files. Tracker stores are separate and excluded from backup. The Corestore contains only the public tracker/channel/blob data.
 - The app exposes the shared loopback `/v1`, SSE, Stremio, and playlist API. Its actual address is shown in worker diagnostics; it falls back to an ephemeral port if the preferred port is busy.
 - iOS controls background execution. Foreground/resume behavior must be verified on-device; this app does not promise unlimited background seeding. A TV receiver is a P2P node, so it can continue independently after handoff.

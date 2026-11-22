@@ -372,7 +372,7 @@ final class AppModel: ObservableObject {
         if raw.lowercased().hasPrefix("peartube:") { await openURI(raw); return }
         await pair(["address": raw], unpaired: nil)
     }
-    /// Pairs through the worklet (which reads a typed address) and connects to the receiver it saved.
+    /// Pairs through the backend (which reads a typed address) and connects to the receiver it saved.
     private func pair(_ params: [String: Any], unpaired: String?) async {
         do {
             let pairedID = try await castRequest("castPair", params).string("pairedId")

@@ -22,11 +22,11 @@ const config = {
   targets: {
     PearTube: {
       type: 'application', platform: 'iOS', sources: ['App', 'Runtime'],
+      dependencies: [{ framework: 'build/native/PearTubeNative.xcframework', embed: false }],
       settings: { base: {
-        FRAMEWORK_SEARCH_PATHS: ['$(inherited)', '$(SRCROOT)/build/$(PLATFORM_NAME)/Frameworks'],
         LIBRARY_SEARCH_PATHS: ['$(inherited)', '$(SRCROOT)/build/$(PLATFORM_NAME)'],
         SWIFT_OBJC_BRIDGING_HEADER: 'Runtime/PearTube-Bridging-Header.h',
-        OTHER_LDFLAGS: ['$(inherited)', '-framework BareKit', '-lpeartube_ios', '-lc++', '-liconv', '-lz', '-framework AVFoundation', '-framework AudioToolbox', '-framework CoreAudio', '-framework CoreMedia', '-framework CoreVideo', '-framework QuartzCore', '-framework CoreGraphics', '-framework Foundation', '-framework UIKit', '-framework Security', '-framework VideoToolbox', '-framework SystemConfiguration'],
+        OTHER_LDFLAGS: ['$(inherited)', '-lpeartube_ios', '-lc++', '-liconv', '-lz', '-framework AVFoundation', '-framework AudioToolbox', '-framework CoreAudio', '-framework CoreMedia', '-framework CoreVideo', '-framework QuartzCore', '-framework CoreGraphics', '-framework Foundation', '-framework UIKit', '-framework Security', '-framework VideoToolbox', '-framework SystemConfiguration'],
         LD_RUNPATH_SEARCH_PATHS: ['$(inherited)', '@executable_path/Frameworks']
       } },
       info: { path: 'build/Info.plist', properties: {
@@ -40,8 +40,7 @@ const config = {
         'UISupportedInterfaceOrientations~ipad': ['UIInterfaceOrientationPortrait', 'UIInterfaceOrientationPortraitUpsideDown', 'UIInterfaceOrientationLandscapeLeft', 'UIInterfaceOrientationLandscapeRight'],
         UIRequiresFullScreen: true
       } },
-      preBuildScripts: [{ name: 'Prepare shared P2P runtime and Rust player', script: 'set -eu\nexport PATH="/opt/homebrew/bin:/usr/local/bin:$HOME/.cargo/bin:$PATH"\nnode "$SRCROOT/prepare.mjs" "$PLATFORM_NAME"', basedOnDependencyAnalysis: false }],
-      postBuildScripts: [{ name: 'Embed worklet and native addons', script: 'set -eu\nsh "$SRCROOT/embed.sh"', basedOnDependencyAnalysis: false }]
+      preBuildScripts: [{ name: 'Prepare P2P backend and Rust player', script: 'set -eu\nexport PATH="/opt/homebrew/bin:/usr/local/bin:$HOME/.cargo/bin:$PATH"\nnode "$SRCROOT/prepare.mjs" "$PLATFORM_NAME"', basedOnDependencyAnalysis: false }]
     },
     PearTubeUITests: {
       type: 'bundle.ui-testing', platform: 'iOS', sources: ['UITests', { path: process.env.PEARTUBE_E2E_FIXTURE || 'build/private-e2e/fixture.json', type: 'file', buildPhase: 'resources', optional: true, createIntermediateGroups: false }],
@@ -52,5 +51,7 @@ const config = {
   schemes: { PearTube: { build: { targets: { PearTube: 'all', PearTubeUITests: ['test'] } }, test: { targets: ['PearTubeUITests'], gatherCoverageData: false } } }
 }
 mkdirSync(join(ios, 'build'), { recursive: true })
+// xcodegen resolves the xcframework path, so it must exist before generating.
+execFileSync('sh', ['ios/native.sh'], { cwd: root, stdio: 'inherit' })
 writeFileSync(join(ios, 'project.generated.json'), JSON.stringify(config, null, 2))
 execFileSync('xcodegen', ['generate', '--spec', 'project.generated.json', '--project', '.'], { cwd: ios, stdio: 'inherit', timeout: 60000 })

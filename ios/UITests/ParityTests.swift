@@ -71,7 +71,7 @@ final class ParityTests: XCTestCase {
         defer { XCUIDevice.shared.orientation = .portrait }
         let movie = try XCTUnwrap(fixture["movieKey"] as? String)
         let row = element("library.entry.\(movie)")
-        XCTAssertTrue(row.waitForExistence(timeout: 150), "The on-device worklet did not synchronize the relay movie. \(app.debugDescription)")
+        XCTAssertTrue(row.waitForExistence(timeout: 150), "The on-device backend did not synchronize the relay movie. \(app.debugDescription)")
         screenshot("library-synchronized")
 
         try tap("filters.series")

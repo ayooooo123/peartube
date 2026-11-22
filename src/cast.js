@@ -13,7 +13,7 @@ import HyperDHT from 'hyperdht'
 import ByteStream from 'hypercore-byte-stream'
 import b4a from 'b4a'
 import { HEX64, RECEIVER_PORT, cleanName, formatReceiverUri, formatWatchUri, parseUri, safeEqual } from './protocol.js'
-import { interfaceAdapter, selfAddressAdapter } from './lan.js'
+import { adNonce, interfaceAdapter, selfAddressAdapter } from './lan.js'
 import { qrSvg } from './qr.js'
 import { CAST } from '../spec/protocols.js'
 import { boundedEntry, commandFromWire, commandToWire, openControl, pairToWire, pairedFromWire, pairedToWire, serveControl, stateFromWire, stateToWire, subscribeToWire } from './cast-control.js'
@@ -754,7 +754,8 @@ export async function createReceiver ({
   const stopServing = node.onConnection(serve)
   for (const conn of node.peerConnections()) serve(conn)
 
-  // The advertisement names the node's LAN endpoint, the address a sender dials. It is renewed when that changes.
+  // The advertisement names the node's LAN endpoint, the address a sender dials. It is renewed when that changes, each
+  // time under a name never used before (see adNonce in src/lan.js): senders know a receiver by TXT `id` and `name`.
   let adSig = ''
 
   async function refreshMdns () {
@@ -768,7 +769,8 @@ export async function createReceiver ({
     try {
       const mdns = adapterForHost(currentHost, adapter)
       adHandle = mdns.advertise({
-        name: `${identity.name} (${identity.deviceId.slice(0, 6)})`,
+        // A DNS label holds 63 bytes, and a packet with a longer one cannot be decoded: 16 characters are 48 at most.
+        name: `${identity.name.slice(0, 16)} (${identity.deviceId.slice(0, 6)}-${adNonce()})`,
         type: CAST_SERVICE_TYPE,
         protocol: 'tcp',
         port: lan?.port || RECEIVER_PORT,
@@ -939,13 +941,15 @@ export function createCastController ({
             auth: txt.auth === 'open' ? 'open' : 'code',
             // A receiver on another PearTube version advertises another `v`, refuses this one's channel, and is
             // never dialed.
-            current: txt.v === CAST_TXT_VERSION
+            current: txt.v === CAST_TXT_VERSION,
+            // The advertisement heard last for this id. An older one (a restart, a new address) can still go down later.
+            adName: svc.name
           })
           emitChange()
         },
         onServiceDown (svc) {
           const id = String(svc?.txt?.id || '')
-          if (id && discovered.delete(id)) emitChange()
+          if (id && discovered.get(id)?.adName === svc.name && discovered.delete(id)) emitChange()
         },
         onError () {}
       })

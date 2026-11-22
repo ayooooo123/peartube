@@ -250,8 +250,11 @@ final class FirstRunTests: XCTestCase {
 
     override func setUpWithError() throws {
         continueAfterFailure = false
-        // Isolate storage, but pass none of the network arguments that configure a node.
+    }
+
+    private func launch(bootstrap: String? = nil) {
         app.launchArguments = ["-peartube-storage", "first-run-\(UUID().uuidString)"]
+        if let bootstrap { app.launchArguments += ["-peartube-bootstrap", bootstrap] }
         app.launch()
         requireApp()
     }
@@ -273,14 +276,39 @@ final class FirstRunTests: XCTestCase {
             if control.exists && control.isHittable { return }
             app.swipeUp()
         }
-        XCTFail("Could not reach the control in Settings")
+        XCTFail("Could not reach the control")
     }
 
-    func testFirstLaunchShowsEmptyLibraryNotSettings() {
+    private func checkNode(minimumPeers: Int) throws -> Int {
+        requireApp()
+        app.buttons["library.hood"].tap()
+        let raw = app.staticTexts["hood.rawState"]
+        for _ in 0..<12 where !raw.exists { requireApp(); app.swipeUp() }
+        var peers = 0
+        let running = NSPredicate { _, _ in
+            guard raw.exists, let state = try? JSONSerialization.jsonObject(with: Data(raw.label.utf8)) as? [String: Any],
+                  let writer = state["writer"] as? String, writer.count == 64,
+                  let count = state["peers"] as? Int, count >= minimumPeers else { return false }
+            peers = count
+            return true
+        }
+        expectation(for: running, evaluatedWith: nil)
+        waitForExpectations(timeout: 30)
+        requireApp()
+        app.navigationBars.buttons["Done"].tap()
+        return peers
+    }
+
+    func testFirstLaunchShowsEmptyLibraryNotSettings() throws {
+        // Bootstrap was enough to suppress the first-run sheet on older versions.
+        // Check this launch, including the worker's status, without any network argument.
+        launch()
         assertEmptyLibrary()
+        _ = try checkNode(minimumPeers: 0)
     }
 
     func testBlankSaveKeepsNetworkSettingAfterRelaunch() throws {
+        launch()
         // Test Save independently of which screen opened first.
         if !closeSettings.exists { addSource.tap() }
         let lan = app.switches["settings.lan"]
@@ -304,5 +332,51 @@ final class FirstRunTests: XCTestCase {
         addSource.tap()
         scrollTo(lan)
         XCTAssertEqual(lan.value as? String, changed)
+    }
+
+    func testGlobalSearchPlaysWithoutAccount() throws {
+        guard let url = Bundle(for: Self.self).url(forResource: "fixture", withExtension: "json"),
+              let fixture = try JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any],
+              let title = fixture["firstRunTitle"] as? String else {
+            throw XCTSkip("Supply the fixture from ios/first-run-network.mjs --serve.")
+        }
+        let bootstrap = try XCTUnwrap(fixture["bootstrap"] as? String)
+        XCTAssertFalse(bootstrap.isEmpty)
+        launch(bootstrap: bootstrap)
+        assertEmptyLibrary()
+        let search = app.textFields["search.field"]
+        requireApp(); search.tap(); search.typeText(title + "\n")
+        let hits = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH 'global.play.'"))
+        let play = hits.firstMatch
+        XCTAssertTrue(play.waitForExistence(timeout: 120), "No global result for the fixture film")
+        XCTAssertEqual(hits.count, 1)
+        XCTAssertTrue(app.staticTexts[title].exists)
+        let peers = try checkNode(minimumPeers: 1)
+        scrollTo(play); play.tap()
+
+        let picture = app.descendants(matching: .any).matching(identifier: "player.surface").firstMatch
+        XCTAssertTrue(picture.waitForExistence(timeout: 30))
+        // The picture's value is "elapsed of duration", even after the controls hide.
+        func elapsed() -> Int {
+            guard let value = picture.value as? String, let clock = value.split(separator: " ").first else { return 0 }
+            return clock.split(separator: ":").compactMap { Int($0) }.reduce(0) { $0 * 60 + $1 }
+        }
+        let start = elapsed()
+        expectation(for: NSPredicate { _, _ in elapsed() >= start + 2 }, evaluatedWith: nil)
+        waitForExpectations(timeout: 40)
+        XCTAssertFalse(app.staticTexts["player.error"].exists)
+        let evidence = XCTAttachment(string: "\(title): \(peers) public peer(s); playback from \(start) to \(elapsed()) seconds.")
+        evidence.name = "first-run-playback"; evidence.lifetime = .keepAlways; add(evidence)
+
+        // Search and playback above must work before the first Save. The same empty
+        // account must also save; bootstrap alone hid the old automatic sheet.
+        let back = app.buttons["player.back"]
+        requireApp()
+        if !back.isHittable { picture.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.22)).tap() }
+        back.tap()
+        requireApp(); app.buttons["library.settings"].tap()
+        let save = app.buttons["settings.save"]
+        scrollTo(save); save.tap()
+        XCTAssertTrue(closeSettings.waitForNonExistence(timeout: 10), "Save rejected the empty account")
     }
 }

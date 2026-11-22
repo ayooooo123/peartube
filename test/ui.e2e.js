@@ -222,6 +222,16 @@ async function startRelay (env) {
   return proc
 }
 
+// The relay, the stub server and a test's folders, ended together: by the test's `finally`, and by a test whose
+// browser did not start, which never reaches its `finally` and would leave the relay running after the run.
+async function stopRelay (relay, stub, dirs) {
+  relay.kill('SIGTERM')
+  await new Promise(resolve => { relay.once('exit', resolve); setTimeout(resolve, 5000) })
+  stub.srv.closeAllConnections()
+  stub.srv.close()
+  for (const dir of dirs) rmSync(dir, { recursive: true, force: true })
+}
+
 // Minimal CDP client for one Brave tab.
 async function launchBrowser () {
   const exe = process.env.PUPPETEER_EXECUTABLE_PATH
@@ -229,13 +239,32 @@ async function launchBrowser () {
   const dir = mkdtempSync(join(tmpdir(), 'peartube-ui-browser-'))
   // `--use-mock-keychain` + `--password-store=basic` + `--disable-sync` keep macOS from ever prompting
   // SecurityAgent for Brave's storage/sync/wallet keys on throwaway profiles during unattended runs.
-  const proc = spawn(exe, ['--headless=new', '--remote-debugging-port=0', '--user-data-dir=' + dir, '--no-first-run', '--no-default-browser-check', '--disable-gpu', '--disable-extensions', '--use-mock-keychain', '--password-store=basic', '--disable-sync', '--disable-features=BraveWallet,BraveRewards,BraveNews', 'about:blank'], { stdio: 'ignore' })
+  // `--disable-gpu` alone leaves WebGL to the platform: Chromium on a Linux machine with no GPU falls back to
+  // software GL and writes a deprecation warning into the page's console, and on macOS the page gets no WebGL.
+  // `--enable-unsafe-swiftshader` asks for software GL by name, so the player takes one path on every machine.
+  const proc = spawn(exe, ['--headless=new', '--remote-debugging-port=0', '--user-data-dir=' + dir, '--no-first-run', '--no-default-browser-check', '--disable-gpu', '--enable-unsafe-swiftshader', '--disable-extensions', '--use-mock-keychain', '--password-store=basic', '--disable-sync', '--disable-features=BraveWallet,BraveRewards,BraveNews', 'about:blank'], { stdio: 'ignore' })
   const portFile = join(dir, 'DevToolsActivePort')
-  for (let i = 0; i < 200 && !existsSync(portFile); i++) await sleep(100)
-  const port = readFileSync(portFile, 'utf8').split('\n')[0]
-  const target = (await (await fetch(`http://127.0.0.1:${port}/json/list`)).json()).find(t => t.type === 'page')
-  const ws = new WebSocket(target.webSocketDebuggerUrl)
-  await new Promise((resolve, reject) => { ws.onopen = resolve; ws.onerror = reject })
+  const connect = async () => {
+    for (let i = 0; i < 200 && !existsSync(portFile); i++) await sleep(100)
+    const port = readFileSync(portFile, 'utf8').split('\n')[0]
+    // The port file can be there before the first tab is: on a busy machine the list came back with no page in it.
+    let target = null
+    for (let i = 0; i < 100 && !target; i++) {
+      target = (await (await fetch(`http://127.0.0.1:${port}/json/list`)).json()).find(t => t.type === 'page')
+      if (!target) await sleep(100)
+    }
+    assert.ok(target, 'the browser opened no tab within 10 s')
+    const socket = new WebSocket(target.webSocketDebuggerUrl)
+    await new Promise((resolve, reject) => { socket.onopen = resolve; socket.onerror = reject })
+    return { port, target, ws: socket }
+  }
+  // A browser that cannot be driven is ended here: nothing else holds it, and it would outlive the run.
+  const { port, target, ws } = await connect().catch(async err => {
+    proc.kill('SIGKILL')
+    await sleep(300)
+    rmSync(dir, { recursive: true, force: true })
+    throw err
+  })
   let seq = 0
   const pending = new Map()
   const issues = []
@@ -515,7 +544,7 @@ test('relay web UI: settings, plugins as intents, identification, music sources,
   const result = { pass: false, relay: base, checks: {}, interactions: {}, timings: {}, consoleIssues: [], viewports: [], screenshots: [] }
   const started = Date.now()
   const mark = name => { result.timings[name] = Date.now() - started }
-  const browser = await launchBrowser()
+  const browser = await launchBrowser().catch(async err => { await stopRelay(relay, stub, [storage, binDir, watchDir]); throw err })
   const { evaluate, send } = browser
   const ui = drive(browser, base, result, shotDir)
   const { click, clickText, clickName, type, waitFor, waitApi, viewport, open, goTab, shot, tasteAudit } = ui
@@ -1414,11 +1443,7 @@ test('relay web UI: settings, plugins as intents, identification, music sources,
   } finally {
     writeFileSync(join(outDir, 'ui-result.json'), JSON.stringify(result, null, 2))
     await browser.close()
-    relay.kill('SIGTERM')
-    await new Promise(resolve => { relay.once('exit', resolve); setTimeout(resolve, 5000) })
-    stub.srv.closeAllConnections()
-    stub.srv.close()
-    for (const dir of [storage, binDir, watchDir]) rmSync(dir, { recursive: true, force: true })
+    await stopRelay(relay, stub, [storage, binDir, watchDir])
   }
 })
 
@@ -1457,7 +1482,7 @@ test('relay web UI: one library with Home, Listen, Watch and Find', { timeout: 9
     return res.json()
   }
   const result = { pass: false, relay: base, checks: {}, failed: [], consoleIssues: [], screenshots: [] }
-  const browser = await launchBrowser()
+  const browser = await launchBrowser().catch(async err => { await stopRelay(relay, stub, [storage, binDir, watchDir]); throw err })
   const { evaluate } = browser
   const { click, clickText, clickName, type, press, waitFor, waitApi, viewport, open, goTab, shot, tasteAudit } = drive(browser, base, result, shots)
 
@@ -2577,15 +2602,18 @@ test('relay web UI: one library with Home, Listen, Watch and Find', { timeout: 9
       const album = await evaluate(`(() => { const a = document.querySelector('#albums .album-open'); return a ? a.getAttribute('href') : '#listen' })()`)
       await open('#watch')
       const title = await evaluate(`(() => { const a = document.querySelector('#entries a.tile[href^="#title/"]'); return a ? a.getAttribute('href') : '#watch' })()`)
-      const places = [['home', '#home'], ['listen', '#listen'], ['artists', '#listen/artists'], ['tracks', '#listen/tracks'],
-        ['album', album], ['artist', '#artist/Test%20Band'], ['watch', '#watch'], ['title', title],
-        ['find', '#find/light'], ['add', '#add'], ['playing', '#playing']]
+      // Each place with the panel it must show: an audit of a place that did not open would pass on the page shown in its stead.
+      const places = [['home', '#home', 'home'], ['listen', '#listen', 'listen'], ['artists', '#listen/artists', 'listen'], ['tracks', '#listen/tracks', 'listen'],
+        ['album', album, 'detail'], ['artist', '#artist/Test%20Band', 'detail'], ['watch', '#watch', 'watch'], ['title', title, 'detail'],
+        ['find', '#find/light', 'find'], ['add', '#add', 'add'], ['playing', '#playing', 'playing']]
       for (const [width, height] of [[1440, 900], [390, 844]]) {
         for (const scheme of ['light', 'dark']) {
           await viewport(width, height, scheme)
-          for (const [name, hash] of places) {
+          for (const [name, hash, panel] of places) {
             await open(hash)
             await sleep(250)
+            const shown = (await place()).panel
+            if (shown !== panel) return { place: name, saw: shown, want: panel }
             await tasteAudit(width + ' ' + scheme + ' ' + name)
             if (scheme === 'light') await shot(name + '-' + width + '-light')
           }
@@ -2617,10 +2645,6 @@ test('relay web UI: one library with Home, Listen, Watch and Find', { timeout: 9
     result.consoleIssues = [...browser.issues]
     writeFileSync(join(outDir, 'ui-design-result.json'), JSON.stringify(result, null, 2))
     await browser.close()
-    relay.kill('SIGTERM')
-    await new Promise(resolve => { relay.once('exit', resolve); setTimeout(resolve, 5000) })
-    stub.srv.closeAllConnections()
-    stub.srv.close()
-    for (const dir of [storage, binDir, watchDir]) rmSync(dir, { recursive: true, force: true })
+    await stopRelay(relay, stub, [storage, binDir, watchDir])
   }
 })

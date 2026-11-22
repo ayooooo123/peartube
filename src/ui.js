@@ -141,6 +141,7 @@ export const page = `<!doctype html>
   .btn:hover:not(:disabled) { border-color: color-mix(in srgb, var(--dim) 45%, transparent); }
   .btn.primary { background: var(--brand); border-color: var(--brand); color: var(--on-brand); }
   .btn.primary:hover:not(:disabled) { background: var(--brand-hover); border-color: var(--brand-hover); }
+  :is(#tab-home, #tab-listen, #tab-watch, #tab-find, #tab-add, #detail) .btn.primary { background: var(--text); border-color: var(--text); color: var(--bg); }
   .btn.quiet { background: transparent; border-color: transparent; color: var(--dim); }
   .btn.quiet:hover:not(:disabled) { color: var(--text); border-color: var(--line); }
   .btn:disabled { opacity: .5; cursor: default; }
@@ -340,7 +341,8 @@ export const page = `<!doctype html>
   .p-top { position: absolute; z-index: 2; top: 0; left: 0; right: 0; display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 16px 22px 32px; background: linear-gradient(180deg,rgba(0,0,0,.82),transparent); transition: opacity .2s; }
   .p-head { min-width: 0; flex: 1; }
   .p-title { font-size: 18px; font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .p-badge { font-size: 12px; color: var(--p-dim); font-variant-numeric: tabular-nums; }
+  .p-file-info { width: fit-content; font-size: 12px; color: var(--p-dim); font-variant-numeric: tabular-nums; }
+  .p-file-info summary { cursor: pointer; }
   .p-stage { position: relative; flex: 1; min-height: 0; display: flex; align-items: center; justify-content: center; background: #000; overflow: hidden; cursor: pointer; }
   #pBackdrop { position: absolute; inset: -32px; background: center / cover no-repeat; filter: blur(28px) brightness(.36); transform: scale(1.06); opacity: 0; transition: opacity .35s ease; pointer-events: none; }
   #pBackdrop.vis { opacity: 1; }
@@ -357,58 +359,94 @@ export const page = `<!doctype html>
   #pSeek { width: 100%; accent-color: var(--brand); padding: 0; cursor: pointer; }
   .clock { font-variant-numeric: tabular-nums; font-size: 12.5px; color: var(--p-dim); min-width: 96px; }
   #playerModal.chrome-hidden .p-top, #playerModal.chrome-hidden .p-bar { opacity: 0; pointer-events: none; }
-  /* Music: one bar along the bottom of every tab, and the queue it opens. The bar is the proof that sound is on. */
-  :root { --np-h: 76px; }
-  .np { position: fixed; left: 0; right: 0; bottom: var(--nav-h); z-index: 30; min-height: var(--np-h); display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(200px, 1.5fr) auto; grid-template-areas: 'info ctl seek side'; align-items: center; gap: 6px 20px; padding: 10px 24px; background: color-mix(in srgb, var(--surface) 94%, transparent); backdrop-filter: blur(18px) saturate(1.3); border-top: 1px solid var(--line); box-shadow: 0 -10px 30px rgba(0,0,0,.16); }
-  body.np-on main { padding-bottom: calc(var(--np-h) + 56px + var(--nav-h)); }
-  body.np-on #toast { bottom: calc(var(--np-h) + 16px + var(--nav-h)); }
-  body.np-on #castBar { bottom: calc(var(--np-h) + 12px + var(--nav-h)); }
-  .np-info { grid-area: info; display: flex; align-items: center; gap: 12px; min-width: 0; }
-  .np-art { flex: none; width: 48px; height: 48px; border-radius: 10px; border: 0; padding: 0; background: linear-gradient(150deg, var(--brand), color-mix(in srgb, var(--brand) 35%, var(--raised))); color: var(--on-brand); font: inherit; font-weight: 800; font-size: 20px; cursor: pointer; }
-  .np-art .sleeve { position: relative; width: 100%; height: 100%; border-radius: inherit; }
-  .np-art .sleeve-mono { font-size: 17px; }
-  .np-text { min-width: 0; display: flex; flex-direction: column; align-items: flex-start; }
-  .np-title { max-width: 100%; padding: 0; border: 0; background: none; color: var(--text); font: inherit; font-weight: 600; text-align: left; cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .np-title:hover { text-decoration: underline; }
-  .np-sub { max-width: 100%; color: var(--dim); font-size: 12.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  /* Music: a dock above the room links and a full view of the same track and list. */
+  :root { --np-h: 72px; }
+  .np { position: fixed; inset: auto 0 var(--nav-h); height: var(--np-h); z-index: 30; display: grid; grid-template-columns: minmax(0,1fr) auto minmax(0,1fr); align-items: center; gap: 16px; padding: 6px clamp(16px,3vw,48px) 4px; background: var(--surface); }
+  body.np-on main { padding-bottom: calc(var(--np-h) + var(--nav-h) + 36px); }
+  body.np-on #toast, body.np-on #castBar { bottom: calc(var(--np-h) + var(--nav-h) + 12px); }
+  body.np-on #playerModal.mini { bottom: calc(var(--np-h) + var(--nav-h) + 12px); }
+  .np-progress { position: absolute; inset: -6px 0 auto; height: 16px; display: flex; align-items: center; }
+  .np-progress::before, .np-progress::after { content: ''; position: absolute; left: 0; right: 0; top: 6px; height: 3px; pointer-events: none; background: var(--line); }
+  .np-progress::after { background: var(--brand); transform: scaleX(var(--played,0)); transform-origin: left; }
+  #npSeek { z-index: 1; appearance: none; width: 100%; height: 16px; margin: 0; padding: 0; background: transparent; cursor: pointer; accent-color: var(--brand); }
+  #npSeek::-webkit-slider-runnable-track { height: 3px; background: transparent; }
+  #npSeek::-webkit-slider-thumb { appearance: none; width: 10px; height: 10px; border-radius: 50%; margin-top: -4px; background: var(--ring); opacity: 0; }
+  #npSeek:hover::-webkit-slider-thumb, #npSeek:focus-visible::-webkit-slider-thumb { opacity: 1; }
+  .np-info, .np-ctl, .np-centre, .np-side, .np-vol, .nq-head, .fp-times { display: flex; align-items: center; }
+  .np-info { min-width: 0; gap: 12px; }
+  .np-art { display: block; flex: none; width: 46px; height: 46px; border-radius: 6px; overflow: hidden; }
+  .np-art .sleeve, .fp-art .sleeve { width: 100%; height: 100%; border-radius: inherit; box-shadow: none; }
+  .np-art .sleeve-mono { font-size: 18px; }
+  .np-text, .fp-caption, .fp-record, .fp-list { min-width: 0; }
+  .np-title, .np-sub { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .np-title, .music-link, .np-sub a, .np-action { color: inherit; text-decoration: none; }
+  .np-title { font-weight: 650; }
+  .music-link[href]:hover, .np-title:hover, .np-sub a:hover, .np-action:hover { text-decoration: underline; }
+  .np-sub, .np-times, .np-action, .np-vol, .fp-times, .fp-eyebrow, .nq-dur, .nq-num { color: var(--dim); font-size: 13px; }
   .np-sub.bad { color: var(--bad); }
-  .np-pos { display: none; }
-  .np-ctl { grid-area: ctl; display: flex; align-items: center; gap: 4px; }
-  .np-btn { flex: none; width: 40px; height: 40px; padding: 0; border-radius: 50%; border: 0; background: transparent; color: var(--text); display: inline-flex; align-items: center; justify-content: center; cursor: pointer; transition: background var(--t-fast) var(--ease), transform var(--t-fast) var(--ease); }
+  .np-centre { flex-direction: column; }
+  .np-times, .fp-times, .nq-dur { font-variant-numeric: tabular-nums; }
+  .np-times { font-size: 11px; }
+  .np-ctl, .np-vol { gap: 6px; }
+  .np-btn { width: 40px; height: 40px; display: inline-flex; flex: none; justify-content: center; align-items: center; border: 0; border-radius: 50%; color: var(--text); background: transparent; cursor: pointer; }
   .np-btn:hover:not(:disabled) { background: var(--raised); }
-  .np-btn:disabled { opacity: .35; cursor: default; }
-  .np-btn svg, .track-play svg, .np-q svg, .nq-num svg { width: 20px; height: 20px; fill: currentColor; }
-  .np-btn.np-play { width: 44px; height: 44px; background: var(--text); color: var(--bg); }
-  .np-btn.np-play:hover:not(:disabled) { background: var(--text); transform: scale(1.06); }
-  .i-pause { display: none; }
-  .on > .i-play { display: none; }
+  .np-btn[aria-pressed=true] { color: var(--ring); }
+  .np-btn:disabled { opacity: .4; cursor: default; }
+  .np-btn.np-play { background: var(--text); color: var(--bg); }
+  .np-btn.np-play:hover { background: var(--text); }
+  .np-btn svg, .track-play svg { width: 20px; height: 20px; fill: currentColor; }
+  .i-pause, .on > .i-play { display: none; }
   .on > .i-pause { display: block; }
   .btn-ic { display: inline-flex; }
   .btn-ic svg { width: 16px; height: 16px; fill: currentColor; }
-  .np-seek { grid-area: seek; display: flex; align-items: center; gap: 10px; color: var(--dim); font-size: 12px; font-variant-numeric: tabular-nums; }
-  .np-seek span { flex: none; min-width: 38px; }
-  .np-seek span:first-child { text-align: right; }
-  #npSeek { flex: 1; min-width: 0; margin: 0; accent-color: var(--brand); cursor: pointer; }
-  #npSeek:disabled { cursor: default; }
-  .np-side { grid-area: side; display: flex; align-items: center; gap: 10px; color: var(--dim); }
-  .np-q { min-height: 36px; padding: 0 12px; font-variant-numeric: tabular-nums; }
-  .np-q[aria-expanded='true'] { color: var(--text); border-color: var(--line); background: var(--raised); }
-  .np-vol { display: flex; align-items: center; gap: 6px; }
-  .np-vol svg { width: 18px; height: 18px; fill: currentColor; flex: none; }
-  #npVol { width: 92px; margin: 0; accent-color: var(--brand); cursor: pointer; }
-  .np-queue { position: fixed; right: 16px; bottom: calc(var(--np-h) + 10px + var(--nav-h)); z-index: 31; width: min(400px, calc(100vw - 24px)); max-height: min(62vh, 540px); display: flex; flex-direction: column; background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-panel); box-shadow: 0 24px 60px rgba(0,0,0,.35); overflow: hidden; }
-  .nq-head { display: flex; align-items: center; gap: 8px; padding: 12px 10px 8px 18px; border-bottom: 1px solid var(--line); }
-  .nq-head .grow h3 { margin: 0; }
-  .nq-list { list-style: none; margin: 0; padding: 6px; overflow-y: auto; }
-  .nq-list button { width: 100%; display: grid; grid-template-columns: 28px minmax(0, 1fr) auto; align-items: center; gap: 10px; padding: 8px 10px; border: 0; border-radius: var(--r-control); background: none; color: var(--text); font: inherit; font-size: 14px; text-align: left; cursor: pointer; }
-  .nq-list button:hover { background: var(--raised); }
-  .nq-num { color: var(--dim); font-size: 12.5px; font-variant-numeric: tabular-nums; text-align: center; display: flex; justify-content: center; }
-  .nq-num svg { width: 16px; height: 16px; }
-  .nq-name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .nq-dur { color: var(--dim); font-size: 12.5px; font-variant-numeric: tabular-nums; }
-  .nq-list .done button { color: var(--dim); }
-  .nq-list .now button { background: var(--brand-soft); font-weight: 600; }
-  .nq-list .now .nq-num { color: var(--ring); }
+  .np-side { justify-content: end; gap: 6px; }
+  .np-action { padding: 8px; white-space: nowrap; }
+  #npQText { display: block; font-size: 11px; text-align: center; }
+  .np-vol input { width: 68px; padding: 0; accent-color: var(--text); }
+  .fp-close { margin: 0 0 16px; }
+  .fp-layout { display: grid; grid-template-columns: minmax(240px, min(34%,420px)) minmax(0,1fr); gap: clamp(24px,5vw,72px); }
+  .fp-record { align-self: start; }
+  .fp-art { aspect-ratio: 1; width: 100%; overflow: hidden; border-radius: var(--r-control); }
+  .fp-art .sleeve-mono { font-size: clamp(32px,9vw,120px); }
+  .fp-caption { margin: 16px 0; }
+  .fp-caption h2, .fp-head h2 { margin: 4px 0; line-height: 1.15; overflow-wrap: anywhere; }
+  .fp-head h2 { font-size: clamp(26px,4vw,48px); }
+  .fp-caption .meta:empty { display: none; }
+  .fp-eyebrow { letter-spacing: .08em; text-transform: uppercase; }
+  #fpSeek { width: 100%; margin: 8px 0 0; accent-color: var(--text); }
+  .fp-times { justify-content: space-between; }
+  #fpControls { margin: 12px 0; justify-content: center; gap: clamp(4px,1vw,16px); }
+  #fpPlay { width: 54px; height: 54px; }
+  .nq-head { margin: 20px 0 6px; gap: 8px; flex-wrap: wrap; }
+  .nq-head h3 { margin: 0 auto 0 0; }
+  .nq-list { list-style: none; margin: 0; padding: 0; }
+  .nq-list li { display: flex; align-items: center; border-bottom: 1px solid var(--line); }
+  .nq-list li.now { background: var(--raised); }
+  .nq-list li.now .nq-name { color: var(--ring); font-weight: 650; }
+  .nq-list li.done { color: var(--dim); }
+  .nq-choice { min-width: 0; flex: 1; display: grid; grid-template-columns: 26px minmax(0,1fr) auto; gap: 8px; align-items: center; min-height: 46px; padding: 6px 12px; text-align: left; color: inherit; font: inherit; background: none; border: 0; cursor: pointer; }
+  .nq-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .nq-then { padding: 20px 12px 6px; color: var(--dim); font-size: 13px; }
+  .nq-remove { margin-right: 4px; font-size: 18px; }
+  @media (max-width: 980px) { .np-side .np-vol { display: none; } }
+  @media (min-width: 641px) { .fp-record { position: sticky; top: 82px; } }
+  @media (max-width: 640px) {
+    :root { --np-h: 64px; }
+    .np { grid-template-columns: minmax(0,1fr) auto; padding: 6px 12px; gap: 6px; }
+    .np .np-side, .np-times, #npPrev { display: none; }
+    .np-art { width: 42px; height: 42px; }
+    .np-ctl .np-btn { width: 44px; height: 44px; }
+    body.at-playing .top { display: none; }
+    body.at-playing main { padding: 16px 16px calc(24px + env(safe-area-inset-bottom,0px)); }
+    .fp-layout { grid-template-columns: minmax(0,1fr); gap: 16px; }
+    .fp-record { display: grid; grid-template-columns: minmax(90px,36%) minmax(0,1fr); gap: 12px; align-items: center; }
+    .fp-caption { margin: 0; }
+    .fp-caption h2 { font-size: 22px; }
+    .fp-transport { grid-column: 1 / -1; }
+    .fp-times { font-size: 12px; }
+    .fp-head { margin-top: 8px; }
+    .fp-head h2 { font-size: 22px; }
+  }
   .rows .row-item.now { background: var(--brand-soft); border-radius: var(--r-control); padding-left: 10px; padding-right: 10px; }
   .rows .row-item.now + .row-item { border-top-color: transparent; }
   .row-item.now .label { color: var(--ring); }
@@ -420,25 +458,13 @@ export const page = `<!doctype html>
   .pill.busy::before { content: ''; display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--brand); margin-right: 6px; vertical-align: 1px; animation: npPulse 1.2s ease-in-out infinite; }
   @keyframes npPulse { 50% { opacity: .25; } }
   @media (prefers-reduced-motion: reduce) { .pill.busy::before { animation: none; } }
-  @media (max-width: 640px) {
-    :root { --np-h: 104px; }
-    .np { grid-template-columns: minmax(0, 1fr) auto auto; grid-template-areas: 'info ctl side' 'seek seek seek'; gap: 2px 4px; padding: 8px 10px 10px 14px; }
-    .np-art, .np-vol, .np-qtext { display: none; }
-    .np-pos { display: inline; }
-    .np-pos::after { content: ' · '; }
-    .np-btn { width: 38px; height: 38px; }
-    .np-btn.np-play { width: 42px; height: 42px; }
-    .np-q { min-height: 38px; width: 38px; padding: 0; }
-    .np-seek { gap: 8px; }
-    .np-queue { left: 8px; right: 8px; width: auto; bottom: calc(var(--np-h) + 8px + var(--nav-h)); }
-  }
 .p-mini-controls, #pMiniRestore { display: none; }
   #playerModal.mini { inset: auto 18px 18px auto; width: min(380px, calc(100vw - 24px)); height: 280px; border-radius: 16px;
     border: 1px solid rgba(255,255,255,.18); box-shadow: 0 18px 65px rgba(0,0,0,.7); }
   #playerModal.mini .p-stage { flex: 1; }
   #playerModal.mini .p-top { padding: 10px 12px 26px; }
   #playerModal.mini .p-title { font-size: 14px; }
-  #playerModal.mini .p-badge, #playerModal.mini #pRawLink, #playerModal.mini #pFsBtn, #playerModal.mini #pMiniBtn, #playerModal.mini .p-bar > #pSeek, #playerModal.mini .p-bar > .row { display: none; }
+  #playerModal.mini .p-file-info, #playerModal.mini #pRawLink, #playerModal.mini #pFsBtn, #playerModal.mini #pMiniBtn, #playerModal.mini .p-bar > #pSeek, #playerModal.mini .p-bar > .row { display: none; }
   #playerModal.mini #pMiniRestore, #playerModal.mini .p-mini-controls { display: flex; }
   #playerModal.mini .p-bar { padding: 24px 12px 10px; }
   #playerModal.mini .p-mini-controls { flex-direction: column; gap: 3px; }
@@ -507,7 +533,7 @@ export const page = `<!doctype html>
   .rows.tracks .row-item:hover .track-play, .rows.tracks .row-item.now .track-play { color: var(--text); background: transparent; }
   .rows.tracks .row-item.now .track-play { color: var(--ring); }
   /* A track away from its album: the name is the button, and the play sign stands quietly in front of it. */
-  .rows.tracks.flat .row-item { display: grid; grid-template-columns: minmax(0, 2.2fr) minmax(0, 1fr) minmax(0, 1.2fr); gap: 12px; align-items: center; padding: 0 8px; }
+  .rows.tracks.flat .row-item { display: grid; grid-template-columns: minmax(0, 2.2fr) minmax(0, 1fr) minmax(0, 1.2fr) auto; gap: 12px; align-items: center; padding: 0 8px; }
   .rows.tracks .track-play.flat { width: auto; height: auto; min-height: 42px; justify-content: flex-start; gap: 10px; padding: 0; color: var(--text); font-size: 14.5px; }
   .rows.tracks .track-play.flat svg { flex: none; }
   .rows.tracks.flat .track-play .i-play { display: block; opacity: .5; }
@@ -530,7 +556,7 @@ export const page = `<!doctype html>
     .sleeve.xl { border-radius: var(--r-card); }
     .sleeve.xl .sleeve-mono { font-size: 40px; }
     .rows.tracks .row-item { gap: 8px; padding: 6px 4px; }
-    .rows.tracks.flat .row-item { grid-template-columns: minmax(0, 1fr) minmax(0, .8fr); padding: 0 4px; }
+    .rows.tracks.flat .row-item { grid-template-columns: minmax(0, 1fr) minmax(0, .8fr) auto; padding: 0 4px; }
     .rows.tracks.flat .track-by { display: none; }
   }
   /* Home shows one line of each room: the tiles that do not fit are left out, not wrapped or cut. These rules
@@ -963,6 +989,27 @@ export const page = `<!doctype html>
   <section id="tab-settings" data-panel="settings" hidden>
     <div id="settingsBody"></div>
   </section>
+  <section id="tab-playing" data-panel="playing" aria-label="Music player" hidden>
+    <button class="btn quiet fp-close" type="button" id="fpClose">Close player</button>
+    <div class="empty" id="fpEmpty">Nothing is playing. <a href="#listen">Listen</a></div>
+    <div class="fp-layout" id="fpBody" hidden>
+      <div class="fp-record">
+        <div id="fpArt" class="fp-art"></div>
+        <div class="fp-caption"><h2 id="fpName"></h2><a class="music-link" id="fpArtist"></a><div id="fpQuality" class="meta"></div><div id="fpStatus" class="meta" role="status"></div></div>
+        <div class="fp-transport">
+          <input type="range" id="fpSeek" min="0" max="0" step="any" value="0" aria-label="Seek" disabled>
+          <div class="fp-times"><span id="fpAt">0:00</span><span id="fpDur"></span></div>
+          <div class="np-ctl" id="fpControls"></div>
+          <label class="np-vol fp-volume">Volume <input type="range" id="fpVol" min="0" max="100" value="100" aria-label="Volume"></label>
+        </div>
+      </div>
+      <div class="fp-list" id="npQueue" aria-label="Up next">
+        <div class="fp-head"><div class="fp-eyebrow">Playing from</div><h2><a class="music-link" id="fpFrom"></a></h2></div>
+        <div class="nq-head"><h3>Up next</h3><button class="btn quiet" type="button" id="npClear">Clear</button><button class="btn quiet" type="button" id="npStop">Stop music</button></div>
+        <ol class="nq-list" id="npList"></ol>
+      </div>
+    </div>
+  </section>
 </main>
 <dialog id="ytSave" aria-labelledby="ytSaveTitle">
   <form id="ytSaveForm" class="yt-save" novalidate>
@@ -982,42 +1029,20 @@ export const page = `<!doctype html>
 </dialog>
 <div id="castBar" hidden></div>
 <div class="np" id="np" role="region" aria-label="Music player" hidden>
+  <div class="np-progress"><input type="range" id="npSeek" min="0" max="0" step="any" value="0" aria-label="Seek" disabled></div>
   <div class="np-info">
-    <button class="np-art" id="npArt" type="button" aria-label="Open album"></button>
-    <div class="np-text">
-      <button class="np-title" id="npTitle" type="button"></button>
-      <div class="np-sub" aria-live="polite"><span class="np-pos" id="npPos"></span><span id="npMeta"></span></div>
-    </div>
+    <a class="np-art" id="npArt" href="#playing" aria-label="Open player" title="Open player"></a>
+    <div class="np-text"><a class="np-title" id="npTitle" href="#playing"></a><div class="np-sub" id="npMeta" aria-live="polite"></div></div>
   </div>
-  <div class="np-ctl">
-    <button class="np-btn" id="npPrev" type="button" aria-label="Previous track"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="5.5" width="2.6" height="13" rx="1"/><path d="M19 6.4v11.2a1 1 0 0 1-1.55.83L9.6 13.2a1.4 1.4 0 0 1 0-2.4l7.85-5.23A1 1 0 0 1 19 6.4z"/></svg></button>
-    <button class="np-btn np-play" id="npPlay" type="button" aria-label="Play"><svg class="i-play" viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5.5v13a1 1 0 0 0 1.5.86l10.2-6.5a1 1 0 0 0 0-1.72L9.5 4.64A1 1 0 0 0 8 5.5z"/></svg><svg class="i-pause" viewBox="0 0 24 24" aria-hidden="true"><rect x="6.5" y="5" width="4" height="14" rx="1.2"/><rect x="13.5" y="5" width="4" height="14" rx="1.2"/></svg></button>
-    <button class="np-btn" id="npNext" type="button" aria-label="Next track"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="16.4" y="5.5" width="2.6" height="13" rx="1"/><path d="M5 6.4v11.2a1 1 0 0 0 1.55.83l7.85-5.23a1.4 1.4 0 0 0 0-2.4L6.55 5.57A1 1 0 0 0 5 6.4z"/></svg></button>
-  </div>
-  <div class="np-seek">
-    <span id="npAt">0:00</span>
-    <input type="range" id="npSeek" min="0" max="0" step="any" value="0" aria-label="Seek" disabled>
-    <span id="npLeft">--:--</span>
-  </div>
-  <div class="np-side">
-    <button class="btn quiet np-q" id="npQueueBtn" type="button" aria-expanded="false" aria-controls="npQueue"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="6" width="12" height="2" rx="1"/><rect x="3" y="11" width="12" height="2" rx="1"/><rect x="3" y="16" width="8" height="2" rx="1"/><path d="M15.5 13.6v6.3a.6.6 0 0 0 .92.5l4.6-3.15a.6.6 0 0 0 0-1l-4.6-3.15a.6.6 0 0 0-.92.5z"/></svg><span class="np-qtext" id="npQText"></span></button>
-    <label class="np-vol"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9.5h3.2L12 5.6v12.8l-4.8-3.9H4z"/><path d="M15.2 8.6a5 5 0 0 1 0 6.8l-1.1-1.1a3.4 3.4 0 0 0 0-4.6zM17.6 6.2a8.4 8.4 0 0 1 0 11.6l-1.1-1.1a6.8 6.8 0 0 0 0-9.4z"/></svg><input type="range" id="npVol" min="0" max="100" step="1" value="100" aria-label="Volume"></label>
-  </div>
+  <div class="np-centre"><div class="np-ctl" id="npControls"></div><div class="np-times"><span id="npAt">0:00</span> / <span id="npLeft"></span></div></div>
+  <div class="np-side"><span class="np-ctl" id="npModes"></span><a class="np-action" id="npQueueBtn" href="#playing" title="Up next">Up next <span id="npQText"></span></a><label class="np-vol">Volume <input type="range" id="npVol" min="0" max="100" value="100" aria-label="Volume"></label><a class="np-btn" id="npOpen" href="#playing" title="Open player" aria-label="Open player"></a></div>
 </div>
-<section class="np-queue" id="npQueue" aria-label="Queue" hidden>
-  <div class="nq-head">
-    <div class="grow"><h3>Queue</h3><div class="meta" id="npQueueMeta"></div></div>
-    <button class="btn quiet" id="npClear" type="button">Stop</button>
-    <button class="btn quiet" id="npQueueClose" type="button">Close</button>
-  </div>
-  <ol class="nq-list" id="npList"></ol>
-</section>
 <div id="toast" role="status" hidden></div>
 <div id="playerModal" role="dialog" aria-modal="true" aria-labelledby="pTitle">
   <div class="p-top">
     <div class="p-head">
       <div class="p-title" id="pTitle"></div>
-      <div class="p-badge" id="pBadge">Loading player…</div>
+      <details class="p-file-info" id="pFileInfo"><summary>File info</summary><div id="pBadge">Loading player…</div></details>
     </div>
     <div class="row">
       <a class="btn" id="pRawLink" target="_blank" rel="noopener">Open file</a>
@@ -1046,7 +1071,7 @@ export const page = `<!doctype html>
         <span class="clock" id="pClock">0:00 / 0:00</span>
       </div>
       <div class="row">
-        <select id="pAudioSel" aria-label="Audio track"></select>
+        <select id="pAudioSel" aria-label="Audio"></select>
         <select id="pSubSel" aria-label="Subtitles"></select>
         <a class="btn" id="pDownloadBtn" href="#" download>Download</a>
         <button class="btn" id="pMuteBtn" type="button">Mute</button>
@@ -1205,7 +1230,7 @@ const sval = key => setting(key) ? setting(key).value : undefined
 // ---- Places. The address names the place: the rooms (Home, Listen, Watch), the page of one album, artist or
 // title, Find, Add to library and the relay's own pages. An old link keeps working: #library is Home and #music is
 // Listen. With no place in the address the page opens the room this browser was in last, and Home on a first visit.
-const PLACES = { home: 'Home', listen: 'Listen', watch: 'Watch', album: 'Album', artist: 'Artist', title: 'Title', find: 'Find', add: 'Add to library', channels: 'Channels', sharing: 'Sharing', tv: 'TV', settings: 'Settings' }
+const PLACES = { home: 'Home', listen: 'Listen', watch: 'Watch', album: 'Album', artist: 'Artist', title: 'Title', find: 'Find', add: 'Add to library', playing: 'Music player', channels: 'Channels', sharing: 'Sharing', tv: 'TV', settings: 'Settings' }
 const OLD_PLACES = { library: 'home', music: 'listen' }
 const ROOMS = ['home', 'listen', 'watch']
 // A page of its own belongs to a room: the room stays lit in the bar, and leaving the page returns to it.
@@ -1257,7 +1282,7 @@ function showTab () {
   cameFrom = tab
   tab = place.name
   placeArg = place.arg
-  const room = DETAIL_ROOM[tab] || tab
+  const room = DETAIL_ROOM[tab] || (tab === 'playing' ? 'listen' : tab)
   if (ROOMS.includes(room)) { try { localStorage.setItem(ROOM_KEY, room) } catch {} }
   const top = enterPlace()
   for (const a of document.querySelectorAll('[data-tab]')) a.setAttribute('aria-current', a.dataset.tab === room ? 'page' : 'false')
@@ -1273,6 +1298,7 @@ function showTab () {
   if (tab === 'tv') loadCast()
   if (tab === 'settings') renderSettings()
   render()
+  paintBar()
   scrollTo(0, top)
   const then = afterPlace
   afterPlace = null
@@ -1602,7 +1628,7 @@ function buildTiles () {
     t.partial = t.items.some(i => !saved(i.e) && i.e.cachedBytes)
   }
   for (const t of mergeAlbums(tiles)) tiles.set(t.key, t)
-  return [...tiles.values()].sort((a, b) => a.title.localeCompare(b.title))
+  return [...tiles.values()].sort((a, b) => (a.album || a.title).localeCompare(b.album || b.title) || a.title.localeCompare(b.title))
 }
 // An album is its artist and its name, not its release id: a peer that tagged by release group and another that
 // tagged by release announce the same album under two ids, and both land here as one tile. A track held twice is one
@@ -1977,7 +2003,7 @@ function keepPlaying (videos) {
     go: () => play(i.e)
   }))
   const cur = queue.length ? queue[queueIndex] : null
-  const album = cur && npState !== 'done' ? tileOf(cur) : null
+  const album = cur && npState !== 'done' && (musicActivity || musicPosition() > 0 || queueIndex > 0) ? tileOf(cur) : null
   if (album) {
     items.push({
       key: 'a:' + album.key,
@@ -2730,7 +2756,7 @@ function renderSlskResults (part) {
           h('div', { class: 'meta wrap' }, ready + ' · from ' + g.username)),
         h('div', { class: 'acts' },
           h('button', { class: 'btn', 'aria-label': 'Browse ' + g.username + '’s ' + g.title, onclick: () => openSlskBrowse(g.username, g.dir) }, 'Browse'),
-          slskMirrorBtn(g, () => g.files, g.files.length === 1 ? 'Mirror track' : 'Mirror', 'srcMsg', (g.files.length === 1 ? 'Mirror track ' + slskLeaf(slskPath(g.files[0].filename)) : 'Mirror ' + g.title) + ' from ' + g.username)))
+          slskMirrorBtn(g, () => g.files, g.files.length === 1 ? 'Save track' : 'Save album', 'srcMsg', (g.files.length === 1 ? 'Save track ' + slskLeaf(slskPath(g.files[0].filename)) : 'Save album ' + g.title) + ' from ' + g.username)))
     }))]
 }
 // The FLAC-like format peers offered for this search, if any: the reason to look above before saving a lossy copy.
@@ -3275,7 +3301,7 @@ function slskFolderItem (g) {
   const picked = () => g.files.filter(f => !off.has(f.filename))
   const label = () => {
     const n = picked().length
-    return n === g.files.length ? 'Mirror folder' : n ? 'Mirror ' + plural(n, 'track', 'tracks') : 'None selected'
+    return n === g.files.length ? 'Save folder' : n ? 'Save ' + plural(n, 'track', 'tracks') : 'None selected'
   }
   const mirror = slskMirrorBtn(g, picked, label(), 'slskBrowseMsg')
   // Nothing picked keeps the button off, also when a finished mirror gives it back.
@@ -3287,9 +3313,9 @@ function slskFolderItem (g) {
   // Each file can be mirrored on its own: it lands in its album's folder as a track of that album (the relay reads
   // its tags, else this folder's name, and says so on the job), and is followed live like a folder mirror.
   const one = f => {
-    const b = slskMirrorBtn({ key: slskKey(g.username, f.filename), username: g.username, title: '', files: [f] }, () => [f], 'Mirror track', 'slskBrowseMsg')
+    const b = slskMirrorBtn({ key: slskKey(g.username, f.filename), username: g.username, title: '', files: [f] }, () => [f], 'Save track', 'slskBrowseMsg')
     b.className = 'btn quiet slsk-one'
-    b.setAttribute('aria-label', 'Mirror track ' + slskLeaf(slskPath(f.filename)))
+    b.setAttribute('aria-label', 'Save track ' + slskLeaf(slskPath(f.filename)))
     return b
   }
   const files = open
@@ -3448,7 +3474,7 @@ function srcSyncButton (b) {
     b.disabled = b.hasAttribute('data-none')
     return
   }
-  b.textContent = j ? jobState(j).short : key.startsWith('y:') ? 'Waiting' : 'Mirroring'
+  b.textContent = j ? jobState(j).short : key.startsWith('y:') ? 'Waiting' : 'Saving'
   b.disabled = true
 }
 function renderSrcJobs () {
@@ -3656,7 +3682,7 @@ function fileRow (label, e, withHealth, labelText) {
       e.locked ? null : h('button', { class: 'btn primary', 'data-play': true, onclick: () => play(e) }, 'Play'),
       e.locked ? null : castButton(e),
       e.locked ? null : downloadBtn(e, true, dlName),
-      h('button', { class: 'btn quiet', title: e.magnetUrl, onclick: () => copyText(e.magnetUrl) }, 'Copy link'),
+      h('button', { class: 'btn quiet', onclick: () => copyText(e.magnetUrl) }, 'Copy link'),
       h('button', { class: 'btn quiet', 'aria-expanded': String(shown), onclick: () => { shown ? infoShown.delete(e.key) : infoShown.add(e.key); renderDetail() } }, 'File info'),
       deleteBtn(e, true))),
   shown ? infoPanel(e) : null)
@@ -3689,8 +3715,8 @@ function qualityOf (e, d) {
 }
 // A row's second line says only what sets the track apart: an artist who is not the album's, a copy that is not
 // what the rest of the album is (one 16-bit track on a 24-bit album, a YouTube copy on a FLAC album), not saved here
-// yet, or held twice. On a clean album every row is one line. The full verdict ("lossless container", bitrate) is
-// the line's tooltip, and the album's own stands under its name on its page.
+// yet, or held twice. On a clean album every row is one line. The tooltip keeps the full verdict. The album page
+// gives the common codec, depth and rate once, above the track list.
 function trackMeta (i, d, albumArtist, common) {
   const e = i.e
   const artist = e.music && e.music.artist
@@ -3728,13 +3754,12 @@ function trackRow (i, t, common) {
       trackYtDeleteBtn(i)),
     h('span', { class: 'track-dur', 'data-dur': e.key }, duration(trackSecs(d))),
     dl,
+    moreMenu('More', queueOptions([e], t.title)),
     trackDeleteBtn(i))
 }
 function albumVerdict (t) {
   const common = commonQuality(t)
-  if (common === YT_LABEL) return 'From ' + YT_LABEL
-  const i = t.items.find(x => !isYt(x.e) && shortQuality(infoData.get(x.e.key)) === common) || t.items.find(x => !isYt(x.e)) || t.items[0]
-  return qualityOf(i.e, infoData.get(i.e.key))
+  return common === YT_LABEL ? 'From ' + YT_LABEL : common
 }
 // Under the verdict, only when an album mixes a YouTube copy with another: which one plays, and what exists only
 // on YouTube.
@@ -3821,6 +3846,7 @@ function musicAudio () {
   a.volume = Number.isFinite(musicStore.vol) ? Math.min(1, Math.max(0, musicStore.vol)) : 1
   document.body.append(a)
   a.addEventListener('playing', () => {
+    if (a.paused || heldForVideo) return
     npState = 'playing'
     playedSince = true
     if (npAnnounce) { toast(npAnnounce); npAnnounce = '' }
@@ -3828,9 +3854,10 @@ function musicAudio () {
   })
   a.addEventListener('waiting', () => { if (!a.paused) { npLoading(); paintBar() } })
   a.addEventListener('pause', () => {
+    if (!a.paused) return
     if (npState !== 'done' && npState !== 'error') npState = 'paused'
     paintBar()
-    saveMusic(true, playedSince)
+    saveMusic(true, playedSince && !heldForVideo)
     playedSince = false
   })
   a.addEventListener('ended', trackEnded)
@@ -3871,156 +3898,332 @@ function setMediaSession (e) {
   if (!navigator.mediaSession || typeof MediaMetadata !== 'function') return
   try { navigator.mediaSession.metadata = new MediaMetadata({ title: trackName(e), artist: (e.music && e.music.artist) || '', album: albumName(e.title) }) } catch {}
 }
-// Starts a list from one of its tracks (the first when none is named) and says so once the sound starts.
+// The two players use one list of occurrences, one current index and one audio element. The boundary marks
+// where songs added after the original list begin. An entry key can occur more than once.
+let queueBoundary = 0
+let queueRevision = 0
+let repeatList = musicStore.repeat === true
+let heldForVideo = false
+let parkedAt = 0
+let musicActivity = Number(musicStore.t) || 0
+const canQueue = e => e && e.streamUrl && !e.locked && e.season != null && e.episode != null && !String(e.id).startsWith('imdb:')
+const musicPosition = () => audioEl && audioEl.getAttribute('src') ? audioEl.currentTime || 0 : parkedAt
+const musicLength = () => Number.isFinite(audioEl?.duration) ? audioEl.duration : trackSecs(infoData.get(queue[queueIndex]?.key))
 function startQueue (list, start, title, verb = 'Playing') {
-  const q = list.filter(e => !e.locked)
+  const q = list.filter(canQueue)
   if (!q.length) return
   queue = q
+  queueBoundary = q.length
+  queueRevision++
   queueTitle = title || q[0].title
-  playedSince = false
   const i = Math.max(0, q.indexOf(start))
   playAt(i, i === 0 && q.length > 1 ? verb + ' “' + albumName(queueTitle) + '”, ' + plural(q.length, 'track', 'tracks') : nowLine(verb, i))
-  loadQueueInfo()
 }
-// Track lengths for the queue panel come from the same header read as an album page's rows.
-function loadQueueInfo () {
-  for (const e of queue) if (!infoData.has(e.key)) { infoEntries.set(e.key, e); loadInfo(e.key) }
+function addToQueue (list, next, title) {
+  const added = list.filter(canQueue)
+  if (!added.length) return
+  if (!queue.length) {
+    // Adding is not Play: a fresh list waits on its first song without starting a sound or opening a file.
+    queue = added
+    queueIndex = 0
+    queueBoundary = added.length
+    queueTitle = title || added[0].title
+    parkedAt = 0
+    npState = 'paused'
+    musicAudio()
+    setMediaSession(added[0])
+  } else {
+    const at = next ? queueIndex + 1 : queue.length
+    queue = queue.slice(0, at).concat(added, queue.slice(at))
+    if (next && at < queueBoundary) queueBoundary += added.length
+  }
+  queueRevision++
+  saveMusic(true)
+  paintBar()
+  toast('Added ' + plural(added.length, 'track', 'tracks') + ' to Up next')
 }
-function playAt (i, announce) {
-  const a = musicAudio()
-  // A track has no picture, so it never opens the video player; one that is open is closed, not left half-running.
-  closePlayer()
-  queueIndex = i
+function queueOptions (list, title) {
+  if (!list.some(canQueue)) return []
+  return [['Play next', true], ['Play last', false]].map(([label, next]) => h('button', { class: 'btn quiet', onclick: ev => {
+    ev.currentTarget.closest('.menu')?.remove()
+    addToQueue(list, next, title)
+  } }, label))
+}
+function playAt (i, announce, offset = 0) {
   const e = queue[i]
+  if (!e) return
+  closePlayer()
+  heldForVideo = false
+  queueIndex = i
+  parkedAt = 0
   npAnnounce = announce || ''
+  npError = ''
   npLoading()
+  const a = musicAudio()
   a.preload = 'auto'
   a.src = resolveStreamUrl(e.streamUrl)
+  if (offset > 0) a.currentTime = offset
   a.play().catch(err => {
-    // A browser that wants a click first refuses here; the bar then offers play instead of a spinner that never ends.
-    if (err && err.name === 'NotAllowedError' && queue[queueIndex] === e) { npState = 'paused'; npAnnounce = ''; paintBar() }
+    if (err.name === 'NotAllowedError' && queue[queueIndex] === e) { npState = 'paused'; npAnnounce = ''; paintBar() }
   })
+  musicActivity = Date.now()
   setMediaSession(e)
-  saveMusic(true, true)
+  saveMusic(true)
   paintBar()
 }
 function musicToggle () {
   const a = audioEl
   if (!a || !queue.length) return
   if (npState === 'done') playAt(0, nowLine('Playing', 0))
-  else if (npState === 'error') playAt(queueIndex)
-  else if (a.paused) a.play().catch(() => {})
-  else a.pause()
+  else if (npState === 'error' || !a.getAttribute('src')) playAt(queueIndex, '', parkedAt)
+  else if (a.paused) {
+    closePlayer()
+    heldForVideo = false
+    a.play().catch(() => { npState = 'paused'; paintBar() })
+    saveMusic(true)
+    paintBar()
+  } else a.pause()
+}
+// Previous and Next are not Play. When a video holds the sound, choose the track without opening it.
+function skipMusic (i) {
+  if (!heldForVideo) { playAt(i); return }
+  queueIndex = i
+  parkedAt = 0
+  audioEl.removeAttribute('src')
+  audioEl.load()
+  npState = 'paused'
+  setMediaSession(queue[i])
+  saveMusic(true)
+  paintBar()
 }
 function musicNext () {
-  if (queueIndex + 1 < queue.length) playAt(queueIndex + 1)
+  if (queueIndex + 1 < queue.length) skipMusic(queueIndex + 1)
+  else if (repeatList && queue.length) skipMusic(0)
 }
 function musicPrev () {
   if (!queue.length) return
-  // Like every player: back restarts the track, and only a second press near its start goes to the one before.
-  if (queueIndex === 0 || (audioEl && audioEl.currentTime > 3 && npState !== 'error')) musicSeek(0)
-  else playAt(queueIndex - 1)
+  if (queueIndex === 0 || (musicPosition() > 3 && npState !== 'error')) musicSeek(0)
+  else skipMusic(queueIndex - 1)
 }
 function musicSeek (secs) {
-  const a = audioEl
-  if (!a || !Number.isFinite(a.duration)) return
-  a.currentTime = Math.max(0, Math.min(a.duration, secs))
+  if (!queue.length || !Number.isFinite(secs)) return
+  const to = Math.max(0, Math.min(musicLength() || secs, secs))
+  if (audioEl?.getAttribute('src')) audioEl.currentTime = to
+  else parkedAt = to
+  saveMusic(true)
   paintTime()
 }
+function shuffleUpcoming () {
+  const first = queueIndex + 1
+  if (queue.length - first < 2) return
+  let changed = false
+  for (let i = queue.length - 1; i > first; i--) {
+    const j = first + Math.floor(Math.random() * (i - first + 1))
+    if (j !== i) { [queue[i], queue[j]] = [queue[j], queue[i]]; changed = true }
+  }
+  if (!changed) [queue[first], queue[first + 1]] = [queue[first + 1], queue[first]]
+  // The order is now the listener's shuffle, not the order of the album and its later additions.
+  queueBoundary = first
+  queueRevision++
+  saveMusic(true)
+  paintBar()
+}
+function removeUpcoming (i, clear) {
+  if (i <= queueIndex || i >= queue.length) return
+  queue.splice(i, clear ? queue.length - i : 1)
+  queueBoundary = clear ? Math.min(queueBoundary, i) : queueBoundary - Number(i < queueBoundary)
+  queueRevision++
+  saveMusic(true)
+  paintBar()
+}
 function trackEnded () {
-  if (queueIndex + 1 < queue.length) { playAt(queueIndex + 1, nowLine('Now playing', queueIndex + 1)); return }
+  if (!audioEl?.ended || heldForVideo || player || !queue.length) return
+  if (queueIndex + 1 < queue.length || repeatList) { musicNext(); return }
   npState = 'done'
   toast('Finished “' + albumName(queueTitle) + '”')
+  saveMusic(true)
   paintBar()
 }
 function musicStop () {
   queue = []
-  queueIndex = 0
+  queueTitle = ''
+  queueIndex = queueBoundary = parkedAt = musicActivity = 0
+  queueRevision++
+  heldForVideo = false
   npState = 'idle'
+  clearTimeout(npSlowTimer)
   if (audioEl) { audioEl.pause(); audioEl.removeAttribute('src'); audioEl.load() }
   saveMusic(true)
   paintBar()
 }
-// 't' is when a person last moved this queue on: a track started, a pause of something that was playing, or sound
-// coming out of the speakers. A reload, a restore and a volume change leave it as it was, so Home never claims a
-// queue nobody has touched is the newest thing. A record saved before 't' existed has none and counts as oldest.
-function saveMusic (now, active) {
-  if (!now && Date.now() - lastMusicSave < 5000) return
-  lastMusicSave = Date.now()
+function saveMusic (now, active = false) {
+  const stamp = Date.now()
+  if (!now && stamp - lastMusicSave < 5000) return
+  lastMusicSave = stamp
+  if (active || (!now && audioEl && !audioEl.paused && !heldForVideo)) musicActivity = stamp
   const vol = audioEl ? audioEl.volume : 1
-  const t = active ? Date.now() : musicStore.t
-  musicStore = queue.length ? { keys: queue.map(x => x.key), i: queueIndex, at: (audioEl && audioEl.currentTime) || 0, title: queueTitle, vol, t } : { vol }
+  musicStore = queue.length ? { keys: queue.map(e => e.key), i: queueIndex, at: musicPosition(), title: queueTitle, t: musicActivity, boundary: queueBoundary, repeat: repeatList, video: heldForVideo, finished: npState === 'done', vol } : { vol, repeat: repeatList }
   try { localStorage.setItem(MUSIC_KEY, JSON.stringify(musicStore)) } catch {}
 }
-// After the first load: the queue this browser left comes back on the same track, paused where it was.
+// Restore the same occurrence, even when a song appears twice or a song before it has left the library. Do not
+// assign the stream to an audio element until Play: even a metadata preload could fetch a remote song on a visit.
 function restoreMusic () {
   if (musicRestored || !S.entries.length) return
   musicRestored = true
   const m = musicStore
-  if (queue.length || !Array.isArray(m.keys)) return
-  const byKey = new Map(S.entries.map(e => [e.key, e]))
+  if (queue.length || !Array.isArray(m.keys) || !Number.isInteger(m.i)) return
+  const byKey = new Map(S.entries.filter(canQueue).map(e => [e.key, e]))
   const cur = byKey.get(m.keys[m.i])
   if (!cur) return
-  queue = m.keys.map(k => byKey.get(k)).filter(Boolean)
-  queueIndex = queue.indexOf(cur)
+  queue = []
+  queueBoundary = 0
+  for (let n = 0; n < m.keys.length; n++) {
+    const e = byKey.get(m.keys[n])
+    if (!e) continue
+    if (n === m.i) queueIndex = queue.length
+    if (n < (Number.isInteger(m.boundary) ? m.boundary : m.keys.length)) queueBoundary++
+    queue.push(e)
+  }
+  queueRevision++
   queueTitle = m.title || cur.title
-  const a = musicAudio()
-  a.preload = 'metadata'
-  a.src = resolveStreamUrl(cur.streamUrl)
-  if (m.at > 0) a.addEventListener('loadedmetadata', () => { if (queue[queueIndex] === cur && m.at < a.duration) a.currentTime = m.at }, { once: true })
-  npState = 'paused'
+  parkedAt = Number.isFinite(m.at) ? Math.max(0, m.at) : 0
+  heldForVideo = m.video === true
+  npState = m.finished ? 'done' : 'paused'
+  musicAudio()
   setMediaSession(cur)
-  loadQueueInfo()
   paintBar()
 }
-
+// All controls write through the same transport. The list redraws only when its order or current index changes.
+const musicHref = (place, value) => '#' + place + '/' + encodeURIComponent(value)
+const musicText = (node, value) => { if (node.textContent !== value) node.textContent = value }
+function musicArt (id, t, e) {
+  const box = $(id)
+  if (box.dataset.key === e.key) return
+  box.dataset.key = e.key
+  box.replaceChildren(t ? albumArt(t) : albumName(e.title).charAt(0))
+}
+const queueCells = new Map()
+let queueDrawn = ''
+const lengthObserver = new IntersectionObserver(rows => {
+  for (const { isIntersecting, target } of rows) {
+    if (!isIntersecting) continue
+    lengthObserver.unobserve(target)
+    const e = infoEntries.get(target.dataset.length)
+    if (e && !infoData.has(e.key)) loadInfo(e.key)
+  }
+}, { rootMargin: '150px' })
+function queueLengthReady (key) {
+  const secs = trackSecs(infoData.get(key))
+  for (const cell of queueCells.get(key) || []) musicText(cell, secs ? duration(secs) : '')
+  const e = queue[queueIndex]
+  if (tab === 'playing' && e?.key === key) { musicText($('fpQuality'), copyQuality(e, infoData.get(key))); paintTime() }
+}
+function renderQueue () {
+  const full = tab === 'playing' && Boolean(queue.length)
+  const sig = full ? queueRevision + ':' + queueIndex : ''
+  if (queueDrawn === sig) return
+  queueDrawn = sig
+  lengthObserver.disconnect()
+  queueCells.clear()
+  const list = $('npList')
+  if (!full) { list.replaceChildren(); return }
+  const rows = document.createDocumentFragment()
+  for (let i = 0; i < queue.length; i++) {
+    const e = queue[i]
+    if (i === queueBoundary || (i > queueBoundary && queue[i - 1].title !== e.title)) rows.append(h('li', { class: 'nq-then' }, 'Then · ' + albumName(e.title)))
+    const now = i === queueIndex
+    const secs = trackSecs(infoData.get(e.key))
+    const cell = h('span', { class: 'nq-dur', 'data-length': e.key }, secs ? duration(secs) : '')
+    if (!secs && readableHere(e) && !infoData.has(e.key)) {
+      if (!queueCells.has(e.key)) queueCells.set(e.key, [])
+      queueCells.get(e.key).push(cell)
+      infoEntries.set(e.key, e)
+      lengthObserver.observe(cell)
+    }
+    const choice = h('button', { class: 'nq-choice', 'aria-current': now ? 'true' : null, onclick: () => now ? musicToggle() : playAt(i) },
+      h('span', { class: 'nq-num' }, String(i + 1)), h('span', { class: 'nq-name' }, trackName(e)), cell)
+    const remove = i > queueIndex ? h('button', { class: 'np-btn nq-remove', title: 'Remove', 'aria-label': 'Remove ' + trackName(e), onclick: () => removeUpcoming(i, false) }, '×') : null
+    rows.append(h('li', { class: now ? 'now' : i < queueIndex ? 'done' : '' }, choice, remove))
+  }
+  list.replaceChildren(rows)
+}
 function paintBar () {
   const e = queue[queueIndex]
-  $('np').hidden = !e
-  document.body.classList.toggle('np-on', Boolean(e))
+  const full = tab === 'playing'
+  $('np').hidden = !e || full
+  document.body.classList.toggle('at-playing', full)
+  document.body.classList.toggle('np-on', Boolean(e) && !full)
+  $('fpEmpty').hidden = Boolean(e)
+  $('fpBody').hidden = !e
+  renderQueue()
   paintRows()
   if (!e) {
-    toggleQueue(false)
     document.title = 'PearTube'
     if (navigator.mediaSession) navigator.mediaSession.metadata = null
     return
   }
-  const playing = Boolean(audioEl && !audioEl.paused)
-  $('npPlay').classList.toggle('on', playing)
-  $('npPlay').setAttribute('aria-label', playing ? 'Pause' : 'Play')
-  // The bar wears the album's own sleeve, so the tile and the bar read as the same record.
-  const art = $('npArt')
-  if (art.dataset.key !== e.key) {
-    const t = tileOf(e)
-    art.dataset.key = e.key
-    art.replaceChildren(t && t.album ? albumArt(t) : albumName(e.title).trim().charAt(0).toUpperCase() || '?')
+  const playing = Boolean(audioEl && !audioEl.paused && !heldForVideo)
+  const label = playing ? 'Pause' : 'Play'
+  const t = tileOf(e)
+  const name = e.music?.artist || t?.artist || 'Unknown artist'
+  const album = t?.album || albumName(e.title)
+  const albumLink = t ? musicHref('album', t.key) : '#listen'
+  const artistLink = musicHref('artist', t?.artist || name)
+  const status = heldForVideo ? 'Paused for a video' : npState === 'loading' ? (npSlow ? 'Still looking for this file on the network…' : 'Loading…') : npState === 'error' ? npError : npState === 'done' ? 'Finished' : ''
+  const last = queueIndex + 1 === queue.length
+  for (const prefix of ['np', 'fp']) {
+    const play = $(prefix + 'Play')
+    play.classList.toggle('on', playing)
+    play.setAttribute('aria-label', label)
+    play.title = label
+    $(prefix + 'Repeat').setAttribute('aria-pressed', String(repeatList))
+    $(prefix + 'Shuffle').disabled = queue.length - queueIndex < 3
+    $(prefix + 'Next').disabled = last && !repeatList
+    $(prefix + 'Vol').value = String(Math.round((audioEl?.volume ?? 1) * 100))
   }
-  $('npArt').setAttribute('aria-label', 'Open ' + albumName(e.title))
-  $('npTitle').textContent = trackName(e)
-  const status = npState === 'loading' ? (npSlow ? 'Still looking for this file on the network…' : 'Loading…') : npState === 'error' ? npError : npState === 'done' ? 'Finished' : ''
-  $('npMeta').textContent = status || [e.music && e.music.artist, albumName(e.title)].filter(Boolean).join(' · ')
-  $('npMeta').parentNode.classList.toggle('bad', npState === 'error')
-  const pos = (queueIndex + 1) + ' of ' + queue.length
-  $('npPos').textContent = pos
-  $('npQText').textContent = pos
-  $('npQueueBtn').setAttribute('aria-label', 'Queue, track ' + pos)
-  $('npNext').disabled = queueIndex + 1 >= queue.length
-  document.title = trackName(e) + ' · ' + albumName(e.title)
+  musicArt('npArt', t, e)
+  musicText($('npTitle'), trackName(e))
+  musicText($('npQText'), (queueIndex + 1) + ' of ' + queue.length)
+  const meta = $('npMeta')
+  if (status) { musicText(meta, status); delete meta.dataset.track }
+  else if (meta.dataset.track !== e.key) {
+    meta.replaceChildren(h('a', { href: artistLink }, t?.artist || name), ' · ', h('a', { href: albumLink }, album))
+    meta.dataset.track = e.key
+  }
+  meta.classList.toggle('bad', npState === 'error')
+  if (full) {
+    musicArt('fpArt', t, e)
+    musicText($('fpName'), trackName(e))
+    musicText($('fpArtist'), name)
+    $('fpArtist').href = artistLink
+    musicText($('fpQuality'), copyQuality(e, infoData.get(e.key)))
+    musicText($('fpStatus'), status)
+    const first = tileOf(queue[0])
+    musicText($('fpFrom'), albumName(queueTitle))
+    $('fpFrom').href = first && queueTitle === first.title ? musicHref('album', first.key) : musicHref('artist', first?.artist || name)
+    $('npClear').disabled = last
+  }
+  document.title = trackName(e) + ' · ' + album
   paintTime()
-  if (!$('npQueue').hidden) renderQueue()
 }
 function paintTime () {
-  const a = audioEl
-  if (!a || !queue.length) return
-  const dur = Number.isFinite(a.duration) ? a.duration : 0
-  const seek = $('npSeek')
-  const at = seekDragging ? Number(seek.value) : (a.currentTime || 0)
-  $('npAt').textContent = clock(at)
-  $('npLeft').textContent = dur ? '-' + clock(dur - at) : '--:--'
-  seek.disabled = !dur
-  if (!seekDragging) { seek.max = String(dur); seek.value = String(at) }
-  seek.setAttribute('aria-valuetext', clock(at) + ' of ' + clock(dur))
+  if (!queue.length) return
+  const dur = musicLength() || 0
+  const at = seekDragging ? Number(seekDragging.value) : musicPosition()
+  const here = clock(at)
+  const end = dur ? clock(dur) : '–:––'
+  musicText($('npAt'), here)
+  musicText($('npLeft'), end)
+  if (tab === 'playing') { musicText($('fpAt'), here); musicText($('fpDur'), end) }
+  for (const id of ['npSeek', 'fpSeek']) {
+    const s = $(id)
+    s.disabled = !dur
+    if (s !== seekDragging) { s.max = String(dur); s.value = String(at) }
+    s.setAttribute('aria-valuetext', dur ? here + ' of ' + end : here)
+  }
+  $('np').style.setProperty('--played', String(dur ? Math.min(1, at / dur) : 0))
 }
+
 // Every row and album button that names a track says whether it is the one playing, wherever it is drawn, without
 // redrawing anything under the pointer: rows carry data-track, album buttons data-album with the tile key.
 function paintRows () {
@@ -4050,57 +4253,55 @@ function paintRows () {
     if (btn.lastChild !== icons) btn.lastChild.textContent = !mine ? 'Play' : playing ? 'Pause' : 'Resume'
   }
 }
-function toggleQueue (open) {
-  const panel = $('npQueue')
-  panel.hidden = !(open ?? panel.hidden) || !queue.length
-  $('npQueueBtn').setAttribute('aria-expanded', String(!panel.hidden))
-  if (panel.hidden) return
-  renderQueue()
-  const cur = $('npList').querySelector('.now')
-  if (cur) cur.scrollIntoView({ block: 'nearest' })
+// Use the same commands and the same labels for the dock, full player and media keys. Only fixed icon paths go
+// through innerHTML. Names from files and channels always go through textContent or h().
+const transportIcon = {
+  Play: ICON_PLAY + ICON_PAUSE,
+  Prev: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 5h3v14H5zm14 0v14l-10-7z"/></svg>',
+  Next: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M16 5h3v14h-3zM5 5l10 7-10 7z"/></svg>',
+  Shuffle: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 6h2c4 0 6 12 11 12h4m-3-3 3 3-3 3M3 18h2c2 0 3-2 5-5m3-4c1-2 2-3 4-3h3m-3-3 3 3-3 3" fill="none" stroke="currentColor" stroke-width="1.8"/></svg>',
+  Repeat: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m16 2 4 4-4 4M3 11V9a3 3 0 0 1 3-3h14M8 22l-4-4 4-4m13-1v2a3 3 0 0 1-3 3H4" fill="none" stroke="currentColor" stroke-width="1.8"/></svg>'
 }
-function renderQueue () {
-  const playing = Boolean(audioEl && !audioEl.paused)
-  $('npQueueMeta').textContent = albumName(queueTitle) + ' · ' + plural(queue.length, 'track', 'tracks')
-  $('npList').replaceChildren(...queue.map((e, i) => {
-    const now = i === queueIndex
-    const d = infoData.get(e.key)
-    const secs = d && d.media && d.media.duration
-    const num = h('span', { class: 'nq-num' + (now && playing ? ' on' : '') }, now ? '' : String(i + 1))
-    if (now) num.innerHTML = ICON_PLAY + ICON_PAUSE
-    return h('li', { class: now ? 'now' : i < queueIndex ? 'done' : '' },
-      h('button', { 'aria-current': now ? 'true' : false, onclick: () => now ? musicToggle() : playAt(i) },
-        num, h('span', { class: 'nq-name' }, trackName(e)), h('span', { class: 'nq-dur' }, secs ? duration(secs) : '')))
-  }))
+const tileOf = e => e && libraryTiles().find(t => t.kind === 'album' && t.items.some(i => i.e.key === e.key || i.alts.some(a => a.key === e.key)))
+const transportAction = { Prev: musicPrev, Next: musicNext, Play: musicToggle, Shuffle: shuffleUpcoming, Repeat: () => { repeatList = !repeatList; saveMusic(true); paintBar() } }
+function transportButton (prefix, name) {
+  const label = name === 'Prev' ? 'Previous' : name
+  const b = h('button', { id: prefix + name, class: 'np-btn' + (name === 'Play' ? ' np-play' : ''), title: label, 'aria-label': label, onclick: transportAction[name] })
+  b.innerHTML = transportIcon[name]
+  return b
 }
-// The library tile that holds a track, whatever its grouping key is, as the copy a row plays or a second copy of it.
-const tileOf = e => libraryTiles().find(t => t.items.some(i => i.e.key === e.key || (i.alts || []).some(a => a.key === e.key)))
-const openAlbum = () => { const e = queue[queueIndex]; const t = e && tileOf(e); if (t) openDetail(t.key, e.season) }
-$('npArt').onclick = openAlbum
-$('npTitle').onclick = openAlbum
-$('npPlay').onclick = musicToggle
-$('npPrev').onclick = musicPrev
-$('npNext').onclick = musicNext
-$('npQueueBtn').onclick = () => toggleQueue()
-$('npQueueClose').onclick = () => { toggleQueue(false); $('npQueueBtn').focus() }
-$('npClear').onclick = musicStop
-$('npSeek').addEventListener('input', () => { seekDragging = true; paintTime() })
-$('npSeek').addEventListener('change', () => { seekDragging = false; musicSeek(Number($('npSeek').value)) })
-$('npVol').value = String(Math.round((Number.isFinite(musicStore.vol) ? musicStore.vol : 1) * 100))
-$('npVol').addEventListener('input', () => { musicAudio().volume = Number($('npVol').value) / 100; saveMusic(true) })
-addEventListener('pointerdown', ev => { if (!$('npQueue').hidden && !ev.target.closest('#npQueue, #npQueueBtn')) toggleQueue(false) })
-// Music keys, whenever a typed key would not land in a text field or a control: space plays or pauses, the arrows
-// step 10 s. A focused button or link keeps Space for itself, so a chip or a checkbox never pauses the music.
+for (const [id, prefix, names] of [['npControls', 'np', ['Prev', 'Play', 'Next']], ['npModes', 'np', ['Shuffle', 'Repeat']], ['fpControls', 'fp', ['Shuffle', 'Prev', 'Play', 'Next', 'Repeat']]]) {
+  $(id).append(...names.map(name => transportButton(prefix, name)))
+}
+$('npOpen').innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 4h18v14h-6v-2h4V6H5v10h4v2H3zM7 21l5-7 5 7z"/></svg>'
+for (const id of ['npQueueBtn', 'npTitle', 'npArt', 'npOpen']) $(id).onclick = ev => {
+  if (ev.ctrlKey || ev.metaKey || ev.shiftKey || ev.altKey) return
+  ev.preventDefault()
+  goPlace('#playing', () => {
+    history.replaceState({ ...history.state, fromDock: true }, '')
+    const target = id === 'npQueueBtn' && $('npList').querySelector('[aria-current=true]')
+    ;(target || $('fpClose')).focus({ preventScroll: true })
+  })
+}
+const closeMusicView = () => history.state?.fromDock ? history.back() : goPlace('#listen')
+$('fpClose').onclick = closeMusicView
+$('npClear').onclick = () => removeUpcoming(queueIndex + 1, true)
+$('npStop').onclick = musicStop
+for (const prefix of ['np', 'fp']) {
+  const seek = $(prefix + 'Seek'), vol = $(prefix + 'Vol')
+  seek.oninput = () => { seekDragging = seek; paintTime() }
+  seek.onchange = () => { seekDragging = false; musicSeek(Number(seek.value)) }
+  seek.onpointercancel = () => { seekDragging = false; paintTime() }
+  vol.oninput = () => { if (audioEl) { audioEl.volume = Number(vol.value) / 100; $('npVol').value = $('fpVol').value = vol.value; saveMusic(true) } }
+}
 addEventListener('keydown', ev => {
-  if (!queue.length || player || ev.altKey || ev.ctrlKey || ev.metaKey || ev.defaultPrevented) return
-  const t = ev.target
-  const range = t.tagName === 'INPUT' && t.type === 'range'
-  if ((!range && /^(INPUT|SELECT|TEXTAREA)$/.test(t.tagName)) || t.isContentEditable) return
-  if (ev.key === 'Escape' && !$('npQueue').hidden) { ev.preventDefault(); toggleQueue(false); $('npQueueBtn').focus() }
-  else if (/^(BUTTON|A)$/.test(t.tagName)) return
-  else if (ev.key === ' ') { ev.preventDefault(); musicToggle() }
-  else if (!range && (ev.key === 'ArrowLeft' || ev.key === 'ArrowRight')) { ev.preventDefault(); musicSeek(audioEl.currentTime + (ev.key === 'ArrowLeft' ? -10 : 10)) }
+  if (ev.defaultPrevented || ev.altKey || ev.ctrlKey || ev.metaKey || player) return
+  if (ev.key === 'Escape' && tab === 'playing') { closeMusicView(); ev.preventDefault(); return }
+  if (!queue.length || ev.target.isContentEditable || ev.target.closest('input, select, textarea, button, a, summary, dialog[open]')) return
+  if (ev.key === ' ') { ev.preventDefault(); musicToggle() }
+  else if (ev.key === 'ArrowLeft' || ev.key === 'ArrowRight') { ev.preventDefault(); musicSeek(musicPosition() + (ev.key === 'ArrowLeft' ? -10 : 10)) }
 })
+addEventListener('pagehide', () => { if (musicRestored || queue.length) saveMusic(true) })
 
 // ---- Library: what a file holds and how well it streams here now (GET /v1/entries/info), redrawn every 3 s while
 // a page is open. Episodes and versions open theirs with File info; a single file shows it at once, and each
@@ -4221,7 +4422,7 @@ async function readInfo (key, read) {
   for (const lab of $('detailBody').querySelectorAll('[data-vlabel]')) {
     if (lab.dataset.vlabel === key) lab.textContent = versionLabel(e, Number(lab.dataset.vnum) || 1)
   }
-  if (!$('npQueue').hidden && queue.some(x => x.key === key)) renderQueue()
+  queueLengthReady(key)
 }
 function pollInfo () {
   if (document.hidden) return
@@ -4309,9 +4510,9 @@ function renderAlbumPage (box, t) {
       allYt(t) ? h('div', { class: 'tag-row' }, h('span', { class: 'tag' }, 'Lossy')) : null,
       h('div', { class: 'facts quiet', 'data-ay': t.key, hidden: !also }, also)),
     h('div', { class: 'page-acts' },
-      list.length ? h('button', { class: 'btn primary', 'data-album': t.key, onclick: () => tileOf(queue[queueIndex] || {})?.key === t.key ? musicToggle() : startQueue(list, list[0], t.title) }, playIcons(), h('span', null, 'Play')) : null,
+      list.length ? h('button', { class: 'btn primary', 'data-album': t.key, onclick: () => tileOf(queue[queueIndex])?.key === t.key ? musicToggle() : startQueue(list, list[0], t.title) }, playIcons(), h('span', null, 'Play')) : null,
       list.length > 1 ? h('button', { class: 'btn', onclick: () => startQueue(shuffled(list), null, t.title) }, 'Shuffle') : null,
-      moreMenu('More actions', [albumDeleteBtn(t)])),
+      moreMenu('More', [...queueOptions(list, t.title), albumDeleteBtn(t)])),
     h('div', { class: 'page-body' },
       discs.map(d => [
         discs.length > 1 ? h('h4', { class: 'disc-head' }, 'Disc ' + d) : null,
@@ -4340,7 +4541,8 @@ function renderArtistPage (box, name) {
       h('div', { class: 'facts' }, [plural(albums.length, 'album', 'albums'), plural(pairs.length, 'track', 'tracks')].join(' · '))),
     h('div', { class: 'page-acts' },
       list.length ? h('button', { class: 'btn primary', onclick: () => startQueue(list, list[0], label) }, playIcon(), h('span', null, 'Play')) : null,
-      list.length > 1 ? h('button', { class: 'btn', onclick: () => startQueue(shuffled(list), null, label) }, 'Shuffle') : null),
+      list.length > 1 ? h('button', { class: 'btn', onclick: () => startQueue(shuffled(list), null, label) }, 'Shuffle') : null,
+      moreMenu('More', queueOptions(list, label))),
     h('div', { class: 'page-body' },
       h('h3', { class: 'sec-head' }, 'Albums'),
       h('div', { class: 'album-grid' }, albums.map(albumCard)),
@@ -4361,7 +4563,8 @@ function songRow (t, i) {
   return h('div', { class: 'row-item', 'data-track': e.key, 'data-name': trackName(e) },
     btn,
     h('span', { class: 'track-by' }, by),
-    h('a', { class: 'track-of', href: '#album/' + encodeURIComponent(t.key) }, t.album))
+    h('a', { class: 'track-of', href: '#album/' + encodeURIComponent(t.key) }, t.album),
+    moreMenu('More', queueOptions([e], t.title)))
 }
 
 // ---- A title: what it is, how to start it, and the files under it. A film lists its versions, a series its
@@ -5167,6 +5370,7 @@ function closePlayer () {
   $('playerModal').setAttribute('aria-modal', 'true')
   seekTarget = null
   const p = player
+  if (p.primed && p.duration > 0 && !p.seeking) saveResume(p.entry, p.ended ? p.duration : p.currentMediaTime(), p.duration)
   player = null
   $('playerModal').classList.remove('open')
   cancelAnimationFrame(p.raf)
@@ -5193,12 +5397,19 @@ function closePlayer () {
 function openPlayer (entry, at = 0) {
   closePlayer()
   // One sound at a time: a film or a clip pauses the album, which stays on its bar to resume after.
-  if (audioEl && !audioEl.paused) audioEl.pause()
+  if (audioEl && !audioEl.paused) {
+    heldForVideo = true
+    npAnnounce = ''
+    audioEl.pause()
+    saveMusic(true)
+    paintBar()
+  }
   playerEntry = entry
   const streamUrl = resolveStreamUrl(entry.streamUrl)
   const worker = getWorker()
   $('pTitle').textContent = entry.title || entry.id
   $('pDownloadBtn').href = downloadHref(entry)
+  $('pFileInfo').open = false
   $('pBadge').textContent = workerWarm ? 'Opening…' : 'Loading player…'
   $('pRawLink').href = streamUrl
   showStatus(workerWarm ? 'Opening stream…' : 'Loading player…')
@@ -5708,6 +5919,7 @@ function openPlayer (entry, at = 0) {
     }
     if (m.type === 'manifest') {
       if (m.streamBlock) streamBlockBytes = m.streamBlock
+      p.fileBlocks = Math.ceil(m.byteLength / streamBlockBytes)
       const mf = m.manifest
       p.manifest = mf
       p.duration = mf.duration || 0
@@ -5895,7 +6107,9 @@ function openPlayer (entry, at = 0) {
       }
     }
     const maxInFlight = p.prefetchMaxInFlight || p.manifest?.rules?.prefetchInFlight || 6
-    const endBlock = typeof p.prefetchEndBlock === 'number' ? p.prefetchEndBlock : (base + (p.manifest?.rules?.prefetchLookahead ?? 24) + 1)
+    // The first read after open can precede the worker's next plan. Stop at the length its Range probe measured.
+    const windowEnd = p.prefetchEndBlock ?? (base + (p.manifest?.rules?.prefetchLookahead ?? 24) + 1)
+    const endBlock = Math.min(windowEnd, p.fileBlocks ?? p.prefetchEndBlock ?? 0)
     for (let idx = base; idx < endBlock; idx++) {
       if (p.prefetchInFlight.size >= maxInFlight) break
       if (idx < 0) continue

@@ -1,5 +1,6 @@
 import { readFileSync, writeFileSync, renameSync } from 'node:fs'
 import { join } from 'node:path'
+import { isBootstrapNode, looksIPv6 } from './app-settings.js'
 import { CINEMETA_URL } from './art.js'
 
 // Relay settings: settings.json (set from the UI) wins, then an env var, then the default. settings.json is a private
@@ -107,7 +108,7 @@ function validate (key, spec, value) {
     if (typeof item !== 'string') throw bad(key, 'items must be text')
     const v = item.trim()
     if (spec.type === 'keys' && !HEX64.test(v.toLowerCase())) throw bad(key, `${v.slice(0, 16)}… is not a 64-character hex key`)
-    if (spec.type === 'hosts' && !/^[a-z0-9.:[\]-]+:\d{1,5}$/i.test(v)) throw bad(key, `${v} must be host:port`)
+    if (spec.type === 'hosts' && !isBootstrapNode(v)) throw bad(key, `${v} must be host:port${looksIPv6(v) ? ' (IPv6 addresses are not supported)' : ''}`)
     if (spec.type === 'urls' && !/^https?:\/\/[^\s]+$/i.test(v)) throw bad(key, `${v.slice(0, 40)} is not an http(s) URL`)
     return spec.type === 'keys' ? v.toLowerCase() : v
   })

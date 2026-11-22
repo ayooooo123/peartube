@@ -4,6 +4,8 @@ Status: design, 2026-11-20. UI only. The API is the contract in `design/youtube-
 
 Scope: the "Find albums" card on the Music tab of `src/ui.js`. It covers source selection, results arriving from two sources at different times, saving YouTube videos as an album, the progress cards, and how a YouTube copy is labelled in the library.
 
+Since `design/unified-library.md` (2026-11-22) this card has no field of its own: the page's one Find field is in the top bar, and the card is the `Not in your library` part of Find. The rest of this document holds.
+
 ---
 
 ## 0. Decisions

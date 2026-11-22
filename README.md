@@ -369,13 +369,19 @@ playlist. The node's blob server stays on loopback behind `/v1/blob`.
 Without `PEARTUBE_API_TOKEN` there is no auth, so run an open relay only on a network you trust:
 anyone on it can queue a download of any public URL.
 
-The UI has six tabs: **Library** (add and play video), **Music** (albums by artist, each with the
-cover its own FLAC files embed or a colour-and-initials sleeve, an album sheet to play from, and
-**Find music**, one search over Soulseek and YouTube), **Channels** (your channel and the ones you
-follow), **Sharing** (peers, kept copies, HiveRelays, Stremio and M3U addresses), **TV** (pair and
-control) and **Settings**. Plugins appear only as user intents.
+The UI is one library with three rooms: **Home** (what you have not finished, then a row of albums
+and a row of movies and series), **Listen** (albums by artist, each with the cover its own FLAC
+files embed or a colour-and-initials sleeve, and an album sheet to play from) and **Watch** (movies,
+series and clips, with a filter for each kind). One **Find** field in the top bar lists what the
+library holds while you type; Enter also searches Soulseek, YouTube and other relays. **Add to
+library** takes a link, a page, a folder, a catalog or a channel. The relay's own pages are
+**Channels** (your channel and the ones you follow), **Sharing** (peers, kept copies, HiveRelays,
+Stremio and M3U addresses), **TV** (pair and control) and **Settings**. Every place has an address
+(`#home`, `#listen`, `#watch/series`, `#find/blue train`, `#add`), and the older `#library` and
+`#music` links still open. Plugins appear only as user intents.
 
-Find music has a chip for each source (on, off, "Set up", or a warning), remembered in the browser.
+Find has a chip for each source (on, off, "Set up", or a warning) and one for other relays, remembered
+in the browser.
 Results stay in one group per source, Soulseek first, and each group fills when its source
 answers, so YouTube's rows show in a few seconds while peers are still being asked. A Soulseek row
 is a peer's folder (Browse, Mirror). A YouTube row is one video with its picture (fetched through

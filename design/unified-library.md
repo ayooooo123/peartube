@@ -20,7 +20,7 @@ The page before this change had a Library tab (video only, with the tools to add
 2. **A film never enters the music queue.** `Up next` holds tracks only. A series offers `Next episode`.
 3. **Music waits for a video.** When a video starts while music plays, the music stops and keeps its track, its time and its list. When the video closes, the small player shows the waiting track, paused, with the line `Paused for a video`. Nothing starts again by itself: only `Play` does.
 4. **Music closes a video.** When a person starts music while a video is open, the video closes and keeps its place under `Keep playing`.
-5. **Artwork.** A cover that the album's own saved files hold is shown. Otherwise the sleeve is drawn from the album's name. The page never opens a file that is not saved here, and never asks a public image host, to fill a shelf.
+5. **Artwork.** A cover that the album's own saved files hold is shown. Otherwise the sleeve is drawn from the album's name. The page never opens a file that is not saved here to fill a shelf, and it never asks a public image host for an album cover. A film's poster comes through the relay (`/v1/poster/<id>`), as before.
 6. **No artist photos.** There are none in the system. An artist's picture is a stack of that artist's sleeves.
 7. **Where a return visit starts.** The first visit opens Home. A later visit with no link opens the room that the person used last.
 8. **Old links keep working.** `#music` opens Listen and `#library` opens Home.
@@ -54,7 +54,7 @@ The video player is not a place. It covers the page, or it stays as a small pict
 
 ## 3. Screens
 
-**Home.** `Keep playing` mixes what is not finished: videos with their time left, and the album of the saved music list. The newest of them is large; the others are rows beside it (under it on a narrow screen). Under that: `Albums` with the link `All albums`, and `Movies and series` with the link `All video`. With nothing unfinished, `Keep playing` is absent.
+**Home.** `Keep playing` mixes what is not finished: videos with their time left, and the album of the saved music list. The newest of them is large; the others are rows beside it (under it on a narrow screen). Under that: `Albums` with the link `All albums`, and `Movies and series` with the link `All video`. A library with clips and no movie or series shows `Clips` with the link `All clips` in that place, so Home is not bare. With nothing unfinished, `Keep playing` is absent. With an empty library, Home says `Nothing in your library yet.` and offers `Add to library`.
 
 **Listen.** One control with `Albums`, `Artists`, `Tracks`; the count (`20 albums`); a `Saved here` switch. Albums are a grid of square covers with the album and the artist under each. Artists are a grid of sleeve stacks with the name and `3 albums`. Tracks is one list (title, artist, album) with a filter field.
 
@@ -64,11 +64,9 @@ The video player is not a place. It covers the page, or it stays as a small pict
 
 **Watch.** Chips `All`, `Movies`, `Series`, `Clips` with their counts, and `Saved here`. With `All`: `Keep watching` (wide pictures with progress), `Movies and series` (tall posters), `Clips` (wide tiles). With one kind chosen: only that grid.
 
-**Add to library.** The add box with its preview, `Import folder`, `Mirror a catalog`, `Copy a channel`, and the list of what is being added. Finished adds fold into one line; a failed one stays until it is dismissed.
+**Add to library.** The add box with its preview, `Import folder`, `Mirror a catalog`, `Copy a channel`, and the list of what is being added. A finished add stays in the list for six hours or until it is dismissed; a failed one stays until it is dismissed. An album that is saved from a search result shows its progress on the Find page, where the save started.
 
-**Find.** One field for everything. Typing narrows the library at once: `In your library`, in the groups `Albums`, `Tracks`, `Movies and series`, `Clips`. Enter also looks outside: `Not in your library`, in the groups `On other relays`, `Soulseek`, `YouTube`. The page never searches outside the library without that key press. A pasted link offers `Add to library`.
-
-**Add to library.** The add box with its preview, `Import folder`, `Mirror a catalog`, `Copy a channel`, and the list of what is being added. A finished add leaves the list after a short time; a failed one stays until it is dismissed.
+**Find.** One field for everything. Typing narrows the library at once: `In your library`, in the groups `Albums`, `Tracks`, `Movies and series`, `Clips`. Enter also looks outside: `Not in your library`, in the groups `Soulseek`, `YouTube`, `On other relays`. Chips above those groups show which of them a search asks, and each can be turned off. The page never searches outside the library without that key press. A pasted link offers `Add to library`.
 
 **The small player (the dock).** It shows only when there is a music list. Its top edge is the progress line, which is also the seek control. Left: cover, track, `artist · album` (links). Centre: `Previous`, `Play` or `Pause`, `Next`, the times. Right: `Shuffle`, `Repeat`, `Up next`, `Volume`, `Open player`. On a narrow screen it is one row: cover, two lines, `Play` or `Pause`, `Next`.
 

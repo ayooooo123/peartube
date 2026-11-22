@@ -1,22 +1,27 @@
-// End-to-end check of the relay web UI in headless Brave (`$PUPPETEER_EXECUTABLE_PATH`), driven over CDP:
+// End-to-end checks of the relay web UI in headless Brave (`$PUPPETEER_EXECUTABLE_PATH`), driven over CDP.
+// The first test:
 //   1. Settings: token gate (401), settings.json > env > default precedence with a way back to the env value, 0600 file,
 //      round-trip from the UI with every change applied in the running relay, and the Restart relay action.
-//   2. Every plugin as a user intent from the first screen, counting clicks: add from URL, import a folder,
+//   2. Every plugin as a user intent from Home, counting presses: add from URL, import a folder,
 //      follow a feed, copy a channel, keep copies, ask a HiveRelay to seed; legacy migration hidden when there is none.
 //   3. Content identification against a stubbed Cinemeta and a stub `ubit` (`UBIT_BIN`): an exact match is
 //      published as `imdb:tt…` (the id MediaStorm searches by), an unknown file as a plain clip, a page link
 //      through ubit's metadata and NDJSON downloader.
-//   4. Music sources against the stub `ubit`: source chips and their memory, a streamed two-source search, YouTube
-//      rows with relay-fetched thumbnails and the fixed lossy label, rows that stay put when the slower group lands
-//      above them (and no redraw mid-press), suggestions from messy titles, failure hints, a failing source on its
-//      own, the save dialog (suggestions, reorder, single track filed into the album that has it, Escape), job
+//   4. Music sources on Find against the stub `ubit`: source chips and their memory, a streamed two-source search,
+//      YouTube rows with relay-fetched thumbnails and the fixed lossy label, rows that stay put when the slower group
+//      lands above them (and no redraw mid-press), suggestions from messy titles, failure hints, a failing source on
+//      its own, the save dialog (suggestions, reorder, single track filed into the album that has it, Escape), job
 //      cards without a percentage, library labels for YouTube copies, alone and merged with a FLAC album, removing
-//      the YouTube copy on its own, and a library-filter miss that leads on to Find music.
-//   5. Taste gates on every tab at 1440×900 and 390×844 in light and dark: no console errors or warnings, no
+//      the YouTube copy on its own, and words that match nothing in the library leading on to a search outside.
+//   5. Taste gates on every place at 1440×900 and 390×844 in light and dark: no console errors or warnings, no
 //      sideways scroll, no internal plugin ids in visible text, no hint over 12 words, every field labelled
 //      with an example placeholder; again with search results on screen and with the save dialog open.
-// Writes `desktop/target/e2e/ui-result.json`, screenshots to `desktop/target/e2e/ui-audit/after/`, and the sources
+// It writes `desktop/target/e2e/ui-result.json`, screenshots to `desktop/target/e2e/ui-audit/after/`, and the sources
 // screens to `desktop/target/e2e/sources-ux/` (the UX-fix evidence in its `fixes/`).
+// The second test is the one library (design/unified-library.md) on a relay of its own that holds a movie, a series,
+// a clip and an album. Each behaviour of the new browsing is one named check; all of them run, and the test fails
+// once, at its end, with the names of the checks that failed. It writes `desktop/target/e2e/ui-design-result.json`
+// and screenshots to `desktop/target/e2e/ui-audit/design/`. To run it alone: `--test-name-pattern='one library'`.
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { execFileSync, spawn } from 'node:child_process'
@@ -27,6 +32,7 @@ import { createServer as createNetServer } from 'node:net'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createInterface } from 'node:readline'
+import { isDeepStrictEqual } from 'node:util'
 
 const root = new URL('..', import.meta.url).pathname
 const outDir = join(root, 'desktop/target/e2e')
@@ -83,25 +89,36 @@ function variableAspectClip () {
   rmSync(dir, { recursive: true, force: true })
   return bytes
 }
+// An album folder for the import folder: one tagged 8 s FLAC tone per track, `[name, hertz, name in the file name]`.
+function flacAlbum (dir, artist, album, tracks) {
+  mkdirSync(dir, { recursive: true })
+  tracks.forEach(([name, hz, file = name], i) => {
+    execFileSync('ffmpeg', ['-loglevel', 'error', '-y', '-f', 'lavfi', '-i', `sine=frequency=${hz}:sample_rate=44100:duration=8`, '-metadata', 'title=' + name, '-metadata', 'artist=' + artist,
+      '-metadata', 'album=' + album, '-metadata', 'track=' + (i + 1), join(dir, `0${i + 1} - ${file}.flac`)])
+  })
+}
 
 function startStub () {
+  // The large file and the ffmpeg clips are made when first asked for: a test that plays none does not wait for them.
   const files = {
     '/media/Big.Buck.Bunny.2008.1080p.BluRay.x264-GRP.mp4': bytesFor('bbb'),
     '/media/Random.Clip.Name.mp4': bytesFor('random'),
     '/media/feed-item.mp4': bytesFor('feed'),
     '/page-video.mp4': bytesFor('page'),
-    '/media/long.mp4': bytesFor('long', 16 * 1024 * 1024),
-    '/media/clip.mkv': playableClip(),
-    '/media/clip30.mkv': playableClip(30),
-    '/media/variable.mkv': variableAspectClip()
+    '/media/long.mp4': () => bytesFor('long', 16 * 1024 * 1024),
+    '/media/clip.mkv': () => playableClip(),
+    '/media/clip30.mkv': () => playableClip(30),
+    '/media/variable.mkv': () => variableAspectClip()
   }
+  const file = path => typeof files[path] === 'function' ? (files[path] = files[path]()) : files[path]
   const srv = createServer((req, res) => {
     const url = new URL(req.url, 'http://x')
     const base = 'http://127.0.0.1:' + srv.address().port
     const json = body => { res.writeHead(200, { 'content-type': 'application/json' }); res.end(JSON.stringify(body)) }
-    if (files[url.pathname]) {
-      res.writeHead(200, { 'content-type': 'video/mp4', 'content-length': files[url.pathname].length })
-      return res.end(req.method === 'HEAD' ? undefined : files[url.pathname])
+    const bytes = file(url.pathname)
+    if (bytes) {
+      res.writeHead(200, { 'content-type': 'video/mp4', 'content-length': bytes.length })
+      return res.end(req.method === 'HEAD' ? undefined : bytes)
     }
     if (url.pathname === '/watch') { res.writeHead(200, { 'content-type': 'text/html' }); return res.end(req.method === 'HEAD' ? undefined : '<html></html>') }
     if (url.pathname === '/poster.png' || url.pathname === '/thumb.png') { res.writeHead(200, { 'content-type': 'image/png' }); return res.end(PNG) }
@@ -118,6 +135,7 @@ function startStub () {
       return json({ metas: [] })
     }
     if (url.pathname === '/cinemeta/meta/movie/tt1254207.json') return json({ meta: { id: 'tt1254207', poster: base + '/poster.png' } })
+    if (url.pathname === '/cinemeta/meta/series/tt0000002.json') return json({ meta: { id: 'tt0000002', poster: base + '/poster.png' } })
     res.writeHead(404)
     res.end()
   })
@@ -305,6 +323,119 @@ async function launchBrowser () {
   }
 }
 
+// One tab driven as a reader drives it: real pointer presses and typed text, and the taste gates. `clicks` counts the
+// presses, for the checks that count the way to an intent.
+function drive (browser, base, result, shots) {
+  const { evaluate, send } = browser
+  const ui = { clicks: 0 }
+  async function center (selector) {
+    const at = await evaluate(`(() => { const e = document.querySelector(${JSON.stringify(selector)}); if (!e) return null; e.scrollIntoView({ block: 'center' }); const r = e.getBoundingClientRect(); return r.width ? { x: r.x + r.width / 2, y: r.y + r.height / 2 } : null })()`)
+    assert.ok(at, 'visible element ' + selector)
+    return at
+  }
+  async function click (selector) {
+    const { x, y } = await center(selector)
+    await send('Input.dispatchMouseEvent', { type: 'mouseMoved', x, y })
+    await send('Input.dispatchMouseEvent', { type: 'mousePressed', x, y, button: 'left', clickCount: 1 })
+    await send('Input.dispatchMouseEvent', { type: 'mouseReleased', x, y, button: 'left', clickCount: 1 })
+    ui.clicks++
+    await sleep(150)
+  }
+  // Marks the visible control whose text is `text` (inside `scope`) and clicks it. A card redraws after its Save, so
+  // a control can appear late or be replaced between marking and clicking: look again for up to 5 s.
+  async function clickText (text, scope = 'body') {
+    const end = Date.now() + 5000
+    for (;;) {
+      const mark = 'e2e-' + Math.random().toString(36).slice(2)
+      const found = await evaluate(`(() => {
+        const els = [...document.querySelectorAll(${JSON.stringify(scope)} + ' button, ' + ${JSON.stringify(scope)} + ' a, ' + ${JSON.stringify(scope)} + ' label.switch')]
+        const e = els.find(x => x.offsetParent !== null && x.textContent.trim().replace(/\\s+/g, ' ').startsWith(${JSON.stringify(text)}))
+        if (!e) return false
+        e.setAttribute('data-e2e', ${JSON.stringify(mark)})
+        e.scrollIntoView({ block: 'center' })
+        return e.getBoundingClientRect().width > 0
+      })()`)
+      if (found) return click(`[data-e2e="${mark}"]`)
+      assert.ok(Date.now() < end, 'control "' + text + '" in ' + scope)
+      await sleep(100)
+    }
+  }
+  async function type (selector, text) {
+    await evaluate(`(() => { const e = document.querySelector(${JSON.stringify(selector)}); e.scrollIntoView({ block: 'center' }); e.focus(); e.select?.() })()`)
+    await send('Input.insertText', { text })
+  }
+  async function press (key) {
+    const k = { Enter: { code: 'Enter', windowsVirtualKeyCode: 13, text: '\r' }, Escape: { code: 'Escape', windowsVirtualKeyCode: 27 } }[key]
+    await send('Input.dispatchKeyEvent', { type: 'keyDown', key, ...k })
+    await send('Input.dispatchKeyEvent', { type: 'keyUp', key, code: k.code, windowsVirtualKeyCode: k.windowsVirtualKeyCode })
+    await sleep(150)
+  }
+  async function waitFor (expression, what, timeout = 30_000) {
+    const end = Date.now() + timeout
+    while (Date.now() < end) {
+      if (await evaluate(expression).catch(() => false)) return
+      await sleep(200)
+    }
+    throw new Error('timed out waiting for ' + what)
+  }
+  async function waitApi (fn, what, timeout = 30_000) {
+    const end = Date.now() + timeout
+    while (Date.now() < end) {
+      const v = await fn().catch(() => null)
+      if (v) return v
+      await sleep(300)
+    }
+    throw new Error('timed out waiting for ' + what)
+  }
+  async function viewport (width, height, scheme) {
+    await send('Emulation.setDeviceMetricsOverride', { width, height, deviceScaleFactor: 1, mobile: width < 600 })
+    await send('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-color-scheme', value: scheme }] })
+  }
+  async function open (hash = '') {
+    // A new query string makes every open a full load, not a same-document hash change.
+    // Park the pointer first: resting on a Play button would start the 16 MB player download on the old page.
+    await send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: 0, y: 0 })
+    await send('Page.navigate', { url: base + '/?load=' + Date.now() + hash })
+    // The page is ready once its first read of the relay has come back; a script that failed to start never is.
+    await waitFor(`document.readyState === 'complete' && S.loaded === true`, 'page load')
+    await sleep(400)
+  }
+  const goTab = async name => { await clickText(name, '.tabs'); await sleep(300) }
+  async function shot (name, viewportOnly = false, dir = shots) {
+    const file = join(dir, name + '.png')
+    writeFileSync(file, Buffer.from((await send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: !viewportOnly })).data, 'base64'))
+    result.screenshots.push(file.slice(root.length))
+  }
+  // The taste gates, on whatever is on screen now.
+  async function tasteAudit (where) {
+    const audit = await evaluate(`(() => {
+      const visible = e => e.offsetParent !== null || getComputedStyle(e).position === 'fixed'
+      const words = s => s.trim().split(/\\s+/).filter(Boolean).length
+      const text = document.body.innerText
+      const fields = [...document.querySelectorAll('input, select, textarea')].filter(e => visible(e) && !['checkbox', 'radio', 'range', 'hidden'].includes(e.type))
+      return {
+        scrollWidth: document.documentElement.scrollWidth,
+        clientWidth: document.documentElement.clientWidth,
+        pluginIds: ${JSON.stringify(PLUGIN_IDS)}.filter(id => text.includes(id)),
+        longHints: [...document.querySelectorAll('.hint, p, [title]')].filter(visible).map(e => e.matches('[title]') ? e.title : e.textContent).filter(t => words(t) > 12),
+        unlabeled: fields.filter(e => !(e.labels && e.labels.length) && !e.getAttribute('aria-label')).map(e => e.id),
+        noPlaceholder: fields.filter(e => e.tagName === 'INPUT' && !e.placeholder).map(e => e.id),
+        rawJson: /[{]"[a-zA-Z]+":/.test(text),
+        stray: text.match(/\\b(null|undefined|NaN)\\b/g) || []
+      }
+    })()`)
+    assert.ok(audit.scrollWidth <= audit.clientWidth, where + ': sideways scroll ' + audit.scrollWidth + ' > ' + audit.clientWidth)
+    assert.deepEqual(audit.pluginIds, [], where + ': internal plugin ids visible')
+    assert.deepEqual(audit.longHints, [], where + ': hints over 12 words')
+    assert.deepEqual(audit.unlabeled, [], where + ': unlabelled fields')
+    assert.deepEqual(audit.noPlaceholder, [], where + ': fields without an example')
+    assert.equal(audit.rawJson, false, where + ': raw JSON on screen')
+    assert.deepEqual(audit.stray, [], where + ': a missing value printed as text')
+    return audit
+  }
+  return Object.assign(ui, { center, click, clickText, type, press, waitFor, waitApi, viewport, open, goTab, shot, tasteAudit })
+}
+
 test('relay web UI: settings, plugins as intents, identification, music sources, and taste gates', { timeout: 420_000 }, async () => {
   mkdirSync(shotDir, { recursive: true })
   mkdirSync(srcShotDir, { recursive: true })
@@ -342,107 +473,9 @@ test('relay web UI: settings, plugins as intents, identification, music sources,
   const mark = name => { result.timings[name] = Date.now() - started }
   const browser = await launchBrowser()
   const { evaluate, send } = browser
-
-  let clicks = 0
-  async function center (selector) {
-    const at = await evaluate(`(() => { const e = document.querySelector(${JSON.stringify(selector)}); if (!e) return null; e.scrollIntoView({ block: 'center' }); const r = e.getBoundingClientRect(); return r.width ? { x: r.x + r.width / 2, y: r.y + r.height / 2 } : null })()`)
-    assert.ok(at, 'visible element ' + selector)
-    return at
-  }
-  async function click (selector) {
-    const { x, y } = await center(selector)
-    await send('Input.dispatchMouseEvent', { type: 'mouseMoved', x, y })
-    await send('Input.dispatchMouseEvent', { type: 'mousePressed', x, y, button: 'left', clickCount: 1 })
-    await send('Input.dispatchMouseEvent', { type: 'mouseReleased', x, y, button: 'left', clickCount: 1 })
-    clicks++
-    await sleep(150)
-  }
-  // Marks the visible control whose text is `text` (inside `scope`) and clicks it. A card redraws after its Save, so
-  // a control can appear late or be replaced between marking and clicking: look again for up to 5 s.
-  async function clickText (text, scope = 'body') {
-    const end = Date.now() + 5000
-    for (;;) {
-      const mark = 'e2e-' + Math.random().toString(36).slice(2)
-      const found = await evaluate(`(() => {
-        const els = [...document.querySelectorAll(${JSON.stringify(scope)} + ' button, ' + ${JSON.stringify(scope)} + ' a, ' + ${JSON.stringify(scope)} + ' label.switch')]
-        const e = els.find(x => x.offsetParent !== null && x.textContent.trim().replace(/\\s+/g, ' ').startsWith(${JSON.stringify(text)}))
-        if (!e) return false
-        e.setAttribute('data-e2e', ${JSON.stringify(mark)})
-        e.scrollIntoView({ block: 'center' })
-        return e.getBoundingClientRect().width > 0
-      })()`)
-      if (found) return click(`[data-e2e="${mark}"]`)
-      assert.ok(Date.now() < end, 'control "' + text + '" in ' + scope)
-      await sleep(100)
-    }
-  }
-  async function type (selector, text) {
-    await evaluate(`(() => { const e = document.querySelector(${JSON.stringify(selector)}); e.scrollIntoView({ block: 'center' }); e.focus(); e.select?.() })()`)
-    await send('Input.insertText', { text })
-  }
-  async function waitFor (expression, what, timeout = 30_000) {
-    const end = Date.now() + timeout
-    while (Date.now() < end) {
-      if (await evaluate(expression).catch(() => false)) return
-      await sleep(200)
-    }
-    throw new Error('timed out waiting for ' + what)
-  }
-  async function waitApi (fn, what, timeout = 30_000) {
-    const end = Date.now() + timeout
-    while (Date.now() < end) {
-      const v = await fn().catch(() => null)
-      if (v) return v
-      await sleep(300)
-    }
-    throw new Error('timed out waiting for ' + what)
-  }
-  async function viewport (width, height, scheme) {
-    await send('Emulation.setDeviceMetricsOverride', { width, height, deviceScaleFactor: 1, mobile: width < 600 })
-    await send('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-color-scheme', value: scheme }] })
-  }
-  async function open (hash = '') {
-    // A new query string makes every open a full load, not a same-document hash change.
-    // Park the pointer first: resting on a Play button would start the 16 MB player download on the old page.
-    await send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: 0, y: 0 })
-    await send('Page.navigate', { url: base + '/?load=' + Date.now() + hash })
-    await waitFor(`document.readyState === 'complete' && document.querySelector('#pills').children.length > 0`, 'page load')
-    await sleep(400)
-  }
-  const goTab = async name => { await clickText(name, '.tabs'); await sleep(300) }
+  const ui = drive(browser, base, result, shotDir)
+  const { click, clickText, type, waitFor, waitApi, viewport, open, goTab, shot, tasteAudit } = ui
   const entries = async () => (await getJson('/v1/entries')).results
-  async function shot (name, viewportOnly = false, dir = shotDir) {
-    const file = join(dir, name + '.png')
-    writeFileSync(file, Buffer.from((await send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: !viewportOnly })).data, 'base64'))
-    result.screenshots.push(file.slice(root.length))
-  }
-  // The taste gates, on whatever is on screen now.
-  async function tasteAudit (where) {
-    const audit = await evaluate(`(() => {
-      const visible = e => e.offsetParent !== null || getComputedStyle(e).position === 'fixed'
-      const words = s => s.trim().split(/\\s+/).filter(Boolean).length
-      const text = document.body.innerText
-      const fields = [...document.querySelectorAll('input, select, textarea')].filter(e => visible(e) && !['checkbox', 'radio', 'range', 'hidden'].includes(e.type))
-      return {
-        scrollWidth: document.documentElement.scrollWidth,
-        clientWidth: document.documentElement.clientWidth,
-        pluginIds: ${JSON.stringify(PLUGIN_IDS)}.filter(id => text.includes(id)),
-        longHints: [...document.querySelectorAll('.hint, p, [title]')].filter(visible).map(e => e.matches('[title]') ? e.title : e.textContent).filter(t => words(t) > 12),
-        unlabeled: fields.filter(e => !(e.labels && e.labels.length) && !e.getAttribute('aria-label')).map(e => e.id),
-        noPlaceholder: fields.filter(e => e.tagName === 'INPUT' && !e.placeholder).map(e => e.id),
-        rawJson: /[{]"[a-zA-Z]+":/.test(text),
-        stray: text.match(/\\b(null|undefined|NaN)\\b/g) || []
-      }
-    })()`)
-    assert.ok(audit.scrollWidth <= audit.clientWidth, where + ': sideways scroll ' + audit.scrollWidth + ' > ' + audit.clientWidth)
-    assert.deepEqual(audit.pluginIds, [], where + ': internal plugin ids visible')
-    assert.deepEqual(audit.longHints, [], where + ': hints over 12 words')
-    assert.deepEqual(audit.unlabeled, [], where + ': unlabelled fields')
-    assert.deepEqual(audit.noPlaceholder, [], where + ': fields without an example')
-    assert.equal(audit.rawJson, false, where + ': raw JSON on screen')
-    assert.deepEqual(audit.stray, [], where + ': a missing value printed as text')
-    return audit
-  }
 
   try {
     await viewport(1440, 900, 'dark')
@@ -535,9 +568,10 @@ test('relay web UI: settings, plugins as intents, identification, music sources,
     mark('settings')
     result.settingsFileMode = fileMode.toString(8)
 
-    // 2 + 3. Add from URL with an exact Cinemeta match: two clicks from the first screen.
-    await goTab('Library')
-    clicks = 0
+    // 2 + 3. Add from URL with an exact Cinemeta match: three presses from Home.
+    await goTab('Home')
+    ui.clicks = 0
+    await clickText('Add to library', '.top')
     await type('#addInput', stub.base + '/media/Big.Buck.Bunny.2008.1080p.BluRay.x264-GRP.mp4')
     await clickText('Add', '#addForm')
     await waitFor(`!document.querySelector('#preview').hidden && document.querySelector('#preview input[name=cand]:checked')`, 'identification preview')
@@ -545,8 +579,8 @@ test('relay web UI: settings, plugins as intents, identification, music sources,
     assert.equal(preview.checked, 'imdb:tt1254207', 'the exact title and year is chosen')
     assert.equal(preview.title, 'Big Buck Bunny 2008')
     assert.ok(!preview.choices.some(c => c.includes('Big Stan')), 'unrelated titles are not offered')
-    await clickText('Add to library')
-    result.interactions.addFromUrl = clicks
+    await clickText('Add to library', '#preview')
+    result.interactions.addFromUrl = ui.clicks
     const movie = await waitApi(async () => (await entries()).find(e => e.id === 'imdb:tt1254207'), 'identified entry')
     assert.equal(movie.title, 'Big Buck Bunny 2008')
     assert.equal((await getJson('/v1/search?id=imdb:tt1254207')).results.length, 1, 'MediaStorm finds it by imdb id')
@@ -554,6 +588,7 @@ test('relay web UI: settings, plugins as intents, identification, music sources,
     const again = await (await fetch(base + '/v1/acquire', { method: 'POST', headers: { ...auth, 'content-type': 'application/json' }, body: JSON.stringify({ id: 'imdb:tt1254207', title: 'Big Buck Bunny 2008', source: { url: stub.base + '/media/Big.Buck.Bunny.2008.1080p.BluRay.x264-GRP.mp4' } }) })).json()
     await waitApi(async () => (await getJson('/v1/jobs/' + again.jobId)).status === 'done', 'second copy announced')
     assert.equal((await getJson('/v1/search?id=imdb:tt1254207')).results.length, 1, 'two copies of one file are one entry')
+    await goTab('Watch')
     await waitFor(`document.querySelectorAll('#entries .tile').length === 1`, 'one tile for the duplicated file')
     result.checks.duplicateCopiesCollapse = true
 
@@ -652,7 +687,7 @@ test('relay web UI: settings, plugins as intents, identification, music sources,
     assert.equal(await evaluate(`player === window.__miniBefore`), true, 'mini and full view share one playback session')
     await goTab('Channels')
     assert.equal(await evaluate(`player === window.__miniBefore && $('playerModal').classList.contains('mini')`), true, 'mini player survives browsing another tab')
-    await goTab('Library')
+    await goTab('Watch')
     await click('#pMiniPlay')
     assert.equal(await evaluate(`player.paused && $('pMiniPlay').textContent === 'Play'`), true, 'mini play button pauses the same player')
     await evaluate(`(() => { $('pMiniSeek').value = 300; $('pMiniSeek').dispatchEvent(new Event('change')); return true })()`)
@@ -698,12 +733,13 @@ test('relay web UI: settings, plugins as intents, identification, music sources,
     mark('identifyMatch')
 
     // No match: the parsed title, under a plain clip id.
+    await clickText('Add to library', '.top')
     await type('#addInput', stub.base + '/media/Random.Clip.Name.mp4')
     await clickText('Add', '#addForm')
     await waitFor(`!document.querySelector('#preview').hidden && document.querySelector('#addTitle')`, 'plain preview')
     assert.equal(await evaluate(`document.querySelector('#addTitle').value`), 'Random Clip Name')
     assert.equal(await evaluate(`document.querySelector('#preview fieldset') === null`), true, 'no suggestions when nothing matches')
-    await clickText('Add to library')
+    await clickText('Add to library', '#preview')
     const clip = await waitApi(async () => (await entries()).find(e => e.title === 'Random Clip Name'), 'plain entry')
     assert.match(clip.id, /^clip:[0-9a-f]{16}$/)
 
@@ -713,7 +749,7 @@ test('relay web UI: settings, plugins as intents, identification, music sources,
     await waitFor(`!document.querySelector('#preview').hidden && document.querySelector('#preview h3')`, 'page preview')
     const pageMeta = await evaluate(`document.querySelector('#preview .meta').textContent`)
     assert.ok(pageMeta.includes('Blender') && pageMeta.includes('10:35'), 'page preview shows uploader and length: ' + pageMeta)
-    await clickText('Add to library')
+    await clickText('Add to library', '#preview')
     const pageEntry = await waitApi(async () => (await entries()).find(e => e.title === page.title), 'page entry')
     assert.equal(pageEntry.size, bytesFor('page').length)
     const publicText = JSON.stringify(await getJson('/v1/entries')) + JSON.stringify(await getJson('/v1/jobs'))
@@ -723,20 +759,16 @@ test('relay web UI: settings, plugins as intents, identification, music sources,
     mark('identifyPage')
 
     // Scan the import folder: the page offers a scan, never a path.
-    await open('#library')
+    await open('#home')
     assert.equal(await evaluate(`document.querySelector('#folderInput') === null && !document.body.innerHTML.includes(${JSON.stringify(watchDir)})`), true, 'the page names no folder')
     writeFileSync(join(watchDir, 'Watched.Clip.2019.mp4'), bytesFor('watched'))
     // And one album: a folder of two tagged 8 s FLAC tracks.
-    const albumDir = join(watchDir, 'Test Band - First Light')
-    mkdirSync(albumDir)
-    for (const [n, name, hz] of [[1, 'Dawn', 440], [2, 'Dusk', 550]]) {
-      execFileSync('ffmpeg', ['-loglevel', 'error', '-y', '-f', 'lavfi', '-i', `sine=frequency=${hz}:sample_rate=44100:duration=8`, '-metadata', 'title=' + name, '-metadata', 'artist=Test Band',
-        '-metadata', 'album=First Light', '-metadata', 'track=' + n, join(albumDir, `0${n} - ${name}.flac`)])
-    }
-    clicks = 0
+    flacAlbum(join(watchDir, 'Test Band - First Light'), 'Test Band', 'First Light', [['Dawn', 440], ['Dusk', 550]])
+    ui.clicks = 0
+    await clickText('Add to library', '.top')
     await clickText('Import folder')
     await clickText('Scan import folder', '#folderForm')
-    result.interactions.importFolder = clicks
+    result.interactions.importFolder = ui.clicks
     mark('importFolderClicked')
     await waitApi(async () => (await entries()).find(e => e.title === 'Watched Clip 2019'), 'watched file imported')
     await waitApi(async () => /Scanned the import folder/.test(await evaluate(`document.querySelector('#addMsg').textContent`)), 'scan result shown')
@@ -746,11 +778,11 @@ test('relay web UI: settings, plugins as intents, identification, music sources,
     // stays through a tab switch and pauses on Space. The bar it leaves comes back paused on every later load,
     // so the taste gates below run with it on screen.
     await waitApi(async () => (await entries()).filter(e => e.music && e.title === 'Test Band · First Light').length === 2, 'album imported')
-    await open('#library')
+    await open('#watch')
     assert.equal(await evaluate(`[...document.querySelectorAll('#entries .tile')].some(t => t.textContent.includes('First Light'))`), false, 'albums are not tiles on the film grid')
     await open('#music')
-    await waitFor(`[...document.querySelectorAll('.album-card .album-name')].some(n => n.textContent === 'First Light')`, 'album on the Music shelf')
-    await evaluate(`[...document.querySelectorAll('.album-card')].find(c => c.querySelector('.album-name').textContent === 'First Light').querySelector('.album-open').setAttribute('data-e2e', 'album'); true`)
+    await waitFor(`[...document.querySelectorAll('#albums .album-card .album-name')].some(n => n.textContent === 'First Light')`, 'album on the Listen shelf')
+    await evaluate(`[...document.querySelectorAll('#albums .album-card')].find(c => c.querySelector('.album-name').textContent === 'First Light').querySelector('.album-open').setAttribute('data-e2e', 'album'); true`)
     await click('[data-e2e="album"]')
     await waitFor(`!!document.querySelector('#detail[open] [data-album]')`, 'album sheet')
     await click('#detail [data-album]')
@@ -772,10 +804,11 @@ test('relay web UI: settings, plugins as intents, identification, music sources,
     result.checks.musicBar = bar
     mark('musicBar')
 
-    // 4. Music sources. Soulseek has no account here, so it offers setup; YouTube runs on the stub `ubit`.
+    // 4. Music sources, on Find. Soulseek has no account here, so it offers setup; YouTube runs on the stub `ubit`.
     const issuesBefore = browser.issues.length
     const chip = name => `document.querySelector('#srcChips [data-src="${name}"]')`
-    await goTab('Music')
+    // Typing in the Find field opens Find. The page stays loaded, so the bar keeps the album it holds.
+    await type('#srcInput', 'test band')
     await waitFor(`!!${chip('youtube')}`, 'source chips')
     assert.deepEqual(await evaluate(`[${chip('youtube')}.textContent, ${chip('youtube')}.getAttribute('aria-pressed')]`), ['✓ YouTube', 'true'], 'YouTube is on by default')
     assert.deepEqual(await evaluate(`[${chip('soulseek')}.textContent, ${chip('soulseek')}.getAttribute('aria-pressed')]`), ['Soulseek · Set up', null], 'Soulseek without an account offers setup, not a toggle')
@@ -788,7 +821,7 @@ test('relay web UI: settings, plugins as intents, identification, music sources,
     assert.equal(await evaluate(`${chip('youtube')}.getAttribute('aria-pressed')`), 'false', 'Space toggles a focused chip')
     assert.equal(await evaluate(`audioEl.paused`), pausedBefore, 'Space on a chip leaves the music alone')
     // The choice survives a reload.
-    await open('#music')
+    await open('#find')
     await waitFor(`!!${chip('youtube')}`, 'source chips after reload')
     assert.equal(await evaluate(`${chip('youtube')}.getAttribute('aria-pressed')`), 'false', 'a source turned off stays off')
     assert.equal(await evaluate(`localStorage.getItem('peartube.sourcesOff')`), '["youtube"]')
@@ -799,7 +832,11 @@ test('relay web UI: settings, plugins as intents, identification, music sources,
     // One search; YouTube's part shows as soon as it lands, every row labelled as the lossy copy it would save. Only
     // YouTube is searched here (Soulseek is not set up); that a group shows while another still waits is proven below
     // with a stubbed two-source stream.
-    const ytSearch = async query => { await type('#srcInput', query); await click('#srcBtn') }
+    const ytSearch = async query => {
+      await type('#srcInput', query)
+      await waitFor(`!$('tab-find').hidden && location.hash === '#find/' + encodeURIComponent(${JSON.stringify(query)})`, 'Find with the typed words', 5000)
+      await click('#srcBtn')
+    }
     await ytSearch('test band')
     await waitFor(`document.querySelectorAll('#srcGroup-youtube .yt-pick-row').length === 3`, 'YouTube rows shown', 5000)
     const rows = await evaluate(`[...document.querySelectorAll('#ytResults .item')].map(i => i.innerText)`)
@@ -819,9 +856,12 @@ test('relay web UI: settings, plugins as intents, identification, music sources,
     const msgBox = `(() => { const m = $('srcMsg'); const r = m.getBoundingClientRect(); return { text: m.textContent, err: m.classList.contains('err'), w: r.width, h: r.height, clip: getComputedStyle(m).clip, live: m.getAttribute('role') } })()`
     const quiet = await evaluate(msgBox)
     assert.ok(quiet.text && !quiet.err && quiet.w <= 1 && quiet.h <= 1 && quiet.clip.startsWith('rect(0') && quiet.live === 'status', 'a status that is no error is read, not shown: ' + JSON.stringify(quiet))
+    // With every source off (the other relays too), Search says so, and that is shown.
+    await click('#srcChips [data-src="relays"]')
     await evaluate(`searchSources('test band', []); true`)
     const loud = await evaluate(msgBox)
     assert.ok(loud.err && loud.w > 1 && loud.h > 1 && loud.clip === 'auto', 'an error on the status line is shown: ' + JSON.stringify(loud))
+    await click('#srcChips [data-src="relays"]')
     result.checks.statusLineHidden = { quiet, loud }
     result.checks.sourcesStreamed = rows.length
 
@@ -1027,14 +1067,14 @@ test('relay web UI: settings, plugins as intents, identification, music sources,
     assert.equal(await evaluate(`$('ytPickText').textContent`), '2 selected')
     await click('#ytPickSave')
     await waitFor(`$('ytSave').open`, 'save dialog')
-    clicks = 0
+    ui.clicks = 0
     assert.deepEqual(await evaluate(`[$('ytArtist').value, $('ytTrack-0').value, $('ytTrack-1').value]`), ['Test Band', 'Dawn', 'Dusk'], 'artist and cleaned titles suggested')
     await type('#ytAlbum', 'Morning')
     await type('#ytYear', '2020')
     await click('[data-mv="up-1"]')
     assert.deepEqual(await evaluate(`[$('ytTrack-0').value, document.activeElement.dataset.mv]`), ['Dusk', 'up-0'], 'a moved track keeps focus on its own button')
     await click('#ytSaveBtn')
-    result.interactions.ytSave = clicks
+    result.interactions.ytSave = ui.clicks
     await waitFor(`!$('ytSave').open && /YouTube/.test($('srcJobs').innerText)`, 'YouTube job card', 10_000)
     // While a save runs, the page redraws the job cards and source chips every second and gives focus back to the
     // control that had it. That must not scroll: a plain focus() pulled the page back up to the card every second
@@ -1071,7 +1111,7 @@ test('relay web UI: settings, plugins as intents, identification, music sources,
     await shot('01-dismissed-job-button-back-1440-dark', true, reviewShotDir)
     result.checks.dismissedJobButton = { followed, after: await evaluate(`${dawnSave}.textContent`) }
     await open('#music')
-    const card = name => `[...document.querySelectorAll('.album-card')].find(c => c.querySelector('.album-name').textContent === '${name}')`
+    const card = name => `[...document.querySelectorAll('#albums .album-card')].find(c => c.querySelector('.album-name').textContent === '${name}')`
     await waitFor(`${card('Morning')}?.querySelector('[data-aq]').textContent === 'YouTube · AAC 128 kbps'`, 'YouTube album labelled on the shelf')
     await evaluate(`${card('Morning')}.querySelector('.album-open').setAttribute('data-e2e', 'morning'); true`)
     await click('[data-e2e="morning"]')
@@ -1112,7 +1152,7 @@ test('relay web UI: settings, plugins as intents, identification, music sources,
     await open('#music')
     await waitFor(`/^FLAC 16-bit 44.1 kHz · also YouTube$/.test(${card('First Light')}?.querySelector('[data-aq]').textContent || '')`, 'merged album says what it is, then also YouTube')
     assert.equal(await evaluate(`(() => { const yt = ${card('First Light')}.querySelector('.aq-yt'); const line = yt.parentElement.getBoundingClientRect(); const r = yt.getBoundingClientRect(); return r.width > 0 && r.right <= line.right + 0.5 })()`), true, '"also YouTube" is never cut off on the card')
-    assert.equal(await evaluate(`document.querySelectorAll('.album-card').length`), 2, 'the YouTube copy joins the FLAC album, not a new one')
+    assert.equal(await evaluate(`document.querySelectorAll('#albums .album-card').length`), 2, 'the YouTube copy joins the FLAC album, not a new one')
     // Saving the same video into that album again: its row says it is already here from YouTube and Save sends
     // nothing, until the owner ticks "Save again".
     await ytSearch('test band')
@@ -1131,6 +1171,9 @@ test('relay web UI: settings, plugins as intents, identification, music sources,
     await click('#ytSaveCancel')
     await waitFor(`!$('ytSave').open`, 'duplicate dialog closed')
     result.checks.duplicateSave = 'left out on its row; Save sends nothing until Save again is ticked'
+    // The searches above left the page on Find: the shelf is in Listen.
+    await goTab('Listen')
+    await waitFor(`!$('tab-listen').hidden`, 'back on Listen', 5000)
     await evaluate(`${card('First Light')}.querySelector('.album-open').setAttribute('data-e2e', 'merged'); true`)
     await click('[data-e2e="merged"]')
     await waitFor(`(document.querySelector('#detail[open] [data-ay]')?.textContent || '').includes('FLAC plays first')`, 'merged sheet says which copy plays', 20_000)
@@ -1147,22 +1190,22 @@ test('relay web UI: settings, plugins as intents, identification, music sources,
     await click('#detailClose')
     await waitFor(`${card('First Light')}?.querySelector('[data-aq]').textContent === 'FLAC 16-bit 44.1 kHz'`, 'the FLAC album stands alone again')
     result.checks.mergedAlbum = 'FLAC 16-bit 44.1 kHz · also YouTube, then the YouTube copy removed on its own'
-    // A miss in the library filter leads on to Find music with the same words.
-    await type('#musicFilter', 'zzqx')
-    await waitFor(`$('albums').querySelector('.empty button')?.textContent === 'Search YouTube for “zzqx”'`, 'the library miss offers a search')
-    await click('#albums .empty button')
-    await waitFor(`$('srcInput').value === 'zzqx' && document.querySelectorAll('#ytResults .yt-pick-row').length === 3`, 'the miss searched Find music')
-    await evaluate(`$('musicFilter').value = ''; renderMusic(); true`)
+    // Words that match nothing in the library say so on Find, and Search asks outside with the same words.
+    await type('#srcInput', 'zzqx')
+    await waitFor(`!$('tab-find').hidden && $('findLib').textContent.includes('Nothing in your library matches “zzqx”.')`, 'Find says the library has no match', 5000)
+    await click('#srcBtn')
+    await waitFor(`srcRun.query === 'zzqx' && document.querySelectorAll('#ytResults .yt-pick-row').length === 3`, 'the miss searched outside')
     assert.deepEqual(browser.issues.slice(issuesBefore), [], 'console errors or warnings in the sources flow')
     mark('musicSources')
-    await open('#library')
+    await open('#home')
 
     // Follow a feed.
-    clicks = 0
+    ui.clicks = 0
+    await clickText('Add to library', '.top')
     await clickText('Mirror a catalog')
     await type('#feedInput', stub.base + '/feed.json?token=feedsecret123')
     await clickText('Mirror', '#feedForm')
-    result.interactions.followFeed = clicks
+    result.interactions.followFeed = ui.clicks
     mark('followFeedClicked')
     await waitApi(async () => (await entries()).find(e => e.id === 'clip:feeditem1'), 'feed item mirrored')
     const feeds = (await settingsNow()).settings.feeds.value
@@ -1170,11 +1213,13 @@ test('relay web UI: settings, plugins as intents, identification, music sources,
 
     // Copy a channel: follow it and keep a copy.
     const channelKey = randomBytes(32).toString('hex')
-    clicks = 0
+    await goTab('Home')
+    ui.clicks = 0
+    await clickText('Add to library', '.top')
     await clickText('Copy a channel')
     await type('#copyInput', 'peartube://channel/' + channelKey)
     await clickText('Copy', '#copyForm')
-    result.interactions.copyChannel = clicks
+    result.interactions.copyChannel = ui.clicks
     mark('copyChannelClicked')
     const copied = await waitApi(async () => { const s = await settingsNow(); return s.settings.replicate.value && s }, 'replication on')
     assert.deepEqual(copied.settings.replicateSources.value, [channelKey])
@@ -1192,11 +1237,11 @@ test('relay web UI: settings, plugins as intents, identification, music sources,
     result.checks.trackerSurvivesFollowRestart = after.tracker
 
     // Sharing: keep copies off again, LAN discovery on, and a HiveRelay with a key.
-    await open('#library')
-    clicks = 0
+    await open('#home')
+    ui.clicks = 0
     await goTab('Sharing')
     await clickText('Keep copies of', '#copiesCard')
-    result.interactions.keepCopies = clicks
+    result.interactions.keepCopies = ui.clicks
     await waitApi(async () => (await settingsNow()).settings.replicate.value === false, 'replication off')
 
     // The settings round-trip saved a documentation address (192.0.2.10) no interface holds; put the detected one
@@ -1207,13 +1252,13 @@ test('relay web UI: settings, plugins as intents, identification, music sources,
     result.checks.lanLive = (await getJson('/v1/status')).lan
     mark('lan')
 
-    await open('#library')
-    clicks = 0
+    await open('#home')
+    ui.clicks = 0
     await goTab('Sharing')
     await type('#hiveInput', 'http://192.168.1.50:9100')
     await type('#hiveKey', 'hr_secretkey_123')
     await clickText('Add HiveRelay')
-    result.interactions.hiveRelay = clicks
+    result.interactions.hiveRelay = ui.clicks
     const hive = await waitApi(async () => { const s = await settingsNow(); return s.settings.hiverelays.value.length && s }, 'HiveRelay saved')
     assert.deepEqual(hive.settings.hiverelays.value.map(r => r.label), ['192.168.1.50:9100'])
     assert.ok(!JSON.stringify(hive).includes('hr_secretkey_123'), 'the key never comes back from the API')
@@ -1238,8 +1283,8 @@ test('relay web UI: settings, plugins as intents, identification, music sources,
 
     for (const [name, n] of Object.entries(result.interactions)) assert.ok(n <= 3, name + ' took ' + n + ' interactions')
 
-    // 5. Taste gates on every tab, both sizes, both schemes; then the Music tab with results on screen and with the
-    // save dialog open.
+    // 5. Taste gates on every place, both sizes, both schemes; then Find with results on screen and with the save
+    // dialog open.
     browser.issues.length = 0
     // While the pages load, this process asks the relay for its status, one request after another. A slow page
     // load beside a relay that kept answering is the page's fault; beside a relay that went quiet it is the
@@ -1260,7 +1305,7 @@ test('relay web UI: settings, plugins as intents, identification, music sources,
     for (const [width, height] of [[1440, 900], [390, 844]]) {
       for (const scheme of ['light', 'dark']) {
         await viewport(width, height, scheme)
-        for (const tab of ['library', 'music', 'channels', 'sharing', 'tv', 'settings']) {
+        for (const tab of ['home', 'listen', 'watch', 'find', 'add', 'channels', 'sharing', 'tv', 'settings']) {
           const where = width + ' ' + scheme + ' ' + tab
           const loadStart = Date.now()
           // A load that never completes keeps what it waited on too.
@@ -1274,15 +1319,15 @@ test('relay web UI: settings, plugins as intents, identification, music sources,
           await shot(`${tab}-${width}-${scheme}`)
           result.viewports.push({ where, at: loadStart, loadMs, ...(slowRequests ? { slowRequests } : {}), ...audit })
         }
-        await open('#music')
+        await open('#find')
         await type('#srcInput', 'test band')
         await click('#srcBtn')
         await waitFor(`document.querySelectorAll('#ytResults .yt-pick-row').length === 3`, 'results for the taste gates', 5000)
         await click('#ytResults .item:nth-child(1) input')
         await click('#ytResults .item:nth-child(3) input')
         await sleep(400)
-        await tasteAudit(width + ' ' + scheme + ' music with results')
-        await shot(`music-sources-${width}-${scheme}`, false, srcShotDir)
+        await tasteAudit(width + ' ' + scheme + ' find with results')
+        await shot(`find-sources-${width}-${scheme}`, false, srcShotDir)
         await click('#ytPickSave')
         await waitFor(`$('ytSave').open`, 'save dialog for the taste gates')
         await tasteAudit(width + ' ' + scheme + ' save dialog')
@@ -1295,7 +1340,7 @@ test('relay web UI: settings, plugins as intents, identification, music sources,
     const external = browser.requests.filter(u => /ytimg\.com|youtube\.com/i.test(u))
     assert.deepEqual(external, [], 'the page never contacts YouTube or its image host')
     result.consoleIssues = [...browser.issues]
-    // Twenty reloads in one tab: a live-update stream left open per visit would stall the sixth for about a minute.
+    // Forty reloads in one tab: a live-update stream left open per visit would stall the sixth for about a minute.
     const slowest = result.viewports.reduce((a, v) => v.loadMs > a.loadMs ? v : a)
     // A stream the page before held open lives long by design; name the slowest request of the load itself.
     const waitedOn = slowest.slowRequests && (slowest.slowRequests.find(r => !r.before) || slowest.slowRequests[0])
@@ -1308,9 +1353,10 @@ test('relay web UI: settings, plugins as intents, identification, music sources,
     assert.deepEqual(browser.issues, [], 'console errors or warnings')
     mark('tasteGates')
 
-    // A stopped relay is named in the header, not left as a stale error under a form.
+    // A stopped relay is named in the header, in sight on the place that is open, not left as a stale error under a
+    // form.
     relay.kill('SIGTERM')
-    await waitFor(`document.querySelector('#pills').textContent.includes('Relay unreachable')`, 'offline pill', 15_000)
+    await waitFor(`[...document.querySelectorAll('#pills .pill')].some(p => p.textContent.includes('Relay unreachable') && p.getBoundingClientRect().width > 0)`, 'offline pill in sight', 15_000)
     await shot('offline-390-dark')
     result.checks.offlineShown = true
     result.pass = true
@@ -1320,6 +1366,355 @@ test('relay web UI: settings, plugins as intents, identification, music sources,
     throw err
   } finally {
     writeFileSync(join(outDir, 'ui-result.json'), JSON.stringify(result, null, 2))
+    await browser.close()
+    relay.kill('SIGTERM')
+    await new Promise(resolve => { relay.once('exit', resolve); setTimeout(resolve, 5000) })
+    stub.srv.closeAllConnections()
+    stub.srv.close()
+    for (const dir of [storage, binDir, watchDir]) rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+// The one library (design/unified-library.md). Each behaviour is one named check: `checks[name]` is true, or it is
+// what the page showed in place of what the design says. Every check runs, so one run names everything that is
+// missing, and the test fails once, at its end.
+test('relay web UI: one library with Home, Listen, Watch and Find', { timeout: 300_000 }, async () => {
+  const shots = join(outDir, 'ui-audit/design')
+  mkdirSync(shots, { recursive: true })
+  const storage = mkdtempSync(join(tmpdir(), 'peartube-ui-design-storage-'))
+  const binDir = mkdtempSync(join(tmpdir(), 'peartube-ui-design-bin-'))
+  const watchDir = mkdtempSync(join(tmpdir(), 'peartube-ui-design-watch-'))
+  const stub = await startStub()
+  fakeUbit(binDir, stub.base)
+  const apiPort = await freePort()
+  const dhtPort = await freePort()
+  // No token: the page is the owner's because this machine opens it.
+  const relay = await startRelay({
+    PATH: binDir + ':' + process.env.PATH,
+    UBIT_BIN: join(binDir, 'ubit'),
+    HOME: process.env.HOME,
+    PEARTUBE_STORAGE: storage,
+    PEARTUBE_API_PORT: String(apiPort),
+    PEARTUBE_API_HOST: '127.0.0.1',
+    PEARTUBE_DHT_PORT: String(dhtPort),
+    PEARTUBE_BOOTSTRAP: '127.0.0.1:1',
+    PEARTUBE_WATCH_DIR: watchDir,
+    PEARTUBE_CINEMETA_URL: stub.base + '/cinemeta',
+    PEARTUBE_ALLOW_PRIVATE_URLS: '1'
+  })
+  const base = 'http://127.0.0.1:' + apiPort
+  const getJson = async path => (await fetch(base + path)).json()
+  const post = async (path, body) => {
+    const res = await fetch(base + path, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) })
+    assert.equal(res.status, 200, 'POST ' + path)
+    return res.json()
+  }
+  const result = { pass: false, relay: base, checks: {}, failed: [], consoleIssues: [], screenshots: [] }
+  const browser = await launchBrowser()
+  const { evaluate } = browser
+  const { click, clickText, type, press, waitFor, waitApi, viewport, open, goTab, shot, tasteAudit } = drive(browser, base, result, shots)
+
+  // One behaviour. `fn` returns true, or what it saw; an error it throws is what it saw, too.
+  const check = async (name, fn) => {
+    try { result.checks[name] = await fn() } catch (err) { result.checks[name] = String(err.message || err).split('\n')[0] }
+    if (result.checks[name] !== true) result.failed.push(name)
+  }
+  const same = (saw, want) => isDeepStrictEqual(saw, want) || { saw, want }
+  // Where the page is: the panel in sight, the room the bar marks, and the address.
+  const place = () => evaluate(`({
+    panel: [...document.querySelectorAll('[data-panel]')].filter(p => !p.hidden).map(p => p.dataset.panel).join('+'),
+    room: [...document.querySelectorAll('.rooms a[aria-current="page"]')].map(a => a.innerText.trim()).join('+'),
+    hash: location.hash
+  })`)
+  // The text of every match that is in sight, as a reader sees it.
+  const texts = selector => evaluate(`[...document.querySelectorAll(${JSON.stringify(selector)})].filter(e => e.offsetParent !== null || getComputedStyle(e).position === 'fixed').map(e => e.innerText.trim().replace(/\\s+/g, ' ')).filter(Boolean)`)
+  // Types into the Find field as a reader does, and returns the library's groups: "Albums: First Light".
+  const typeFind = async words => {
+    await type('#srcInput', words)
+    await waitFor(`!$('tab-find').hidden && location.hash === '#find/' + encodeURIComponent(${JSON.stringify(words)})`, 'Find with “' + words + '”', 4000)
+    return evaluate(`[...document.querySelectorAll('#findLib .find-group')].map(g => g.querySelector('h3').textContent + ': ' + [...g.querySelectorAll('.album-name, .ft-name, .tile-title')].map(e => e.textContent).join(', '))`)
+  }
+  const asked = (from, part) => [...new Set(browser.requests.slice(from).map(u => new URL(u).pathname).filter(p => p.startsWith(part)))].sort()
+
+  try {
+    await viewport(1440, 900, 'dark')
+
+    // An empty library. A first visit opens Home, and each room says why it is empty and how to fill it.
+    await open()
+    await check('homeFirst', async () => same(await place(), { panel: 'home', room: 'Home', hash: '' }))
+    await check('emptyLibrary', async () => {
+      const saw = {}
+      for (const room of ['home', 'listen', 'watch']) {
+        await open('#' + room)
+        saw[room] = await texts('#tab-' + room + ' .empty')
+      }
+      saw.way = await evaluate(`[...document.querySelectorAll('#tab-watch .empty a')].map(a => a.getAttribute('href'))`)
+      return same(saw, {
+        home: ['Nothing in your library yet. Add to library'],
+        listen: ['No albums yet. Use Find to save one, or add a folder. Add to library'],
+        watch: ['Nothing in your library yet. Add to library'],
+        way: ['#add']
+      })
+    })
+
+    // The library for the rest: a movie, a series of two episodes, a clip, and an album of two tracks.
+    const acquire = async (id, title, path) => {
+      const { jobId } = await post('/v1/acquire', { id, title, source: { url: stub.base + path } })
+      await waitApi(async () => (await getJson('/v1/jobs/' + jobId)).status === 'done', title + ' added')
+    }
+    await acquire('imdb:tt1254207', 'Big Buck Bunny 2008', '/media/Big.Buck.Bunny.2008.1080p.BluRay.x264-GRP.mp4')
+    await acquire('imdb:tt0000002:s01e01', 'Night Ferry S01E01', '/media/feed-item.mp4')
+    await acquire('imdb:tt0000002:s01e02', 'Night Ferry S01E02', '/page-video.mp4')
+    await acquire('clip:harbourwalk', 'Harbour Walk', '/media/Random.Clip.Name.mp4')
+    flacAlbum(join(watchDir, 'Test Band - First Light'), 'Test Band', 'First Light', [['Dawn', 440], ['Señal', 550, 'Senal']])
+    await post('/v1/plugins/watch-dir/run', {})
+    await waitApi(async () => (await getJson('/v1/entries')).results.length === 6, 'six files in the library')
+
+    // Home shows the start of each room, and the room holds the rest.
+    await open('#home')
+    await check('homeRows', async () => same(await evaluate(`[...document.querySelectorAll('#homeRows .home-row')].map(r => ({
+      title: r.querySelector('h2').textContent,
+      all: r.querySelector('.row-all').textContent + ' ' + r.querySelector('.row-all').getAttribute('href'),
+      shown: [...r.querySelectorAll('.album-name, .tile-title')].map(e => e.textContent)
+    }))`), [
+      { title: 'Albums', all: 'All albums #listen', shown: ['First Light'] },
+      { title: 'Movies and series', all: 'All video #watch', shown: ['Big Buck Bunny 2008', 'Night Ferry'] }
+    ]))
+    await shot('home-1440-dark')
+    await check('roomsByClick', async () => {
+      const saw = []
+      for (const room of ['Listen', 'Watch', 'Home']) {
+        await goTab(room)
+        saw.push(await place())
+      }
+      await clickText('All albums', '#homeRows')
+      saw.push(await place())
+      return same(saw, [
+        { panel: 'listen', room: 'Listen', hash: '#listen' },
+        { panel: 'watch', room: 'Watch', hash: '#watch' },
+        { panel: 'home', room: 'Home', hash: '#home' },
+        { panel: 'listen', room: 'Listen', hash: '#listen' }
+      ])
+    })
+    // Music and video have a room each: the shelf holds no film, and the grid holds no album.
+    await check('roomContents', async () => {
+      await open('#listen')
+      const listen = { count: await texts('#musicCount'), artists: await texts('#albums .artist-head h3'), albums: await texts('#albums .album-name') }
+      await open('#watch')
+      return same({ listen, watch: await texts('#entries .tile-title') }, {
+        listen: { count: ['1 album'], artists: ['Test Band'], albums: ['First Light'] },
+        watch: ['Big Buck Bunny 2008', 'Harbour Walk', 'Night Ferry']
+      })
+    })
+    await check('oldLinks', async () => {
+      const saw = {}
+      for (const hash of ['#library', '#music']) {
+        await open(hash)
+        const at = await place()
+        saw[hash] = at.panel + ' ' + at.room
+      }
+      return same(saw, { '#library': 'home Home', '#music': 'listen Listen' })
+    })
+    // The bar: the rooms, one way to add, and the relay's own pages. Peers and rates are on Sharing.
+    await check('topBarWords', async () => {
+      await open('#home')
+      return same(await texts('.top a, .top button'), ['PearTube', 'Home', 'Listen', 'Watch', 'Add to library', 'Channels', 'Sharing', 'TV', 'Settings'])
+    })
+    await check('addPage', async () => {
+      await open('#home')
+      const onHome = await evaluate(`$('addInput').offsetParent !== null`)
+      await clickText('Add to library', '.top')
+      const at = await place()
+      const saw = { onHome, panel: at.panel, hash: at.hash, field: await evaluate(`$('addInput').offsetParent !== null`), marked: await evaluate(`$('addLink').getAttribute('aria-current')`), ways: await texts('#tab-add .chips .chip') }
+      return same(saw, { onHome: false, panel: 'add', hash: '#add', field: true, marked: 'page', ways: ['Import folder', 'Mirror a catalog', 'Copy a channel'] })
+    })
+    await check('peersOnSharing', async () => {
+      await open('#home')
+      const bar = await evaluate(`$('pills').textContent`)
+      await goTab('Sharing')
+      const sharing = await evaluate(`['over the internet', 'sending now', 'receiving now'].filter(w => $('tab-sharing').textContent.includes(w))`)
+      return same({ bar, sharing }, { bar: '', sharing: ['over the internet', 'sending now', 'receiving now'] })
+    })
+    // With no place in the address the page opens the room this browser was in last; a page that is no room is not one.
+    await check('lastRoom', async () => {
+      await open('#watch')
+      await open()
+      const afterWatch = await place()
+      await goTab('Settings')
+      await open()
+      const afterSettings = await place()
+      await open('#home')
+      await open()
+      return same({ afterWatch, afterSettings, afterHome: await place() }, {
+        afterWatch: { panel: 'watch', room: 'Watch', hash: '' },
+        afterSettings: { panel: 'watch', room: 'Watch', hash: '' },
+        afterHome: { panel: 'home', room: 'Home', hash: '' }
+      })
+    })
+    // Watch: the chip that is on is part of the address, and a chip press is no step for Back.
+    await check('watchKinds', async () => {
+      await open('#home')
+      await goTab('Watch')
+      const chips = await texts('#libKinds .chip')
+      await clickText('Series', '#libKinds')
+      const series = { hash: await evaluate('location.hash'), on: await texts('#libKinds .chip[aria-pressed="true"]'), tiles: await texts('#entries .tile-title') }
+      await evaluate('history.back(); true')
+      await sleep(500)
+      const back = await place()
+      await open('#watch/clips')
+      const direct = { on: await texts('#libKinds .chip[aria-pressed="true"]'), tiles: await texts('#entries .tile-title') }
+      return same({ chips, series, back, direct }, {
+        chips: ['All 3', 'Movies 1', 'Series 1', 'Clips 1'],
+        series: { hash: '#watch/series', on: ['Series 1'], tiles: ['Night Ferry'] },
+        back: { panel: 'home', room: 'Home', hash: '#home' },
+        direct: { on: ['Clips 1'], tiles: ['Harbour Walk'] }
+      })
+    })
+    await shot('watch-clips-1440-dark')
+
+    // Find: one field for everything. Typing narrows the library and asks nobody.
+    await check('oneFindField', async () => {
+      await open('#home')
+      const fields = await evaluate(`[...document.querySelectorAll('input, textarea, select')].filter(e => e.offsetParent !== null && !['checkbox', 'radio', 'range', 'hidden'].includes(e.type)).map(e => ({ id: e.id, label: e.getAttribute('aria-label'), example: e.placeholder }))`)
+      return same(fields, [{ id: 'srcInput', label: 'Find', example: 'Blue Train' }])
+    })
+    await check('findInLibrary', async () => {
+      await open('#home')
+      const from = browser.requests.length
+      const saw = {
+        album: await typeFind('first light'),
+        anyOrder: await typeFind('LIGHT  band'),
+        track: await typeFind('dawn'),
+        noAccent: await typeFind('senal'),
+        trackAndArtist: await typeFind('test band señal'),
+        series: await typeFind('ferry'),
+        clip: await typeFind('harbour'),
+        nothing: await typeFind('zzqx'),
+        says: await texts('#findLib .empty'),
+        asked: asked(from, '/v1/search/')
+      }
+      return same(saw, {
+        album: ['Albums: First Light'],
+        anyOrder: ['Albums: First Light'],
+        track: ['Tracks: Dawn'],
+        noAccent: ['Tracks: Señal'],
+        trackAndArtist: ['Tracks: Señal'],
+        series: ['Movies and series: Night Ferry'],
+        clip: ['Clips: Harbour Walk'],
+        nothing: [],
+        says: ['Nothing in your library matches “zzqx”.'],
+        asked: []
+      })
+    })
+    // Enter asks outside the library with the same words: the sources that are on, and other relays.
+    await check('enterAsksOutside', async () => {
+      await open('#find')
+      await typeFind('test band')
+      const from = browser.requests.length
+      await press('Enter')
+      await waitFor(`document.querySelectorAll('#srcGroup-youtube .yt-pick-row').length === 3`, 'YouTube rows after Enter', 8000)
+      await waitFor(`!$('globalWrap').hidden && $('globalMsg').textContent.startsWith('No relay has it yet')`, 'an answer from the other relays', 8000)
+      return same({ asked: asked(from, '/v1/search/'), library: await texts('#findLib .find-group h3'), relays: await texts('#globalHead') }, { asked: ['/v1/search/global', '/v1/search/sources'], library: ['Albums'], relays: ['On other relays'] })
+    })
+    await shot('find-asked-1440-dark')
+    // Other relays are a choice beside the sources. Off, the words go to no relay, and a reload keeps the choice.
+    await check('relaysChip', async () => {
+      const chip = `document.querySelector('#srcChips [data-src="relays"]')`
+      const on = await evaluate(`[${chip}.textContent, ${chip}.getAttribute('aria-pressed')]`)
+      await click('#srcChips [data-src="relays"]')
+      const off = await evaluate(`[${chip}.textContent, ${chip}.getAttribute('aria-pressed'), $('globalWrap').hidden]`)
+      const from = browser.requests.length
+      await click('#srcBtn')
+      await waitFor(`document.querySelectorAll('#srcGroup-youtube .yt-pick-row').length === 3`, 'YouTube rows with the relays off', 8000)
+      await sleep(800)
+      const askedOff = asked(from, '/v1/search/')
+      await open('#find')
+      const kept = await evaluate(`${chip}.getAttribute('aria-pressed')`)
+      await click('#srcChips [data-src="relays"]')
+      return same({ on, off, askedOff, kept, again: await evaluate(`${chip}.getAttribute('aria-pressed')`) }, { on: ['✓ Other relays', 'true'], off: ['Other relays', 'false', true], askedOff: ['/v1/search/sources'], kept: 'false', again: 'true' })
+    })
+    // A link in the field is not searched for: Find says what it is and hands it to Add to library.
+    await check('linkInFind', async () => {
+      await open('#home')
+      const link = stub.base + '/media/Random.Clip.Name.mp4'
+      const from = browser.requests.length
+      await type('#srcInput', link)
+      await waitFor(`!$('tab-find').hidden && !!document.querySelector('#findLib .find-link')`, 'Find with a link', 4000)
+      const says = await texts('#findLib .find-link span')
+      await clickText('Add to library', '#findLib')
+      const at = await place()
+      return same({ says, panel: at.panel, carried: await evaluate(`$('addInput').value`) === link, asked: asked(from, '/v1/').filter(p => /search|identify|acquire/.test(p)) }, { says: ['This is a link.'], panel: 'add', carried: true, asked: [] })
+    })
+
+    // A narrow screen: the rooms are the row at the bottom, the bar names the place, and the relay's pages are in More.
+    await viewport(390, 844, 'dark')
+    await check('narrowRooms', async () => {
+      await open('#home')
+      return same(await evaluate(`(() => {
+        const nav = document.querySelector('.rooms')
+        if (!nav) return 'no rooms'
+        const links = [...nav.querySelectorAll('a')].filter(a => a.offsetParent !== null)
+        const name = $('placeName').getBoundingClientRect()
+        return {
+          row: getComputedStyle(nav).position + ' ' + Math.round(innerHeight - nav.getBoundingClientRect().bottom),
+          rooms: links.map(a => a.innerText.trim()),
+          tall: links.every(a => a.getBoundingClientRect().height >= 44),
+          name: name.width > 1 && name.top < 60 ? $('placeName').textContent : '',
+          sideways: Math.max(0, document.documentElement.scrollWidth - document.documentElement.clientWidth)
+        }
+      })()`), { row: 'fixed 0', rooms: ['Home', 'Listen', 'Watch', 'Find'], tall: true, name: 'Home', sideways: 0 })
+    })
+    await shot('home-390-dark', true)
+    await check('narrowMore', async () => {
+      await open('#home')
+      await click('#moreBtn')
+      const open1 = { pages: await texts('#ownerNav a'), said: await evaluate(`$('moreBtn').getAttribute('aria-expanded')`) }
+      await press('Escape')
+      const shut = await evaluate(`[$('moreBtn').getAttribute('aria-expanded'), $('ownerNav').offsetParent === null, document.activeElement === $('moreBtn')]`)
+      await click('#moreBtn')
+      await clickText('Sharing', '#ownerNav')
+      const at = await place()
+      return same({ open: open1, shut, went: at.panel + ' ' + at.hash, name: await evaluate(`$('placeName').textContent`), after: await evaluate(`$('moreBtn').getAttribute('aria-expanded')`) }, {
+        open: { pages: ['Channels', 'Sharing', 'TV', 'Settings'], said: 'true' },
+        shut: ['false', true, true],
+        went: 'sharing #sharing',
+        name: 'Sharing',
+        after: 'false'
+      })
+    })
+    await check('narrowFind', async () => {
+      await open('#home')
+      const onHome = await evaluate(`$('srcInput').offsetParent !== null`)
+      await goTab('Find')
+      const at = await place()
+      const field = await evaluate(`(() => { const r = $('srcInput').getBoundingClientRect(); return { inSight: $('srcInput').offsetParent !== null, wide: r.width >= 240, atTop: r.top < 60 } })()`)
+      const library = await typeFind('ferry')
+      return same({ onHome, at: at.panel + ' ' + at.room, field, library }, { onHome: false, at: 'find Find', field: { inSight: true, wide: true, atTop: true }, library: ['Movies and series: Night Ferry'] })
+    })
+    await shot('find-390-dark', true)
+
+    // The taste gates of the first test, on the new places with a library in them.
+    await check('tasteOnNewPlaces', async () => {
+      for (const [width, height] of [[1440, 900], [390, 844]]) {
+        await viewport(width, height, 'light')
+        for (const [name, hash] of [['home', '#home'], ['listen', '#listen'], ['watch', '#watch'], ['find', '#find/light'], ['add', '#add']]) {
+          await open(hash)
+          await sleep(300)
+          await tasteAudit(width + ' light ' + name)
+          await shot(name + '-' + width + '-light')
+        }
+      }
+      return true
+    })
+    await check('consoleClean', async () => same(browser.issues, []))
+    result.pass = result.failed.length === 0
+    assert.deepEqual(result.failed, [], 'checks that failed; what each one saw is in desktop/target/e2e/ui-design-result.json')
+  } catch (err) {
+    result.error = err.message
+    throw err
+  } finally {
+    result.consoleIssues = [...browser.issues]
+    writeFileSync(join(outDir, 'ui-design-result.json'), JSON.stringify(result, null, 2))
     await browser.close()
     relay.kill('SIGTERM')
     await new Promise(resolve => { relay.once('exit', resolve); setTimeout(resolve, 5000) })

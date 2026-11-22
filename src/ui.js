@@ -41,26 +41,95 @@ export const page = `<!doctype html>
   [hidden] { display: none !important; }
   body { margin: 0; font: 15px/1.5 system-ui, -apple-system, 'Segoe UI', sans-serif; letter-spacing: -0.005em; -webkit-font-smoothing: antialiased; background: var(--bg); color: var(--text); }
   a { color: var(--brand); }
-  .top { position: sticky; top: 0; z-index: 20; background: color-mix(in srgb, var(--bg) 82%, transparent); backdrop-filter: blur(18px) saturate(1.3); border-bottom: 1px solid var(--line); }
-  .bar { max-width: 1440px; margin: 0 auto; padding: 14px 28px 0; display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
-  .brand { display: flex; align-items: center; gap: 10px; font-weight: 700; font-size: 17px; letter-spacing: -0.02em; color: var(--text); text-decoration: none; }
-  .brand svg { width: 30px; height: 30px; border-radius: 9px; background: var(--brand); box-shadow: 0 6px 18px var(--brand-soft); }
+  /* ==== Places: the top bar with the rooms and the Find field; on a narrow screen the rooms are the row at the bottom.
+     One nav element per group serves both layouts. No blur and no shadow on the page's own chrome. ==== */
+  :root { --nav-h: 0px; }
+  .top { position: sticky; top: 0; z-index: 20; background: var(--bg); border-bottom: 1px solid var(--line); }
+  .bar { max-width: 1440px; margin: 0 auto; padding: 0 28px; min-height: 64px; display: flex; align-items: center; gap: 16px; }
+  .brand { flex: none; display: flex; align-items: center; gap: 10px; font-weight: 700; font-size: 17px; letter-spacing: -0.02em; color: var(--text); text-decoration: none; }
+  .brand svg { width: 28px; height: 28px; border-radius: 8px; background: var(--brand); }
   .brand svg rect { fill: transparent; }
   .brand svg path { fill: var(--on-brand); }
-  .pills { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
-  .bar-right { display: flex; align-items: center; gap: 8px; margin-left: auto; }
-  .theme-toggle { min-height: 34px; padding: 0 10px; color: var(--dim); }
-  .theme-toggle:hover:not(:disabled) { color: var(--text); }
+  .place-name { position: absolute; width: 1px; height: 1px; margin: 0; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; font-size: 20px; font-weight: 700; letter-spacing: -0.015em; }
+  .tabs { display: flex; align-items: center; }
+  .tabs a { position: relative; color: var(--dim); text-decoration: none; font-weight: 600; white-space: nowrap; transition: color var(--t-fast) var(--ease); }
+  .tabs a:hover, .tabs a[aria-current='page'] { color: var(--text); }
+  .rooms { gap: 26px; margin-left: 16px; }
+  .rooms a { font-size: 16px; line-height: 24px; padding: 20px 0; }
+  .rooms a[aria-current='page']::after { content: ''; position: absolute; left: 0; right: 0; bottom: 13px; height: 2px; background: var(--text); }
+  .rooms .ti, .rooms .narrow-only { display: none; }
+  .ti { fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+  .find-box { position: relative; flex: 1 1 320px; min-width: 160px; max-width: 420px; margin-left: auto; }
+  .find-box svg { position: absolute; left: 12px; top: 50%; width: 16px; height: 16px; margin-top: -8px; color: var(--dim); pointer-events: none; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; }
+  .find-box input[type=search] { min-height: 40px; padding-left: 36px; }
+  .pills { display: flex; gap: 6px; align-items: center; }
+  .bar-right { flex: none; display: flex; align-items: center; gap: 12px; }
+  .bar .add-link { min-height: 38px; gap: 6px; padding: 0 12px 0 10px; }
+  .add-link svg { flex: none; width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; }
+  .bar .add-link[aria-current='page'] { border-color: var(--dim); }
+  .more-wrap { position: relative; display: flex; align-items: center; }
+  .bar .more-btn { display: none; min-height: 38px; padding: 0 10px; }
+  .owner { gap: 18px; }
+  .owner a { font-size: 13.5px; line-height: 20px; padding: 8px 0; }
+  .owner a[aria-current='page']::after { content: ''; position: absolute; left: 0; right: 0; bottom: 3px; height: 2px; background: var(--text); }
+  .bar .theme-toggle { min-height: 34px; padding: 0 8px; gap: 10px; color: var(--dim); }
+  .bar .theme-toggle:hover:not(:disabled) { color: var(--text); }
+  .theme-word { display: none; }
+  @media (max-width: 1180px) {
+    .bar .more-btn { display: inline-flex; }
+    .owner { display: none; position: absolute; right: 0; top: calc(100% + 8px); z-index: 30; min-width: 220px; flex-direction: column; align-items: stretch; gap: 0; padding: 6px; background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-control); }
+    .owner.open { display: flex; }
+    .bar .owner a, .bar .owner .theme-toggle { display: flex; align-items: center; justify-content: flex-start; min-height: 44px; padding: 0 12px; border-radius: 8px; font-size: 15px; font-weight: 600; }
+    .bar .owner a:hover, .bar .owner .theme-toggle:hover:not(:disabled) { background: var(--raised); border-color: transparent; }
+    .owner a[aria-current='page']::after { left: 0; right: auto; top: 12px; bottom: 12px; width: 2px; height: auto; }
+    .theme-word { display: inline; }
+  }
+  @media (max-width: 900px) {
+    .bar .add-link { width: 40px; padding: 0; justify-content: center; }
+    .add-link span { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+  }
   .pill { font-size: 12px; font-weight: 500; padding: 4px 10px; border-radius: var(--r-pill); background: var(--raised); color: var(--dim); white-space: nowrap; }
   .pill b { color: var(--text); font-weight: 600; font-variant-numeric: tabular-nums; }
   .pill.warn { color: var(--warn); }
   button.pill { border: 0; font-family: inherit; cursor: pointer; }
   button.pill:disabled { opacity: .6; cursor: default; }
   .pill.ok::before { content: ''; display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--ok); margin-right: 6px; vertical-align: 1px; box-shadow: 0 0 0 3px color-mix(in srgb, var(--ok) 16%, transparent); }
-  .tabs { max-width: 1440px; margin: 0 auto; padding: 0 20px; display: flex; gap: 4px; overflow-x: auto; scrollbar-width: none; }
-  .tabs a { padding: 12px 14px 11px; color: var(--dim); text-decoration: none; font-size: 14px; font-weight: 600; border-bottom: 2px solid transparent; white-space: nowrap; transition: color var(--t-fast) var(--ease), border-color var(--t-fast) var(--ease); }
-  .tabs a:hover { color: var(--text); }
-  .tabs a[aria-current='page'] { color: var(--text); border-bottom-color: var(--brand); }
+  .page-title { font-size: 24px; font-weight: 700; letter-spacing: -0.02em; line-height: 1.2; margin: 8px 0 20px; }
+  .room-ctl { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; min-height: 34px; margin-bottom: 24px; }
+  .room-ctl > .count { margin-left: auto; color: var(--dim); font-size: 13px; font-variant-numeric: tabular-nums; }
+  .room-ctl.kinds { gap: 8px; }
+  .row-head { display: flex; align-items: baseline; gap: 12px; margin: 0 0 14px; }
+  .row-head h2, .row-head h3 { margin: 0; }
+  .row-head h3 { font-size: 17px; font-weight: 700; letter-spacing: -0.01em; }
+  .row-head .count { color: var(--dim); font-size: 13px; font-variant-numeric: tabular-nums; }
+  .row-all { margin-left: auto; padding: 6px 0; color: var(--dim); font-size: 13px; font-weight: 600; text-decoration: none; }
+  .row-all:hover { color: var(--text); }
+  /* Home shows one line of video: the tiles that do not fit are left out, not wrapped or cut. */
+  .home-row { margin-bottom: 40px; }
+  .home-row .grid { grid-template-columns: repeat(7, minmax(0, 1fr)); }
+  .home-row .grid > :nth-child(n+8) { display: none; }
+  @media (max-width: 1279px) { .home-row .grid { grid-template-columns: repeat(6, minmax(0, 1fr)); } .home-row .grid > :nth-child(n+7) { display: none; } }
+  @media (max-width: 1023px) { .home-row .grid { grid-template-columns: repeat(5, minmax(0, 1fr)); } .home-row .grid > :nth-child(n+6) { display: none; } }
+  @media (max-width: 799px) { .home-row .grid { grid-template-columns: repeat(4, minmax(0, 1fr)); } .home-row .grid > :nth-child(n+5) { display: none; } }
+  @media (max-width: 640px) {
+    .home-row { margin-bottom: 28px; }
+    .home-row .grid { grid-template-columns: none; grid-auto-flow: column; grid-auto-columns: 132px; margin: 0 -16px; padding: 0 16px; scroll-padding: 0 16px; overflow-x: auto; scrollbar-width: none; scroll-snap-type: x proximity; }
+    .home-row .grid::-webkit-scrollbar { display: none; }
+    .home-row .grid > :nth-child(n) { display: flex; scroll-snap-align: start; }
+    .home-row .album-list > :nth-child(n+5) { display: none; }
+  }
+  .find-idle { color: var(--dim); margin: 8px 0 0; }
+  #findLib > h2:first-child { margin-top: 8px; }
+  .find-group { margin-bottom: 28px; }
+  .find-link { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; padding: 14px; margin-bottom: 20px; background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-card); }
+  .find-link span { flex: 1; min-width: 0; }
+  .find-tracks { display: flex; flex-direction: column; }
+  .find-track { display: flex; align-items: baseline; gap: 12px; min-height: 44px; padding: 10px; border: 0; border-bottom: 1px solid var(--line); background: none; color: inherit; font: inherit; text-align: left; cursor: pointer; }
+  .find-track:hover { background: var(--surface); }
+  .ft-name { min-width: 0; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .ft-of { flex: 0 1 50%; min-width: 0; margin-left: auto; color: var(--dim); font-size: 13px; text-align: right; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .src-in > .btn { margin-left: auto; }
+  /* ==== end Places ==== */
   main { max-width: 1440px; margin: 0 auto; padding: 24px 28px 96px; }
   h2 { font-size: 20px; font-weight: 700; letter-spacing: -0.015em; margin: 40px 0 16px; display: flex; align-items: baseline; gap: 10px; }
   h2 .count { color: var(--dim); font-weight: 500; font-size: 13px; font-variant-numeric: tabular-nums; }
@@ -99,9 +168,6 @@ export const page = `<!doctype html>
   .acts { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
   .poster { width: 48px; height: 72px; border-radius: 8px; flex: none; background: var(--raised); object-fit: cover; display: flex; align-items: center; justify-content: center; color: var(--dim); font-weight: 700; font-size: 18px; overflow: hidden; }
   .thumb { width: 128px; height: 72px; }
-  .lib-tools { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; margin-bottom: 20px; }
-  .lib-tools .kinds { display: flex; gap: 6px; flex-wrap: wrap; }
-  .lib-tools input { flex: 1; min-width: 200px; width: auto; }
   .chip[aria-pressed='true'] { background: var(--text); color: var(--bg); border-color: var(--text); }
   .chip .count { opacity: .7; font-size: 12px; font-variant-numeric: tabular-nums; }
   .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(168px, 1fr)); gap: 24px 16px; }
@@ -120,8 +186,9 @@ export const page = `<!doctype html>
   .more { grid-column: 1 / -1; display: flex; justify-content: center; padding: 12px; }
   /* Browse face: one hero, landscape rails, posters underneath — Netflix shape, YouTube rows,
      torrent truth kept in the meta line instead of the layout. */
-  #resumeWrap, #liveWrap { margin-bottom: 32px; }
-  #hero { position: relative; overflow: hidden; border-radius: var(--r-panel); border: 1px solid var(--line); min-height: 372px; display: flex; align-items: flex-end; margin-bottom: 4px; background: linear-gradient(135deg, var(--raised), var(--surface)); }
+  #resumeWrap, #liveWrap { margin-bottom: 40px; }
+  #resumeWrap h2, #liveWrap h2 { margin-top: 0; }
+  #hero { position: relative; overflow: hidden; border-radius: var(--r-panel); border: 1px solid var(--line); min-height: 372px; display: flex; align-items: flex-end; margin-bottom: 40px; background: linear-gradient(135deg, var(--raised), var(--surface)); }
   #hero.no-art { min-height: 236px; }
   #hero.no-art .hero-scrim { background: none; }
   .hero-art { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
@@ -203,13 +270,28 @@ export const page = `<!doctype html>
   .menu { position: absolute; right: 0; top: calc(100% + 4px); background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 6px; display: flex; flex-direction: column; min-width: 200px; z-index: 30; box-shadow: 0 8px 24px #0003; }
   .menu .btn { justify-content: flex-start; background: transparent; border-color: transparent; }
   .wrap-rel { position: relative; }
-  #castBar { position: fixed; left: 50%; transform: translateX(-50%); bottom: 16px; z-index: 40; background: var(--surface); border: 1px solid var(--line); border-radius: 14px; padding: 8px 10px 8px 16px; box-shadow: 0 8px 28px #0004; display: flex; align-items: center; gap: 8px; max-width: calc(100% - 24px); }
+  #castBar { position: fixed; left: 50%; transform: translateX(-50%); bottom: calc(16px + var(--nav-h)); z-index: 40; background: var(--surface); border: 1px solid var(--line); border-radius: 14px; padding: 8px 10px 8px 16px; box-shadow: 0 8px 28px #0004; display: flex; align-items: center; gap: 8px; max-width: calc(100% - 24px); }
   #castBar .name { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  #toast { position: fixed; left: 50%; transform: translateX(-50%); bottom: 84px; z-index: 50; background: var(--text); color: var(--bg); padding: 10px 16px; border-radius: 10px; font-size: 14px; max-width: calc(100% - 24px); }
+  #toast { position: fixed; left: 50%; transform: translateX(-50%); bottom: calc(84px + var(--nav-h)); z-index: 50; background: var(--text); color: var(--bg); padding: 10px 16px; border-radius: 10px; font-size: 14px; max-width: calc(100% - 24px); }
   .vh { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
   @media (max-width: 1100px) { .rail { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
   @media (max-width: 640px) {
-    .bar { padding: 10px 16px 0; flex-wrap: nowrap; }
+    :root { --nav-h: calc(56px + env(safe-area-inset-bottom, 0px)); }
+    .bar { padding: 0 8px 0 16px; min-height: 56px; gap: 8px; }
+    .brand-name { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+    .place-name { position: static; width: auto; height: auto; clip: auto; flex: 0 1 auto; min-width: 0; text-overflow: ellipsis; }
+    .find-box { display: none; max-width: none; margin: 0; }
+    /* On Find the field takes the row, so what the bar has to say (a stopped relay, an album being added) goes under it. */
+    body.at-find .find-box { display: block; flex: 1 1 0; }
+    body.at-find .bar { flex-wrap: wrap; padding-top: 6px; padding-bottom: 6px; }
+    body.at-find .bar-right { display: contents; }
+    body.at-find .pills { order: 10; flex: 0 0 100%; justify-content: center; overflow-x: visible; }
+    body.at-find .pills:empty, body.at-find .place-name, body.at-find .add-link { display: none; }
+    .rooms { position: fixed; left: 0; right: 0; bottom: 0; z-index: 29; margin: 0; gap: 0; align-items: stretch; padding-bottom: env(safe-area-inset-bottom, 0px); background: var(--bg); border-top: 1px solid var(--line); }
+    .rooms a { flex: 1; min-height: 56px; padding: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px; font-size: 11px; line-height: 14px; }
+    .rooms a[aria-current='page']::after { display: none; }
+    .rooms .ti { display: block; width: 22px; height: 22px; }
+    .rooms .narrow-only { display: flex; }
     #hero { min-height: 300px; }
     .hero-body { padding: 18px; gap: 8px; }
     .hero-title { font-size: 26px; letter-spacing: -0.015em; }
@@ -217,18 +299,15 @@ export const page = `<!doctype html>
     .hero-meta { font-size: 12px; gap: 7px; }
     .rail { display: flex; overflow-x: auto; gap: 10px; scrollbar-width: none; padding-bottom: 2px; }
     .rail .r-card { flex: 0 0 214px; }
-    .bar-right { min-width: 0; flex: 1; }
-    .pills { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; justify-content: flex-end; }
+    .bar-right { flex: 1 1 0; min-width: 0; gap: 4px; justify-content: flex-end; }
+    .pills { flex: 0 1 auto; min-width: 0; overflow-x: auto; scrollbar-width: none; }
     .pills::-webkit-scrollbar { display: none; }
     .pill { flex: none; }
-    .pill.rate { display: none; }
-    .tabs { padding: 0 6px; gap: 0; }
-    main { padding: 16px 16px 96px; }
+    main { padding: 16px 16px calc(96px + var(--nav-h)); }
     h2 { font-size: 18px; margin: 28px 0 12px; }
     .item { flex-wrap: wrap; }
     .item.job { flex-wrap: nowrap; }
     .item:not(.job) .acts { width: 100%; justify-content: flex-start; }
-    .tabs a { padding: 12px 8px 10px; }
     .thumb { width: 96px; height: 54px; }
     .setting .control { max-width: none; }
     .grid { grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 20px 10px; }
@@ -269,10 +348,10 @@ export const page = `<!doctype html>
   #playerModal.chrome-hidden .p-top, #playerModal.chrome-hidden .p-bar { opacity: 0; pointer-events: none; }
   /* Music: one bar along the bottom of every tab, and the queue it opens. The bar is the proof that sound is on. */
   :root { --np-h: 76px; }
-  .np { position: fixed; left: 0; right: 0; bottom: 0; z-index: 30; min-height: var(--np-h); display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(200px, 1.5fr) auto; grid-template-areas: 'info ctl seek side'; align-items: center; gap: 6px 20px; padding: 10px 24px; background: color-mix(in srgb, var(--surface) 94%, transparent); backdrop-filter: blur(18px) saturate(1.3); border-top: 1px solid var(--line); box-shadow: 0 -10px 30px rgba(0,0,0,.16); }
-  body.np-on main { padding-bottom: calc(var(--np-h) + 56px); }
-  body.np-on #toast { bottom: calc(var(--np-h) + 16px); }
-  body.np-on #castBar { bottom: calc(var(--np-h) + 12px); }
+  .np { position: fixed; left: 0; right: 0; bottom: var(--nav-h); z-index: 30; min-height: var(--np-h); display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(200px, 1.5fr) auto; grid-template-areas: 'info ctl seek side'; align-items: center; gap: 6px 20px; padding: 10px 24px; background: color-mix(in srgb, var(--surface) 94%, transparent); backdrop-filter: blur(18px) saturate(1.3); border-top: 1px solid var(--line); box-shadow: 0 -10px 30px rgba(0,0,0,.16); }
+  body.np-on main { padding-bottom: calc(var(--np-h) + 56px + var(--nav-h)); }
+  body.np-on #toast { bottom: calc(var(--np-h) + 16px + var(--nav-h)); }
+  body.np-on #castBar { bottom: calc(var(--np-h) + 12px + var(--nav-h)); }
   .np-info { grid-area: info; display: flex; align-items: center; gap: 12px; min-width: 0; }
   .np-art { flex: none; width: 48px; height: 48px; border-radius: 10px; border: 0; padding: 0; background: linear-gradient(150deg, var(--brand), color-mix(in srgb, var(--brand) 35%, var(--raised))); color: var(--on-brand); font: inherit; font-weight: 800; font-size: 20px; cursor: pointer; }
   .np-art .sleeve { position: relative; width: 100%; height: 100%; border-radius: inherit; }
@@ -306,7 +385,7 @@ export const page = `<!doctype html>
   .np-vol { display: flex; align-items: center; gap: 6px; }
   .np-vol svg { width: 18px; height: 18px; fill: currentColor; flex: none; }
   #npVol { width: 92px; margin: 0; accent-color: var(--brand); cursor: pointer; }
-  .np-queue { position: fixed; right: 16px; bottom: calc(var(--np-h) + 10px); z-index: 31; width: min(400px, calc(100vw - 24px)); max-height: min(62vh, 540px); display: flex; flex-direction: column; background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-panel); box-shadow: 0 24px 60px rgba(0,0,0,.35); overflow: hidden; }
+  .np-queue { position: fixed; right: 16px; bottom: calc(var(--np-h) + 10px + var(--nav-h)); z-index: 31; width: min(400px, calc(100vw - 24px)); max-height: min(62vh, 540px); display: flex; flex-direction: column; background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-panel); box-shadow: 0 24px 60px rgba(0,0,0,.35); overflow: hidden; }
   .nq-head { display: flex; align-items: center; gap: 8px; padding: 12px 10px 8px 18px; border-bottom: 1px solid var(--line); }
   .nq-head .grow h3 { margin: 0; }
   .nq-list { list-style: none; margin: 0; padding: 6px; overflow-y: auto; }
@@ -340,7 +419,7 @@ export const page = `<!doctype html>
     .np-btn.np-play { width: 42px; height: 42px; }
     .np-q { min-height: 38px; width: 38px; padding: 0; }
     .np-seek { gap: 8px; }
-    .np-queue { left: 8px; right: 8px; width: auto; bottom: calc(var(--np-h) + 8px); }
+    .np-queue { left: 8px; right: 8px; width: auto; bottom: calc(var(--np-h) + 8px + var(--nav-h)); }
   }
 .p-mini-controls, #pMiniRestore { display: none; }
   #playerModal.mini { inset: auto 18px 18px auto; width: min(380px, calc(100vw - 24px)); height: 280px; border-radius: 16px;
@@ -364,7 +443,7 @@ export const page = `<!doctype html>
     #playerModal:not(.mini) #pRawLink, #playerModal:not(.mini) #pDownloadBtn, #playerModal:not(.mini) #pVol { display: none; }
     #playerModal:not(.mini) .p-bar > .row { flex-wrap: wrap; }
     #playerModal:not(.mini) .p-bar select { max-width: 42vw; }
-    #playerModal.mini { right: 12px; bottom: 12px; }
+    #playerModal.mini { right: 12px; bottom: calc(12px + var(--nav-h)); }
   }
   /* ==== Music library ==== */
   .sleeve { position: relative; flex: none; width: 64px; height: 64px; border-radius: 8px; display: flex; align-items: center; justify-content: center; overflow: hidden; color: rgba(255,255,255,.95); box-shadow: inset 0 0 0 1px rgba(255,255,255,.1), 0 1px 3px rgba(0,0,0,.18); }
@@ -513,8 +592,8 @@ export const page = `<!doctype html>
   .yt-thumb.sm .yt-ph { border-left-width: 9px; border-top-width: 6px; border-bottom-width: 6px; }
   .yt-thumb img { z-index: 1; }
   .yt-dur { position: absolute; z-index: 2; right: 4px; bottom: 4px; padding: 1px 5px; border-radius: 4px; background: rgba(0,0,0,.72); color: var(--on-media); font-size: 11px; font-weight: 600; font-variant-numeric: tabular-nums; }
-  .yt-pick { position: sticky; bottom: 12px; z-index: 5; display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: center; margin-top: 12px; padding: 10px 12px; background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-card); box-shadow: 0 10px 30px rgba(0,0,0,.25); }
-  body.np-on .yt-pick { bottom: calc(var(--np-h) + 12px); }
+  .yt-pick { position: sticky; bottom: calc(12px + var(--nav-h)); z-index: 5; display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: center; margin-top: 12px; padding: 10px 12px; background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-card); box-shadow: 0 10px 30px rgba(0,0,0,.25); }
+  body.np-on .yt-pick { bottom: calc(var(--np-h) + 12px + var(--nav-h)); }
   .yt-pick .grow { flex: 1 1 140px; min-width: 0; font-weight: 600; font-size: 14px; overflow-wrap: anywhere; }
   #ytSaveClose { position: absolute; top: 14px; right: 14px; }
   .yt-save { padding: 22px; }
@@ -592,22 +671,35 @@ export const page = `<!doctype html>
 <body>
 <header class="top">
   <div class="bar">
-    <a class="brand" href="#library"><svg viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" rx="8"/><path d="M12 9l12 7-12 7z"/></svg>PearTube</a>
+    <a class="brand" href="#home"><svg viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" rx="8"/><path d="M12 9l12 7-12 7z"/></svg><span class="brand-name">PearTube</span></a>
+    <h1 class="place-name" id="placeName">Home</h1>
+    <nav class="tabs rooms" aria-label="Rooms">
+      <a href="#home" data-tab="home"><svg class="ti" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 11.5 12 4l8 7.5V20h-5.5v-5.5h-5V20H4z"/></svg>Home</a>
+      <a href="#listen" data-tab="listen"><svg class="ti" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 18V6l10-2v12"/><circle cx="6.5" cy="18" r="2.5"/><circle cx="16.5" cy="16" r="2.5"/></svg>Listen</a>
+      <a href="#watch" data-tab="watch"><svg class="ti" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="2.5"/><path d="M10.5 9.5v5l4-2.5z"/></svg>Watch</a>
+      <a href="#find" data-tab="find" class="narrow-only"><svg class="ti" viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6.5"/><path d="M16 16l4.5 4.5"/></svg>Find</a>
+    </nav>
+    <div class="find-box">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6.5"/><path d="M16 16l4.5 4.5"/></svg>
+      <input id="srcInput" form="srcForm" type="search" aria-label="Find" spellcheck="false" autocomplete="off" placeholder="Blue Train" required>
+    </div>
     <div class="bar-right">
       <div class="pills" id="pills"></div>
-      <button class="btn quiet theme-toggle" id="themeToggle" type="button" aria-label="Theme" title="Theme">
-        <svg width="16" height="16" viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="10" r="6.6" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M10 3.4a6.6 6.6 0 010 13.2z" fill="currentColor"/></svg>
-      </button>
+      <a class="btn add-link" id="addLink" href="#add" data-tab="add" title="Add to library"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg><span>Add to library</span></a>
+      <div class="more-wrap">
+        <button class="btn quiet more-btn" id="moreBtn" type="button" aria-expanded="false" aria-controls="ownerNav">More</button>
+        <nav class="tabs owner" id="ownerNav" aria-label="This relay">
+          <a href="#channels" data-tab="channels">Channels</a>
+          <a href="#sharing" data-tab="sharing">Sharing</a>
+          <a href="#tv" data-tab="tv">TV</a>
+          <a href="#settings" data-tab="settings">Settings</a>
+          <button class="btn quiet theme-toggle" id="themeToggle" type="button" aria-label="Theme" title="Theme">
+            <svg width="16" height="16" viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="10" r="6.6" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M10 3.4a6.6 6.6 0 010 13.2z" fill="currentColor"/></svg><span class="theme-word">Theme</span>
+          </button>
+        </nav>
+      </div>
     </div>
   </div>
-  <nav class="tabs" aria-label="Sections">
-    <a href="#library" data-tab="library">Library</a>
-    <a href="#music" data-tab="music">Music</a>
-    <a href="#channels" data-tab="channels">Channels</a>
-    <a href="#sharing" data-tab="sharing">Sharing</a>
-    <a href="#tv" data-tab="tv">TV</a>
-    <a href="#settings" data-tab="settings">Settings</a>
-  </nav>
 </header>
 <main>
   <form id="authForm" class="card" hidden>
@@ -619,14 +711,62 @@ export const page = `<!doctype html>
     <div class="msg err" id="authMsg" role="alert"></div>
   </form>
 
-  <section id="tab-library" data-panel="library">
+  <!-- ==== Home: what is not finished, then a row of music and a row of video ==== -->
+  <section id="tab-home" data-panel="home">
     <section id="hero" hidden></section>
-    <div id="resumeWrap" hidden><h2>Continue watching <span class="count" id="resumeCount"></span></h2><div class="rail" id="resume"></div></div>
+    <div id="resumeWrap" hidden><h2>Keep playing <span class="count" id="resumeCount"></span></h2><div class="rail" id="resume"></div></div>
     <div id="liveWrap" hidden><h2>Live <span class="count" id="liveCount"></span></h2><div class="rail" id="live"></div></div>
+    <div id="homeRows"></div>
+  </section>
+
+  <!-- ==== Listen: the music room ==== -->
+  <section id="tab-listen" data-panel="listen" hidden>
+    <div class="room-ctl" id="listenCtl" hidden><span class="count" id="musicCount"></span></div>
+    <div class="shelf" id="albums"></div>
+  </section>
+
+  <!-- ==== Watch: the video room ==== -->
+  <section id="tab-watch" data-panel="watch" hidden>
+    <div class="room-ctl kinds" id="libKinds" role="group" aria-label="Show" hidden></div>
+    <div class="grid" id="entries"></div>
+  </section>
+
+  <!-- ==== Find: one field in the top bar; the library first, then what is outside it ==== -->
+  <section id="tab-find" data-panel="find" hidden>
+    <div id="findLib"></div>
+    <h2>Not in your library</h2>
+    <!-- ==== Sources: one search over Soulseek, YouTube and other relays ==== -->
+    <form id="srcForm" class="card">
+      <div class="src-in" id="srcIn"><span class="label" id="srcInLabel">Search in</span><div class="chips" id="srcChips" role="group" aria-labelledby="srcInLabel"></div><button class="btn primary" type="submit" id="srcBtn">Search</button></div>
+      <span class="hint" id="srcHint">Finds albums on peers and mirrors them here.</span>
+      <div class="meta wrap" id="srcNote" hidden></div>
+      <div class="slsk-port" id="slskPort" role="note" hidden></div>
+      <div class="list src-jobs" id="srcJobs" aria-label="Adding" hidden></div>
+      <div class="msg" id="srcMsg" role="status"></div>
+      <nav class="src-summary" id="srcSummary" aria-label="Results by source" hidden></nav>
+      <div id="srcGroups"></div>
+      <div id="globalWrap" hidden>
+        <h3 class="src-head" id="globalHead" tabindex="-1">On other relays</h3>
+        <div class="msg" id="globalMsg" role="status"></div>
+        <div class="list" id="globalResults"></div>
+      </div>
+      <div class="yt-pick" id="ytPick" role="region" aria-label="Selected videos" hidden>
+        <span class="grow" id="ytPickText"></span>
+        <button class="btn primary" type="button" id="ytPickSave">Save track</button>
+        <button class="btn quiet" type="button" id="ytPickClear">Clear</button>
+      </div>
+    </form>
+    <div class="card slsk-browse" id="slskBrowse" hidden></div>
+    <!-- ==== end Sources ==== -->
+  </section>
+
+  <!-- ==== Add to library: links, pages, folders, catalogs and channels ==== -->
+  <section id="tab-add" data-panel="add" hidden>
+    <h2 class="page-title">Add to library</h2>
     <div class="card">
       <form id="addForm">
         <div class="field" style="margin:0">
-          <label for="addInput">Add a video or channel</label>
+          <label for="addInput">Link to a video, a page or a channel</label>
           <div class="row"><input class="grow" id="addInput" type="text" inputmode="url" autocomplete="off" spellcheck="false" placeholder="https://www.youtube.com/watch?v=aqz-KE-bpKQ"><button class="btn primary" type="submit" id="addBtn">Add</button></div>
         </div>
       </form>
@@ -658,53 +798,6 @@ export const page = `<!doctype html>
       <div class="msg" id="addMsg" role="status"></div>
     </div>
     <div id="jobsWrap" hidden><h2>Adding <span class="count" id="jobCount"></span></h2><div class="list" id="jobs"></div></div>
-    <h2>Library <span class="count" id="libCount"></span></h2>
-    <div class="lib-tools" id="libTools" hidden>
-      <div class="kinds" id="libKinds" role="group" aria-label="Show"></div>
-      <input id="libFilter" type="search" aria-label="Search library" placeholder="Big Buck Bunny">
-    </div>
-    <div class="grid" id="entries"></div>
-    <h2>Search all relays</h2>
-    <form id="globalForm" class="card">
-      <div class="field">
-        <label for="globalInput">Title or IMDb id</label>
-        <div class="row"><input class="grow" id="globalInput" type="search" spellcheck="false" placeholder="Stalker 1979" required><button class="btn primary" type="submit" id="globalBtn">Search</button></div>
-        <span class="hint">Asks relays you do not follow; results play from them.</span>
-      </div>
-      <div class="msg" id="globalMsg" role="status"></div>
-      <div class="list" id="globalResults"></div>
-    </form>
-  </section>
-
-  <section id="tab-music" data-panel="music" hidden>
-    <h2>Music <span class="count" id="musicCount"></span></h2>
-    <div class="lib-tools" id="musicTools" hidden>
-      <input id="musicFilter" type="search" aria-label="Search music" placeholder="Chop Suey!">
-    </div>
-    <div class="shelf" id="albums"></div>
-    <h2>Find music</h2>
-    <!-- ==== Sources: one search over Soulseek and YouTube ==== -->
-    <form id="srcForm" class="card">
-      <div class="field">
-        <label for="srcInput">Artist or album</label>
-        <div class="row"><input class="grow" id="srcInput" type="search" spellcheck="false" placeholder="John Coltrane Blue Train" required><button class="btn primary" type="submit" id="srcBtn">Search</button></div>
-        <div class="src-in" id="srcIn" hidden><span class="label" id="srcInLabel">Search in</span><div class="chips" id="srcChips" role="group" aria-labelledby="srcInLabel"></div></div>
-        <span class="hint" id="srcHint">Finds albums on peers and mirrors them here.</span>
-        <div class="meta wrap" id="srcNote" hidden></div>
-      </div>
-      <div class="slsk-port" id="slskPort" role="note" hidden></div>
-      <div class="list src-jobs" id="srcJobs" aria-label="Adding" hidden></div>
-      <div class="msg" id="srcMsg" role="status"></div>
-      <nav class="src-summary" id="srcSummary" aria-label="Results by source" hidden></nav>
-      <div id="srcGroups"></div>
-      <div class="yt-pick" id="ytPick" role="region" aria-label="Selected videos" hidden>
-        <span class="grow" id="ytPickText"></span>
-        <button class="btn primary" type="button" id="ytPickSave">Save track</button>
-        <button class="btn quiet" type="button" id="ytPickClear">Clear</button>
-      </div>
-    </form>
-    <div class="card slsk-browse" id="slskBrowse" hidden></div>
-    <!-- ==== end Sources ==== -->
   </section>
 
   <section id="tab-channels" data-panel="channels" hidden>
@@ -954,7 +1047,7 @@ async function api (path, { method, body } = {}) {
   let data = null
   try { data = await res.json() } catch {}
   if (res.status === 401) throw signInFirst()
-  if (!res.ok) throw new Error((data && data.error) || 'The relay answered ' + res.status)
+  if (!res.ok) throw Object.assign(new Error((data && data.error) || 'The relay answered ' + res.status), { status: res.status })
   return data
 }
 
@@ -1046,18 +1139,87 @@ const isYt = e => String((e && e.id) || '').startsWith('yt:')
 const setting = key => S.settings && S.settings.settings[key]
 const sval = key => setting(key) ? setting(key).value : undefined
 
-// ---- Tabs
-let tab = 'library'
+// ---- Places. The address names the place: the rooms (Home, Listen, Watch), Find, Add to library and the relay's
+// own pages. An old link keeps working: #library is Home and #music is Listen. With no place in the address the
+// page opens the room this browser was in last, and Home on a first visit.
+const PLACES = { home: 'Home', listen: 'Listen', watch: 'Watch', find: 'Find', add: 'Add to library', channels: 'Channels', sharing: 'Sharing', tv: 'TV', settings: 'Settings' }
+const OLD_PLACES = { library: 'home', music: 'listen' }
+const ROOMS = ['home', 'listen', 'watch']
+const ROOM_KEY = 'peartube-room'
+let tab = 'home'
+let placeArg = ''
+function readPlace () {
+  const raw = location.hash.slice(1)
+  const cut = raw.indexOf('/')
+  const named = cut < 0 ? raw : raw.slice(0, cut)
+  const name = OLD_PLACES[named] || named
+  let arg = ''
+  try { arg = cut < 0 ? '' : decodeURIComponent(raw.slice(cut + 1)) } catch {}
+  if (Object.hasOwn(PLACES, name)) return { name, arg }
+  let last = ''
+  try { last = localStorage.getItem(ROOM_KEY) || '' } catch {}
+  return { name: ROOMS.includes(last) ? last : 'home', arg: '' }
+}
+// A place opens at its top, and Back or Forward returns to where the reader was. Each history entry gets a number
+// the first time it is shown; the last scroll position seen under that number is kept while the page lives.
+const scrollAt = new Map()
+const placeBase = Date.now()
+let placeSeq = 0
+let placeId = 0
+if ('scrollRestoration' in history) history.scrollRestoration = 'manual'
+addEventListener('scroll', () => { if (placeId) scrollAt.set(placeId, scrollY) }, { passive: true })
+function enterPlace () {
+  const st = history.state
+  let id = st && st.place
+  const back = typeof id === 'number' && scrollAt.has(id)
+  if (typeof id !== 'number') {
+    id = placeBase + ++placeSeq
+    history.replaceState({ ...st, place: id }, '')
+  }
+  placeId = id
+  return back ? scrollAt.get(id) : 0
+}
+// Go to a place and do something there once it is drawn (scroll to a card, focus a field).
+let afterPlace = null
+function goPlace (hash, then) {
+  if (location.hash === hash) { if (then) then(); return }
+  afterPlace = then || null
+  location.hash = hash
+}
 function showTab () {
-  const want = location.hash.slice(1)
-  tab = ['library', 'music', 'channels', 'sharing', 'tv', 'settings'].includes(want) ? want : 'library'
-  for (const a of document.querySelectorAll('.tabs a')) a.setAttribute('aria-current', a.dataset.tab === tab ? 'page' : 'false')
+  const place = readPlace()
+  tab = place.name
+  placeArg = place.arg
+  if (ROOMS.includes(tab)) { try { localStorage.setItem(ROOM_KEY, tab) } catch {} }
+  const top = enterPlace()
+  for (const a of document.querySelectorAll('[data-tab]')) a.setAttribute('aria-current', a.dataset.tab === tab ? 'page' : 'false')
   for (const s of document.querySelectorAll('[data-panel]')) s.hidden = s.dataset.panel !== tab
+  $('placeName').textContent = PLACES[tab]
+  document.body.classList.toggle('at-find', tab === 'find')
+  setMore(false)
+  showFindWords(place.arg)
   if (tab === 'tv') loadCast()
   if (tab === 'settings') renderSettings()
   render()
+  scrollTo(0, top)
+  const then = afterPlace
+  afterPlace = null
+  if (then) then()
 }
 addEventListener('hashchange', showTab)
+
+// ---- More: the relay's own pages fold into a menu when the bar has no room for them in a row.
+function setMore (open) {
+  $('ownerNav').classList.toggle('open', open)
+  $('moreBtn').setAttribute('aria-expanded', String(open))
+}
+$('moreBtn').onclick = () => setMore($('moreBtn').getAttribute('aria-expanded') !== 'true')
+addEventListener('click', ev => { if (!ev.target.closest('.more-wrap')) setMore(false) })
+addEventListener('keydown', ev => {
+  if (ev.key !== 'Escape' || $('moreBtn').getAttribute('aria-expanded') !== 'true') return
+  setMore(false)
+  $('moreBtn').focus()
+})
 
 // ---- Loading
 async function refresh () {
@@ -1109,23 +1271,21 @@ const soon = () => { clearTimeout(refreshTimer); refreshTimer = setTimeout(refre
 
 function render () {
   renderPills()
-  if (tab === 'library') renderLibrary()
-  if (tab === 'music') renderMusic()
+  if (tab === 'home') renderHome()
+  if (tab === 'listen') renderMusic()
+  if (tab === 'watch') renderLibrary()
+  if (tab === 'find') renderFind()
+  if (tab === 'add') renderAdd()
   if (tab === 'channels') renderChannels()
   if (tab === 'sharing') renderSharing()
   if (tab === 'tv') renderCast()
   renderCastBar()
 }
 
-// ---- Header
+// ---- Header: only what needs the reader now. Peer counts and rates are on the Sharing page.
 function renderPills () {
-  const st = S.status
   const pills = []
   if (S.offline) pills.push(h('span', { class: 'pill warn' }, 'Relay unreachable'))
-  else {
-    pills.push(h('span', { class: 'pill' + (st.peers || st.lanPeers ? ' ok' : '') }, h('b', null, String((st.peers || 0))), ' ', (st.peers === 1 ? 'peer' : 'peers'), st.lanPeers ? ' · ' + st.lanPeers + ' nearby' : ''))
-    pills.push(h('span', { class: 'pill rate' }, '↓ ', h('b', null, rate(st.downBps)), ' ↑ ', h('b', null, rate(st.upBps))))
-  }
   // An album being added runs for minutes; the header says so on every tab, and a press goes to its progress. A
   // percentage only when every running job knows its total (a YouTube save never does).
   const adding = S.jobs.filter(srcActive)
@@ -1133,7 +1293,7 @@ function renderPills () {
     const total = adding.every(j => j.total > 0) ? adding.reduce((n, j) => n + j.total, 0) : 0
     const pct = total ? Math.min(99, Math.floor(adding.reduce((n, j) => n + (j.bytes || 0), 0) / total * 100)) : null
     const btn = h('button', { class: 'pill busy', type: 'button' }, 'Adding' + (adding.length > 1 ? ' ' + adding.length + ' albums' : '') + (pct != null ? ' ' + pct + '%' : ''))
-    btn.onclick = () => { location.hash = '#music'; setTimeout(() => $('srcJobs').scrollIntoView({ block: 'center' }), 0) }
+    btn.onclick = () => goPlace('#find', () => $('srcJobs').scrollIntoView({ block: 'center' }))
     pills.push(btn)
   }
   const restart = S.settings ? S.settings.restartNeeded.length : 0
@@ -1193,11 +1353,11 @@ $('addForm').onsubmit = async ev => {
     }, 'addMsg')
   }
   if (HEX.test(val)) {
-    location.hash = '#channels'
-    $('followInput').value = val
-    $('followInput').dispatchEvent(new Event('input'))
-    $('followName').focus()
-    return
+    return goPlace('#channels', () => {
+      $('followInput').value = val
+      $('followInput').dispatchEvent(new Event('input'))
+      $('followName').focus()
+    })
   }
   if (!/^https?:[/][/]/i.test(val)) return say('addMsg', 'That is not a link. Links start with https://', true)
   await act($('addBtn'), async () => {
@@ -1457,7 +1617,7 @@ function tileLine (t) {
     return [(discs > 1 ? plural(discs, 'disc', 'discs') + ' · ' : '') + plural(n, 'track', 'tracks'), size(t.items.reduce((sum, i) => sum + (i.e.size || 0), 0))].join(' · ')
   }
   const e = t.items[0].e
-  return [t.kind === 'movie' ? 'Movie' : 'Video', n > 1 ? n + ' versions' : size(e.size)].join(' · ')
+  return [t.kind === 'movie' ? 'Movie' : 'Clip', n > 1 ? n + ' versions' : size(e.size)].join(' · ')
 }
 function tileState (t) {
   if (t.saved === t.items.length) return ['Saved here', 'ok']
@@ -1625,6 +1785,16 @@ function albumPlayBtn (t) {
   b.append(ic)
   return b
 }
+function albumCard (t) {
+  return h('div', { class: 'album-card', 'data-tile': t.key },
+    h('button', { class: 'album-open', onclick: () => openDetail(t.key) },
+      albumArt(t),
+      h('span', { class: 'album-text' },
+        h('span', { class: 'album-name' }, t.album),
+        h('span', { class: 'album-meta' }, tileLine(t)),
+        h('span', { class: 'album-meta', 'data-aq': t.key }, ...albumLine(t)))),
+    albumPlayBtn(t))
+}
 // The Music view is a shelf per artist, not a wall of posters: albums are square, read left to right as name, size
 // and copy, and play from where they sit. Rows fill the width four to a line on a desktop and stack on a phone.
 function renderAlbums (list) {
@@ -1638,16 +1808,8 @@ function renderAlbums (list) {
     h('div', { class: 'artist-head' },
       h('h3', null, artist),
       h('span', { class: 'count' }, plural(albums.length, 'album', 'albums') + ' · ' + plural(albums.reduce((n, t) => n + t.items.length, 0), 'track', 'tracks'))),
-    h('div', { class: 'album-list' }, albums.sort((a, b) => a.album.localeCompare(b.album)).map(t => h('div', { class: 'album-card', 'data-tile': t.key },
-      h('button', { class: 'album-open', onclick: () => openDetail(t.key) },
-        albumArt(t),
-        h('span', { class: 'album-text' },
-          h('span', { class: 'album-name' }, t.album),
-          h('span', { class: 'album-meta' }, tileLine(t)),
-          h('span', { class: 'album-meta', 'data-aq': t.key }, ...albumLine(t)))),
-      albumPlayBtn(t))))))
+    h('div', { class: 'album-list' }, albums.sort((a, b) => a.album.localeCompare(b.album)).map(albumCard))))
 }
-const albumMatches = (t, q) => t.title.toLowerCase().includes(q) || t.items.some(i => trackName(i.e).toLowerCase().includes(q))
 // Continue watching: where this browser stopped, remembered locally. No protocol change,
 // no relay state; a different browser starts its own list.
 const WATCH_KEY = 'peartube-watch'
@@ -1700,7 +1862,7 @@ function renderHero (list) {
     artImg(t, 'backdrop', 'hero-art'),
     h('div', { class: 'hero-scrim' }),
     h('div', { class: 'hero-body' },
-      h('span', { class: 'eyebrow' }, 'Continue watching · ' + Math.round(pct * 100) + '%'),
+      h('span', { class: 'eyebrow' }, 'Keep playing · ' + Math.round(pct * 100) + '%'),
       h('h2', { class: 'hero-title' }, t.title),
       h('div', { class: 'hero-meta' },
         h('span', null, tileLine(t)), h('span', { class: 'dot' }), h('span', null, tileState(t)[0]),
@@ -1744,54 +1906,82 @@ function renderLive () {
       h('span', { class: 'r-meta' }, (l.channel ? l.channel + ' · ' : '') + (l.viewers != null ? l.viewers + ' watching' : ''))))))
 }
 
-let libKind = 'all'
 let libShown = 60
 let libSignature = ''
-const KINDS = [['all', 'All'], ['movie', 'Movies'], ['show', 'Shows'], ['video', 'Videos']]
-function renderLibrary (force) {
-  renderJobs()
-  // The scan is offered only on a relay whose host set an import folder.
-  const watching = Boolean(plugin('watch-dir').watching)
-  $('folderChip').hidden = !watching
-  if (!watching && !$('folderForm').hidden) {
-    $('folderForm').hidden = true
-    $('folderChip').setAttribute('aria-expanded', 'false')
-  }
-  // Albums live under Music: the film grid and its posters are the wrong shape for them.
+const KINDS = [['all', 'All', ''], ['movie', 'Movies', 'movies'], ['show', 'Series', 'series'], ['video', 'Clips', 'clips']]
+// One poster of the video grid: what it is, where it comes from, and whether a copy is saved here.
+function videoTile (t) {
+  const [state, tone] = tileState(t)
+  return h('button', { class: 'tile', 'data-tile': t.key, onclick: () => openDetail(t.key) },
+    posterBox(t.imdb ? '/v1/poster/' + t.imdb : null, t.title),
+    h('span', { class: 'tile-title' }, t.title),
+    h('span', { class: 'tile-meta' }, [tileLine(t), sourceName(t.items[0].e.source)].filter(Boolean).join(' · ')),
+    h('span', { class: 'tile-meta' + (tone ? ' ' + tone : '') }, state))
+}
+// What an empty place says: why it is empty, then the way to fill it.
+function emptyNote (text) {
+  if (S.offline) return h('div', { class: 'empty' }, 'Can’t reach the relay.')
+  if (!S.loaded && !needsToken) return h('div', { class: 'empty' }, 'Loading the library…')
+  return h('div', { class: 'empty' }, text, h('div', { class: 'empty-acts' }, h('a', { class: 'btn primary', href: '#add' }, 'Add to library')))
+}
+
+// ---- Home: what is not finished first, then the start of each room. One line of each; the room holds the rest.
+const HOME_ALBUMS = 8
+const HOME_VIDEOS = 8
+let homeSignature = ''
+function homeRow (title, all, href, body) {
+  return h('section', { class: 'home-row' }, h('div', { class: 'row-head' }, h('h2', null, title), h('a', { class: 'row-all', href }, all)), body)
+}
+function renderHome (force) {
   const tiles = libraryTiles()
-  const all = tiles.filter(t => t.kind !== 'album')
-  const resume = resumeTiles(all)
+  const albums = tiles.filter(t => t.kind === 'album')
+  const videos = tiles.filter(t => t.kind !== 'album')
+  const resume = resumeTiles(videos)
   renderHero(resume)
   renderResume(resume)
   renderLive()
-  const q = $('libFilter').value.trim().toLowerCase()
-  const list = all.filter(t => (libKind === 'all' || t.kind === libKind) && (!q || t.title.toLowerCase().includes(q)))
+  // With no movie and no series the video row is the clips, so a library of clips does not leave Home bare.
+  const films = videos.filter(t => t.kind !== 'video')
+  const row = (films.length ? films : videos).slice(0, HOME_VIDEOS)
+  const first = albums.slice(0, HOME_ALBUMS)
+  const signature = [S.offline, S.loaded, needsToken, albums.length, videos.length, ...[...first, ...row].map(t => t.key + tileState(t)[0] + t.items.length + '/' + (t.keys || []).length)].join('|')
+  if (!force && signature === homeSignature) return
+  homeSignature = signature
+  const rows = []
+  if (first.length) rows.push(homeRow('Albums', 'All albums', '#listen', h('div', { class: 'album-list' }, first.map(albumCard))))
+  if (row.length) rows.push(films.length ? homeRow('Movies and series', 'All video', '#watch', h('div', { class: 'grid' }, row.map(videoTile))) : homeRow('Clips', 'All clips', '#watch/clips', h('div', { class: 'grid' }, row.map(videoTile))))
+  if (!rows.length) rows.push(emptyNote('Nothing in your library yet.'))
+  $('homeRows').replaceChildren(...rows)
+  paintRows()
+  if ($('detail').open) renderDetail()
+}
+
+// ---- Watch: the video room. Movies, series and clips in one grid; albums are in Listen. The chip that is on is
+// part of the address (#watch/series), and a chip press replaces the address, so Back leaves the room.
+const libKind = () => (KINDS.find(k => k[2] && k[2] === placeArg) || KINDS[0])[0]
+function renderLibrary (force) {
+  const tiles = libraryTiles()
+  const all = tiles.filter(t => t.kind !== 'album')
+  const kind = libKind()
+  const list = all.filter(t => kind === 'all' || t.kind === kind)
   // Progress polls arrive every few seconds; redraw only when what the grid shows has changed.
-  const signature = [libKind, q, libShown, S.offline, S.loaded, tiles.length - all.length, ...list.slice(0, libShown).map(t => t.key + tileState(t)[0] + t.items.length)].join('|')
+  const signature = [kind, libShown, S.offline, S.loaded, needsToken, tiles.length - all.length, ...list.slice(0, libShown).map(t => t.key + tileState(t)[0] + t.items.length)].join('|')
   if (!force && signature === libSignature) return
   libSignature = signature
-  $('libCount').textContent = all.length ? String(all.length) : ''
-  $('libTools').hidden = all.length < 2
-  $('libKinds').replaceChildren(...KINDS.map(([k, label]) => {
+  $('libKinds').hidden = all.length < 2
+  $('libKinds').replaceChildren(...KINDS.map(([k, label, view]) => {
     const n = k === 'all' ? all.length : all.filter(t => t.kind === k).length
-    return n || k === 'all' ? h('button', { class: 'chip', 'aria-pressed': String(libKind === k), onclick: () => { libKind = k; libShown = 60; renderLibrary() } }, label + ' ', h('span', { class: 'count' }, String(n))) : null
+    return n || k === 'all' ? h('button', { class: 'chip', 'aria-pressed': String(kind === k), onclick: () => { libShown = 60; location.replace('#watch' + (view ? '/' + view : '')) } }, label + ' ', h('span', { class: 'count' }, String(n))) : null
   }).filter(Boolean))
   if (!all.length) {
-    $('entries').replaceChildren(h('div', { class: 'empty' }, S.offline ? 'Can’t reach the relay.' : !S.loaded && !needsToken ? 'Loading the library…' : tiles.length ? 'No videos yet. Your albums are under Music.' : 'Nothing here yet. Paste a link above to add a video.'))
+    $('entries').replaceChildren(emptyNote(tiles.length ? 'No video yet. Your albums are in Listen.' : 'Nothing in your library yet.'))
     return
   }
   if (!list.length) {
-    $('entries').replaceChildren(h('div', { class: 'empty' }, q ? 'No titles match “' + q + '”.' : 'Nothing in this view.'))
+    $('entries').replaceChildren(h('div', { class: 'empty' }, 'Nothing in this view.'))
     return
   }
-  $('entries').replaceChildren(...list.slice(0, libShown).map(t => {
-    const [state, tone] = tileState(t)
-    return h('button', { class: 'tile', 'data-tile': t.key, onclick: () => openDetail(t.key) },
-      posterBox(t.imdb ? '/v1/poster/' + t.imdb : null, t.title),
-      h('span', { class: 'tile-title' }, t.title),
-      h('span', { class: 'tile-meta' }, [tileLine(t), sourceName(t.items[0].e.source)].filter(Boolean).join(' · ')),
-      h('span', { class: 'tile-meta' + (tone ? ' ' + tone : '') }, state))
-  }), ...(list.length > libShown ? [h('div', { class: 'more', id: 'libMore' }, h('button', { class: 'btn', onclick: showMore }, 'Show more'))] : []))
+  $('entries').replaceChildren(...list.slice(0, libShown).map(videoTile), ...(list.length > libShown ? [h('div', { class: 'more', id: 'libMore' }, h('button', { class: 'btn', onclick: showMore }, 'Show more'))] : []))
   const more = $('libMore')
   if (more && 'IntersectionObserver' in window) {
     const io = new IntersectionObserver(entries => { if (entries.some(x => x.isIntersecting)) { io.disconnect(); showMore() } }, { rootMargin: '600px' })
@@ -1800,53 +1990,160 @@ function renderLibrary (force) {
   if ($('detail').open) renderDetail()
 }
 function showMore () { libShown += 60; renderLibrary() }
-$('libFilter').oninput = () => { libShown = 60; renderLibrary() }
 
-// ---- Music: the albums tab. Its own surface, not a filter on the film grid: a shelf per artist, the album sheet
-// as the place to listen, and the Soulseek search below it as the way to add more.
+// ---- Listen: the music room. Its own surface, not a filter on the video grid: a shelf per artist, and the album
+// sheet as the place to listen.
 let musicSignature = ''
 function renderMusic (force) {
-  renderSourcesStatus()
   const all = libraryTiles().filter(t => t.kind === 'album')
-  const q = $('musicFilter').value.trim().toLowerCase()
-  const list = all.filter(t => !q || albumMatches(t, q))
   // The copy count is in it too: removing one copy of a track leaves the rows alone but changes the card's line.
-  const signature = [q, S.offline, S.loaded, sourcesOn().join(), ...list.map(t => t.key + tileState(t)[0] + t.items.length + '/' + (t.keys || []).length)].join('|')
+  const signature = [S.offline, S.loaded, needsToken, ...all.map(t => t.key + tileState(t)[0] + t.items.length + '/' + (t.keys || []).length)].join('|')
   if (!force && signature === musicSignature) return
   musicSignature = signature
-  $('musicCount').textContent = all.length ? String(all.length) : ''
-  $('musicTools').hidden = all.length < 2
-  if (!all.length) {
-    $('albums').replaceChildren(h('div', { class: 'empty' }, S.offline ? 'Can’t reach the relay.' : !S.loaded && !needsToken ? 'Loading albums…' : 'No albums yet. Find one below.'))
-  } else if (!list.length) {
-    // A miss in the library is a reason to look further: one press runs the same words through Find music.
-    const words = $('musicFilter').value.trim()
-    const on = sourcesOn()
-    const look = on.length ? h('div', null, h('button', { class: 'btn', onclick: () => {
-      $('srcInput').value = words
-      $('srcForm').scrollIntoView({ block: 'start', behavior: 'smooth' })
-      $('srcForm').requestSubmit()
-    } }, 'Search ' + on.map(sourceLabel).join(' and ') + ' for “' + words + '”')) : null
-    $('albums').replaceChildren(h('div', { class: 'empty' }, 'No album, artist or track matches “' + q + '”.', look))
-  } else {
-    $('albums').replaceChildren(...renderAlbums(list))
+  $('listenCtl').hidden = !all.length
+  $('musicCount').textContent = plural(all.length, 'album', 'albums')
+  if (!all.length) $('albums').replaceChildren(emptyNote('No albums yet. Use Find to save one, or add a folder.'))
+  else {
+    $('albums').replaceChildren(...renderAlbums(all))
     paintRows()
   }
   if ($('detail').open) renderDetail()
 }
-$('musicFilter').oninput = () => renderMusic()
 
-// ---- Library: search all relays (POST /v1/search/global). Answers that arrive later come with an update event,
-// which asks the same query again for 60 s.
-let globalAsk = null
+// ---- Add to library: the add box and what is being added now.
+function renderAdd () {
+  renderJobs()
+  // The scan is offered only on a relay whose host set an import folder.
+  const watching = Boolean(plugin('watch-dir').watching)
+  $('folderChip').hidden = !watching
+  if (!watching && !$('folderForm').hidden) {
+    $('folderForm').hidden = true
+    $('folderChip').setAttribute('aria-expanded', 'false')
+  }
+}
+
+// ---- Find: one field, in the top bar, for everything. Typing narrows the library at once and asks nobody. Enter
+// (or Search) also asks outside the library: the sources that are on, and other relays. The words are part of the
+// address (#find/blue train), so Back returns to them and a reload keeps them.
+const FIND_SHOWN = 12
+const LINK_WORDS = /^(https?|peartube|magnet):[^ ]+$/i
+const findWords = () => $('srcInput').value.trim()
+function showFindWords (words) {
+  const box = $('srcInput')
+  if (tab !== 'find') { box.value = ''; return }
+  // A bare #find returns to the last search outside, so its results never stand under an empty field.
+  if (!words && srcRun) {
+    words = srcRun.query
+    history.replaceState(history.state, '', '#find/' + encodeURIComponent(words))
+  }
+  if (box.value.trim() !== words.trim()) box.value = words
+}
+$('srcInput').addEventListener('input', () => {
+  const words = findWords()
+  const to = '#find' + (words ? '/' + encodeURIComponent(words) : '')
+  if (readPlace().name !== 'find') { location.hash = to; return }
+  history.replaceState(history.state, '', to)
+  if (tab === 'find') renderFind()
+})
+// Every word must be in the text, in any order; case, accents and punctuation do not count. The accents go first:
+// fold() alone turns one into a space, which cuts a word with an accent inside it in two.
+const plain = s => fold(String(s || '').normalize('NFKD').replace(/\\p{M}+/gu, ''))
+function findIn (words) {
+  const need = plain(words).split(' ').filter(Boolean)
+  const has = text => { const t = plain(text); return need.length > 0 && need.every(w => t.includes(w)) }
+  // A track is found by its own name, alone or beside its artist or album: one of the words must be in the name.
+  has.track = (name, of) => { const n = plain(name); return need.some(w => n.includes(w)) && has(name + ' ' + of) }
+  return has
+}
+function findGroup (title, n, body) {
+  return h('section', { class: 'find-group' },
+    h('div', { class: 'row-head' }, h('h3', null, title), h('span', { class: 'count' }, n > FIND_SHOWN ? FIND_SHOWN + ' of ' + n : String(n))),
+    body,
+    n > FIND_SHOWN ? h('div', { class: 'hint' }, 'Type more words to narrow these.') : null)
+}
+function findTrack ({ t, e }) {
+  return h('button', { class: 'find-track', 'data-find-track': e.key, onclick: () => openDetail(t.key) },
+    h('span', { class: 'ft-name' }, trackName(e)),
+    h('span', { class: 'ft-of' }, t.title))
+}
+let findSignature = ''
+function renderFind (force) {
+  renderSourcesStatus()
+  const words = findWords()
+  const box = $('findLib')
+  if (!words) {
+    if (!force && findSignature === 'idle') return
+    findSignature = 'idle'
+    box.replaceChildren(h('p', { class: 'find-idle' }, 'Type a title or artist, or paste a link.'))
+    return
+  }
+  const tiles = libraryTiles()
+  const has = findIn(words)
+  const albums = tiles.filter(t => t.kind === 'album' && has(t.title))
+  const tracks = tiles.filter(t => t.kind === 'album').flatMap(t => t.items.filter(i => has.track(trackName(i.e), t.title)).map(i => ({ t, e: i.e })))
+  const films = tiles.filter(t => (t.kind === 'movie' || t.kind === 'show') && has(t.title))
+  const clips = tiles.filter(t => t.kind === 'video' && has(t.title))
+  const link = LINK_WORDS.test(words)
+  const shown = [...albums.slice(0, FIND_SHOWN), ...films.slice(0, FIND_SHOWN), ...clips.slice(0, FIND_SHOWN)]
+  const signature = [words, S.offline, S.loaded, needsToken, albums.length, tracks.length, films.length, clips.length,
+    ...shown.map(t => t.key + tileState(t)[0] + t.items.length + '/' + (t.keys || []).length), ...tracks.slice(0, FIND_SHOWN).map(r => r.e.key)].join('|')
+  if (!force && signature === findSignature) return
+  findSignature = signature
+  const parts = [h('h2', null, 'In your library')]
+  if (link) {
+    parts.push(h('div', { class: 'find-link' }, h('span', null, 'This is a link.'), h('button', { class: 'btn primary', onclick: () => goPlace('#add', () => {
+      $('addInput').value = words
+      $('addInput').focus()
+    }) }, 'Add to library')))
+  }
+  if (albums.length) parts.push(findGroup('Albums', albums.length, h('div', { class: 'album-list' }, albums.slice(0, FIND_SHOWN).map(albumCard))))
+  if (tracks.length) parts.push(findGroup('Tracks', tracks.length, h('div', { class: 'find-tracks' }, tracks.slice(0, FIND_SHOWN).map(findTrack))))
+  if (films.length) parts.push(findGroup('Movies and series', films.length, h('div', { class: 'grid' }, films.slice(0, FIND_SHOWN).map(videoTile))))
+  if (clips.length) parts.push(findGroup('Clips', clips.length, h('div', { class: 'grid' }, clips.slice(0, FIND_SHOWN).map(videoTile))))
+  if (!link && !albums.length && !tracks.length && !films.length && !clips.length) {
+    parts.push(h('div', { class: 'empty' }, S.offline ? 'Can’t reach the relay.' : !S.loaded && !needsToken ? 'Loading the library…' : 'Nothing in your library matches “' + words + '”.'))
+  }
+  box.replaceChildren(...parts)
+  paintRows()
+  if ($('detail').open) renderDetail()
+}
+
+// ---- Other relays (POST /v1/search/global): asked beside the sources, with the same words, while its chip is on.
+// Answers that arrive later come with an update event, which asks the same query again for 60 s. A result plays
+// from the relay that holds it; nothing is saved here. The relay takes new words from one address every 3 s and
+// refuses them before that, so new words wait their turn here: the reader sees "Asking relays…", never the refusal.
+const RELAYS = 'relays'
+const relaysCan = () => !S.status.privateRouting
+const relaysOn = () => relaysCan() && !sourcesOff().includes(RELAYS)
+const RELAYS_PACE = 3100
+let globalAsk = null // { body, at, sent }
+let globalNew = { key: '', at: 0 }
+let globalTimer = 0
 function globalBody (val) {
   const tt = val.toLowerCase().match(/^(imdb:)?(tt[0-9]+)$/)
   return tt ? { id: 'imdb:' + tt[2] } : { query: val }
 }
 async function askGlobal () {
-  if (!globalAsk || Date.now() - globalAsk.at > 60000) return
-  const r = await api('/v1/search/global', { body: globalAsk.body })
-  renderGlobal(r.results || [])
+  const ask = globalAsk
+  if (!ask || !ask.sent || Date.now() - ask.at > 60000) return
+  const r = await api('/v1/search/global', { body: ask.body })
+  if (ask === globalAsk) renderGlobal(r.results || [])
+}
+function sendGlobal (ask, again) {
+  if (ask !== globalAsk) return
+  ask.sent = true
+  const key = JSON.stringify(ask.body)
+  if (key !== globalNew.key) globalNew = { key, at: Date.now() }
+  askGlobal().catch(err => {
+    if (ask !== globalAsk) return
+    // Another tab, or this page before a reload, asked other words just before: these go once the relay takes them.
+    if (err.status === 429 && !again) {
+      ask.sent = false
+      globalTimer = setTimeout(sendGlobal, RELAYS_PACE, ask, true)
+      return
+    }
+    say('globalMsg', err.message, true)
+  })
 }
 function renderGlobal (rows) {
   say('globalMsg', rows.length ? '' : 'No relay has it yet. Answers can take a few seconds.')
@@ -1862,12 +2159,28 @@ function renderGlobal (rows) {
       }, 'globalMsg') }, 'Play'),
       copyBtn('Copy link', row.magnetUrl)))))
 }
-$('globalForm').onsubmit = ev => {
-  ev.preventDefault()
-  const val = $('globalInput').value.trim()
-  globalAsk = { body: globalBody(val), at: Date.now() }
+function searchRelays (words) {
+  clearTimeout(globalTimer)
+  const on = relaysOn() && Boolean(words)
+  globalAsk = null
+  $('globalWrap').hidden = !on
+  $('globalResults').replaceChildren()
+  if (!on) return
+  // The relays match whole words of two characters or more.
+  if (!plain(words).split(' ').some(w => w.length >= 2)) { say('globalMsg', 'Type at least 2 letters.'); return }
+  const ask = globalAsk = { body: globalBody(words), at: Date.now(), sent: false }
   say('globalMsg', 'Asking relays…')
-  act($('globalBtn'), askGlobal, 'globalMsg')
+  const wait = JSON.stringify(ask.body) === globalNew.key ? 0 : Math.max(0, globalNew.at + RELAYS_PACE - Date.now())
+  globalTimer = setTimeout(sendGlobal, wait, ask)
+}
+function relaysChip () {
+  if (!relaysCan()) return h('button', { class: 'chip', 'data-src': RELAYS, 'aria-disabled': 'true' }, 'Other relays · ', h('span', { class: 'st' }, 'Off with private routing'))
+  const on = relaysOn()
+  return h('button', { class: 'chip', 'data-src': RELAYS, 'aria-pressed': String(on), 'aria-label': 'Search other relays', onclick: () => {
+    setSourceOff(RELAYS, on)
+    renderSourcesStatus()
+    searchRelays(srcRun ? srcRun.query : '')
+  } }, on ? '✓ ' : '', 'Other relays')
 }
 
 // ==== Sources: one search over Soulseek and YouTube, browse a peer's folders, save, port and job legibility ====
@@ -1962,13 +2275,14 @@ function sourceState (name) {
 const sourcesHere = () => SOURCES.map(s => s[0]).filter(n => sourceState(n))
 const sourcesOn = () => sourcesHere().filter(n => sourceState(n).state === 'on')
 function openSourceSetup () {
-  location.hash = '#settings'
-  const until = Date.now() + 3000
-  const find = () => {
-    const card = document.querySelector('.card[data-group="Sources"]')
-    if (card) { card.scrollIntoView({ block: 'start' }); const f = card.querySelector('input'); if (f) f.focus({ preventScroll: true }) } else if (Date.now() < until) setTimeout(find, 100)
-  }
-  setTimeout(find, 0)
+  goPlace('#settings', () => {
+    const until = Date.now() + 3000
+    const find = () => {
+      const card = document.querySelector('.card[data-group="Sources"]')
+      if (card) { card.scrollIntoView({ block: 'start' }); const f = card.querySelector('input'); if (f) f.focus({ preventScroll: true }) } else if (Date.now() < until) setTimeout(find, 100)
+    }
+    find()
+  })
 }
 function sourceChip (name) {
   const st = sourceState(name)
@@ -1993,8 +2307,7 @@ function renderSourceChips () {
   const here = sourcesHere()
   const box = $('srcChips')
   const focused = box.contains(document.activeElement) ? document.activeElement.dataset.src : ''
-  $('srcIn').hidden = here.length < 2
-  box.replaceChildren(...here.map(sourceChip))
+  box.replaceChildren(...here.map(sourceChip), relaysChip())
   // Redrawn every second while a mirror runs: focus comes back without scrolling, or the page jumps to the chips.
   if (focused) { const again = box.querySelector('[data-src="' + focused + '"]'); if (again) again.focus({ preventScroll: true }) }
   const on = sourcesOn()
@@ -2002,8 +2315,9 @@ function renderSourceChips () {
   $('srcHint').textContent = on.length === 2 ? 'Finds albums on peers and tracks on YouTube.'
     : on[0] === 'soulseek' ? 'Finds albums on peers and mirrors them here.'
       : on[0] === 'youtube' ? 'Finds YouTube videos and saves their audio here.'
-        : usable.length ? 'Pick a source to search.'
-          : here.some(n => sourceState(n).state === 'setup') ? 'Set up a source in Settings to search.' : 'No search source works on this device.'
+        : relaysOn() ? 'Finds titles that other relays hold.'
+          : usable.length ? 'Pick a source to search.'
+            : here.some(n => sourceState(n).state === 'setup') ? 'Set up a source in Settings to search.' : 'No search source works on this device.'
   const notes = here.map(n => sourceState(n).note).filter(Boolean)
   $('srcNote').hidden = !notes.length
   $('srcNote').replaceChildren(...notes.map(t => h('div', null, t)))
@@ -2049,7 +2363,7 @@ async function searchSources (query, names) {
   }
   const run = srcRun
   const list = names || sourcesOn()
-  if (!list.length) { say('srcMsg', 'Pick a source to search.', true); renderSrcGroups(); return }
+  if (!list.length) { say('srcMsg', relaysOn() ? '' : 'Pick a source to search.', !relaysOn()); renderSrcGroups(); return }
   const ask = ++srcAsks
   for (const n of list) run.groups.set(n, { state: 'pending', started: Date.now(), ask, results: [], truncated: false, error: null })
   renderSrcGroups(list, [run, 'Searching ' + list.map(sourceLabel).join(' and ') + ' for “' + query + '”.'])
@@ -2116,12 +2430,11 @@ function srcTick () {
 }
 $('srcForm').onsubmit = ev => {
   ev.preventDefault()
-  const query = $('srcInput').value.trim()
+  const query = findWords()
   if (!query) return
-  try { localStorage.setItem('peartube.srcQuery', query) } catch {}
   searchSources(query)
+  searchRelays(query)
 }
-try { $('srcInput').value = localStorage.getItem('peartube.srcQuery') || '' } catch {}
 
 // ---- Groups: one section per source in SOURCES order; only the named ones are redrawn, so a row being pressed in
 // one group is not rebuilt when the other answers. An answer that lands while a press is in progress waits for it to
@@ -3012,7 +3325,7 @@ function renderSrcJobs () {
 }
 function renderMirrors () {
   renderPills()
-  if (tab === 'music') renderSourcesStatus()
+  if (tab === 'find') renderSourcesStatus()
 }
 // Cheap and independent of the full refresh, which holds still while a film plays. When the last mirror ends, one
 // full refresh loads the new album's tracks so its card can open it.
@@ -3972,7 +4285,8 @@ function renderSharing () {
       stat(String(st.lanPeers || 0), lan ? 'nearby on ' + lan.host : 'nearby'),
       stat(st.privateRouting ? String((routes.private && routes.private.peers) || 0) : 'Off', 'private routing'),
       stat(st.privateGuard ? String(st.privateGuard.activeCircuits || 0) : 'Off', 'guard circuits'),
-      stat(rate(st.upBps), 'sending now')),
+      stat(rate(st.upBps), 'sending now'),
+      stat(rate(st.downBps), 'receiving now')),
     S.settings ? h('div', { style: 'margin-top:12px' }, switchRow('Find peers on this network', sval('lan'), on => saveSettings({ lan: on }), { note: envNote('lan') })) : null)
 
   const rep = plugin('p2p-replicate')
@@ -5754,6 +6068,7 @@ function applyTheme (mode) {
   if (!t) return
   t.setAttribute('aria-label', themeLabel(mode))
   t.title = themeLabel(mode) + ' — click to change'
+  t.querySelector('.theme-word').textContent = themeLabel(mode)
 }
 applyTheme(document.documentElement.dataset.theme || 'system')
 $('themeToggle').onclick = () => {

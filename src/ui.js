@@ -26,17 +26,17 @@ export const page = `<!doctype html>
      Brand: violet (#9147ff) — the Mac, Android and TV surfaces already wear it. */
   :root { color-scheme: dark; --bg:#08090c; --surface:#101218; --raised:#171a22; --line:#232733; --text:#f2f4f8; --dim:#98a0b3;
     --brand:#9147ff; --brand-hover:#a866ff; --brand-soft:rgba(145,71,255,.16); --ring:#b98bff; --on-brand:#fff;
-    --ok:#45d08a; --warn:#e8b45c; --bad:#ff7d7d; --focus:var(--ring); --live:#e11d48;
+    --ok:#45d08a; --warn:#e8b45c; --bad:#ff7d7d; --focus:var(--ring);
     --on-media:#f7f8fb; --on-media-dim:rgba(247,248,251,.74); --on-media-line:rgba(255,255,255,.3);
     --s1:4px; --s2:8px; --s3:12px; --s4:16px; --s5:24px; --s6:32px; --s7:48px;
     --r-control:10px; --r-card:14px; --r-panel:18px; --r-pill:999px;
     --t-fast:120ms; --t-base:160ms; --ease:cubic-bezier(.2,.8,.2,1); }
   html[data-theme='light'] { color-scheme: light; --bg:#f7f8fa; --surface:#fff; --raised:#eef1f6; --line:#e3e7ee; --text:#0d1016; --dim:#5b6475;
     --brand:#7c3aed; --brand-hover:#6d28d9; --brand-soft:rgba(124,58,237,.12); --ring:#7c3aed;
-    --ok:#127a48; --warn:#8a5200; --bad:#b3261e; --live:#be123c; }
+    --ok:#127a48; --warn:#8a5200; --bad:#b3261e; }
   @media (prefers-color-scheme: light) { html[data-theme='system'], html:not([data-theme]) { color-scheme: light; --bg:#f7f8fa; --surface:#fff; --raised:#eef1f6; --line:#e3e7ee; --text:#0d1016; --dim:#5b6475;
     --brand:#7c3aed; --brand-hover:#6d28d9; --brand-soft:rgba(124,58,237,.12); --ring:#7c3aed;
-    --ok:#127a48; --warn:#8a5200; --bad:#b3261e; --live:#be123c; } }
+    --ok:#127a48; --warn:#8a5200; --bad:#b3261e; } }
   * { box-sizing: border-box; }
   [hidden] { display: none !important; }
   body { margin: 0; font: 15px/1.5 system-ui, -apple-system, 'Segoe UI', sans-serif; letter-spacing: -0.005em; -webkit-font-smoothing: antialiased; background: var(--bg); color: var(--text); }
@@ -97,27 +97,21 @@ export const page = `<!doctype html>
   .page-title { font-size: 24px; font-weight: 700; letter-spacing: -0.02em; line-height: 1.2; margin: 8px 0 20px; }
   .room-ctl { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; min-height: 34px; margin-bottom: 24px; }
   .room-ctl > .count { margin-left: auto; color: var(--dim); font-size: 13px; font-variant-numeric: tabular-nums; }
-  .room-ctl.kinds { gap: 8px; }
+  .kinds { display: flex; gap: 8px; flex-wrap: wrap; margin-right: auto; }
+  /* Albums, artists or tracks: one of the three, and always one. */
+  .seg { display: inline-flex; gap: 2px; padding: 3px; border: 1px solid var(--line); border-radius: var(--r-pill); background: var(--surface); }
+  .seg-btn { min-height: 30px; padding: 0 14px; border: 0; border-radius: var(--r-pill); background: transparent; color: var(--dim); font: inherit; font-size: 13px; font-weight: 600; cursor: pointer; transition: background var(--t-fast) var(--ease), color var(--t-fast) var(--ease); }
+  .seg-btn:hover { color: var(--text); }
+  .seg-btn[aria-pressed='true'] { background: var(--raised); color: var(--text); }
+  .seg-btn:focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; }
+  .field.filter { max-width: 420px; margin: -8px 0 18px; }
   .row-head { display: flex; align-items: baseline; gap: 12px; margin: 0 0 14px; }
   .row-head h2, .row-head h3 { margin: 0; }
   .row-head h3 { font-size: 17px; font-weight: 700; letter-spacing: -0.01em; }
   .row-head .count { color: var(--dim); font-size: 13px; font-variant-numeric: tabular-nums; }
   .row-all { margin-left: auto; padding: 6px 0; color: var(--dim); font-size: 13px; font-weight: 600; text-decoration: none; }
   .row-all:hover { color: var(--text); }
-  /* Home shows one line of video: the tiles that do not fit are left out, not wrapped or cut. */
   .home-row { margin-bottom: 40px; }
-  .home-row .grid { grid-template-columns: repeat(7, minmax(0, 1fr)); }
-  .home-row .grid > :nth-child(n+8) { display: none; }
-  @media (max-width: 1279px) { .home-row .grid { grid-template-columns: repeat(6, minmax(0, 1fr)); } .home-row .grid > :nth-child(n+7) { display: none; } }
-  @media (max-width: 1023px) { .home-row .grid { grid-template-columns: repeat(5, minmax(0, 1fr)); } .home-row .grid > :nth-child(n+6) { display: none; } }
-  @media (max-width: 799px) { .home-row .grid { grid-template-columns: repeat(4, minmax(0, 1fr)); } .home-row .grid > :nth-child(n+5) { display: none; } }
-  @media (max-width: 640px) {
-    .home-row { margin-bottom: 28px; }
-    .home-row .grid { grid-template-columns: none; grid-auto-flow: column; grid-auto-columns: 132px; margin: 0 -16px; padding: 0 16px; scroll-padding: 0 16px; overflow-x: auto; scrollbar-width: none; scroll-snap-type: x proximity; }
-    .home-row .grid::-webkit-scrollbar { display: none; }
-    .home-row .grid > :nth-child(n) { display: flex; scroll-snap-align: start; }
-    .home-row .album-list > :nth-child(n+5) { display: none; }
-  }
   .find-idle { color: var(--dim); margin: 8px 0 0; }
   #findLib > h2:first-child { margin-top: 8px; }
   .find-group { margin-bottom: 28px; }
@@ -184,47 +178,63 @@ export const page = `<!doctype html>
   .tile-progress { position: absolute; left: 8px; right: 8px; bottom: 8px; height: 3px; border-radius: 2px; background: rgba(255,255,255,.28); overflow: hidden; }
   .tile-progress > span { display: block; height: 100%; background: var(--brand); border-radius: 2px; }
   .more { grid-column: 1 / -1; display: flex; justify-content: center; padding: 12px; }
-  /* Browse face: one hero, landscape rails, posters underneath — Netflix shape, YouTube rows,
-     torrent truth kept in the meta line instead of the layout. */
-  #resumeWrap, #liveWrap { margin-bottom: 40px; }
-  #resumeWrap h2, #liveWrap h2 { margin-top: 0; }
-  #hero { position: relative; overflow: hidden; border-radius: var(--r-panel); border: 1px solid var(--line); min-height: 372px; display: flex; align-items: flex-end; margin-bottom: 40px; background: linear-gradient(135deg, var(--raised), var(--surface)); }
-  #hero.no-art { min-height: 236px; }
-  #hero.no-art .hero-scrim { background: none; }
-  .hero-art { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
-  .hero-scrim { position: absolute; inset: 0; background: linear-gradient(90deg, rgba(4,5,8,.95) 0%, rgba(4,5,8,.86) 34%, rgba(4,5,8,.16) 70%, rgba(4,5,8,.55) 100%); }
-  .hero-body { position: relative; padding: 32px; display: flex; flex-direction: column; gap: 12px; max-width: 640px; }
-  .hero-logo { max-width: 320px; max-height: 96px; object-fit: contain; object-position: left bottom; filter: drop-shadow(0 6px 24px rgba(0,0,0,.6)); margin-bottom: 2px; }
-  .hero-title { font-size: 40px; font-weight: 800; letter-spacing: -0.02em; line-height: 1.06; margin: 0; color: var(--on-media); }
-  .hero-meta { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; color: var(--on-media-dim); font-size: 13.5px; }
-  .hero-progress { display: flex; align-items: center; gap: 12px; max-width: 360px; }
-  .hero-progress .bar-track { flex: 1; margin-top: 0; background: rgba(255,255,255,.24); }
-  .hero-progress span { color: var(--on-media-dim); font-size: 12px; font-variant-numeric: tabular-nums; white-space: nowrap; }
-  .hero-actions { display: flex; gap: 10px; margin-top: 4px; }
-  #hero .eyebrow { font-size: 11px; font-weight: 700; letter-spacing: .1em; text-transform: uppercase; color: var(--on-media-dim); }
-  .hero-actions .btn.ghost { color: var(--on-media); border-color: var(--on-media-line); background: rgba(255,255,255,.10); }
-  .dot { width: 3px; height: 3px; border-radius: 50%; background: currentColor; opacity: .55; }
-  .rail { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 12px; }
-  .r-card { position: relative; display: block; padding: 0; border: 0; border-radius: var(--r-card); overflow: hidden; aspect-ratio: 16 / 9; background: var(--raised); box-shadow: 0 0 0 1px var(--line); cursor: pointer; text-align: left; color: inherit; font: inherit; transition: transform var(--t-base) var(--ease), box-shadow var(--t-base) var(--ease); }
-  .r-card > img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; opacity: .92; }
-  .r-card .wash { position: absolute; inset: 0; background: linear-gradient(0deg, rgba(4,5,8,.94) 0%, rgba(4,5,8,.18) 58%, rgba(4,5,8,0) 100%); }
-  .r-body { position: absolute; left: 0; right: 0; bottom: 0; padding: 10px 12px; display: flex; flex-direction: column; gap: 1px; }
-  .r-title { font-size: 13px; font-weight: 600; color: var(--on-media); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .r-meta { font-size: 11.5px; color: var(--on-media-dim); font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .r-track { position: absolute; left: 0; right: 0; bottom: 0; height: 3px; background: rgba(255,255,255,.22); }
-  .r-track > div { height: 100%; background: var(--brand); }
-  .r-card:hover { transform: translateY(-3px); box-shadow: 0 18px 36px rgba(0,0,0,.45), 0 0 0 1px color-mix(in srgb, var(--ring) 40%, transparent); }
-  .r-card:focus-visible { outline: 2px solid var(--ring); outline-offset: 3px; }
-  .badge.live { display: inline-flex; align-items: center; gap: 5px; background: var(--live); color: #fff; border: 0; align-self: flex-start; margin-bottom: 2px; }
-  .badge.live::before { content: ''; width: 5px; height: 5px; border-radius: 50%; background: #fff; }
-  .r-card.live .r-track { display: none; }
-  #detail, #ytSave { width: min(760px, calc(100% - 24px)); max-height: calc(100% - 48px); padding: 0; border: 1px solid var(--line); border-radius: var(--r-panel); background: var(--surface); color: var(--text); box-shadow: 0 40px 90px rgba(0,0,0,.5); }
-  #detail::backdrop, #ytSave::backdrop { background: color-mix(in srgb, #05060a 72%, transparent); backdrop-filter: blur(6px); }
-  #detail .bar { padding: 14px 14px 0 22px; justify-content: flex-end; }
-  #detailBody { padding: 0 22px 22px; }
-  .detail-head { display: flex; gap: 20px; align-items: flex-start; margin-bottom: 20px; }
-  .detail-head .poster { width: 128px; height: 192px; font-size: 40px; border-radius: var(--r-card); }
-  .detail-head h3 { font-size: 24px; font-weight: 700; letter-spacing: -0.015em; line-height: 1.2; margin: 2px 0 8px; }
+  /* ==== Keep playing: the newest unfinished thing large, the others beside it ==== */
+  #keepWrap { margin-bottom: 40px; }
+  .keep { display: grid; grid-template-columns: minmax(0, 620px) minmax(0, 1fr); gap: 24px; align-items: start; }
+  .keep.alone { grid-template-columns: minmax(0, 620px); }
+  .keep-big { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+  .keep-face { display: block; padding: 0; border: 0; background: none; cursor: pointer; border-radius: var(--r-panel); overflow: hidden; box-shadow: 0 0 0 1px var(--line); transition: box-shadow var(--t-base) var(--ease); }
+  .keep-face:hover { box-shadow: 0 22px 44px rgba(0,0,0,.45), 0 0 0 1px color-mix(in srgb, var(--ring) 40%, transparent); }
+  .keep-art { position: relative; display: block; width: 100%; aspect-ratio: 16 / 9; overflow: hidden; background: var(--raised); }
+  .keep-art.square { aspect-ratio: 1; }
+  .keep-art > img, .keep-art > .sleeve, .keep-art > .wide-art { position: absolute; inset: 0; width: 100%; height: 100%; border-radius: 0; }
+  .keep-big .sleeve-mono { font-size: 64px; }
+  .keep-foot { display: flex; align-items: center; gap: 12px; min-width: 0; }
+  .keep-name { font-weight: 650; font-size: 15px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .keep-sub { color: var(--dim); font-size: 12.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .keep-rows { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+  .keep-row { display: flex; align-items: center; gap: 12px; padding: 8px; border: 1px solid transparent; border-radius: var(--r-card); background: none; color: inherit; font: inherit; text-align: left; cursor: pointer; }
+  .keep-row:hover { background: var(--surface); border-color: var(--line); }
+  .keep-row .keep-art { flex: none; width: 128px; border-radius: 10px; }
+  .keep-row .keep-art.square { width: 72px; }
+  .keep-row .sleeve-mono { font-size: 24px; }
+  .keep-row .grow { display: flex; flex-direction: column; gap: 2px; }
+  /* ==== A page of its own: one album, one artist, one title. The art stays in view beside what it is about. ==== */
+  .page-bar { display: flex; margin: 0 0 10px -8px; }
+  .page { display: grid; grid-template-columns: 300px minmax(0, 860px); column-gap: 32px; align-items: start; }
+  .page-art { grid-column: 1; grid-row: 1 / span 3; position: sticky; top: 88px; }
+  .page-head, .page-acts, .page-body { grid-column: 2; min-width: 0; }
+  .page.wide { grid-template-columns: minmax(0, 1fr); }
+  .page.wide .page-head, .page.wide .page-acts, .page.wide .page-body { grid-column: 1; }
+  .page-acts { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin: 18px 0 6px; }
+  .page-acts .btn.primary { min-width: 128px; }
+  .page-body { padding-top: 14px; }
+  .eyebrow { font-size: 11px; font-weight: 700; letter-spacing: .1em; text-transform: uppercase; color: var(--dim); margin-bottom: 6px; }
+  .page-title.big { font-size: 32px; line-height: 1.15; margin: 0 0 6px; }
+  .page-by { display: inline-block; margin-bottom: 6px; color: var(--text); font-weight: 600; font-size: 15px; text-decoration: none; }
+  .page-by:hover { text-decoration: underline; }
+  .page-by.dim { color: var(--dim); font-weight: 500; }
+  .facts { color: var(--dim); font-size: 13px; line-height: 1.5; }
+  .facts.quiet { font-size: 12.5px; }
+  .facts:empty { display: none; }
+  .tag-row { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
+  .sec-head { font-size: 15px; font-weight: 700; margin: 26px 0 8px; }
+  .page-body > .sec-head:first-child { margin-top: 0; }
+  .seasons { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 14px; }
+  .ep-name { color: var(--dim); font-weight: 500; margin-left: 10px; }
+  .btn.dots { min-width: 38px; padding: 0; font-size: 19px; line-height: 1; }
+  .menu.wide { min-width: 232px; }
+  .title-page .page-art .poster { width: 100%; height: auto; aspect-ratio: 2 / 3; font-size: 56px; border-radius: var(--r-panel); }
+  .wide-art { position: relative; display: flex; align-items: center; justify-content: center; width: 100%; aspect-ratio: 16 / 9; overflow: hidden; border-radius: var(--r-card); background: linear-gradient(160deg, var(--raised), var(--line)); }
+  .wide-art > img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+  .wide-art .letter { font-weight: 800; font-size: 34px; color: var(--dim); }
+  .wide-grid { grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); }
+  .tile.wide .wide-art { margin-bottom: 8px; transition: transform var(--t-base) var(--ease), box-shadow var(--t-base) var(--ease); }
+  .tile.wide:hover .wide-art { transform: translateY(-4px); box-shadow: 0 22px 44px rgba(0,0,0,.45); }
+  .tile.wide:focus-visible .wide-art { outline: 2px solid var(--ring); outline-offset: 3px; }
+  a.tile { color: inherit; text-decoration: none; }
+  #ytSave { width: min(760px, calc(100% - 24px)); max-height: calc(100% - 48px); padding: 0; border: 1px solid var(--line); border-radius: var(--r-panel); background: var(--surface); color: var(--text); box-shadow: 0 40px 90px rgba(0,0,0,.5); }
+  #ytSave::backdrop { background: color-mix(in srgb, #05060a 72%, transparent); backdrop-filter: blur(6px); }
   .rows { display: flex; flex-direction: column; }
   .row-item { display: flex; gap: 12px; align-items: center; padding: 12px 0; border-top: 1px solid var(--line); }
   #detail .meta, #ytSave .meta { white-space: normal; font-size: 13px; line-height: 1.5; }
@@ -274,7 +284,6 @@ export const page = `<!doctype html>
   #castBar .name { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   #toast { position: fixed; left: 50%; transform: translateX(-50%); bottom: calc(84px + var(--nav-h)); z-index: 50; background: var(--text); color: var(--bg); padding: 10px 16px; border-radius: 10px; font-size: 14px; max-width: calc(100% - 24px); }
   .vh { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
-  @media (max-width: 1100px) { .rail { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
   @media (max-width: 640px) {
     :root { --nav-h: calc(56px + env(safe-area-inset-bottom, 0px)); }
     .bar { padding: 0 8px 0 16px; min-height: 56px; gap: 8px; }
@@ -292,13 +301,15 @@ export const page = `<!doctype html>
     .rooms a[aria-current='page']::after { display: none; }
     .rooms .ti { display: block; width: 22px; height: 22px; }
     .rooms .narrow-only { display: flex; }
-    #hero { min-height: 300px; }
-    .hero-body { padding: 18px; gap: 8px; }
-    .hero-title { font-size: 26px; letter-spacing: -0.015em; }
-    .hero-logo { max-width: 190px; max-height: 58px; }
-    .hero-meta { font-size: 12px; gap: 7px; }
-    .rail { display: flex; overflow-x: auto; gap: 10px; scrollbar-width: none; padding-bottom: 2px; }
-    .rail .r-card { flex: 0 0 214px; }
+    .keep { grid-template-columns: minmax(0, 1fr); gap: 14px; }
+    .keep-row .keep-art { width: 112px; }
+    .keep-row .keep-art.square { width: 64px; }
+    .page { grid-template-columns: 112px minmax(0, 1fr); column-gap: 14px; }
+    .page-art { grid-row: 1; position: static; }
+    .page-acts, .page-body { grid-column: 1 / -1; }
+    .page-acts .btn.primary { flex: 1; }
+    .page-title.big { font-size: 22px; }
+    .wide-grid { grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); }
     .bar-right { flex: 1 1 0; min-width: 0; gap: 4px; justify-content: flex-end; }
     .pills { flex: 0 1 auto; min-width: 0; overflow-x: auto; scrollbar-width: none; }
     .pills::-webkit-scrollbar { display: none; }
@@ -312,7 +323,7 @@ export const page = `<!doctype html>
     .setting .control { max-width: none; }
     .grid { grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 20px 10px; }
     .tile .poster { font-size: 28px; }
-    .detail-head .poster { width: 96px; height: 144px; font-size: 30px; }
+    .title-page .page-art .poster { font-size: 34px; }
     .p-top { flex-wrap: wrap; }
     #playerModal .p-head { flex-basis: 100%; }
     #playerModal .p-title { white-space: normal; }
@@ -445,39 +456,42 @@ export const page = `<!doctype html>
     #playerModal:not(.mini) .p-bar select { max-width: 42vw; }
     #playerModal.mini { right: 12px; bottom: calc(12px + var(--nav-h)); }
   }
-  /* ==== Music library ==== */
+  /* ==== Music: sleeves, the album grid, artists and track rows ==== */
   .sleeve { position: relative; flex: none; width: 64px; height: 64px; border-radius: 8px; display: flex; align-items: center; justify-content: center; overflow: hidden; color: rgba(255,255,255,.95); box-shadow: inset 0 0 0 1px rgba(255,255,255,.1), 0 1px 3px rgba(0,0,0,.18); }
   .sleeve-mono { font-weight: 800; font-size: 24px; letter-spacing: -0.03em; line-height: 1; text-shadow: 0 2px 12px rgba(0,0,0,.28); }
   .sleeve-img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
   .shelf { display: flex; flex-direction: column; gap: 28px; }
   .shelf > .empty { padding: 24px 0; }
-  .artist-head { display: flex; align-items: baseline; gap: 10px; margin-bottom: 12px; }
-  .artist-head h3 { font-size: 17px; font-weight: 700; letter-spacing: -0.01em; margin: 0; }
-  .artist-head .count { color: var(--dim); font-size: 13px; font-variant-numeric: tabular-nums; }
-  .album-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 10px; }
-  .album-card { display: flex; align-items: center; gap: 10px; padding: 10px 14px 10px 10px; background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-card); transition: border-color var(--t-fast) var(--ease); }
-  .album-card:hover { border-color: color-mix(in srgb, var(--dim) 40%, transparent); }
-  .album-open { flex: 1; min-width: 0; display: flex; align-items: center; gap: 14px; padding: 0; border: 0; background: none; color: inherit; font: inherit; text-align: left; cursor: pointer; border-radius: 8px; }
-  .album-open .sleeve { width: 72px; height: 72px; }
-  .album-text { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
-  .album-name { font-weight: 650; font-size: 15px; line-height: 1.25; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .album-meta { color: var(--dim); font-size: 12.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .album-meta:empty { display: none; }
-  .album-play { flex: none; width: 40px; height: 40px; padding: 0; border-radius: 50%; border: 1px solid var(--line); background: var(--raised); color: var(--text); display: inline-flex; align-items: center; justify-content: center; cursor: pointer; transition: background var(--t-fast) var(--ease), color var(--t-fast) var(--ease), transform var(--t-fast) var(--ease); }
+  .album-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(168px, 1fr)); gap: 24px 16px; }
+  .album-card { position: relative; display: flex; flex-direction: column; min-width: 0; }
+  .album-open { display: flex; flex-direction: column; gap: 2px; min-width: 0; color: inherit; text-decoration: none; }
+  .album-open .sleeve { width: 100%; height: auto; aspect-ratio: 1; border-radius: var(--r-card); margin-bottom: 8px; transition: transform var(--t-base) var(--ease), box-shadow var(--t-base) var(--ease); }
+  .album-open .sleeve-mono { font-size: 44px; }
+  .album-open:hover .sleeve { transform: translateY(-4px); box-shadow: inset 0 0 0 1px rgba(255,255,255,.1), 0 22px 44px rgba(0,0,0,.45); }
+  .album-open:focus-visible { outline: none; }
+  .album-open:focus-visible .sleeve { outline: 2px solid var(--ring); outline-offset: 3px; }
+  .album-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+  .album-name { font-weight: 600; font-size: 14px; line-height: 1.3; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .album-artist { color: var(--dim); font-size: 12.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  /* The cover is square, so its height is the card's own width. A percentage top margin resolves against that
+     width, which hangs the play button over the bottom of the art without measuring anything. */
+  .album-play { position: absolute; right: 8px; top: 0; margin-top: calc(100% - 52px); width: 40px; height: 40px; padding: 0; border-radius: 50%; border: 1px solid var(--line); background: var(--raised); color: var(--text); display: inline-flex; align-items: center; justify-content: center; cursor: pointer; opacity: 0; transition: opacity var(--t-fast) var(--ease), background var(--t-fast) var(--ease), color var(--t-fast) var(--ease); }
   .album-play .btn-ic svg { width: 18px; height: 18px; }
+  .album-card:hover .album-play, .album-play:focus-visible, .album-play:has(.btn-ic.on) { opacity: 1; }
   .album-play:hover, .album-play:has(.btn-ic.on) { background: var(--brand); border-color: var(--brand); color: var(--on-brand); }
-  .album-play:hover { transform: scale(1.06); }
-  .detail-head.album-head { display: grid; grid-template-columns: auto minmax(0, 1fr); grid-template-rows: 1fr auto auto; grid-template-areas: 'art title' 'art meta' 'art acts'; column-gap: 20px; row-gap: 0; align-items: end; }
-  .album-head > .sleeve { grid-area: art; }
-  .ah-title { grid-area: title; min-width: 0; }
-  .ah-meta { grid-area: meta; min-width: 0; }
-  .album-head > .album-acts { grid-area: acts; }
-  .sleeve.sleeve-lg { width: 168px; height: 168px; border-radius: var(--r-card); box-shadow: inset 0 0 0 1px rgba(255,255,255,.1), 0 18px 40px rgba(0,0,0,.28); }
-  .sleeve-lg .sleeve-mono { font-size: 64px; }
-  .detail-head.album-head h3 { font-size: 28px; margin: 0 0 4px; }
-  .album-by { font-weight: 600; font-size: 15px; margin-bottom: 4px; }
-  .album-acts { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 14px; }
-  .album-acts .btn.primary { min-width: 116px; }
+  @media (hover: none) { .album-play { opacity: 1; } }
+  .artist-card { display: flex; flex-direction: column; gap: 2px; min-width: 0; color: inherit; text-decoration: none; }
+  .stack { position: relative; display: block; width: 100%; aspect-ratio: 1; margin-bottom: 8px; }
+  .stack .sleeve { position: absolute; width: 84%; height: 84%; border-radius: var(--r-card); transition: transform var(--t-base) var(--ease); }
+  .stack .sleeve-mono { font-size: 34px; }
+  .stack .l0 { left: 0; bottom: 0; z-index: 3; }
+  .stack .l1 { left: 8%; bottom: 8%; z-index: 2; opacity: .78; }
+  .stack .l2 { left: 16%; bottom: 16%; z-index: 1; opacity: .56; }
+  .artist-card:hover .l0 { transform: translateY(-4px); }
+  .artist-card:focus-visible { outline: none; }
+  .artist-card:focus-visible .stack { outline: 2px solid var(--ring); outline-offset: 3px; border-radius: var(--r-card); }
+  .sleeve.xl { width: 100%; height: auto; aspect-ratio: 1; border-radius: var(--r-panel); box-shadow: inset 0 0 0 1px rgba(255,255,255,.1), 0 24px 50px rgba(0,0,0,.34); }
+  .sleeve.xl .sleeve-mono { font-size: 84px; }
   .disc-head { font-size: 12px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; color: var(--dim); margin: 18px 0 6px; }
   .rows.tracks .row-item { gap: 12px; padding: 6px 8px; border-top: 0; border-radius: var(--r-control); cursor: pointer; }
   .rows.tracks .row-item:hover { background: var(--raised); }
@@ -492,6 +506,18 @@ export const page = `<!doctype html>
   .rows.tracks .track-play.on .i-pause { display: block; }
   .rows.tracks .row-item:hover .track-play, .rows.tracks .row-item.now .track-play { color: var(--text); background: transparent; }
   .rows.tracks .row-item.now .track-play { color: var(--ring); }
+  /* A track away from its album: the name is the button, and the play sign stands quietly in front of it. */
+  .rows.tracks.flat .row-item { display: grid; grid-template-columns: minmax(0, 2.2fr) minmax(0, 1fr) minmax(0, 1.2fr); gap: 12px; align-items: center; padding: 0 8px; }
+  .rows.tracks .track-play.flat { width: auto; height: auto; min-height: 42px; justify-content: flex-start; gap: 10px; padding: 0; color: var(--text); font-size: 14.5px; }
+  .rows.tracks .track-play.flat svg { flex: none; }
+  .rows.tracks.flat .track-play .i-play { display: block; opacity: .5; }
+  .rows.tracks.flat .row-item:hover .track-play .i-play, .rows.tracks.flat .row-item.now .track-play .i-play { opacity: 1; }
+  .rows.tracks.flat .track-play.on .i-play { display: none; }
+  .rows.tracks.flat .track-play.on .i-pause { display: block; }
+  .track-name { min-width: 0; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .track-by { color: var(--dim); font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .track-of { color: var(--dim); font-size: 13px; text-decoration: none; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .track-of:hover { color: var(--text); text-decoration: underline; }
   .track-dur { flex: none; min-width: 42px; text-align: right; color: var(--dim); font-size: 13px; font-variant-numeric: tabular-nums; }
   .track-dl { flex: none; width: 32px; height: 32px; display: inline-flex; align-items: center; justify-content: center; border-radius: 8px; color: var(--dim); opacity: 0; transition: opacity var(--t-fast) var(--ease); }
   .track-dl svg { width: 18px; height: 18px; }
@@ -499,17 +525,43 @@ export const page = `<!doctype html>
   .track-dl:hover { color: var(--text); background: var(--surface); }
   @media (hover: none) { .track-dl { opacity: 1; } }
   @media (max-width: 640px) {
-    .album-list { grid-template-columns: minmax(0, 1fr); gap: 8px; }
-    .album-open .sleeve { width: 56px; height: 56px; }
-    .album-open .sleeve-mono { font-size: 20px; }
-    .detail-head.album-head { grid-template-columns: 108px minmax(0, 1fr); grid-template-rows: auto auto auto; grid-template-areas: 'art title' 'meta meta' 'acts acts'; column-gap: 14px; }
-    .album-head > .sleeve { margin-bottom: 12px; }
-    .ah-title { align-self: center; margin-bottom: 12px; }
-    .sleeve.sleeve-lg { width: 108px; height: 108px; }
-    .sleeve-lg .sleeve-mono { font-size: 40px; }
-    .detail-head.album-head h3 { font-size: 21px; }
-    .album-acts .btn.primary { flex: 1; }
+    .album-grid { grid-template-columns: repeat(auto-fill, minmax(132px, 1fr)); gap: 18px 10px; }
+    .album-open .sleeve-mono { font-size: 34px; }
+    .sleeve.xl { border-radius: var(--r-card); }
+    .sleeve.xl .sleeve-mono { font-size: 40px; }
     .rows.tracks .row-item { gap: 8px; padding: 6px 4px; }
+    .rows.tracks.flat .row-item { grid-template-columns: minmax(0, 1fr) minmax(0, .8fr); padding: 0 4px; }
+    .rows.tracks.flat .track-by { display: none; }
+  }
+  /* Home shows one line of each room: the tiles that do not fit are left out, not wrapped or cut. These rules
+     come after every grid they narrow, and name both classes, so neither order nor weight can undo them. */
+  .grid.row-grid, .album-grid.row-grid { grid-template-columns: repeat(7, minmax(0, 1fr)); }
+  .row-grid > :nth-child(n+8) { display: none; }
+  .wide-grid.row-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+  .wide-grid.row-grid > :nth-child(n+5) { display: none; }
+  @media (max-width: 1279px) {
+    .grid.row-grid, .album-grid.row-grid { grid-template-columns: repeat(6, minmax(0, 1fr)); }
+    .row-grid > :nth-child(n+7) { display: none; }
+  }
+  @media (max-width: 1023px) {
+    .grid.row-grid, .album-grid.row-grid { grid-template-columns: repeat(5, minmax(0, 1fr)); }
+    .row-grid > :nth-child(n+6) { display: none; }
+    .wide-grid.row-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+    .wide-grid.row-grid > :nth-child(n+4) { display: none; }
+  }
+  @media (max-width: 799px) {
+    .grid.row-grid, .album-grid.row-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+    .row-grid > :nth-child(n+5) { display: none; }
+    .wide-grid.row-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .wide-grid.row-grid > :nth-child(n+3) { display: none; }
+  }
+  /* Narrow: the row scrolls sideways instead, and every tile of it stays. */
+  @media (max-width: 640px) {
+    .home-row { margin-bottom: 28px; }
+    .grid.row-grid, .album-grid.row-grid, .wide-grid.row-grid { grid-template-columns: none; grid-auto-flow: column; grid-auto-columns: 132px; margin: 0 -16px; padding: 0 16px; scroll-padding-left: 16px; overflow-x: auto; scrollbar-width: none; scroll-snap-type: x proximity; }
+    .wide-grid.row-grid { grid-auto-columns: 220px; }
+    .row-grid::-webkit-scrollbar { display: none; }
+    .row-grid > :nth-child(n) { display: flex; scroll-snap-align: start; }
   }
   /* ==== Sources: Soulseek and YouTube search, save and progress ==== */
   .slsk-port { margin-top: 12px; font-size: 13px; color: var(--dim); line-height: 1.45; overflow-wrap: anywhere; }
@@ -620,9 +672,6 @@ export const page = `<!doctype html>
   .why summary { cursor: pointer; width: max-content; max-width: 100%; }
   .why > div { margin-top: 4px; overflow-wrap: anywhere; }
   .yt-save-acts { position: sticky; bottom: 0; z-index: 2; margin: 12px -22px -22px; padding: 12px 22px 22px; background: var(--surface); border-top: 1px solid var(--line); }
-  .album-meta[data-aq]:not(:empty) { display: flex; }
-  .album-meta .aq-main { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
-  .album-meta .aq-yt { flex: none; white-space: pre; }
   .track-alt-del { display: inline-block; margin-top: 2px; padding: 2px 0; border: 0; background: transparent; color: var(--dim); font: inherit; font-size: 12.5px; text-decoration: underline; text-underline-offset: 2px; cursor: pointer; }
   .track-alt-del:hover { color: var(--text); }
   .track-alt-del.armed { color: var(--bad); }
@@ -713,22 +762,40 @@ export const page = `<!doctype html>
 
   <!-- ==== Home: what is not finished, then a row of music and a row of video ==== -->
   <section id="tab-home" data-panel="home">
-    <section id="hero" hidden></section>
-    <div id="resumeWrap" hidden><h2>Keep playing <span class="count" id="resumeCount"></span></h2><div class="rail" id="resume"></div></div>
-    <div id="liveWrap" hidden><h2>Live <span class="count" id="liveCount"></span></h2><div class="rail" id="live"></div></div>
+    <section id="keepWrap" hidden>
+      <div class="row-head"><h2>Keep playing</h2></div>
+      <div class="keep" id="keep"></div>
+    </section>
     <div id="homeRows"></div>
   </section>
 
   <!-- ==== Listen: the music room ==== -->
   <section id="tab-listen" data-panel="listen" hidden>
-    <div class="room-ctl" id="listenCtl" hidden><span class="count" id="musicCount"></span></div>
+    <div class="room-ctl" id="listenCtl" hidden>
+      <div class="seg" id="listenSeg" role="group" aria-label="Show"></div>
+      <span class="count" id="musicCount"></span>
+      <button class="chip" type="button" id="listenSaved" aria-pressed="false">Saved here</button>
+    </div>
+    <div class="field filter" id="trackFilterWrap" hidden>
+      <label for="trackFilter">Filter tracks</label>
+      <input id="trackFilter" type="search" autocomplete="off" spellcheck="false" placeholder="blue in green">
+    </div>
     <div class="shelf" id="albums"></div>
   </section>
 
   <!-- ==== Watch: the video room ==== -->
   <section id="tab-watch" data-panel="watch" hidden>
-    <div class="room-ctl kinds" id="libKinds" role="group" aria-label="Show" hidden></div>
-    <div class="grid" id="entries"></div>
+    <div class="room-ctl" id="watchCtl" hidden>
+      <div class="kinds" id="libKinds" role="group" aria-label="Show"></div>
+      <button class="chip" type="button" id="watchSaved" aria-pressed="false">Saved here</button>
+    </div>
+    <div id="entries"></div>
+  </section>
+
+  <!-- ==== One album, one artist, one title: a page of its own, under the room it belongs to ==== -->
+  <section id="detail" data-panel="detail" aria-labelledby="detailTitle" hidden>
+    <div class="page-bar"><button class="btn quiet" id="detailClose" type="button">Back</button></div>
+    <div id="detailBody"></div>
   </section>
 
   <!-- ==== Find: one field in the top bar; the library first, then what is outside it ==== -->
@@ -897,10 +964,6 @@ export const page = `<!doctype html>
     <div id="settingsBody"></div>
   </section>
 </main>
-<dialog id="detail" aria-labelledby="detailTitle">
-  <div class="bar"><button class="btn quiet" id="detailClose" type="button">Close</button></div>
-  <div id="detailBody"></div>
-</dialog>
 <dialog id="ytSave" aria-labelledby="ytSaveTitle">
   <form id="ytSaveForm" class="yt-save" novalidate>
     <h3 id="ytSaveTitle" tabindex="-1">Save from YouTube</h3>
@@ -1139,15 +1202,18 @@ const isYt = e => String((e && e.id) || '').startsWith('yt:')
 const setting = key => S.settings && S.settings.settings[key]
 const sval = key => setting(key) ? setting(key).value : undefined
 
-// ---- Places. The address names the place: the rooms (Home, Listen, Watch), Find, Add to library and the relay's
-// own pages. An old link keeps working: #library is Home and #music is Listen. With no place in the address the
-// page opens the room this browser was in last, and Home on a first visit.
-const PLACES = { home: 'Home', listen: 'Listen', watch: 'Watch', find: 'Find', add: 'Add to library', channels: 'Channels', sharing: 'Sharing', tv: 'TV', settings: 'Settings' }
+// ---- Places. The address names the place: the rooms (Home, Listen, Watch), the page of one album, artist or
+// title, Find, Add to library and the relay's own pages. An old link keeps working: #library is Home and #music is
+// Listen. With no place in the address the page opens the room this browser was in last, and Home on a first visit.
+const PLACES = { home: 'Home', listen: 'Listen', watch: 'Watch', album: 'Album', artist: 'Artist', title: 'Title', find: 'Find', add: 'Add to library', channels: 'Channels', sharing: 'Sharing', tv: 'TV', settings: 'Settings' }
 const OLD_PLACES = { library: 'home', music: 'listen' }
 const ROOMS = ['home', 'listen', 'watch']
+// A page of its own belongs to a room: the room stays lit in the bar, and leaving the page returns to it.
+const DETAIL_ROOM = { album: 'listen', artist: 'listen', title: 'watch' }
 const ROOM_KEY = 'peartube-room'
 let tab = 'home'
 let placeArg = ''
+let cameFrom = ''
 function readPlace () {
   const raw = location.hash.slice(1)
   const cut = raw.indexOf('/')
@@ -1188,16 +1254,22 @@ function goPlace (hash, then) {
 }
 function showTab () {
   const place = readPlace()
+  cameFrom = tab
   tab = place.name
   placeArg = place.arg
-  if (ROOMS.includes(tab)) { try { localStorage.setItem(ROOM_KEY, tab) } catch {} }
+  const room = DETAIL_ROOM[tab] || tab
+  if (ROOMS.includes(room)) { try { localStorage.setItem(ROOM_KEY, room) } catch {} }
   const top = enterPlace()
-  for (const a of document.querySelectorAll('[data-tab]')) a.setAttribute('aria-current', a.dataset.tab === tab ? 'page' : 'false')
-  for (const s of document.querySelectorAll('[data-panel]')) s.hidden = s.dataset.panel !== tab
+  for (const a of document.querySelectorAll('[data-tab]')) a.setAttribute('aria-current', a.dataset.tab === room ? 'page' : 'false')
+  for (const s of document.querySelectorAll('[data-panel]')) s.hidden = s.dataset.panel !== (DETAIL_ROOM[tab] ? 'detail' : tab)
   $('placeName').textContent = PLACES[tab]
   document.body.classList.toggle('at-find', tab === 'find')
   setMore(false)
   showFindWords(place.arg)
+  // A page says how well the files it lists stream here, and asks again every 3 s while it is open. Leaving it
+  // stops the asking: nothing polls a page nobody is looking at.
+  if (DETAIL_ROOM[tab]) { if (!infoTimer) infoTimer = setInterval(pollInfo, 3000) }
+  else { clearInterval(infoTimer); infoTimer = 0; infoShown.clear(); infoWatched.clear() }
   if (tab === 'tv') loadCast()
   if (tab === 'settings') renderSettings()
   render()
@@ -1215,8 +1287,11 @@ function setMore (open) {
 }
 $('moreBtn').onclick = () => setMore($('moreBtn').getAttribute('aria-expanded') !== 'true')
 addEventListener('click', ev => { if (!ev.target.closest('.more-wrap')) setMore(false) })
+// Escape closes the menu and gives the button its focus back. The key counts as used, so a page under the menu
+// stays where it is.
 addEventListener('keydown', ev => {
   if (ev.key !== 'Escape' || $('moreBtn').getAttribute('aria-expanded') !== 'true') return
+  ev.preventDefault()
   setMore(false)
   $('moreBtn').focus()
 })
@@ -1274,6 +1349,7 @@ function render () {
   if (tab === 'home') renderHome()
   if (tab === 'listen') renderMusic()
   if (tab === 'watch') renderLibrary()
+  if (DETAIL_ROOM[tab]) renderDetail()
   if (tab === 'find') renderFind()
   if (tab === 'add') renderAdd()
   if (tab === 'channels') renderChannels()
@@ -1488,13 +1564,24 @@ function renderJobs () {
 // numbered from the id, since their titles are usually just the show's name.
 // A replica that has every block holds the file as fully as its owner does.
 const saved = e => e.local || e.cachedBytes >= e.size
+const readableHere = e => Boolean(e && !e.private && !e.locked && saved(e))
 const where = e => saved(e) ? 'Saved here' : e.cachedBytes ? 'Partly saved' : 'On the network'
 function sourceName (key) {
   const s = (S.sources.sources || []).find(x => x.key === key)
   if (!s || s.writable) return ''
   return s.alias || (s.kind === 'channel' ? 'Channel ' : 'Tracker ') + short(s.key)
 }
+// Grouping every entry is the most expensive thing this page does, and Home, both rooms, Find, the music bar and
+// every page ask for it many times in one frame. The answer stands until a refresh replaces the entries themselves.
+let tilesFrom = null
+let tilesCache = []
 function libraryTiles () {
+  if (tilesFrom === S.entries) return tilesCache
+  tilesFrom = S.entries
+  tilesCache = buildTiles()
+  return tilesCache
+}
+function buildTiles () {
   const tiles = new Map()
   for (const e of S.entries) {
     const m = e.id.match(/^imdb:(tt[0-9]+)(?::s([0-9]+)e([0-9]+))?$/)
@@ -1613,7 +1700,7 @@ function tileLine (t) {
   if (t.kind === 'album') {
     const discs = new Set(t.items.map(i => i.season)).size
     // Size, not length: a length is known only once every track's header is read, and a shelf where some cards
-    // say minutes and others megabytes reads as noise. The sheet says both.
+    // say minutes and others megabytes reads as noise. The album's own page says both.
     return [(discs > 1 ? plural(discs, 'disc', 'discs') + ' · ' : '') + plural(n, 'track', 'tracks'), size(t.items.reduce((sum, i) => sum + (i.e.size || 0), 0))].join(' · ')
   }
   const e = t.items[0].e
@@ -1667,14 +1754,12 @@ function albumArt (t, cls) {
   albumCover(t).then(src => { if (src) box.append(h('img', { class: 'sleeve-img', alt: '', src })) })
   return box
 }
-// The first front cover (or, failing one, the first picture) among the album's first few saved tracks. Only files
-// held here are read, so looking for a picture never asks the network for a title; four tracks bound the cost of an
-// album that carries none to four small reads.
+// Try four public files that this relay holds. A missing cover is not a reason to open a private or remote file.
 const covers = new Map() // tile key -> Promise of an object URL or null
 function albumCover (t) {
   if (!covers.has(t.key)) {
     covers.set(t.key, (async () => {
-      for (const i of t.items.filter(x => saved(x.e) && x.e.streamUrl).slice(0, 4)) {
+      for (const i of t.items.filter(x => readableHere(x.e) && x.e.streamUrl).slice(0, 4)) {
         const src = await flacPicture(i.e).catch(() => null)
         if (src) return src
       }
@@ -1729,7 +1814,7 @@ async function flacPicture (e) {
   if (!/^image[/](jpeg|png|webp|gif)$/.test(mime) || p + 4 + length > pick.length) return null
   return URL.createObjectURL(new Blob([pick.subarray(p + 4, p + 4 + length)], { type: mime }))
 }
-// The album's running time, once every track's header has been read (the sheet reads them all); 0 until then.
+// The album's running time, once every track's header has been read (its page reads them all); 0 until then.
 function albumSecs (t) {
   let secs = 0
   for (const i of t.items) {
@@ -1740,42 +1825,18 @@ function albumSecs (t) {
   return secs
 }
 // What a copy of the album is: "FLAC 24-bit 44.1 kHz". The full verdict (bitrate, "lossless container") is the
-// album sheet's; this is the one fact a listener sorts a shelf by. The shelf reads one track's header per album,
-// and once a sheet has read them all it says what most tracks are.
+// album page's; this is the one fact a listener sorts a shelf by. The shelf reads one track's header per album,
+// and once a page has read them all it says what most tracks are.
 function shortQuality (d) {
   const a = d && d.media && (d.media.audio || [])[0]
   if (!a) return ''
   return [a.codec, a.depth ? a.depth + '-bit' : '', a.rate ? (a.rate / 1000) + ' kHz' : ''].filter(Boolean).join(' ')
 }
-// What a copy is, for the shelf, the sheet and a track's line: a YouTube copy is named by where it came from.
+// What a copy is, for a card, an album's page and a track's line: a YouTube copy is named by where it came from.
 const copyQuality = (e, d) => isYt(e) ? YT_LABEL : shortQuality(d)
 // An album that holds a YouTube copy beside another one (rows playing it, or kept as a second copy of a row).
 const hasYt = t => t.items.some(i => isYt(i.e) || (i.alts || []).some(isYt))
 const allYt = t => t.items.every(i => isYt(i.e) && !(i.alts || []).some(a => !isYt(a)))
-// One read per album at a time: the card is painted when it lands, and asked again on a later draw if it did not.
-const qualityAsked = new Set()
-function albumQuality (t) {
-  const e = (t.items.find(i => !isYt(i.e)) || t.items[0]).e
-  if (isYt(e) || infoData.has(e.key)) return commonQuality(t)
-  if (qualityAsked.has(e.key)) return ''
-  qualityAsked.add(e.key)
-  infoEntries.set(e.key, e)
-  loadInfo(e.key).then(() => {
-    qualityAsked.delete(e.key)
-    if (!infoData.has(e.key)) return
-    for (const line of document.querySelectorAll('[data-aq]')) if (line.dataset.aq === t.key) line.replaceChildren(...albumLine(t))
-  })
-  return ''
-}
-// Saved here is the normal state of a mirrored album, so it is said only when it is not true. An album that also
-// holds a YouTube copy says so after what most of it is; on a narrow card the quality is cut, never "also YouTube".
-function albumLine (t) {
-  const [state, tone] = tileState(t)
-  const q = albumQuality(t)
-  const main = [tone === 'ok' ? '' : state, q].filter(Boolean).join(' · ')
-  const yt = hasYt(t) && !allYt(t) && q !== YT_LABEL ? 'also YouTube' : ''
-  return [main ? h('span', { class: 'aq-main' }, main) : null, yt ? h('span', { class: 'aq-yt' }, (main ? ' · ' : '') + yt) : null].filter(Boolean)
-}
 function albumPlayBtn (t) {
   const list = t.items.map(i => i.e).filter(e => !e.locked)
   if (!list.length) return null
@@ -1785,31 +1846,39 @@ function albumPlayBtn (t) {
   b.append(ic)
   return b
 }
+// One card: the album's own cover, its name and who made it. The same card stands in the Listen grid, in a Home
+// row and in Find. What a copy is made of belongs on the album's page, not on sixty cards: a shelf that read one
+// file header per album asked the relay for sixty headers to draw a wall of small print nobody reads.
 function albumCard (t) {
   return h('div', { class: 'album-card', 'data-tile': t.key },
-    h('button', { class: 'album-open', onclick: () => openDetail(t.key) },
+    h('a', { class: 'album-open', href: '#album/' + encodeURIComponent(t.key) },
       albumArt(t),
       h('span', { class: 'album-text' },
         h('span', { class: 'album-name' }, t.album),
-        h('span', { class: 'album-meta' }, tileLine(t)),
-        h('span', { class: 'album-meta', 'data-aq': t.key }, ...albumLine(t)))),
+        h('span', { class: 'album-artist' }, t.artist || 'Unknown artist'))),
     albumPlayBtn(t))
 }
-// The Music view is a shelf per artist, not a wall of posters: albums are square, read left to right as name, size
-// and copy, and play from where they sit. Rows fill the width four to a line on a desktop and stack on a phone.
-function renderAlbums (list) {
-  const byArtist = new Map()
-  for (const t of list) {
-    const k = t.artist || 'Unknown artist'
-    if (!byArtist.has(k)) byArtist.set(k, [])
-    byArtist.get(k).push(t)
-  }
-  return [...byArtist].sort((a, b) => a[0].localeCompare(b[0])).map(([artist, albums]) => h('section', { class: 'artist-group' },
-    h('div', { class: 'artist-head' },
-      h('h3', null, artist),
-      h('span', { class: 'count' }, plural(albums.length, 'album', 'albums') + ' · ' + plural(albums.reduce((n, t) => n + t.items.length, 0), 'track', 'tracks'))),
-    h('div', { class: 'album-list' }, albums.sort((a, b) => a.album.localeCompare(b.album)).map(albumCard))))
+// An artist wears the sleeves of up to three of their albums, stacked. Nothing in the system holds a picture of a
+// person, and this page never asks a stranger for one.
+function artistCard (a) {
+  return h('a', { class: 'artist-card', href: '#artist/' + encodeURIComponent(a.name) },
+    h('span', { class: 'stack' }, a.albums.slice(0, 3).map((t, n) => albumArt(t, 'l' + n))),
+    h('span', { class: 'album-text' },
+      h('span', { class: 'album-name' }, a.name),
+      h('span', { class: 'album-artist' }, plural(a.albums.length, 'album', 'albums'))))
 }
+function artistList (albums) {
+  const by = new Map()
+  for (const t of albums) {
+    const name = t.artist || 'Unknown artist'
+    const k = fold(name)
+    if (!by.has(k)) by.set(k, { name, albums: [] })
+    by.get(k).albums.push(t)
+  }
+  return [...by.values()].sort((a, b) => a.name.localeCompare(b.name))
+}
+const albumTracksList = albums => albums.flatMap(t => t.items.map(i => ({ t, i })))
+  .sort((a, b) => trackName(a.i.e).localeCompare(trackName(b.i.e)))
 // Continue watching: where this browser stopped, remembered locally. No protocol change,
 // no relay state; a different browser starts its own list.
 const WATCH_KEY = 'peartube-watch'
@@ -1846,73 +1915,37 @@ function artImg (t, kind, cls) {
   }
   return img
 }
-function playLabel (t, i, w) {
-  const ep = t.kind === 'show' && i.season ? 'S' + i.season + 'E' + String(i.episode).padStart(2, '0') + ' · ' : ''
-  return ep + fmtClock(Math.max(0, w.dur - w.at)) + ' left'
+// Time left, in words: "1 h 36 min left", "31 min left". A clock reading 1:36:12 is a position, not a length.
+function timeLeft (secs) {
+  const m = Math.max(1, Math.round(Math.max(0, secs) / 60))
+  const hrs = Math.floor(m / 60)
+  const mins = m % 60
+  return (hrs ? hrs + ' h' + (mins ? ' ' + mins + ' min' : '') : mins + ' min') + ' left'
 }
-function renderHero (list) {
-  const hero = $('hero')
-  const pick = list[0]
-  if (!pick) { hero.hidden = true; hero.replaceChildren(); return }
-  const { t, i, w, pct } = pick
-  hero.hidden = false
-  hero.classList.toggle('no-art', !t.imdb)
-  const from = sourceName(i.e.source)
-  hero.replaceChildren(
-    artImg(t, 'backdrop', 'hero-art'),
-    h('div', { class: 'hero-scrim' }),
-    h('div', { class: 'hero-body' },
-      h('span', { class: 'eyebrow' }, 'Keep playing · ' + Math.round(pct * 100) + '%'),
-      h('h2', { class: 'hero-title' }, t.title),
-      h('div', { class: 'hero-meta' },
-        h('span', null, tileLine(t)), h('span', { class: 'dot' }), h('span', null, tileState(t)[0]),
-        from ? h('span', { class: 'dot' }) : null, from ? h('span', null, 'From ' + from) : null,
-        h('span', { class: 'dot' }), h('span', null, playLabel(t, i, w))),
-      h('div', { class: 'hero-progress' },
-        h('div', { class: 'bar-track' }, h('div', { style: 'width:' + Math.round(pct * 100) + '%' })),
-        h('span', null, Math.round(pct * 100) + '%')),
-      h('div', { class: 'hero-actions' },
-        h('button', { class: 'btn primary', onclick: () => play(i.e) },
-          h('svg', { width: '13', height: '13', viewBox: '0 0 16 16', 'aria-hidden': 'true' }, h('path', { d: 'M4 2.4l9 5.6-9 5.6z', fill: 'currentColor' })),
-          'Resume'),
-        h('button', { class: 'btn ghost', onclick: () => openDetail(t.key) }, 'Details')))
-  )
+// A wide picture for a title: the backdrop IMDb has for it, or the first letter of its name when it has none.
+function wideArt (t) {
+  return h('span', { class: 'wide-art' }, t.imdb ? artImg(t, 'backdrop') : h('span', { class: 'letter' }, monogram(t.title).slice(0, 1)))
 }
-function renderResume (list) {
-  // With a single title the hero already carries it; a one-card rail is noise.
-  const show = list.length > 1
-  $('resumeWrap').hidden = !show
-  $('resumeCount').textContent = show ? String(list.length) : ''
-  if (!show) { $('resume').replaceChildren(); return }
-  $('resume').replaceChildren(...list.map(({ t, i, w, pct }) => h('button', { class: 'r-card', onclick: () => play(i.e) },
-    artImg(t, 'backdrop'),
-    h('div', { class: 'wash' }),
-    h('div', { class: 'r-body' }, h('span', { class: 'r-title' }, t.title), h('span', { class: 'r-meta' }, playLabel(t, i, w))),
-    h('div', { class: 'r-track' }, h('div', { style: 'width:' + Math.round(pct * 100) + '%' }))
-  )))
+function progressBar (pct) {
+  return pct ? h('span', { class: 'tile-progress' }, h('span', { style: 'width:' + Math.round(pct * 100) + '%' })) : null
 }
-// Live channels land with the streaming pipeline: this is the slot and the card shape they will fill.
-function renderLive () {
-  const items = Array.isArray(S.live) ? S.live.slice(0, 6) : []
-  $('liveWrap').hidden = !items.length
-  $('liveCount').textContent = items.length ? String(items.length) : ''
-  if (!items.length) { $('live').replaceChildren(); return }
-  $('live').replaceChildren(...items.map(l => h('button', { class: 'r-card live', onclick: () => l.key && openDetail(l.key) },
-    l.imdb ? artImg({ imdb: l.imdb }, 'backdrop') : null,
-    h('div', { class: 'wash' }),
-    h('div', { class: 'r-body' },
-      h('span', { class: 'badge live' }, 'LIVE'),
-      h('span', { class: 'r-title' }, l.title || 'Live'),
-      h('span', { class: 'r-meta' }, (l.channel ? l.channel + ' · ' : '') + (l.viewers != null ? l.viewers + ' watching' : ''))))))
+// A clip has no poster, and a half-watched title is found by its picture sooner than by its name: both are wide
+// tiles, with what is left of them drawn on the picture.
+function wideTile (t, line, pct, onclick) {
+  return h('button', { class: 'tile wide', 'data-tile': t.key, onclick },
+    h('span', { class: 'tile-art' }, wideArt(t), progressBar(pct)),
+    h('span', { class: 'tile-title' }, t.title),
+    h('span', { class: 'tile-meta' }, line))
 }
 
 let libShown = 60
 let libSignature = ''
+let watchSaved = false
 const KINDS = [['all', 'All', ''], ['movie', 'Movies', 'movies'], ['show', 'Series', 'series'], ['video', 'Clips', 'clips']]
 // One poster of the video grid: what it is, where it comes from, and whether a copy is saved here.
 function videoTile (t) {
   const [state, tone] = tileState(t)
-  return h('button', { class: 'tile', 'data-tile': t.key, onclick: () => openDetail(t.key) },
+  return h('a', { class: 'tile', 'data-tile': t.key, href: '#title/' + encodeURIComponent(t.key) },
     posterBox(t.imdb ? '/v1/poster/' + t.imdb : null, t.title),
     h('span', { class: 'tile-title' }, t.title),
     h('span', { class: 'tile-meta' }, [tileLine(t), sourceName(t.items[0].e.source)].filter(Boolean).join(' · ')),
@@ -1926,89 +1959,203 @@ function emptyNote (text) {
 }
 
 // ---- Home: what is not finished first, then the start of each room. One line of each; the room holds the rest.
+// Keep playing holds video and music in one list, newest first. A video counts while it is between a fiftieth and
+// nineteen twentieths watched; the music counts while a queue is loaded and not finished. Newest means when a
+// person last moved one of them on, never when this page restored it.
+const KEEP_MAX = 4
 const HOME_ALBUMS = 8
 const HOME_VIDEOS = 8
 let homeSignature = ''
+function keepPlaying (videos) {
+  const items = resumeTiles(videos).map(({ t, i, w, pct }) => ({
+    key: 'v:' + watchId(i.e),
+    when: w.t || 0,
+    pct,
+    title: t.kind === 'show' && i.season ? t.title + ' · ' + epWords(i) : t.title,
+    sub: timeLeft(w.dur - w.at),
+    art: () => wideArt(t),
+    go: () => play(i.e)
+  }))
+  const cur = queue.length ? queue[queueIndex] : null
+  const album = cur && npState !== 'done' ? tileOf(cur) : null
+  if (album) {
+    items.push({
+      key: 'a:' + album.key,
+      when: Number(musicStore.t) || 0,
+      pct: 0,
+      title: album.album,
+      sub: 'Track ' + (queueIndex + 1) + ' of ' + queue.length,
+      art: () => albumArt(album),
+      go: () => musicToggle(),
+      album: album.key
+    })
+  }
+  return items.sort((a, b) => b.when - a.when).slice(0, KEEP_MAX)
+}
+const keepArt = k => h('span', { class: 'keep-art' + (k.album ? ' square' : ''), 'aria-hidden': 'true' }, k.art(), progressBar(k.pct))
+const keepLabel = k => (k.album ? 'Play ' : 'Resume ') + k.title
+function renderKeep (list) {
+  $('keepWrap').hidden = !list.length
+  if (!list.length) { $('keep').replaceChildren(); return }
+  const first = list[0]
+  const rest = list.slice(1)
+  $('keep').className = 'keep' + (rest.length ? '' : ' alone')
+  $('keep').replaceChildren(...[
+    h('div', { class: 'keep-big' },
+      h('button', { class: 'keep-face', 'aria-label': keepLabel(first), onclick: first.go }, keepArt(first)),
+      h('div', { class: 'keep-foot' },
+        h('div', { class: 'grow' },
+          h('div', { class: 'keep-name' }, first.title),
+          h('div', { class: 'keep-sub' }, first.sub)),
+        first.album
+          ? h('button', { class: 'btn primary', 'data-album': first.album, onclick: first.go }, playIcons(), h('span', null, 'Resume'))
+          : h('button', { class: 'btn primary', onclick: first.go }, playIcon(), h('span', null, 'Resume')))),
+    rest.length
+      ? h('div', { class: 'keep-rows' }, rest.map(k => h('button', { class: 'keep-row', 'aria-label': keepLabel(k), onclick: k.go },
+        keepArt(k),
+        h('span', { class: 'grow' },
+          h('span', { class: 'keep-name' }, k.title),
+          h('span', { class: 'keep-sub' }, k.sub)))))
+      : null
+  ].filter(Boolean))
+}
 function homeRow (title, all, href, body) {
-  return h('section', { class: 'home-row' }, h('div', { class: 'row-head' }, h('h2', null, title), h('a', { class: 'row-all', href }, all)), body)
+  return h('section', { class: 'home-row' },
+    h('div', { class: 'row-head' }, h('h2', null, title), all ? h('a', { class: 'row-all', href }, all) : null),
+    body)
 }
 function renderHome (force) {
   const tiles = libraryTiles()
   const albums = tiles.filter(t => t.kind === 'album')
   const videos = tiles.filter(t => t.kind !== 'album')
-  const resume = resumeTiles(videos)
-  renderHero(resume)
-  renderResume(resume)
-  renderLive()
+  const keep = keepPlaying(videos)
   // With no movie and no series the video row is the clips, so a library of clips does not leave Home bare.
   const films = videos.filter(t => t.kind !== 'video')
   const row = (films.length ? films : videos).slice(0, HOME_VIDEOS)
   const first = albums.slice(0, HOME_ALBUMS)
-  const signature = [S.offline, S.loaded, needsToken, albums.length, videos.length, ...[...first, ...row].map(t => t.key + tileState(t)[0] + t.items.length + '/' + (t.keys || []).length)].join('|')
+  const signature = [S.offline, S.loaded, needsToken, albums.length, videos.length,
+    ...keep.map(k => k.key + Math.round(k.pct * 100) + k.sub),
+    ...[...first, ...row].map(t => t.key + tileState(t)[0] + t.items.length + '/' + (t.keys || []).length)].join('|')
   if (!force && signature === homeSignature) return
   homeSignature = signature
+  renderKeep(keep)
   const rows = []
-  if (first.length) rows.push(homeRow('Albums', 'All albums', '#listen', h('div', { class: 'album-list' }, first.map(albumCard))))
-  if (row.length) rows.push(films.length ? homeRow('Movies and series', 'All video', '#watch', h('div', { class: 'grid' }, row.map(videoTile))) : homeRow('Clips', 'All clips', '#watch/clips', h('div', { class: 'grid' }, row.map(videoTile))))
-  if (!rows.length) rows.push(emptyNote('Nothing in your library yet.'))
+  if (first.length) rows.push(homeRow('Albums', 'All albums', '#listen', h('div', { class: 'album-grid row-grid' }, first.map(albumCard))))
+  if (row.length) rows.push(films.length
+    ? homeRow('Movies and series', 'All video', '#watch', h('div', { class: 'grid row-grid' }, row.map(videoTile)))
+    : homeRow('Clips', 'All clips', '#watch/clips', h('div', { class: 'grid wide-grid row-grid' }, row.map(t => wideTile(t, tileLine(t), 0, () => openDetail(t.key))))))
+  if (!rows.length && !keep.length) rows.push(emptyNote('Nothing in your library yet.'))
   $('homeRows').replaceChildren(...rows)
   paintRows()
-  if ($('detail').open) renderDetail()
 }
 
-// ---- Watch: the video room. Movies, series and clips in one grid; albums are in Listen. The chip that is on is
-// part of the address (#watch/series), and a chip press replaces the address, so Back leaves the room.
+// ---- Watch: the video room. Movies, series and clips; albums are in Listen. The chip that is on is part of the
+// address (#watch/series), and a chip press replaces the address, so Back leaves the room in one step.
 const libKind = () => (KINDS.find(k => k[2] && k[2] === placeArg) || KINDS[0])[0]
 function renderLibrary (force) {
   const tiles = libraryTiles()
-  const all = tiles.filter(t => t.kind !== 'album')
+  const every = tiles.filter(t => t.kind !== 'album')
+  const all = watchSaved ? every.filter(t => t.saved === t.items.length) : every
   const kind = libKind()
   const list = all.filter(t => kind === 'all' || t.kind === kind)
-  // Progress polls arrive every few seconds; redraw only when what the grid shows has changed.
-  const signature = [kind, libShown, S.offline, S.loaded, needsToken, tiles.length - all.length, ...list.slice(0, libShown).map(t => t.key + tileState(t)[0] + t.items.length)].join('|')
+  const keep = kind === 'all' ? resumeTiles(all) : []
+  // Progress polls arrive every few seconds; redraw only when what the room shows has changed.
+  const signature = [kind, libShown, watchSaved, S.offline, S.loaded, needsToken, tiles.length - every.length,
+    ...keep.map(k => k.i.e.key + Math.round(k.pct * 100)),
+    ...list.slice(0, libShown).map(t => t.key + tileState(t)[0] + t.items.length)].join('|')
   if (!force && signature === libSignature) return
   libSignature = signature
-  $('libKinds').hidden = all.length < 2
+  $('watchCtl').hidden = every.length < 2
   $('libKinds').replaceChildren(...KINDS.map(([k, label, view]) => {
     const n = k === 'all' ? all.length : all.filter(t => t.kind === k).length
     return n || k === 'all' ? h('button', { class: 'chip', 'aria-pressed': String(kind === k), onclick: () => { libShown = 60; location.replace('#watch' + (view ? '/' + view : '')) } }, label + ' ', h('span', { class: 'count' }, String(n))) : null
   }).filter(Boolean))
-  if (!all.length) {
+  $('watchSaved').setAttribute('aria-pressed', String(watchSaved))
+  if (!every.length) {
     $('entries').replaceChildren(emptyNote(tiles.length ? 'No video yet. Your albums are in Listen.' : 'Nothing in your library yet.'))
     return
   }
   if (!list.length) {
-    $('entries').replaceChildren(h('div', { class: 'empty' }, 'Nothing in this view.'))
+    $('entries').replaceChildren(h('div', { class: 'empty' }, watchSaved ? 'Nothing here is saved on this relay.' : 'Nothing in this view.'))
     return
   }
-  $('entries').replaceChildren(...list.slice(0, libShown).map(videoTile), ...(list.length > libShown ? [h('div', { class: 'more', id: 'libMore' }, h('button', { class: 'btn', onclick: showMore }, 'Show more'))] : []))
+  const films = list.filter(t => t.kind !== 'video')
+  const clips = list.filter(t => t.kind === 'video')
+  const main = kind === 'all' ? (films.length ? films : clips) : list
+  const wide = main.every(t => t.kind === 'video')
+  const shown = main.slice(0, libShown)
+  const grid = h('div', { class: 'grid' + (wide ? ' wide-grid' : '') },
+    ...shown.map(t => wide ? wideTile(t, tileLine(t), 0, () => openDetail(t.key)) : videoTile(t)),
+    ...(main.length > libShown ? [h('div', { class: 'more', id: 'libMore' }, h('button', { class: 'btn', onclick: showMore }, 'Show more'))] : []))
+  const parts = []
+  if (keep.length) parts.push(homeRow('Keep watching', '', '', h('div', { class: 'grid wide-grid' }, keep.map(k => wideTile(k.t, timeLeft(k.w.dur - k.w.at), k.pct, () => play(k.i.e))))))
+  const extra = kind === 'all' && films.length ? clips : []
+  parts.push(keep.length || extra.length ? homeRow(wide ? 'Clips' : 'Movies and series', '', '', grid) : grid)
+  if (extra.length) parts.push(homeRow('Clips', 'All clips', '#watch/clips', h('div', { class: 'grid wide-grid' }, extra.slice(0, 12).map(t => wideTile(t, tileLine(t), 0, () => openDetail(t.key))))))
+  $('entries').replaceChildren(...parts)
   const more = $('libMore')
   if (more && 'IntersectionObserver' in window) {
     const io = new IntersectionObserver(entries => { if (entries.some(x => x.isIntersecting)) { io.disconnect(); showMore() } }, { rootMargin: '600px' })
     io.observe(more)
   }
-  if ($('detail').open) renderDetail()
 }
 function showMore () { libShown += 60; renderLibrary() }
+$('watchSaved').onclick = () => { watchSaved = !watchSaved; libShown = 60; renderLibrary(true) }
 
-// ---- Listen: the music room. Its own surface, not a filter on the video grid: a shelf per artist, and the album
-// sheet as the place to listen.
+// ---- Listen: the music room. Albums, artists or tracks, each part of the address (#listen/artists); a press
+// replaces the address, so Back leaves the room in one step. An album's page is where listening starts.
+const LISTEN_VIEWS = [['albums', 'Albums', ''], ['artists', 'Artists', 'artists'], ['tracks', 'Tracks', 'tracks']]
+const listenView = () => (LISTEN_VIEWS.find(v => v[2] && v[2] === placeArg) || LISTEN_VIEWS[0])[0]
+const TRACKS_PAGE = 200
 let musicSignature = ''
+let listenSaved = false
+let trackWords = ''
+let tracksShown = TRACKS_PAGE
 function renderMusic (force) {
-  const all = libraryTiles().filter(t => t.kind === 'album')
-  // The copy count is in it too: removing one copy of a track leaves the rows alone but changes the card's line.
-  const signature = [S.offline, S.loaded, needsToken, ...all.map(t => t.key + tileState(t)[0] + t.items.length + '/' + (t.keys || []).length)].join('|')
+  const every = libraryTiles().filter(t => t.kind === 'album')
+  const all = listenSaved ? every.filter(t => t.saved === t.items.length) : every
+  const view = listenView()
+  const artists = view === 'artists' ? artistList(all) : []
+  const tracks = view === 'tracks' ? albumTracksList(all) : []
+  // The copy count is in it too: removing one copy of a track leaves the rows alone but changes what the page says.
+  const signature = [view, listenSaved, trackWords, tracksShown, S.offline, S.loaded, needsToken,
+    ...all.map(t => t.key + tileState(t)[0] + t.items.length + '/' + (t.keys || []).length)].join('|')
   if (!force && signature === musicSignature) return
   musicSignature = signature
-  $('listenCtl').hidden = !all.length
-  $('musicCount').textContent = plural(all.length, 'album', 'albums')
-  if (!all.length) $('albums').replaceChildren(emptyNote('No albums yet. Use Find to save one, or add a folder.'))
-  else {
-    $('albums').replaceChildren(...renderAlbums(all))
-    paintRows()
-  }
-  if ($('detail').open) renderDetail()
+  $('listenCtl').hidden = !every.length
+  $('listenSeg').replaceChildren(...LISTEN_VIEWS.map(([name, label, arg]) => h('button', {
+    class: 'seg-btn',
+    'aria-pressed': String(view === name),
+    onclick: () => { tracksShown = TRACKS_PAGE; location.replace('#listen' + (arg ? '/' + arg : '')) }
+  }, label)))
+  $('listenSaved').setAttribute('aria-pressed', String(listenSaved))
+  $('trackFilterWrap').hidden = view !== 'tracks'
+  $('musicCount').textContent = view === 'artists' ? plural(artists.length, 'artist', 'artists')
+    : view === 'tracks' ? plural(tracks.length, 'track', 'tracks')
+    : plural(all.length, 'album', 'albums')
+  if (!every.length) { $('albums').replaceChildren(emptyNote('No albums yet. Use Find to save one, or add a folder.')); return }
+  if (!all.length) { $('albums').replaceChildren(h('div', { class: 'empty' }, 'No album here is saved on this relay.')); return }
+  if (view === 'artists') $('albums').replaceChildren(h('div', { class: 'album-grid' }, artists.map(artistCard)))
+  else if (view === 'tracks') {
+    const has = findIn(trackWords)
+    const rows = trackWords ? tracks.filter(p => has.track(trackName(p.i.e), p.t.title + ' ' + ((p.i.e.music && p.i.e.music.artist) || ''))) : tracks
+    $('albums').replaceChildren(...[
+      rows.length
+        ? h('div', { class: 'rows tracks flat' }, rows.slice(0, tracksShown).map(p => songRow(p.t, p.i)))
+        : h('div', { class: 'empty' }, 'No track here matches those words.'),
+      rows.length > tracksShown
+        ? h('div', { class: 'more' }, h('button', { class: 'btn', onclick: () => { tracksShown += TRACKS_PAGE; renderMusic(true) } }, 'Show more'))
+        : null
+    ].filter(Boolean))
+  } else $('albums').replaceChildren(h('div', { class: 'album-grid' }, all.map(albumCard)))
+  paintRows()
 }
+$('listenSaved').onclick = () => { listenSaved = !listenSaved; renderMusic(true) }
+$('trackFilter').addEventListener('input', () => {
+  trackWords = $('trackFilter').value.trim()
+  tracksShown = TRACKS_PAGE
+  renderMusic(true)
+})
 
 // ---- Add to library: the add box and what is being added now.
 function renderAdd () {
@@ -2096,16 +2243,15 @@ function renderFind (force) {
       $('addInput').focus()
     }) }, 'Add to library')))
   }
-  if (albums.length) parts.push(findGroup('Albums', albums.length, h('div', { class: 'album-list' }, albums.slice(0, FIND_SHOWN).map(albumCard))))
+  if (albums.length) parts.push(findGroup('Albums', albums.length, h('div', { class: 'album-grid' }, albums.slice(0, FIND_SHOWN).map(albumCard))))
   if (tracks.length) parts.push(findGroup('Tracks', tracks.length, h('div', { class: 'find-tracks' }, tracks.slice(0, FIND_SHOWN).map(findTrack))))
   if (films.length) parts.push(findGroup('Movies and series', films.length, h('div', { class: 'grid' }, films.slice(0, FIND_SHOWN).map(videoTile))))
-  if (clips.length) parts.push(findGroup('Clips', clips.length, h('div', { class: 'grid' }, clips.slice(0, FIND_SHOWN).map(videoTile))))
+  if (clips.length) parts.push(findGroup('Clips', clips.length, h('div', { class: 'grid wide-grid' }, clips.slice(0, FIND_SHOWN).map(t => wideTile(t, tileLine(t), 0, () => openDetail(t.key))))))
   if (!link && !albums.length && !tracks.length && !films.length && !clips.length) {
     parts.push(h('div', { class: 'empty' }, S.offline ? 'Can’t reach the relay.' : !S.loaded && !needsToken ? 'Loading the library…' : 'Nothing in your library matches “' + words + '”.'))
   }
   box.replaceChildren(...parts)
   paintRows()
-  if ($('detail').open) renderDetail()
 }
 
 // ---- Other relays (POST /v1/search/global): asked beside the sources, with the same words, while its chip is on.
@@ -3370,15 +3516,15 @@ function renderSourcesStatus () {
 }
 // ==== end Sources ====
 
-// ---- Library: details sheet (play, cast, copy; a show's episodes by season)
-let detailKey = null
+// ---- Library: a title, an album and an artist are places of their own. This opens one from anywhere — a tile, the
+// music bar, a finished job — without the caller having to know which kind it is.
+let detailArg = null
 let detailSeason = null
 function openDetail (key, season = null) {
-  detailKey = key
+  const t = libraryTiles().find(x => x.key === key)
+  detailArg = key
   detailSeason = season
-  renderDetail()
-  if (!$('detail').open) $('detail').showModal()
-  if (!infoTimer) infoTimer = setInterval(pollInfo, 3000)
+  goPlace((t && t.kind === 'album' ? '#album/' : '#title/') + encodeURIComponent(key))
 }
 function castButton (e) {
   const tvs = (S.cast && S.cast.receivers) || []
@@ -3400,7 +3546,6 @@ const resumeAtFor = e => {
   return w && w.dur > 0 && w.at / w.dur < 0.95 ? w.at : 0
 }
 function play (e, at) {
-  $('detail').close()
   openPlayer(e, at == null ? resumeAtFor(e) : at)
 }
 function downloadHref (e, nameOverride) {
@@ -3494,14 +3639,15 @@ function albumDeleteBtn (t) {
     // The tile's key list spans every release folded into it; its items collapse duplicate copies to one row and
     // would leave the dropped copy's announce behind (mergeAlbums keeps only the first). Fall back to rows we have.
     const keys = Array.isArray(t.keys) && t.keys.length ? t.keys : own.map(i => i.e.key)
-    return removeEntries({ keys }, () => $('detail').close())
+    return removeEntries({ keys }, () => leaveDetail())
   })
   return [b, ask]
 }
 // ---- end Delete
-function fileRow (label, e, withHealth) {
+function fileRow (label, e, withHealth, labelText) {
+  const text = labelText || (typeof label === 'string' ? label : '')
   const from = sourceName(e.source)
-  const dlName = /^S\\d+E\\d+$/i.test(label) && e.title && !/s\\d+e\\d+/i.test(e.title) ? e.title + ' ' + label : (e.title || label)
+  const dlName = /^S\\d+E\\d+$/i.test(text) && e.title && !/s\\d+e\\d+/i.test(e.title) ? e.title + ' ' + text : (e.title || text)
   const accessNote = e.locked ? 'Subscriber pass needed' : (e.private ? 'Subscribers only' : '')
   const shown = infoShown.has(e.key)
   return h('div', null, h('div', { class: 'row-item' },
@@ -3544,7 +3690,7 @@ function qualityOf (e, d) {
 // A row's second line says only what sets the track apart: an artist who is not the album's, a copy that is not
 // what the rest of the album is (one 16-bit track on a 24-bit album, a YouTube copy on a FLAC album), not saved here
 // yet, or held twice. On a clean album every row is one line. The full verdict ("lossless container", bitrate) is
-// the line's tooltip, and the album's own is the sheet's header.
+// the line's tooltip, and the album's own stands under its name on its page.
 function trackMeta (i, d, albumArtist, common) {
   const e = i.e
   const artist = e.music && e.music.artist
@@ -3568,7 +3714,7 @@ function trackRow (i, t, common) {
   const e = i.e
   const d = infoData.get(e.key)
   infoEntries.set(e.key, e)
-  if (!d) loadInfo(e.key)
+  if (!d && readableHere(e)) loadInfo(e.key)
   const go = () => isCurrent(e) ? musicToggle() : startQueue(t.items.map(x => x.e), e, t.title)
   const btn = h('button', { class: 'track-play', 'aria-label': 'Play ' + trackName(e), onclick: ev => { ev.stopPropagation(); go() } }, h('span', { class: 'tn' }, String(i.episode)))
   btn.insertAdjacentHTML('beforeend', ICON_PLAY + ICON_PAUSE)
@@ -3583,12 +3729,6 @@ function trackRow (i, t, common) {
     h('span', { class: 'track-dur', 'data-dur': e.key }, duration(trackSecs(d))),
     dl,
     trackDeleteBtn(i))
-}
-// The sheet's header: how much and how long (once every header is read) and where it lives; then what the copy is.
-function albumHeadLine (t) {
-  const secs = albumSecs(t)
-  return [plural(t.items.length, 'track', 'tracks'), secs ? Math.round(secs / 60) + ' min' : '', size(t.items.reduce((n, i) => n + (i.e.size || 0), 0)),
-    tileState(t)[0], t.releases > 1 ? 'from ' + t.releases + ' releases' : ''].filter(Boolean).join(' · ')
 }
 function albumVerdict (t) {
   const common = commonQuality(t)
@@ -3611,14 +3751,14 @@ function albumAlso (t) {
   if (only) lines.push(plural(only, 'track', 'tracks') + ' only from ' + YT_LABEL + '.')
   return lines.join(' ')
 }
-// Headers land one by one after the sheet opens; each redraws the lines that depend on them, never the rows.
-function paintAlbumSheet (t) {
+// Headers land one by one after the page opens; each redraws the lines that depend on them, never the rows.
+function paintAlbumPage (t) {
   const box = $('detailBody')
   const common = commonQuality(t)
   const am = box.querySelector('[data-am]')
-  if (am) am.textContent = albumHeadLine(t)
-  const av = box.querySelector('[data-av]')
-  if (av) av.textContent = albumVerdict(t)
+  if (am) am.textContent = albumFacts(t)
+  const aq = box.querySelector('[data-aq]')
+  if (aq) aq.replaceChildren(...albumQuietLine(t))
   const ay = box.querySelector('[data-ay]')
   if (ay) { ay.textContent = albumAlso(t); ay.hidden = !ay.textContent }
   for (const i of t.items) {
@@ -3636,34 +3776,6 @@ function paintAlbumSheet (t) {
       b.setAttribute('aria-label', label)
     }
   }
-}
-function albumHead (t) {
-  const list = t.items.map(i => i.e).filter(e => !e.locked)
-  const del = albumDeleteBtn(t)
-  const icons = h('span', { class: 'btn-ic' })
-  icons.innerHTML = ICON_PLAY + ICON_PAUSE
-  const shuffled = () => {
-    const pool = list.slice()
-    for (let i = pool.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [pool[i], pool[j]] = [pool[j], pool[i]] }
-    return pool
-  }
-  // Flat children on a grid: beside the sleeve on a desktop; on a phone the name sits beside it and the facts and
-  // buttons take the full width under it, so Play and Shuffle stay on one line.
-  return h('div', { class: 'detail-head album-head' },
-    albumArt(t, 'sleeve-lg'),
-    h('div', { class: 'ah-title' },
-      h('h3', { id: 'detailTitle' }, t.album),
-      h('div', { class: 'album-by' }, t.artist || 'Unknown artist')),
-    h('div', { class: 'ah-meta' },
-      h('div', { class: 'meta', 'data-am': t.key }, albumHeadLine(t)),
-      h('div', { class: 'meta', 'data-av': t.key }, albumVerdict(t)),
-      h('div', { class: 'meta', 'data-ay': t.key, hidden: !albumAlso(t) }, albumAlso(t))),
-    list.length || del
-      ? h('div', { class: 'album-acts' },
-        list.length ? h('button', { class: 'btn primary', 'data-album': t.key, onclick: () => queue.length && (tileOf(queue[queueIndex]) || {}).key === t.key ? musicToggle() : startQueue(list, list[0], t.title) }, icons, h('span', null, 'Play')) : null,
-        list.length > 1 ? h('button', { class: 'btn quiet', onclick: () => startQueue(shuffled(), null, t.title, 'Shuffling') }, 'Shuffle') : null,
-        del)
-      : null)
 }
 
 // ---- Music: one queue, one audio element, one bar along the bottom of every tab
@@ -3693,6 +3805,7 @@ function npLoading () {
 let seekDragging = false
 let lastMusicSave = 0
 let musicRestored = false
+let playedSince = false // sound has come out since this queue was last saved: a pause after that is a person's
 const albumName = title => String(title || '').split(' · ').pop()
 const isCurrent = e => queue.length > 0 && queue[queueIndex].key === e.key
 const clock = s => duration(s) || '0:00'
@@ -3709,13 +3822,19 @@ function musicAudio () {
   document.body.append(a)
   a.addEventListener('playing', () => {
     npState = 'playing'
+    playedSince = true
     if (npAnnounce) { toast(npAnnounce); npAnnounce = '' }
     paintBar()
   })
   a.addEventListener('waiting', () => { if (!a.paused) { npLoading(); paintBar() } })
-  a.addEventListener('pause', () => { if (npState !== 'done' && npState !== 'error') npState = 'paused'; paintBar(); saveMusic(true) })
+  a.addEventListener('pause', () => {
+    if (npState !== 'done' && npState !== 'error') npState = 'paused'
+    paintBar()
+    saveMusic(true, playedSince)
+    playedSince = false
+  })
   a.addEventListener('ended', trackEnded)
-  a.addEventListener('timeupdate', () => { paintTime(); saveMusic() })
+  a.addEventListener('timeupdate', () => { paintTime(); saveMusic(false, !a.paused) })
   a.addEventListener('durationchange', paintTime)
   a.addEventListener('error', async () => {
     const src = a.getAttribute('src')
@@ -3758,12 +3877,12 @@ function startQueue (list, start, title, verb = 'Playing') {
   if (!q.length) return
   queue = q
   queueTitle = title || q[0].title
-  $('detail').close()
+  playedSince = false
   const i = Math.max(0, q.indexOf(start))
   playAt(i, i === 0 && q.length > 1 ? verb + ' “' + albumName(queueTitle) + '”, ' + plural(q.length, 'track', 'tracks') : nowLine(verb, i))
   loadQueueInfo()
 }
-// Track lengths for the queue panel come from the same header read as the sheet's rows.
+// Track lengths for the queue panel come from the same header read as an album page's rows.
 function loadQueueInfo () {
   for (const e of queue) if (!infoData.has(e.key)) { infoEntries.set(e.key, e); loadInfo(e.key) }
 }
@@ -3782,7 +3901,7 @@ function playAt (i, announce) {
     if (err && err.name === 'NotAllowedError' && queue[queueIndex] === e) { npState = 'paused'; npAnnounce = ''; paintBar() }
   })
   setMediaSession(e)
-  saveMusic(true)
+  saveMusic(true, true)
   paintBar()
 }
 function musicToggle () {
@@ -3822,11 +3941,15 @@ function musicStop () {
   saveMusic(true)
   paintBar()
 }
-function saveMusic (now) {
+// 't' is when a person last moved this queue on: a track started, a pause of something that was playing, or sound
+// coming out of the speakers. A reload, a restore and a volume change leave it as it was, so Home never claims a
+// queue nobody has touched is the newest thing. A record saved before 't' existed has none and counts as oldest.
+function saveMusic (now, active) {
   if (!now && Date.now() - lastMusicSave < 5000) return
   lastMusicSave = Date.now()
   const vol = audioEl ? audioEl.volume : 1
-  musicStore = queue.length ? { keys: queue.map(x => x.key), i: queueIndex, at: (audioEl && audioEl.currentTime) || 0, title: queueTitle, vol } : { vol }
+  const t = active ? Date.now() : musicStore.t
+  musicStore = queue.length ? { keys: queue.map(x => x.key), i: queueIndex, at: (audioEl && audioEl.currentTime) || 0, title: queueTitle, vol, t } : { vol }
   try { localStorage.setItem(MUSIC_KEY, JSON.stringify(musicStore)) } catch {}
 }
 // After the first load: the queue this browser left comes back on the same track, paused where it was.
@@ -3980,14 +4103,14 @@ addEventListener('keydown', ev => {
 })
 
 // ---- Library: what a file holds and how well it streams here now (GET /v1/entries/info), redrawn every 3 s while
-// the sheet is open. Episodes and versions open theirs with File info; a single file shows it at once, and each
+// a page is open. Episodes and versions open theirs with File info; a single file shows it at once, and each
 // version of a film carries its verdict on its row. The relay reads a header only for files it holds or has open;
 // for any other, Check sources asks the network on purpose, which tells peers the title is wanted, as Play does.
 const infoData = new Map() // entry key -> last reply, or { error }
 const infoEntries = new Map() // entry key -> the entry it describes
 const infoBusy = new Set()
 const infoShown = new Set()
-const infoWatched = new Set() // entry keys polled while the sheet is open: open panels and a film's versions
+const infoWatched = new Set() // entry keys polled while a page is open: open panels and a film's versions
 let infoTimer = 0
 const CHANNELS = { 1: 'Mono', 2: 'Stereo', 6: '5.1', 8: '7.1' }
 function langName (code) {
@@ -4017,7 +4140,7 @@ function verdict (e, d) {
 }
 function healthTag (e) {
   infoEntries.set(e.key, e)
-  infoWatched.add(e.key)
+  if (readableHere(e)) infoWatched.add(e.key)
   const tag = h('span', { class: 'tag', 'data-health': e.key, style: 'margin-left:8px' })
   paintTag(tag, e, infoData.get(e.key))
   if (!infoData.has(e.key)) loadInfo(e.key)
@@ -4028,7 +4151,9 @@ function paintTag (tag, e, d) {
   tag.hidden = !v
   if (v) { tag.textContent = v[0]; tag.className = 'tag' + (v[1] ? ' ' + v[1] : '') }
 }
+const checkFile = e => h('button', { class: 'btn quiet', style: 'margin-left:8px', title: 'Tells peers this title is wanted, as Play does', onclick: ev => act(ev.currentTarget, () => loadInfo(e.key, true)) }, 'Check sources')
 function infoRows (e, d) {
+  if (!d && !readableHere(e)) return [h('div', { class: 'meta' }, 'File details have not been read.', S.settings && !e.locked ? checkFile(e) : null)]
   if (!d) return [h('div', { class: 'meta' }, 'Reading file details…')]
   if (d.error) return [h('div', { class: 'meta err' }, d.error)]
   const rows = []
@@ -4036,7 +4161,7 @@ function infoRows (e, d) {
   const m = d.media
   if (d.mediaDeferred) {
     row('Format', 'Not read yet: this relay does not hold the file',
-      d.health ? h('button', { class: 'btn quiet', style: 'margin-left:8px', title: 'Tells peers this title is wanted, as Play does', onclick: ev => act(ev.currentTarget, () => loadInfo(e.key, true)) }, 'Check sources') : null)
+      d.health && !e.locked ? checkFile(e) : null)
   } else if (m === undefined) row('Format', 'Reading the file header…')
   else if (!m) row('Format', 'Not recognised')
   else {
@@ -4057,7 +4182,7 @@ function infoRows (e, d) {
 }
 function infoPanel (e) {
   infoEntries.set(e.key, e)
-  infoWatched.add(e.key)
+  if (readableHere(e)) infoWatched.add(e.key)
   const box = h('div', { class: 'file-info', 'data-info': e.key }, infoRows(e, infoData.get(e.key)))
   if (!infoData.has(e.key)) loadInfo(e.key)
   return box
@@ -4065,6 +4190,7 @@ function infoPanel (e) {
 // A read already in flight is shared, so a caller waiting on it (the shelf's quality line) hears when it lands.
 const infoPending = new Map()
 function loadInfo (key, read) {
+  if (!read && !readableHere(infoEntries.get(key))) return
   if (infoBusy.has(key) && !read) return infoPending.get(key)
   const p = readInfo(key, read)
   infoPending.set(key, p)
@@ -4087,65 +4213,260 @@ async function readInfo (key, read) {
   for (const tag of $('detailBody').querySelectorAll('[data-health]')) {
     if (tag.dataset.health === key) paintTag(tag, e, infoData.get(key))
   }
-  // An album sheet's rows and header are built from these reads, so they are redrawn as each header lands.
+  // An album page's facts and rows are built from these reads, so they are redrawn as each header lands, and so
+  // are a film's version labels.
   const am = $('detailBody').querySelector('[data-am]')
   const at = am && libraryTiles().find(x => x.key === am.dataset.am)
-  if (at && at.items.some(i => i.e.key === key)) paintAlbumSheet(at)
+  if (at && at.items.some(i => i.e.key === key)) paintAlbumPage(at)
+  for (const lab of $('detailBody').querySelectorAll('[data-vlabel]')) {
+    if (lab.dataset.vlabel === key) lab.textContent = versionLabel(e, Number(lab.dataset.vnum) || 1)
+  }
   if (!$('npQueue').hidden && queue.some(x => x.key === key)) renderQueue()
 }
 function pollInfo () {
   if (document.hidden) return
   for (const key of infoWatched) loadInfo(key)
 }
+// ---- A title, an album and an artist are places of their own (#title/…, #album/…, #artist/…), drawn into one
+// region under the top bar. Leaving one returns to the room it came from, so Back lands on the same grid in the
+// same place.
+// What a page says when what it was about has gone. It carries the region's label, so the page keeps a name.
+const goneNote = what => h('div', { class: 'empty', id: 'detailTitle' }, !S.loaded && !needsToken ? 'Loading the library…' : 'This ' + what + ' is no longer in the library.')
+const playIcons = () => { const ic = h('span', { class: 'btn-ic' }); ic.innerHTML = ICON_PLAY + ICON_PAUSE; return ic }
+const playIcon = () => { const ic = h('span', { class: 'btn-ic' }); ic.innerHTML = ICON_PLAY; return ic }
+// What a page can do beyond its two main actions. Real actions only: with none, there is no button.
+function moreMenu (label, items) {
+  const real = items.flat().filter(Boolean)
+  if (!real.length) return null
+  const wrap = h('span', { class: 'wrap-rel' })
+  wrap.append(h('button', {
+    class: 'btn dots',
+    'aria-haspopup': 'menu',
+    'aria-label': label,
+    title: label,
+    onclick: () => {
+      const open = wrap.querySelector('.menu')
+      if (open) return open.remove()
+      wrap.append(h('div', { class: 'menu wide', role: 'menu' }, real))
+    }
+  }, '…'))
+  return wrap
+}
+function shuffled (list) {
+  const pool = list.slice()
+  for (let n = pool.length - 1; n > 0; n--) {
+    const j = Math.floor(Math.random() * (n + 1))
+    const swap = pool[n]
+    pool[n] = pool[j]
+    pool[j] = swap
+  }
+  return pool
+}
 function renderDetail () {
-  const t = libraryTiles().find(x => x.key === detailKey)
   const box = $('detailBody')
   infoWatched.clear()
-  if (!t) { box.replaceChildren(h('div', { class: 'empty' }, 'This title is no longer in the library.')); return }
-  const head = t.kind === 'album'
-    ? albumHead(t)
-    : h('div', { class: 'detail-head' },
-      posterBox(t.imdb ? '/v1/poster/' + t.imdb : null, t.title),
-      h('div', { class: 'grow' }, h('h3', { id: 'detailTitle' }, t.title), h('div', { class: 'meta' }, tileLine(t) + ' · ' + tileState(t)[0])))
-  let body
-  if (t.kind === 'album') {
-    // Every track on one page, in disc and track order, with a heading per disc when there is more than one: a
-    // disc picker hid half an album behind a select for no gain.
-    const discs = [...new Set(t.items.map(i => i.season))].sort((a, b) => a - b)
-    const common = commonQuality(t)
-    body = discs.map(d => [
-      discs.length > 1 ? h('h4', { class: 'disc-head' }, 'Disc ' + d) : null,
-      h('div', { class: 'rows tracks' }, t.items.filter(i => i.season === d).map(i => trackRow(i, t, common)))]).flat()
-  } else if (t.kind === 'show') {
-    const seasons = [...new Set(t.items.map(i => i.season))]
-    if (detailSeason == null || !seasons.includes(detailSeason)) detailSeason = seasons[0]
-    const pick = seasons.length > 1
-      ? h('div', { class: 'field' }, h('label', { for: 'seasonPick' }, 'Season'), h('select', { id: 'seasonPick', onchange: ev => { detailSeason = Number(ev.target.value); renderDetail() } },
-        seasons.map(s => h('option', { value: String(s), selected: s === detailSeason }, 'Season ' + s + ' (' + t.items.filter(i => i.season === s).length + ')'))))
-      : null
-    body = [pick, h('div', { class: 'rows' }, t.items.filter(i => i.season === detailSeason).map(i => fileRow('S' + String(i.season).padStart(2, '0') + 'E' + String(i.episode).padStart(2, '0'), i.e)))]
-  } else if (t.items.length > 1) {
-    // A film's versions are few, so each row shows its verdict; a show's episodes check only under File info.
-    body = [h('div', { class: 'rows' }, t.items.map((i, n) => fileRow('Version ' + (n + 1), i.e, n < 8)))]
-  } else {
-    const e = t.items[0].e
-    const from = sourceName(e.source)
-    const accessNote = e.locked ? 'Subscriber pass needed' : (e.private ? 'Subscribers only' : '')
-    body = [h('div', { class: 'meta' }, [where(e), accessNote, from && 'from ' + from].filter(Boolean).join(' · ')),
-      h('div', { class: 'row', style: 'margin-top:14px;flex-wrap:wrap' },
-        e.locked ? null : h('button', { class: 'btn primary', 'data-play': true, onclick: () => play(e) }, 'Play'),
-        e.locked ? null : castButton(e),
-        e.locked ? null : downloadBtn(e),
-        copyBtn('Copy link', e.magnetUrl),
-        deleteBtn(e, false)),
-      infoPanel(e)]
+  if (detailArg !== placeArg) { detailArg = placeArg; detailSeason = null; artistAll = false }
+  if (tab === 'artist') renderArtistPage(box, placeArg)
+  else {
+    const t = libraryTiles().find(x => x.key === placeArg)
+    if (!t) { $('placeName').textContent = PLACES[tab]; box.replaceChildren(goneNote(tab === 'album' ? 'album' : 'title')) }
+    else if (t.kind === 'album') renderAlbumPage(box, t)
+    else renderTitlePage(box, t)
   }
-  box.replaceChildren(head, ...body.filter(Boolean))
   paintRows()
 }
-$('detailClose').onclick = () => $('detail').close()
-$('detail').addEventListener('click', ev => { if (ev.target === $('detail')) $('detail').close() })
-$('detail').addEventListener('close', () => { clearInterval(infoTimer); infoTimer = 0; infoShown.clear(); infoWatched.clear() })
+
+// ---- An album: its cover stays in view beside the tracks, and what the album is sits above them. What it holds
+// is one line of facts; how it sounds and where it is sit under it, quieter.
+const albumTracks = t => t.items.map(i => i.e).filter(e => !e.locked)
+function albumFacts (t) {
+  const secs = albumSecs(t)
+  return [plural(t.items.length, 'track', 'tracks'), secs ? Math.round(secs / 60) + ' min' : ''].filter(Boolean).join(' · ')
+}
+function albumQuietLine (t) {
+  const bytes = t.items.reduce((n, i) => n + (i.e.size || 0), 0)
+  const verdict = albumVerdict(t)
+  const rest = [bytes ? size(bytes) : '', tileState(t)[0], t.releases > 1 ? 'from ' + t.releases + ' releases' : ''].filter(Boolean).join(' · ')
+  return [h('span', { 'data-av': t.key }, verdict), h('span', null, (verdict && rest ? ' · ' : '') + rest)]
+}
+function renderAlbumPage (box, t) {
+  $('placeName').textContent = t.album
+  const list = albumTracks(t)
+  const common = commonQuality(t)
+  const discs = [...new Set(t.items.map(i => i.season))].sort((a, b) => a - b)
+  const also = albumAlso(t)
+  const more = t.artist ? libraryTiles().filter(x => x.kind === 'album' && x.key !== t.key && fold(x.artist || '') === fold(t.artist)) : []
+  box.replaceChildren(h('div', { class: 'page' },
+    h('div', { class: 'page-art' }, albumArt(t, 'xl')),
+    h('div', { class: 'page-head' },
+      h('div', { class: 'eyebrow' }, 'Album'),
+      h('h2', { id: 'detailTitle', class: 'page-title big' }, t.album),
+      t.artist
+        ? h('a', { class: 'page-by', href: '#artist/' + encodeURIComponent(t.artist) }, t.artist)
+        : h('div', { class: 'page-by dim' }, 'Unknown artist'),
+      h('div', { class: 'facts', 'data-am': t.key }, albumFacts(t)),
+      h('div', { class: 'facts quiet', 'data-aq': t.key }, albumQuietLine(t)),
+      allYt(t) ? h('div', { class: 'tag-row' }, h('span', { class: 'tag' }, 'Lossy')) : null,
+      h('div', { class: 'facts quiet', 'data-ay': t.key, hidden: !also }, also)),
+    h('div', { class: 'page-acts' },
+      list.length ? h('button', { class: 'btn primary', 'data-album': t.key, onclick: () => tileOf(queue[queueIndex] || {})?.key === t.key ? musicToggle() : startQueue(list, list[0], t.title) }, playIcons(), h('span', null, 'Play')) : null,
+      list.length > 1 ? h('button', { class: 'btn', onclick: () => startQueue(shuffled(list), null, t.title) }, 'Shuffle') : null,
+      moreMenu('More actions', [albumDeleteBtn(t)])),
+    h('div', { class: 'page-body' },
+      discs.map(d => [
+        discs.length > 1 ? h('h4', { class: 'disc-head' }, 'Disc ' + d) : null,
+        h('div', { class: 'rows tracks' }, t.items.filter(i => i.season === d).map(i => trackRow(i, t, common)))]).flat(),
+      more.length ? h('h3', { class: 'sec-head' }, 'More by ' + t.artist) : null,
+      more.length ? h('div', { class: 'album-grid' }, more.sort((a, b) => a.album.localeCompare(b.album)).map(albumCard)) : null)))
+}
+
+// ---- An artist: their albums, then their tracks. Nothing in the system holds a picture of a person, so the work
+// itself is the page.
+const ARTIST_TRACKS = 8
+let artistAll = false
+function renderArtistPage (box, name) {
+  const albums = libraryTiles().filter(t => t.kind === 'album' && fold(t.artist || 'Unknown artist') === fold(name || ''))
+    .sort((a, b) => a.album.localeCompare(b.album))
+  $('placeName').textContent = name || 'Artist'
+  if (!albums.length) { box.replaceChildren(goneNote('artist')); return }
+  const label = albums[0].artist || 'Unknown artist'
+  const pairs = albums.flatMap(t => t.items.map(i => ({ t, i })))
+  const list = pairs.map(p => p.i.e).filter(e => !e.locked)
+  const shown = artistAll ? pairs : pairs.slice(0, ARTIST_TRACKS)
+  box.replaceChildren(h('div', { class: 'page wide' },
+    h('div', { class: 'page-head' },
+      h('div', { class: 'eyebrow' }, 'Artist'),
+      h('h2', { id: 'detailTitle', class: 'page-title big' }, label),
+      h('div', { class: 'facts' }, [plural(albums.length, 'album', 'albums'), plural(pairs.length, 'track', 'tracks')].join(' · '))),
+    h('div', { class: 'page-acts' },
+      list.length ? h('button', { class: 'btn primary', onclick: () => startQueue(list, list[0], label) }, playIcon(), h('span', null, 'Play')) : null,
+      list.length > 1 ? h('button', { class: 'btn', onclick: () => startQueue(shuffled(list), null, label) }, 'Shuffle') : null),
+    h('div', { class: 'page-body' },
+      h('h3', { class: 'sec-head' }, 'Albums'),
+      h('div', { class: 'album-grid' }, albums.map(albumCard)),
+      h('h3', { class: 'sec-head' }, 'Tracks'),
+      h('div', { class: 'rows tracks flat' }, shown.map(p => songRow(p.t, p.i))),
+      !artistAll && pairs.length > ARTIST_TRACKS
+        ? h('div', { class: 'more' }, h('button', { class: 'btn', onclick: () => { artistAll = true; renderDetail() } }, 'Show all ' + pairs.length))
+        : null)))
+}
+// One track away from its album: its name, who plays it and which album it is on. No length and no file header,
+// because a list of every track would read a header for each one.
+function songRow (t, i) {
+  const e = i.e
+  const by = (e.music && e.music.artist) || t.artist || ''
+  const btn = h('button', { class: 'track-play flat', 'aria-label': 'Play ' + trackName(e), onclick: () => isCurrent(e) ? musicToggle() : startQueue(albumTracks(t), e, t.title) })
+  btn.insertAdjacentHTML('beforeend', ICON_PLAY + ICON_PAUSE)
+  btn.append(h('span', { class: 'track-name' }, trackName(e)))
+  return h('div', { class: 'row-item', 'data-track': e.key, 'data-name': trackName(e) },
+    btn,
+    h('span', { class: 'track-by' }, by),
+    h('a', { class: 'track-of', href: '#album/' + encodeURIComponent(t.key) }, t.album))
+}
+
+// ---- A title: what it is, how to start it, and the files under it. A film lists its versions, a series its
+// episodes a season at a time, a clip just itself.
+const pad2 = n => String(n).padStart(2, '0')
+const epCode = i => 'S' + pad2(i.season) + 'E' + pad2(i.episode)
+const epWords = i => 'S' + i.season + ' E' + i.episode
+const RES_TIERS = [[3840, '2160p'], [2560, '1440p'], [1920, '1080p'], [1280, '720p'], [854, '480p']]
+function resLabel (v) {
+  if (!v || !v.width) return ''
+  for (const tier of RES_TIERS) if (v.width >= tier[0]) return tier[1]
+  return v.height ? v.height + 'p' : ''
+}
+// A version is chosen by its picture and its sound, not by a number. The number stands in until a header is read;
+// nothing here asks for one, the row's own health check is what reads it.
+function versionLabel (e, n) {
+  const m = (infoData.get(e.key) || {}).media || {}
+  const v = (m.video || [])[0]
+  const a = (m.audio || [])[0]
+  const sound = a ? [langName(a.language), CHANNELS[a.channels] || '', a.codec].filter(Boolean).join(' ') : ''
+  return [resLabel(v), v && v.hdr ? v.hdr : '', sound].filter(Boolean).join(' · ') || 'Version ' + n
+}
+// Where a title is: the file left part way, else the one after the last finished, else the first.
+function nextUp (t) {
+  let part = null
+  let done = -1
+  t.items.forEach((i, n) => {
+    const w = watchStore[watchId(i.e)]
+    if (!w || !(w.dur > 0)) return
+    const pct = w.at / w.dur
+    if (pct >= 0.02 && pct <= 0.95) { if (!part || (w.t || 0) > (part.w.t || 0)) part = { i, w, verb: 'Resume' } }
+    else if (pct > 0.95) done = Math.max(done, n)
+  })
+  if (part) return part
+  if (t.kind === 'show' && done >= 0 && done + 1 < t.items.length) return { i: t.items[done + 1], w: null, verb: 'Next episode' }
+  return { i: t.items[0], w: null, verb: 'Play' }
+}
+function renderTitlePage (box, t) {
+  $('placeName').textContent = t.title
+  const kindWord = t.kind === 'movie' ? 'Movie' : t.kind === 'show' ? 'Series' : 'Clip'
+  const up = nextUp(t)
+  const e = up.i.e
+  const from = sourceName(t.items[0].e.source)
+  const accessNote = e.locked ? 'Subscriber pass needed' : (e.private ? 'Subscribers only' : '')
+  box.replaceChildren(h('div', { class: 'page title-page' },
+    h('div', { class: 'page-art' }, posterBox(t.imdb ? '/v1/poster/' + t.imdb : null, t.title)),
+    h('div', { class: 'page-head' },
+      h('div', { class: 'eyebrow' }, kindWord),
+      h('h2', { id: 'detailTitle', class: 'page-title big' }, t.title),
+      h('div', { class: 'facts' }, [tileLine(t), tileState(t)[0], accessNote, from && 'from ' + from].filter(Boolean).join(' · '))),
+    h('div', { class: 'page-acts' },
+      e.locked
+        ? h('span', { class: 'tag warn' }, 'Subscriber pass needed')
+        : h('button', { class: 'btn primary', 'data-play': true, onclick: () => play(e) }, playIcon(),
+          h('span', null, up.verb + (t.kind === 'show' ? ' ' + epWords(up.i) : ''))),
+      up.w ? h('span', { class: 'facts quiet' }, timeLeft(up.w.dur - up.w.at)) : null,
+      e.locked ? null : castButton(e),
+      e.locked ? null : downloadBtn(e),
+      moreMenu('More actions', [copyBtn('Copy link', e.magnetUrl), deleteBtn(e, false)])),
+    h('div', { class: 'page-body' }, titleBody(t))))
+}
+function titleBody (t) {
+  if (t.kind === 'show') {
+    const seasons = [...new Set(t.items.map(i => i.season))]
+    if (detailSeason == null || !seasons.includes(detailSeason)) detailSeason = seasons[0]
+    return [
+      seasons.length > 1
+        ? h('div', { class: 'seasons', role: 'group', 'aria-label': 'Season' }, seasons.map(s => h('button', {
+          class: 'chip',
+          'aria-pressed': String(s === detailSeason),
+          onclick: () => { detailSeason = s; renderDetail() }
+        }, 'Season ' + s)))
+        : null,
+      h('h3', { class: 'sec-head' }, plural(t.items.filter(i => i.season === detailSeason).length, 'episode', 'episodes')),
+      h('div', { class: 'rows' }, t.items.filter(i => i.season === detailSeason)
+        .map(i => fileRow(epLabel(i, t), i.e, false, epCode(i))))]
+  }
+  if (t.items.length > 1) {
+    // A film's versions are few, so each row shows its verdict; a show's episodes check only under File info.
+    return [h('h3', { class: 'sec-head' }, plural(t.items.length, 'version', 'versions')),
+      h('div', { class: 'rows' }, t.items.map((i, n) => fileRow(
+        h('span', { 'data-vlabel': i.e.key, 'data-vnum': String(n + 1) }, versionLabel(i.e, n + 1)), i.e, n < 8, 'Version ' + (n + 1))))]
+  }
+  return [infoPanel(t.items[0].e)]
+}
+// An episode row names the number and then the file, unless the file only repeats the series.
+function epLabel (i, t) {
+  const title = i.e.title || ''
+  const extra = title && fold(title) !== fold(t.title) && fold(title) !== fold(epCode(i)) ? title : ''
+  return extra ? h('span', null, epCode(i), h('span', { class: 'ep-name' }, extra)) : epCode(i)
+}
+function leaveDetail () {
+  const room = '#' + (DETAIL_ROOM[tab] || 'home')
+  if (cameFrom === DETAIL_ROOM[tab]) history.back()
+  else location.hash = room
+}
+$('detailClose').onclick = leaveDetail
+// Escape leaves a page, the way Back does. Anything else that is open takes the key first.
+addEventListener('keydown', ev => {
+  if (ev.key !== 'Escape' || ev.defaultPrevented || !DETAIL_ROOM[tab]) return
+  if (document.querySelector('dialog[open], .menu')) return
+  if ($('playerModal').classList.contains('open')) return
+  if ($('moreBtn').getAttribute('aria-expanded') === 'true') return
+  leaveDetail()
+})
 
 // ---- Channels
 $('followForm').onsubmit = async ev => {

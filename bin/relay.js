@@ -129,6 +129,8 @@ let guardConfig = ''
 let lifecycle = Promise.resolve()
 let mirrorStarting = null
 let mirrorHost = null
+// Set once a node's close() has rejected: that node may still hold the store open.
+let closeFailure = null
 async function shutdown () {
   if (shuttingDown) return
   shuttingDown = true
@@ -138,9 +140,13 @@ async function shutdown () {
   const guardStopped = stopGuard()
   // Let an open or reopen in flight finish (bounded by the kill timer) so its node is closed, not cut off mid-open.
   await Promise.race([lifecycle, new Promise(resolve => setTimeout(resolve, 2000))])
-  await stop()
+  // A stop that failed is not a clean exit: a node that did not close, in this stop or in an earlier restart, may
+  // still hold the store open. Say why and exit 1.
+  let failure = null
+  try { await stop() } catch (err) { failure = err?.message || String(err) }
   await guardStopped
-  process.exit(0)
+  if (failure) console.error(JSON.stringify({ msg: 'relay did not stop cleanly', error: failure }))
+  process.exit(failure ? 1 : 0)
 }
 for (const signal of ['SIGINT', 'SIGTERM']) {
   process.on(signal, shutdown)
@@ -269,6 +275,9 @@ async function start () {
 
 // The node keeps serving until the plugins have stopped: closing the plugin host first ends a folder import between
 // files, so a reopen waits for one file, not the whole import.
+// A node whose close() rejects may still hold the store open, and no later close can reach it. `stop` rejects with
+// that failure, then and on every later call: a reopen opens no node on the same storage in this process (the caller
+// gets the reason), and shutdown does not exit 0.
 async function stop () {
   await mirrorHost?.close().catch(() => {})
   await mirrorStarting
@@ -277,8 +286,11 @@ async function stop () {
   mirrorHost = null
   await cast?.close().catch(() => {})
   acquirer?.close()
-  await node?.close().catch(() => {})
+  await node?.close().catch(err => {
+    closeFailure = Object.assign(new Error(`The node did not close: ${err?.message || err}. Stop the relay process and start it again.`), { status: 500 })
+  })
   api.notify('update')
+  if (closeFailure) throw closeFailure
 }
 
 // Guard forwarder for other peers' 2-hop private routing: bin/private-relay.js in its own process, so it never shares

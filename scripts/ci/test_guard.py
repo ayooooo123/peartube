@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-"""Fail a pull request that weakens a test, unless its author declares the change.
+"""Fail a pull request that weakens a test.
 
     python3 scripts/ci/test_guard.py --base <rev> [--head <rev>]
 
 The script reads only git. It reports a removed test, a removed or changed assertion, a new skip marker,
-a longer time limit in a test, and a change to how the tests run. A line `Test-change: <reason>` in
-$PR_BODY or in a commit message of base..head turns every finding into a warning; a reviewer judges it.
-Exit 0: no finding, or the change is declared. Exit 1: findings without a declaration. Exit 2: git failed.
+a longer or removed time limit, and a change to how the tests run. It cannot tell a correct change from a
+weakening, so every finding fails, and a person decides at merge time whether the change is correct.
+Exit 0: no finding. Exit 1: findings. Exit 2: git failed.
 In CI, check out the full history (`fetch-depth: 0`): the script needs the merge base of --base and --head.
 """
 import argparse
@@ -29,6 +29,7 @@ JS_QUOTE = DOUBLE + r"|'(?:\\.|[^'\\])*'|`(?:\\.|[^`\\])*`"
 #   name       a test declaration on one line (`decl` and `name` hold the name of the test in the group `name`)
 #   assertion  where an assertion starts          skip   a marker that switches a test off
 #   time       a word that marks a time limit     quote  a string (the brackets inside it do not count)
+#   limit      a line that sets a time limit; a file with fewer such lines than before has lost a limit
 LANGS = {
     'rust': dict(
         ext=('.rs',), where=r'(^|/)tests/|(^|/)tests\.rs$|_tests\.rs$', comment='//', quote=QUOTE, time=TIME,
@@ -50,7 +51,8 @@ LANGS = {
         attr=r'^\s*@Test\b', decl=r'\bfunc\s+(?P<name>\w+)', name=r'\bfunc\s+(?P<name>test\w*)',
         assertion=r'\bXCTAssert\w*\(|#(?:expect|require)\(', skip=r'XCTSkip|\.disabled\('),
     'workflow': dict(
-        ext=('.yml', '.yaml'), where=r'^\.github/workflows/', comment='#', time=TIME, skip=r'--skip(?![\w-])'),
+        ext=('.yml', '.yaml'), where=r'^\.github/workflows/', comment='#', time=TIME, skip=r'--skip(?![\w-])',
+        limit=r'^\s*timeout-minutes\s*:'),
 }
 
 # Files that set how the tests run: (path regex, the line that opens the block of a changed line, the changed line).
@@ -61,14 +63,13 @@ PROFILE = [
     (r'(^|/)\.config/nextest\.toml$', None, None),
     (r'^\.github/workflows/[^/]+\.ya?ml$', None,
      r'cargo test|cargo nextest|npm test|npm run test|node --test|brittle|--test-[a-z]|--include-ignored|--ignored'
-     r'|--skip|RUST_TEST_THREADS|timeout-minutes|gradlew|xcodebuild'),
+     r'|--skip|RUST_TEST_THREADS|gradlew|xcodebuild'),
     (r'(^|/)package\.json$', r'"scripts"\s*:', r'^\s*"test[^"]*"\s*:'),
 ]
 
 DIFF = ['diff', '-M', '--no-color', '--no-ext-diff', '--no-textconv', '--src-prefix=a/', '--dst-prefix=b/']
 HUNK = re.compile(r'^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@')
 NUMBER = re.compile(r'(?<![\w.])\d+(?:_\d+)*(?:\.\d+)?')
-DECLARATION = re.compile(r'Test-change:\s*\S')
 
 # One weakened test: its place, the rule that found it, and what changed.
 Finding = namedtuple('Finding', 'path line kind detail')
@@ -240,6 +241,16 @@ def longer_limits(path, lang, old, new, hunks):
                 if grown:
                     yield Finding(path, n, 'longer-limit', f"{', '.join(grown)}: {short(s.strip())}")
 
+def removed_limits(path, lang, old, new, hunks):
+    """Fewer time limit lines than before: without its own limit, a job runs until a longer default limit."""
+    if 'limit' not in lang:
+        return
+    before = sum(1 for s in old.code.values() if re.search(lang['limit'], s))
+    after = sum(1 for s in new.code.values() if re.search(lang['limit'], s))
+    if after < before:
+        n, s = next((row for h in hunks for row in h.removed if re.search(lang['limit'], row[1])), (1, ''))
+        yield Finding(path, head_line(hunks, n), 'longer-limit', f'{before} -> {after} time limits: -{short(s.strip())}')
+
 def opener(lines, i, toml):
     """The line that opens the block of lines[i]: its TOML section header, else the nearest less indented line."""
     indent = len(lines[i]) - len(lines[i].lstrip())
@@ -280,6 +291,7 @@ def scan(base, head):
             for text, n in lost(statements(lang, old.code), statements(lang, new.code)):
                 found.append(Finding(path, head_line(hs, n), 'assertion-changed', f'removed or changed: {short(text)}'))
             found += list(new_skips(path, lang, old, new, hs)) + list(longer_limits(path, lang, old, new, hs))
+            found += removed_limits(path, lang, old, new, hs)
         if rule:
             found += profile_changes(path, rule, old, new, hs)
     for name, path, line in gone:  # a test that moved to another file is not gone
@@ -289,28 +301,17 @@ def scan(base, head):
             found.append(Finding(path, line, 'removed-test', f'test {name} is in no test file at head'))
     return sorted(set(found))
 
-def declared(base, head):
-    """True if PR_BODY or a commit message of base..head has a line `Test-change: <reason>`."""
-    text = os.environ.get('PR_BODY', '') + '\n' + git('log', '--format=%B', f'{base}..{head}')
-    return any(DECLARATION.match(line) for line in text.splitlines())
-
-def report(findings, accepted):
+def report(findings):
     """Print one line for each finding and one summary line."""
-    github, level = os.environ.get('GITHUB_ACTIONS') == 'true', 'warning' if accepted else 'error'
+    github = os.environ.get('GITHUB_ACTIONS') == 'true'
     for f in findings:
         if github:
             text = f'{f.kind}: {f.detail}'.replace('%', '%25').replace('\r', '%0D').replace('\n', '%0A')
-            print(f'::{level} file={f.path},line={f.line}::{text}')
+            print(f'::error file={f.path},line={f.line}::{text}')
         else:
             print(f'{f.path}:{f.line}: {f.kind}: {f.detail}')
     count = f'{len(findings)} finding{"" if len(findings) == 1 else "s"}'
-    if accepted:
-        print(f'test_guard: {count}, declared with a "Test-change:" line; a reviewer judges them.')
-    elif findings:
-        print(f'test_guard: {count}. Add a line "Test-change: <reason>" to the pull request text or a commit '
-              'message; a reviewer judges it.')
-    else:
-        print(f'test_guard: {count}.')
+    print(f'test_guard: {count}.' + (' A person decides at merge time whether each change is correct.' if findings else ''))
 
 def main():
     """Read the command line, scan, report, and return the exit status."""
@@ -319,9 +320,8 @@ def main():
     parser.add_argument('--head', default='HEAD', help='the revision of the pull request (default HEAD)')
     args = parser.parse_args()
     findings = scan(args.base, args.head)
-    accepted = bool(findings) and declared(args.base, args.head)
-    report(findings, accepted)
-    return 1 if findings and not accepted else 0
+    report(findings)
+    return 1 if findings else 0
 
 if __name__ == '__main__':
     sys.exit(main())

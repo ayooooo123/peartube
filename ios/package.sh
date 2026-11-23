@@ -25,6 +25,8 @@ ditto --norsrc --noextattr "$app" "$stage/Payload/PearTube.app"
 if [ "$#" -eq 1 ]; then
   rm -f "$stage/Payload/PearTube.app/embedded.mobileprovision"
   codesign --remove-signature "$stage/Payload/PearTube.app"
+else
+  xcrun strip -S "$stage/Payload/PearTube.app/PearTube"
 fi
 version=$(node -p "require('./package.json').version")
 ipa="$PWD/ios/build/PearTube-$version-ios-arm64.ipa"

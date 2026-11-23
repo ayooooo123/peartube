@@ -1,0 +1,81 @@
+id: stop-all-settled
+language: javascript
+severity: error
+message: Promise.all over stop or close calls rejects at the first failure while other stops still run, and a stop that throws at once stops the loop.
+note: |-
+  Stop or close a group with `await Promise.allSettled(items.map(async item => item.stop()))`.
+  The async callback turns a throw into a rejection, so every stop starts.
+  Then report every rejected reason, for example `throw new AggregateError(reasons, '...')`, so no reason is lost.
+  See docs/code-rules.md#stop-all-settled.
+# Tests close their fixtures with Promise.all, and a failed close fails the test anyway.
+ignores:
+  - 'test/**'
+  - '**/*.test.js'
+  - '**/*.e2e.js'
+  - '**/*.test.mjs'
+utils:
+  # A call such as `p.stop()`, `p.stop?.()` or `p?.close()`: its callee is a member access with one of five stop names.
+  stop-call:
+    kind: call_expression
+    has:
+      field: function
+      kind: member_expression
+      has:
+        field: property
+        regex: '^(stop|close|destroy|suspend|shutdown)$'
+  # A stop call, or `await` of a stop call.
+  stop-result:
+    any:
+      - matches: stop-call
+      - kind: await_expression
+        has:
+          matches: stop-call
+  # A callback that stops its item: a stop call as its expression body, or as a `return` or a statement that is a direct
+  # statement of its block body. A stop call inside `try`, `if` or a loop is not seen, so a callback that reads a core
+  # and closes it only in `finally` passes.
+  stop-callback:
+    any:
+      - kind: arrow_function
+        has:
+          field: body
+          matches: stop-result
+      - any:
+          - kind: arrow_function
+          - kind: function_expression
+        has:
+          field: body
+          kind: statement_block
+          has:
+            any:
+              - kind: return_statement
+              - kind: expression_statement
+            has:
+              matches: stop-result
+  # `<list>.map(<callback>)` where the callback hands back a stop call.
+  map-of-stops:
+    kind: call_expression
+    all:
+      - has:
+          field: function
+          kind: member_expression
+          has:
+            field: property
+            regex: '^map$'
+      - has:
+          field: arguments
+          has:
+            matches: stop-callback
+  # An array literal with a stop call, or an `await` of one, as an element.
+  array-with-stop:
+    kind: array
+    has:
+      matches: stop-result
+# The rule flags Promise.all when its argument is a `map` of stop callbacks, or an array with a stop call. It does not
+# check a plain variable, as in `Promise.all(closing)`, because ast-grep cannot see what the variable holds.
+rule:
+  pattern: Promise.all($ARG)
+constraints:
+  ARG:
+    any:
+      - matches: map-of-stops
+      - matches: array-with-stop

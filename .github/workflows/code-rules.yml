@@ -1,0 +1,53 @@
+# Checks the rules in docs/code-rules.md. A step whose files are not in the checked-out commit is
+# skipped, so a pull request from a branch that is older than the rules does not fail.
+name: Code rules
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: code-rules-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  ast-grep:
+    name: ast-grep rules
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+      - name: Install ast-grep
+        if: hashFiles('sgconfig.yml') != ''
+        run: npm install --global @ast-grep/cli@0.50.0
+      - name: Rule tests
+        if: hashFiles('sgconfig.yml') != ''
+        run: ast-grep test
+      - name: Rules on the changed lines
+        if: hashFiles('sgconfig.yml') != ''
+        env:
+          BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: python3 scripts/ci/ast_grep_changed.py --base "$BASE"
+
+  test-guard:
+    name: Test-weakening guard
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+      - name: Guard
+        if: hashFiles('scripts/ci/test_guard.py') != ''
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+        run: python3 scripts/ci/test_guard.py --base "$BASE"

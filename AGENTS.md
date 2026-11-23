@@ -6,6 +6,8 @@ PearTube is a decentralized CDN and debrid provider on the Holepunch stack. The 
 
 Builds, installs, and deploy commands may be run when explicitly requested.
 
+Code rules: read `docs/code-rules.md` before you change code. CI checks them (`.github/workflows/code-rules.yml`: ast-grep rules on changed lines, and a guard that fails when a pull request weakens a test).
+
 ## Layout
 
 |File|Purpose|

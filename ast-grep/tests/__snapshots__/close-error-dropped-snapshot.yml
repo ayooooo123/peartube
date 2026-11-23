@@ -1,0 +1,542 @@
+id: close-error-dropped
+snapshots:
+  ? |
+    async function shutdown () {
+      if (stopping) return
+      stopping = true
+      clearInterval(heartbeat)
+      setTimeout(() => process.exit(0), 2000).unref?.()
+      await guard.close().catch(() => {})
+      process.exit(0)
+    }
+  : labels:
+    - source: guard.close().catch(() => {})
+      style: primary
+      start: 157
+      end: 186
+    - source: catch
+      style: secondary
+      start: 171
+      end: 176
+    - source: close
+      style: secondary
+      start: 163
+      end: 168
+    - source: guard.close
+      style: secondary
+      start: 157
+      end: 168
+    - source: guard.close()
+      style: secondary
+      start: 157
+      end: 170
+    - source: guard.close().catch
+      style: secondary
+      start: 157
+      end: 176
+    - source: '{}'
+      style: secondary
+      start: 183
+      end: 185
+    - source: () => {}
+      style: secondary
+      start: 177
+      end: 185
+    - source: () => {}
+      style: secondary
+      start: 177
+      end: 185
+  ? |
+    async function stop () {
+      await mirrorHost?.close().catch(() => {})
+      await mirrorStarting
+      const { node, acquirer, cast } = state
+      state.node = state.acquirer = state.cast = state.mirror = null
+      mirrorHost = null
+      await cast?.close().catch(() => {})
+      acquirer?.close()
+      try {
+        await node?.close()
+      } catch (err) {
+        closeFailure = Object.assign(new Error(`The node did not close: ${reasonOf(err)}.`), { status: 500 })
+      }
+      api.notify('update')
+      if (closeFailure) throw closeFailure
+    }
+  : labels:
+    - source: mirrorHost?.close().catch(() => {})
+      style: primary
+      start: 33
+      end: 68
+    - source: catch
+      style: secondary
+      start: 53
+      end: 58
+    - source: close
+      style: secondary
+      start: 45
+      end: 50
+    - source: mirrorHost?.close
+      style: secondary
+      start: 33
+      end: 50
+    - source: mirrorHost?.close()
+      style: secondary
+      start: 33
+      end: 52
+    - source: mirrorHost?.close().catch
+      style: secondary
+      start: 33
+      end: 58
+    - source: '{}'
+      style: secondary
+      start: 65
+      end: 67
+    - source: () => {}
+      style: secondary
+      start: 59
+      end: 67
+    - source: () => {}
+      style: secondary
+      start: 59
+      end: 67
+  ? |
+    async function stop () {
+      await node.close().catch(() => null)
+    }
+  : labels:
+    - source: node.close().catch(() => null)
+      style: primary
+      start: 33
+      end: 63
+    - source: catch
+      style: secondary
+      start: 46
+      end: 51
+    - source: close
+      style: secondary
+      start: 38
+      end: 43
+    - source: node.close
+      style: secondary
+      start: 33
+      end: 43
+    - source: node.close()
+      style: secondary
+      start: 33
+      end: 45
+    - source: node.close().catch
+      style: secondary
+      start: 33
+      end: 51
+    - source: 'null'
+      style: secondary
+      start: 58
+      end: 62
+    - source: () => null
+      style: secondary
+      start: 52
+      end: 62
+    - source: () => null
+      style: secondary
+      start: 52
+      end: 62
+  ? |
+    async function stop () {
+      await node.close().catch(() => undefined)
+    }
+  : labels:
+    - source: node.close().catch(() => undefined)
+      style: primary
+      start: 33
+      end: 68
+    - source: catch
+      style: secondary
+      start: 46
+      end: 51
+    - source: close
+      style: secondary
+      start: 38
+      end: 43
+    - source: node.close
+      style: secondary
+      start: 33
+      end: 43
+    - source: node.close()
+      style: secondary
+      start: 33
+      end: 45
+    - source: node.close().catch
+      style: secondary
+      start: 33
+      end: 51
+    - source: undefined
+      style: secondary
+      start: 58
+      end: 67
+    - source: () => undefined
+      style: secondary
+      start: 52
+      end: 67
+    - source: () => undefined
+      style: secondary
+      start: 52
+      end: 67
+  ? |
+    async function stop () {
+      await node.close().catch(() => { /* ignore */ })
+    }
+  : labels:
+    - source: node.close().catch(() => { /* ignore */ })
+      style: primary
+      start: 33
+      end: 75
+    - source: catch
+      style: secondary
+      start: 46
+      end: 51
+    - source: close
+      style: secondary
+      start: 38
+      end: 43
+    - source: node.close
+      style: secondary
+      start: 33
+      end: 43
+    - source: node.close()
+      style: secondary
+      start: 33
+      end: 45
+    - source: node.close().catch
+      style: secondary
+      start: 33
+      end: 51
+    - source: '{ /* ignore */ }'
+      style: secondary
+      start: 58
+      end: 74
+    - source: () => { /* ignore */ }
+      style: secondary
+      start: 52
+      end: 74
+    - source: () => { /* ignore */ }
+      style: secondary
+      start: 52
+      end: 74
+  ? |
+    async function stop () {
+      await node.close().catch(err => {})
+    }
+  : labels:
+    - source: node.close().catch(err => {})
+      style: primary
+      start: 33
+      end: 62
+    - source: catch
+      style: secondary
+      start: 46
+      end: 51
+    - source: close
+      style: secondary
+      start: 38
+      end: 43
+    - source: node.close
+      style: secondary
+      start: 33
+      end: 43
+    - source: node.close()
+      style: secondary
+      start: 33
+      end: 45
+    - source: node.close().catch
+      style: secondary
+      start: 33
+      end: 51
+    - source: '{}'
+      style: secondary
+      start: 59
+      end: 61
+    - source: err => {}
+      style: secondary
+      start: 52
+      end: 61
+    - source: err => {}
+      style: secondary
+      start: 52
+      end: 61
+  ? |
+    async function stop () {
+      await node.close().catch(noop)
+    }
+  : labels:
+    - source: node.close().catch(noop)
+      style: primary
+      start: 33
+      end: 57
+    - source: catch
+      style: secondary
+      start: 46
+      end: 51
+    - source: close
+      style: secondary
+      start: 38
+      end: 43
+    - source: node.close
+      style: secondary
+      start: 33
+      end: 43
+    - source: node.close()
+      style: secondary
+      start: 33
+      end: 45
+    - source: node.close().catch
+      style: secondary
+      start: 33
+      end: 51
+    - source: noop
+      style: secondary
+      start: 52
+      end: 56
+    - source: noop
+      style: secondary
+      start: 52
+      end: 56
+  ? |
+    async function stop () {
+      await node.destroy().catch(function () {})
+    }
+  : labels:
+    - source: node.destroy().catch(function () {})
+      style: primary
+      start: 33
+      end: 69
+    - source: catch
+      style: secondary
+      start: 48
+      end: 53
+    - source: destroy
+      style: secondary
+      start: 38
+      end: 45
+    - source: node.destroy
+      style: secondary
+      start: 33
+      end: 45
+    - source: node.destroy()
+      style: secondary
+      start: 33
+      end: 47
+    - source: node.destroy().catch
+      style: secondary
+      start: 33
+      end: 53
+    - source: '{}'
+      style: secondary
+      start: 66
+      end: 68
+    - source: function () {}
+      style: secondary
+      start: 54
+      end: 68
+    - source: function () {}
+      style: secondary
+      start: 54
+      end: 68
+  ? |
+    async function stop () {
+      await plugin.stop?.().catch(() => {})
+    }
+  : labels:
+    - source: plugin.stop?.().catch(() => {})
+      style: primary
+      start: 33
+      end: 64
+    - source: catch
+      style: secondary
+      start: 49
+      end: 54
+    - source: stop
+      style: secondary
+      start: 40
+      end: 44
+    - source: plugin.stop
+      style: secondary
+      start: 33
+      end: 44
+    - source: plugin.stop?.()
+      style: secondary
+      start: 33
+      end: 48
+    - source: plugin.stop?.().catch
+      style: secondary
+      start: 33
+      end: 54
+    - source: '{}'
+      style: secondary
+      start: 61
+      end: 63
+    - source: () => {}
+      style: secondary
+      start: 55
+      end: 63
+    - source: () => {}
+      style: secondary
+      start: 55
+      end: 63
+  ? |
+    async function stop () {
+      const { node } = state
+      state.node = null
+      await node?.close().catch(() => {})
+      api.notify('update')
+    }
+  : labels:
+    - source: node?.close().catch(() => {})
+      style: primary
+      start: 78
+      end: 107
+    - source: catch
+      style: secondary
+      start: 92
+      end: 97
+    - source: close
+      style: secondary
+      start: 84
+      end: 89
+    - source: node?.close
+      style: secondary
+      start: 78
+      end: 89
+    - source: node?.close()
+      style: secondary
+      start: 78
+      end: 91
+    - source: node?.close().catch
+      style: secondary
+      start: 78
+      end: 97
+    - source: '{}'
+      style: secondary
+      start: 104
+      end: 106
+    - source: () => {}
+      style: secondary
+      start: 98
+      end: 106
+    - source: () => {}
+      style: secondary
+      start: 98
+      end: 106
+  ? |
+    async function stop () {
+      try {
+        await node.close()
+      } catch {}
+    }
+  : labels:
+    - source: |-
+        try {
+            await node.close()
+          } catch {}
+      style: primary
+      start: 27
+      end: 68
+    - source: close
+      style: secondary
+      start: 48
+      end: 53
+    - source: node.close
+      style: secondary
+      start: 43
+      end: 53
+    - source: node.close()
+      style: secondary
+      start: 43
+      end: 55
+    - source: node.close()
+      style: secondary
+      start: 43
+      end: 55
+    - source: '{}'
+      style: secondary
+      start: 66
+      end: 68
+    - source: '{}'
+      style: secondary
+      start: 66
+      end: 68
+  ? |
+    async function stop () {
+      try {
+        if (node) {
+          await node.stop()
+        }
+      } catch (err) {}
+    }
+  : labels:
+    - source: |-
+        try {
+            if (node) {
+              await node.stop()
+            }
+          } catch (err) {}
+      style: primary
+      start: 27
+      end: 97
+    - source: stop
+      style: secondary
+      start: 66
+      end: 70
+    - source: node.stop
+      style: secondary
+      start: 61
+      end: 70
+    - source: node.stop()
+      style: secondary
+      start: 61
+      end: 72
+    - source: node.stop()
+      style: secondary
+      start: 61
+      end: 72
+    - source: '{}'
+      style: secondary
+      start: 95
+      end: 97
+    - source: '{}'
+      style: secondary
+      start: 95
+      end: 97
+  ? |
+    async function stop () {
+      try { await node.close() } catch (err) { /* ignore */ }
+    }
+  : labels:
+    - source: try { await node.close() } catch (err) { /* ignore */ }
+      style: primary
+      start: 27
+      end: 82
+    - source: close
+      style: secondary
+      start: 44
+      end: 49
+    - source: node.close
+      style: secondary
+      start: 39
+      end: 49
+    - source: node.close()
+      style: secondary
+      start: 39
+      end: 51
+    - source: node.close()
+      style: secondary
+      start: 39
+      end: 51
+    - source: '{ /* ignore */ }'
+      style: secondary
+      start: 66
+      end: 82
+    - source: '{ /* ignore */ }'
+      style: secondary
+      start: 66
+      end: 82

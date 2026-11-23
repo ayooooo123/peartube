@@ -1,0 +1,109 @@
+id: stop-all-settled
+valid:
+  # Promise.allSettled starts every stop and waits for each one: this is the one way.
+  - |
+    async function close () {
+      await Promise.allSettled([...plugins.values()].map(async p => p.stop?.()))
+    }
+  # The callback reads a core and closes it in `finally`, so it is not a group stop (the shape of src/node/catalog.js).
+  - |
+    async function probe (hexes) {
+      await Promise.all(hexes.map(async h => {
+        if (seen.has(h)) return
+        const tmp = store.get({ key: h, active: false })
+        try {
+          await tmp.ready()
+          record(h, tmp.length)
+        } finally {
+          await tmp.close().catch(() => {})
+        }
+      }))
+    }
+  # A `return` inside `try` is not a statement of the callback body itself, so the rule does not see it.
+  - |
+    async function probe (nodes) {
+      await Promise.all(nodes.map(async n => {
+        try {
+          return await n.close()
+        } catch (err) {
+          log(err)
+        }
+      }))
+    }
+  # The callback is a function name, not a stop call.
+  - |
+    async function sizes (entries) {
+      return await Promise.all(entries.map(resolutionOf))
+    }
+  # The argument is a plain variable, and ast-grep cannot see what it holds.
+  - |
+    function closeAll (closing) {
+      return Promise.all(closing)
+    }
+  # None of the elements is a stop call.
+  - |
+    async function open (a, b) {
+      await Promise.all([a.start(), b.open()])
+    }
+  # `closeSync` is not one of the five stop names.
+  - |
+    async function sync (files) {
+      await Promise.all(files.map(f => f.closeSync()))
+    }
+invalid:
+  # The fault of pull request 581: Promise.all rejects at the first failed stop, and a stop that throws at once ends map.
+  - |
+    async function close () {
+      closed = true
+      clearInterval(timer)
+      await Promise.all([...plugins.values()].map(p => p.stop?.()))
+      traffic.stop()
+    }
+  # An array that holds two stop calls.
+  - |
+    async function close () {
+      await Promise.all([cast.close(), sender.close()])
+    }
+  # A block body that returns a stop call.
+  - |
+    async function close (nodes) {
+      await Promise.all(nodes.map(async n => { return n.close() }))
+    }
+  # A function expression that returns a stop call.
+  - |
+    async function close (list) {
+      await Promise.all(list.map(function (x) { return x.destroy() }))
+    }
+  # An expression body that awaits a stop call.
+  - |
+    async function close (nodes) {
+      await Promise.all(nodes.map(async n => await n.close()))
+    }
+  # `suspend` is a stop name.
+  - |
+    async function pause (hosts) {
+      await Promise.all(hosts.map(h => h.suspend()))
+    }
+  # `shutdown` is a stop name.
+  - |
+    async function stopAll (hosts) {
+      await Promise.all(hosts.map(h => h.shutdown()))
+    }
+  # An optional call on an optional receiver is a stop call.
+  - |
+    async function close (nodes) {
+      await Promise.all(nodes.map(n => n?.close?.()))
+    }
+  # An array element that awaits a stop call is a stop call.
+  - |
+    async function close (a, b) {
+      await Promise.all([b.start(), await a.stop()])
+    }
+  # A block body whose own statement awaits a stop call: Promise.all still rejects at the first failed stop.
+  - |
+    async function close (nodes) {
+      await Promise.all(nodes.map(async n => {
+        log(n.key)
+        await n.close()
+      }))
+    }

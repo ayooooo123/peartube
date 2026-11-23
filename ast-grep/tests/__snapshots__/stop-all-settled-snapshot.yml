@@ -1,0 +1,398 @@
+id: stop-all-settled
+snapshots:
+  ? |
+    async function close () {
+      await Promise.all([cast.close(), sender.close()])
+    }
+  : labels:
+    - source: Promise.all([cast.close(), sender.close()])
+      style: primary
+      start: 34
+      end: 77
+    - source: close
+      style: secondary
+      start: 52
+      end: 57
+    - source: cast.close
+      style: secondary
+      start: 47
+      end: 57
+    - source: cast.close()
+      style: secondary
+      start: 47
+      end: 59
+  ? |
+    async function close () {
+      closed = true
+      clearInterval(timer)
+      await Promise.all([...plugins.values()].map(p => p.stop?.()))
+      traffic.stop()
+    }
+  : labels:
+    - source: Promise.all([...plugins.values()].map(p => p.stop?.()))
+      style: primary
+      start: 73
+      end: 128
+    - source: map
+      style: secondary
+      start: 107
+      end: 110
+    - source: '[...plugins.values()].map'
+      style: secondary
+      start: 85
+      end: 110
+    - source: stop
+      style: secondary
+      start: 118
+      end: 122
+    - source: p.stop
+      style: secondary
+      start: 116
+      end: 122
+    - source: p.stop?.()
+      style: secondary
+      start: 116
+      end: 126
+    - source: p => p.stop?.()
+      style: secondary
+      start: 111
+      end: 126
+    - source: p => p.stop?.()
+      style: secondary
+      start: 111
+      end: 126
+  ? |
+    async function close (a, b) {
+      await Promise.all([b.start(), await a.stop()])
+    }
+  : labels:
+    - source: Promise.all([b.start(), await a.stop()])
+      style: primary
+      start: 38
+      end: 78
+    - source: stop
+      style: secondary
+      start: 70
+      end: 74
+    - source: a.stop
+      style: secondary
+      start: 68
+      end: 74
+    - source: a.stop()
+      style: secondary
+      start: 68
+      end: 76
+    - source: await a.stop()
+      style: secondary
+      start: 62
+      end: 76
+  ? |
+    async function close (list) {
+      await Promise.all(list.map(function (x) { return x.destroy() }))
+    }
+  : labels:
+    - source: Promise.all(list.map(function (x) { return x.destroy() }))
+      style: primary
+      start: 38
+      end: 96
+    - source: map
+      style: secondary
+      start: 55
+      end: 58
+    - source: list.map
+      style: secondary
+      start: 50
+      end: 58
+    - source: destroy
+      style: secondary
+      start: 83
+      end: 90
+    - source: x.destroy
+      style: secondary
+      start: 81
+      end: 90
+    - source: x.destroy()
+      style: secondary
+      start: 81
+      end: 92
+    - source: return x.destroy()
+      style: secondary
+      start: 74
+      end: 92
+    - source: '{ return x.destroy() }'
+      style: secondary
+      start: 72
+      end: 94
+    - source: function (x) { return x.destroy() }
+      style: secondary
+      start: 59
+      end: 94
+    - source: function (x) { return x.destroy() }
+      style: secondary
+      start: 59
+      end: 94
+  ? |
+    async function close (nodes) {
+      await Promise.all(nodes.map(async n => await n.close()))
+    }
+  : labels:
+    - source: Promise.all(nodes.map(async n => await n.close()))
+      style: primary
+      start: 39
+      end: 89
+    - source: map
+      style: secondary
+      start: 57
+      end: 60
+    - source: nodes.map
+      style: secondary
+      start: 51
+      end: 60
+    - source: close
+      style: secondary
+      start: 80
+      end: 85
+    - source: n.close
+      style: secondary
+      start: 78
+      end: 85
+    - source: n.close()
+      style: secondary
+      start: 78
+      end: 87
+    - source: await n.close()
+      style: secondary
+      start: 72
+      end: 87
+    - source: async n => await n.close()
+      style: secondary
+      start: 61
+      end: 87
+    - source: async n => await n.close()
+      style: secondary
+      start: 61
+      end: 87
+  ? |
+    async function close (nodes) {
+      await Promise.all(nodes.map(async n => {
+        log(n.key)
+        await n.close()
+      }))
+    }
+  : labels:
+    - source: |-
+        Promise.all(nodes.map(async n => {
+            log(n.key)
+            await n.close()
+          }))
+      style: primary
+      start: 39
+      end: 114
+    - source: map
+      style: secondary
+      start: 57
+      end: 60
+    - source: nodes.map
+      style: secondary
+      start: 51
+      end: 60
+    - source: close
+      style: secondary
+      start: 101
+      end: 106
+    - source: n.close
+      style: secondary
+      start: 99
+      end: 106
+    - source: n.close()
+      style: secondary
+      start: 99
+      end: 108
+    - source: await n.close()
+      style: secondary
+      start: 93
+      end: 108
+    - source: await n.close()
+      style: secondary
+      start: 93
+      end: 108
+    - source: |-
+        {
+            log(n.key)
+            await n.close()
+          }
+      style: secondary
+      start: 72
+      end: 112
+    - source: |-
+        async n => {
+            log(n.key)
+            await n.close()
+          }
+      style: secondary
+      start: 61
+      end: 112
+    - source: |-
+        async n => {
+            log(n.key)
+            await n.close()
+          }
+      style: secondary
+      start: 61
+      end: 112
+  ? |
+    async function close (nodes) {
+      await Promise.all(nodes.map(async n => { return n.close() }))
+    }
+  : labels:
+    - source: Promise.all(nodes.map(async n => { return n.close() }))
+      style: primary
+      start: 39
+      end: 94
+    - source: map
+      style: secondary
+      start: 57
+      end: 60
+    - source: nodes.map
+      style: secondary
+      start: 51
+      end: 60
+    - source: close
+      style: secondary
+      start: 83
+      end: 88
+    - source: n.close
+      style: secondary
+      start: 81
+      end: 88
+    - source: n.close()
+      style: secondary
+      start: 81
+      end: 90
+    - source: return n.close()
+      style: secondary
+      start: 74
+      end: 90
+    - source: '{ return n.close() }'
+      style: secondary
+      start: 72
+      end: 92
+    - source: async n => { return n.close() }
+      style: secondary
+      start: 61
+      end: 92
+    - source: async n => { return n.close() }
+      style: secondary
+      start: 61
+      end: 92
+  ? |
+    async function close (nodes) {
+      await Promise.all(nodes.map(n => n?.close?.()))
+    }
+  : labels:
+    - source: Promise.all(nodes.map(n => n?.close?.()))
+      style: primary
+      start: 39
+      end: 80
+    - source: map
+      style: secondary
+      start: 57
+      end: 60
+    - source: nodes.map
+      style: secondary
+      start: 51
+      end: 60
+    - source: close
+      style: secondary
+      start: 69
+      end: 74
+    - source: n?.close
+      style: secondary
+      start: 66
+      end: 74
+    - source: n?.close?.()
+      style: secondary
+      start: 66
+      end: 78
+    - source: n => n?.close?.()
+      style: secondary
+      start: 61
+      end: 78
+    - source: n => n?.close?.()
+      style: secondary
+      start: 61
+      end: 78
+  ? |
+    async function pause (hosts) {
+      await Promise.all(hosts.map(h => h.suspend()))
+    }
+  : labels:
+    - source: Promise.all(hosts.map(h => h.suspend()))
+      style: primary
+      start: 39
+      end: 79
+    - source: map
+      style: secondary
+      start: 57
+      end: 60
+    - source: hosts.map
+      style: secondary
+      start: 51
+      end: 60
+    - source: suspend
+      style: secondary
+      start: 68
+      end: 75
+    - source: h.suspend
+      style: secondary
+      start: 66
+      end: 75
+    - source: h.suspend()
+      style: secondary
+      start: 66
+      end: 77
+    - source: h => h.suspend()
+      style: secondary
+      start: 61
+      end: 77
+    - source: h => h.suspend()
+      style: secondary
+      start: 61
+      end: 77
+  ? |
+    async function stopAll (hosts) {
+      await Promise.all(hosts.map(h => h.shutdown()))
+    }
+  : labels:
+    - source: Promise.all(hosts.map(h => h.shutdown()))
+      style: primary
+      start: 41
+      end: 82
+    - source: map
+      style: secondary
+      start: 59
+      end: 62
+    - source: hosts.map
+      style: secondary
+      start: 53
+      end: 62
+    - source: shutdown
+      style: secondary
+      start: 70
+      end: 78
+    - source: h.shutdown
+      style: secondary
+      start: 68
+      end: 78
+    - source: h.shutdown()
+      style: secondary
+      start: 68
+      end: 80
+    - source: h => h.shutdown()
+      style: secondary
+      start: 63
+      end: 80
+    - source: h => h.shutdown()
+      style: secondary
+      start: 63
+      end: 80

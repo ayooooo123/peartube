@@ -1,0 +1,78 @@
+id: close-error-dropped
+language: javascript
+severity: error
+message: This stop path drops the error of a close, so the process can exit 0 while a store or a plugin is still open.
+note: |
+  Catch the error of each close, and keep it. Go on to close the rest.
+  Then make the stop fail with the kept error, so that the process exits 1, or log the error with its reason.
+  See docs/code-rules.md#close-error-dropped.
+# The relay and guard processes: their stop paths decide the exit status.
+files:
+  - bin/**/*.js
+utils:
+  # `node.close()`, `node?.close()` and `plugin.stop?.()`. The `?.` token does not change the property name.
+  close-call:
+    kind: call_expression
+    has:
+      field: function
+      kind: member_expression
+      has:
+        field: property
+        regex: ^(close|stop|destroy)$
+  # A block with no statement. `$_` matches a named node only, so the braces do not count; a comment does not count either.
+  empty-block:
+    kind: statement_block
+    not:
+      has:
+        all:
+          - pattern: $_
+          - not:
+              kind: comment
+  # A handler that gets the error and does nothing with it.
+  dropping-handler:
+    any:
+      - kind: identifier
+        regex: ^noop$
+      - kind: arrow_function
+        has:
+          field: body
+          any:
+            - matches: empty-block
+            - kind: 'null'
+            - kind: undefined
+      - kind: function_expression
+        has:
+          field: body
+          matches: empty-block
+rule:
+  any:
+    # `<close call>.catch(<handler that drops the error>)`
+    - kind: call_expression
+      all:
+        - has:
+            field: function
+            kind: member_expression
+            all:
+              - has:
+                  field: property
+                  regex: ^catch$
+              - has:
+                  field: object
+                  matches: close-call
+        - has:
+            field: arguments
+            has:
+              matches: dropping-handler
+    # A `try` whose block closes something, at any depth, and whose `catch` body is empty.
+    - kind: try_statement
+      all:
+        - has:
+            field: body
+            has:
+              matches: close-call
+              stopBy: end
+        - has:
+            field: handler
+            has:
+              field: body
+              matches: empty-block

@@ -1,0 +1,50 @@
+# Checks the rules in docs/code-rules.md. This workflow runs only on branches that contain it.
+name: Code rules
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, edited]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: code-rules-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  ast-grep:
+    name: ast-grep rules
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+      - name: Install ast-grep
+        run: npm install --global @ast-grep/cli@0.50.0
+      - name: Rule tests
+        run: ast-grep test
+      - name: Rules on the changed lines
+        env:
+          BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: python3 scripts/ci/ast_grep_changed.py --base "$BASE"
+
+  test-guard:
+    name: Test-weakening guard
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+      - name: Guard
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: python3 scripts/ci/test_guard.py --base "$BASE"

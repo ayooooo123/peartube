@@ -1,0 +1,153 @@
+id: close-error-dropped
+valid:
+  # The repaired node close of main (pull request 586): the error is kept, and the stop fails with it.
+  - |
+    async function stop () {
+      try {
+        await node?.close()
+      } catch (err) {
+        closeFailure = Object.assign(new Error(`The node did not close: ${reasonOf(err)}.`), { status: 500 })
+      }
+      if (closeFailure) throw closeFailure
+    }
+  # The handler keeps the error for the stop to report.
+  - |
+    async function stop () {
+      await cast?.close().catch(err => { failures.push(err) })
+    }
+  # The handler uses the error.
+  - |
+    async function stop () {
+      await cast?.close().catch(err => log(err))
+    }
+  # The handler rethrows the error.
+  - |
+    async function stop () {
+      await cast?.close().catch(err => { throw err })
+    }
+  # `run` is not a close call, so an empty handler on it is fine.
+  - |
+    function start () {
+      directorySync = run.catch(() => {})
+    }
+  # `run('p2p-replicate')` is not a close call either.
+  - |
+    function start () {
+      state.mirror?.run('p2p-replicate').catch(() => {})
+    }
+  # The empty catch has no close call in its block.
+  - |
+    function parse (line) {
+      let msg = null
+      try { msg = JSON.parse(line) } catch {}
+      return msg
+    }
+  # The empty catch has no close call in its block, and `os.kill?.()` is not one.
+  - |
+    function die () {
+      try { os.kill?.(process.pid, 9) } catch {}
+      process.exit(1)
+    }
+  # The close is in `finally`, so its error is not caught by the empty catch.
+  - |
+    async function run () {
+      try { await work() } catch {} finally { await node.close() }
+    }
+  # No catch clause: the error of the close goes up to the caller.
+  - |
+    async function stop () {
+      try { await node.close() } finally { clearInterval(timer) }
+    }
+invalid:
+  # The fault of pull request 586 (main at commit 26a40b7, cut down to the node close): a failed close was lost, and SIGTERM exited 0.
+  - |
+    async function stop () {
+      const { node } = state
+      state.node = null
+      await node?.close().catch(() => {})
+      api.notify('update')
+    }
+  # Main now: the node close is repaired, but the plugin host and the cast host still drop their errors.
+  - |
+    async function stop () {
+      await mirrorHost?.close().catch(() => {})
+      await mirrorStarting
+      const { node, acquirer, cast } = state
+      state.node = state.acquirer = state.cast = state.mirror = null
+      mirrorHost = null
+      await cast?.close().catch(() => {})
+      acquirer?.close()
+      try {
+        await node?.close()
+      } catch (err) {
+        closeFailure = Object.assign(new Error(`The node did not close: ${reasonOf(err)}.`), { status: 500 })
+      }
+      api.notify('update')
+      if (closeFailure) throw closeFailure
+    }
+  # The guard process drops the error of its close, then exits 0.
+  - |
+    async function shutdown () {
+      if (stopping) return
+      stopping = true
+      clearInterval(heartbeat)
+      setTimeout(() => process.exit(0), 2000).unref?.()
+      await guard.close().catch(() => {})
+      process.exit(0)
+    }
+  # An optional call, `stop?.()`, is a close call too.
+  - |
+    async function stop () {
+      await plugin.stop?.().catch(() => {})
+    }
+  # A function expression with an empty body drops the error.
+  - |
+    async function stop () {
+      await node.destroy().catch(function () {})
+    }
+  # A handler that takes the error and does nothing with it.
+  - |
+    async function stop () {
+      await node.close().catch(err => {})
+    }
+  # A handler that only holds a comment does nothing with the error.
+  - |
+    async function stop () {
+      await node.close().catch(() => { /* ignore */ })
+    }
+  # An arrow function that returns `null` drops the error.
+  - |
+    async function stop () {
+      await node.close().catch(() => null)
+    }
+  # An arrow function that returns `undefined` drops the error.
+  - |
+    async function stop () {
+      await node.close().catch(() => undefined)
+    }
+  # `noop` drops the error.
+  - |
+    async function stop () {
+      await node.close().catch(noop)
+    }
+  # An empty catch around a close.
+  - |
+    async function stop () {
+      try {
+        await node.close()
+      } catch {}
+    }
+  # An empty catch with a parameter, and a close deeper in the block.
+  - |
+    async function stop () {
+      try {
+        if (node) {
+          await node.stop()
+        }
+      } catch (err) {}
+    }
+  # A catch that only holds a comment does nothing with the error.
+  - |
+    async function stop () {
+      try { await node.close() } catch (err) { /* ignore */ }
+    }

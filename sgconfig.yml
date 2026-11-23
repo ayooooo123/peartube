@@ -1,0 +1,6 @@
+# Machine-checked code rules. Read docs/code-rules.md for the reason behind each rule.
+# `ast-grep test` runs the rule tests; CI runs `ast-grep scan` on the lines that a pull request changes.
+ruleDirs:
+  - ast-grep/rules
+testConfigs:
+  - testDir: ast-grep/tests

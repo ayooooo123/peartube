@@ -4,8 +4,9 @@
     python3 scripts/ci/test_guard.py --base <rev> [--head <rev>]
 
 The script reads only git. It reports a removed test, a removed or changed assertion, a new skip marker,
-a longer or removed time limit, and a change to how the tests run. It cannot tell a correct change from a
-weakening, so every finding fails, and a person decides at merge time whether the change is correct.
+a longer time limit, a removed `timeout-minutes`, and a change to how the tests run. It cannot tell a
+correct change from a weakening, so every finding fails, and a person decides at merge time whether the
+change is correct.
 Exit 0: no finding. Exit 1: findings. Exit 2: git failed.
 In CI, check out the full history (`fetch-depth: 0`): the script needs the merge base of --base and --head.
 """

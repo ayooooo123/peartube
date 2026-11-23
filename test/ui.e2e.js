@@ -2357,10 +2357,12 @@ test('relay web UI: one library with Home, Listen, Watch and Find', { timeout: 9
     await check('videoPausesMusic', async () => {
       await playAlbum('Night Signal')
       await click('#npNext')
-      await waitFor(`$('npTitle').textContent === 'Lantern' && audioEl.currentTime > 1`, 'the second track playing', 25_000)
-      const at = await evaluate(`audioEl.currentTime`)
+      await waitFor(`$('npTitle').textContent === 'Lantern' && audioEl.currentTime >= 3`, 'the second track playing past three seconds', 25_000)
       await goTab('Watch')
       await openTitle('Harbour Walk')
+      // Record the position immediately before the video opens, past the 2 s window below:
+      // a player that reset the music to zero on pause would be caught here.
+      const at = await evaluate(`audioEl.currentTime`)
       await click('#detail [data-play]')
       await waitFor(`$('playerModal').classList.contains('open')`, 'the video player', 20_000)
       await waitFor(`!!audioEl && audioEl.paused`, 'the music stops for the video', 10_000)

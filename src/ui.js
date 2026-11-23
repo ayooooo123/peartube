@@ -1634,7 +1634,16 @@ function buildTiles () {
 // tagged by release announce the same album under two ids, and both land here as one tile. A track held twice is one
 // row, playing the copy saved here (or the larger one). The album's name is what most of its tracks' titles say, so
 // one badly tagged track ("Untitled album") neither renames the album nor splits it off.
-const fold = s => String(s || '').toLowerCase().normalize('NFKD').replace(/[^\\p{L}\\p{N}]+/gu, ' ').trim()
+// Case, width and punctuation fold away; so do the accents of Latin and Greek letters. A mark stays where its
+// script uses it as a letter: Cyrillic й and ё, and the marks of Indic, Arabic and other scripts. Turkish has two
+// i's; both fold to i, and a Greek final sigma folds to σ.
+const ACCENT_BASE = /[A-Za-z\\u00C0-\\u024F\\u1E00-\\u1EFF\\u2C60-\\u2C7F\\uA720-\\uA7FF\\u0370-\\u03FF\\u1F00-\\u1FFF]/
+const fold = s => String(s || '').toLowerCase().normalize('NFKD')
+  .replace(/(.)[\\u0300-\\u036F]+/gu, (all, base) => ACCENT_BASE.test(base) ? base : all)
+  .replace(/ı/g, 'i')
+  .replace(/ς/g, 'σ')
+  .replace(/[^\\p{L}\\p{N}\\p{M}]+/gu, ' ')
+  .trim()
 function mergeAlbums (tiles) {
   const groups = new Map()
   for (const t of [...tiles.values()]) {
@@ -2222,14 +2231,14 @@ $('srcInput').addEventListener('input', () => {
   history.replaceState(history.state, '', to)
   if (tab === 'find') renderFind()
 })
-// Every word must be in the text, in any order; case, accents and punctuation do not count. The accents go first:
-// fold() alone turns one into a space, which cuts a word with an accent inside it in two.
-const plain = s => fold(String(s || '').normalize('NFKD').replace(/\\p{M}+/gu, ''))
+// Every word must be in the text, in any order; case, width, punctuation and the accents of Latin and Greek
+// letters do not count. A mark that is a letter (Cyrillic й and ё) still counts. fold() keeps each mark with its
+// letter, so a word with an accent inside it stays one word.
 function findIn (words) {
-  const need = plain(words).split(' ').filter(Boolean)
-  const has = text => { const t = plain(text); return need.length > 0 && need.every(w => t.includes(w)) }
+  const need = fold(words).split(' ').filter(Boolean)
+  const has = text => { const t = fold(text); return need.length > 0 && need.every(w => t.includes(w)) }
   // A track is found by its own name, alone or beside its artist or album: one of the words must be in the name.
-  has.track = (name, of) => { const n = plain(name); return need.some(w => n.includes(w)) && has(name + ' ' + of) }
+  has.track = (name, of) => { const n = fold(name); return need.some(w => n.includes(w)) && has(name + ' ' + of) }
   return has
 }
 function findGroup (title, n, body) {
@@ -2343,7 +2352,7 @@ function searchRelays (words) {
   $('globalResults').replaceChildren()
   if (!on) return
   // The relays match whole words of two characters or more.
-  if (!plain(words).split(' ').some(w => w.length >= 2)) { say('globalMsg', 'Type at least 2 letters.'); return }
+  if (!fold(words).split(' ').some(w => w.length >= 2)) { say('globalMsg', 'Type at least 2 letters.'); return }
   const ask = globalAsk = { body: globalBody(words), at: Date.now(), sent: false }
   say('globalMsg', 'Asking relays…')
   const wait = JSON.stringify(ask.body) === globalNew.key ? 0 : Math.max(0, globalNew.at + RELAYS_PACE - Date.now())
@@ -4312,7 +4321,9 @@ addEventListener('keydown', ev => {
   if (ev.key === ' ') { ev.preventDefault(); musicToggle() }
   else if (ev.key === 'ArrowLeft' || ev.key === 'ArrowRight') { ev.preventDefault(); musicSeek(musicPosition() + (ev.key === 'ArrowLeft' ? -10 : 10)) }
 })
-addEventListener('pagehide', () => { if (musicRestored || queue.length) saveMusic(true) })
+// Only a queue that this page holds may be written here: a page that could not restore one (the library had not
+// arrived, or its song had left) holds nothing, and must not erase the queue that a reload still has to bring back.
+addEventListener('pagehide', () => { if (queue.length) saveMusic(true) })
 
 // ---- Library: what a file holds and how well it streams here now (GET /v1/entries/info), redrawn every 3 s while
 // a page is open. Episodes and versions open theirs with File info; a single file shows it at once, and each

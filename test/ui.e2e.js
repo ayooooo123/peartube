@@ -2326,6 +2326,31 @@ test('relay web UI: one library with Home, Listen, Watch and Find', { timeout: 9
       return same({ title: back.title, paused: back.paused, savedPlace: clockSeconds(back.at) === clockSeconds(at), noPreload, resumesThere: Math.abs(resumed - clockSeconds(at)) < 2, rows },
         { title: 'Lantern', paused: true, savedPlace: true, noPreload: true, resumesThere: true, rows: ['Beacon', 'Lantern (playing)', 'Mist', 'Quay'] })
     })
+    // A page that cannot restore the saved queue (its library arrived without the song) must not erase it when the
+    // page hides: a later load still has to bring the queue back.
+    await check('queueSurvivesFailedRestore', async () => {
+      await playAlbum('Night Signal')
+      await click('#npNext')
+      await waitFor(`$('npTitle').textContent === 'Lantern' && audioEl.currentTime >= 3`, 'the second track playing', 25_000)
+      await click('#npPlay')
+      await waitFor(`audioEl.paused`, 'the music waits', 8000)
+      const saved = JSON.parse(await evaluate(`localStorage.getItem('peartube-music')`))
+      assert.equal(saved.keys?.length, 4, 'a queue waits in this browser')
+      // The relay answers with a film the queue cannot use, so restoreMusic runs, finds no song of the queue, and
+      // leaves the page empty. This is the page whose pagehide used to overwrite the saved queue with no keys.
+      const film = (await getJson('/v1/entries')).results.find(e => e.id === 'imdb:tt1254207')
+      assert.ok(film, 'the library has a film')
+      await browser.withJson({ [base + '/v1/entries']: { results: [film] } }, async () => {
+        await open('#home')
+        const failed = await evaluate(`({ restored: musicRestored, held: queue.length, dock: ${seen('#np')} })`)
+        assert.deepEqual(failed, { restored: true, held: 0, dock: false }, 'the page had nothing to restore')
+      })
+      // Leaving that page fires pagehide. An ordinary load must find the queue still saved.
+      await open('#home')
+      await waitFor(`${seen('#np')} && $('npTitle').textContent === 'Lantern'`, 'the saved queue after a later load', 20_000)
+      const back = await evaluate(`({ keys: queue.length, title: $('npTitle').textContent, paused: !audioEl || audioEl.paused })`)
+      return same(back, { keys: 4, title: 'Lantern', paused: true })
+    })
 
     // ==== How music and video share the one player.
     // A video stops the music, which keeps its track, its time and its list, says why, and waits for Play.
@@ -2340,12 +2365,18 @@ test('relay web UI: one library with Home, Listen, Watch and Find', { timeout: 9
       await waitFor(`$('playerModal').classList.contains('open')`, 'the video player', 20_000)
       await waitFor(`!!audioEl && audioEl.paused`, 'the music stops for the video', 10_000)
       await waitFor(`/[1-9]/.test(($('pClock').textContent || '').split('/')[0])`, 'the video plays', 60_000)
+      // The pause must hold while the video plays above zero, not only at the moment it opens.
+      const during = await evaluate(`({ at: ($('pClock').textContent || '').split('/')[0], paused: !!audioEl && audioEl.paused, held: heldForVideo, musicAt: audioEl ? audioEl.currentTime : 0 })`)
       await click('#pCloseBtn')
       await sleep(900)
       const saw = {
         dock: await evaluate(seen('#np')),
         track: await evaluate(`$('npTitle').textContent`),
         kept: Math.abs(await evaluate(`(audioEl && audioEl.currentTime) || 0`) - at) <= 2,
+        pausedWhilePlaying: during.paused,
+        heldWhilePlaying: during.held,
+        musicHeld: Math.abs(during.musicAt - at) <= 2,
+        videoAboveZero: clockSeconds(during.at) > 0,
         says: (await evaluate(`$('np').innerText.replace(/\\s+/g, ' ')`)).includes('Paused for a video')
       }
       await openPlayer()
@@ -2359,6 +2390,10 @@ test('relay web UI: one library with Home, Listen, Watch and Find', { timeout: 9
         dock: true,
         track: 'Lantern',
         kept: true,
+        pausedWhilePlaying: true,
+        heldWhilePlaying: true,
+        musicHeld: true,
+        videoAboveZero: true,
         says: true,
         list: ['Beacon', 'Lantern (playing)', 'Mist', 'Quay'],
         stillWaiting: true,
@@ -2633,6 +2668,61 @@ test('relay web UI: one library with Home, Listen, Watch and Find', { timeout: 9
       return same({ first, all }, {
         first: ['Late', 'Rain', 'Porch', 'Dawn', 'Señal', 'Beacon', 'Lantern', 'Mist'],
         all: ['Late', 'Rain', 'Porch', 'Dawn', 'Señal', 'Beacon', 'Lantern', 'Mist', 'Quay']
+      })
+    })
+    // Find and Artist grouping fold Latin and Greek accents, Turkish's two i's and a Greek final sigma, but keep a
+    // mark where the script uses it as a letter: Cyrillic й/ё stay apart from и/е.
+    await check('nonLatinFindAndArtists', async () => {
+      // The narrow checks before this one leave the browser at 390 px, where the bar's field is a button; this check
+      // reads the wide field and its results.
+      await viewport(1440, 900, 'light')
+      const albums = [
+        ['Ёлка - Зима', 'Ёлка', 'Зима', [['Снег', 300]]],
+        ['Елка - Весна', 'Елка', 'Весна', [['Ручей', 320]]],
+        ['Άλφα - Θάλασσα', 'Άλφα', 'Θάλασσα', [['Κύμα', 340]]],
+        ['Αλφα - Νησί', 'Αλφα', 'Νησί', [['Λιμάνι', 360]]],
+        ['Οδός - Νύχτα', 'Οδός', 'Νύχτα', [['Φως', 380]]],
+        ['IŞIK - Gece', 'IŞIK', 'Gece', [['Yıldız', 400]]],
+        ['ışık - Gündüz', 'ışık', 'Gündüz', [['Güneş', 420]]]
+      ]
+      for (const [dir, artist, album, tracks] of albums) flacAlbum(join(watchDir, dir), artist, album, tracks)
+      // The watch-dir poll may hold the folder when this check adds its albums; a run that answers `busy` scanned
+      // nothing. Ask again until a run takes the folder, then wait for each album's track (an entry's title is
+      // `artist · album`, and its `music.title` is the track's own name).
+      const trackNames = albums.map(([, , , tracks]) => tracks[0][0])
+      await waitApi(async () => {
+        const run = await post('/v1/plugins/watch-dir/run', {})
+        if (run?.busy) return false
+        const entries = (await getJson('/v1/entries')).results
+        return trackNames.every(name => entries.some(e => e.music?.title === name))
+      }, 'the non-Latin albums imported', 90_000)
+      await open('#listen')
+      await clickText('Artists', '#listenSeg')
+      const artists = await evaluate(`[...document.querySelectorAll('#albums .artist-card')].filter(a => a.offsetParent !== null).map(a => ({
+        name: a.querySelector('.album-name').textContent,
+        albums: a.querySelector('.album-artist').textContent
+      }))`)
+      const find = async query => (await typeFind(query)).join(' | ')
+      const cyr = { marked: await find('ёлка'), plain: await find('елка') }
+      const grk = { finalSigma: await find('οδοσ'), accent: await find('αλφα') }
+      const tur = await find('ışık')
+      const cyrNames = ['Ёлка', 'Елка'].filter(name => artists.some(a => a.name === name))
+      const turkish = artists.filter(a => a.name === 'IŞIK' || a.name === 'ışık')
+      const greek = artists.filter(a => a.name === 'Άλφα' || a.name === 'Αλφα')
+      return same({
+        cyrFind: [cyr.marked.includes('Зима'), !cyr.marked.includes('Весна'), cyr.plain.includes('Весна'), !cyr.plain.includes('Зима')],
+        greekFind: [grk.finalSigma.includes('Νύχτα'), grk.accent.includes('Θάλασσα'), grk.accent.includes('Νησί')],
+        turkishFind: [tur.includes('Gece'), tur.includes('Gündüz')],
+        cyrNames,
+        turkish: turkish.map(a => a.albums),
+        greek: greek.map(a => a.albums)
+      }, {
+        cyrFind: [true, true, true, true],
+        greekFind: [true, true, true],
+        turkishFind: [true, true],
+        cyrNames: ['Ёлка', 'Елка'],
+        turkish: ['2 albums'],
+        greek: ['2 albums']
       })
     })
     await check('consoleClean', async () => same(browser.issues, []))

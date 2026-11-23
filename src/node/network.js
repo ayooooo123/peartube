@@ -78,6 +78,16 @@ export async function createNetwork (ctx) {
       })
   const dht = isPrivate ? swarm.dht : null
   if (!isPrivate) tuneDht(swarm.dht)
+  // dht-rpc takes another port without an error when the fixed one is busy, so a port forward would point at nothing.
+  // It binds one tick after construction: listen in the same turn, with no await in between.
+  if (!isPrivate && Number.isInteger(dhtPort) && dhtPort > 0) {
+    swarm.dht.once('listening', () => {
+      try {
+        const bound = swarm.dht.localAddress()?.port
+        if (Number.isInteger(bound) && bound > 0 && bound !== dhtPort) console.error(`Requested peer port ${dhtPort}; listening on ${bound}`)
+      } catch {}
+    })
+  }
   swarm.on('connection', conn => {
     if (hasLanPeer(conn.remotePublicKey)) { conn.destroy(); return }
     trackConn(conn, dht ? traffic.private : traffic.public)

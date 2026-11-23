@@ -276,7 +276,7 @@ def scan(base, head):
     root = git('merge-base', base, head).strip()
     changes = parse_status(git(*DIFF, '--name-status', f'{base}...{head}'))
     hunks = parse_diff(git(*DIFF, '--unified=0', f'{base}...{head}'))
-    found, gone, came = [], [], Counter()
+    found, gone, came, dropped, added = [], [], Counter(), [], Counter()
     for old_path, new_path in changes:
         path = new_path or old_path
         lang = next((x for x in LANGS.values() if path.endswith(x['ext'])), None)
@@ -288,8 +288,9 @@ def scan(base, head):
             before, after = names(lang, old.code), names(lang, new.code)
             gone += [(name, path, head_line(hs, n)) for name, n in lost(before, after)]
             came.update(name for name, _ in lost(after, before))
-            for text, n in lost(statements(lang, old.code), statements(lang, new.code)):
-                found.append(Finding(path, head_line(hs, n), 'assertion-changed', f'removed or changed: {short(text)}'))
+            before, after = statements(lang, old.code), statements(lang, new.code)
+            dropped += [(text, path, head_line(hs, n)) for text, n in lost(before, after)]
+            added.update(text for text, _ in lost(after, before))
             found += list(new_skips(path, lang, old, new, hs)) + list(longer_limits(path, lang, old, new, hs))
             found += removed_limits(path, lang, old, new, hs)
         if rule:
@@ -299,6 +300,11 @@ def scan(base, head):
             came[name] -= 1
         else:
             found.append(Finding(path, line, 'removed-test', f'test {name} is in no test file at head'))
+    for text, path, line in dropped:  # an assertion that moved to another file is not removed
+        if added[text] > 0:
+            added[text] -= 1
+        else:
+            found.append(Finding(path, line, 'assertion-changed', f'removed or changed: {short(text)}'))
     return sorted(set(found))
 
 def report(findings):

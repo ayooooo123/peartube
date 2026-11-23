@@ -87,6 +87,26 @@ The driver creates a real local HyperDHT relay, publishes an H.264/FLAC/SubRip f
 
 The UI scenarios check fullscreen-only playback in portrait and landscape, the playback clock hiding and reappearing with the controls, opening and dismissing the overlaid Info sheet without leaving playback, a single Back returning to the library, nearby TV discovery without entering an address, and return from casting into the fullscreen player. The cast scenario opens a real `/v1/events` client inside the native test runner while saving network settings, so it also works on a physical iPhone's loopback interface. Node replacement must close that old SSE connection and return to a usable library; attached Cast and event streams must not leave the serialized restart waiting indefinitely.
 
+### First start without an account
+
+`FirstRunTests` checks first start both with and without a test DHT. A launch with fresh storage and no network arguments must show the library and report a running node. For the search test, the app’s only network argument is the test DHT’s bootstrap address. Before saving Settings, it must find the test film in global search, report a connected peer, and play the film for at least two seconds. It then saves with no channel, recovery phrase, or source. An older app skipped its initial Settings sheet when it saw a bootstrap argument. The separate first launch makes that regression visible.
+
+The simulator DHT run above includes this case. To run only the account-free tests with the search relay on a separate machine, use these steps:
+
+1. On the relay test host, supply a small film that runs for at least 15 seconds. Run `node ios/first-run-network.mjs film.mp4` to check discovery and the SHA-256 of the bytes that a fresh node reads from the search result.
+2. On that host, run `node ios/first-run-network.mjs film.mp4 --serve <test-host-IPv4>`. Keep its input open. Copy the one line of JSON to the Mac as `ios/build/private-e2e/fixture.json`. This file supplies the expected title to XCTest, not a channel or watch link to the app.
+   The JSON gives the fixture address; it does not prove that a searcher can find the film. Before the UI search, XCTest gives a separate launch on the simulator up to 120 seconds to find the exact title through that app’s loopback search API. It then terminates the probe. The measured launch uses fresh storage, submits the title once, and must find the film within the original 120 seconds.
+3. On the Mac, run `node ios/project.mjs`, then:
+
+   ```sh
+   /usr/bin/lockf /tmp/mac-heavy.lock xcodebuild -project ios/PearTube.xcodeproj \
+     -scheme PearTube -destination 'platform=iOS Simulator,id=<simulator-UDID>' \
+     -derivedDataPath ios/build/simulator -parallel-testing-enabled NO \
+     -only-testing:PearTubeUITests/FirstRunTests -resultBundlePath ios/build/FirstRun.xcresult test
+   ```
+
+Check that all three tests ran and none was skipped. The `first-run-playback` attachment records the peer count and the elapsed time on the native player. After Save, the Library search field must be usable and no PearTube alert may be present. Stop the fixture with Ctrl-C, shut down the simulator, and remove the copied JSON.
+
 Test data is isolated with `-peartube-storage <basename>`. Only `-peartube-e2e` enables `Documents/e2e-state.json`; production launches do not continually write it. Snapshots redact pairing credentials and stream/pairing URLs. Relay/receiver stores, the source pairing fixture, raw XCTest bundles, and unfiltered attachments stay in a private OS temporary directory outside the evidence tree. Xcode temporarily copies the fixture into the UI-test bundle; normal cleanup deletes the generated simulator and physical-device UI-test runner products as well as the private temporary directory, leaving the actual app product and IPA untouched. Only explicitly named safe screenshots and proof records are exported; raw recordings and screenshots of pairing-code entry are not evidence artifacts. If a run is forcibly killed, remove its own private temporary directory and generated UI-test runner products before rerunning.
 
 A physical iPhone is additionally required to verify Local Network authorization, discovery of a real peer/TV, six-character/QR pairing, cast handoff and return, camera QR scanning, background/resume, orientation, and player output. If a system or authentication window appears, stop automation and ask the user to answer it. Never mark these device-only checks passed from simulator results.

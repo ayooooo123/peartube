@@ -11,6 +11,7 @@ import { fileURLToPath } from 'node:url'
 import createTestnet from 'hyperdht/testnet.js'
 import { createNode } from '../src/index.js'
 import { createLan, lanAddress } from '../src/lan.js'
+import { createMirrorHost } from '../src/mirror.js'
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)))
 process.chdir(root)
@@ -29,6 +30,7 @@ const privateDir = mkdtempSync(join(tmpdir(), 'peartube-ios-e2e-'))
 const run = (program, argv, options = {}) => execFileSync(program, argv, { cwd: root, stdio: 'inherit', ...options })
 let testnet
 let relay
+let searchHost
 const snapshots = []
 let timer
 let reading
@@ -59,6 +61,10 @@ try {
   const entries = await relay.search()
   const movie = entries.find(entry => entry.id === 'imdb:tt0111161')
   assert.ok(movie)
+  if (simulator && !lan) {
+    searchHost = await createMirrorHost({ node: relay, storage: join(privateDir, 'relay'), acquirer: null, mirrorChannel: false, mediaCheck: true, pollIntervalMs: 0 })
+    relay.serveSearch({ isMedia: searchHost.isMedia })
+  }
   // The receiver is a node: it must be on the same DHT as the relay and the app, or the app cannot reach it by key.
   const bootstrap = lan ? '127.0.0.1:9' : testnet.bootstrap.map(node => `${host}:${node.port}`).join(',')
   receiverProcess = spawn(process.execPath, ['test/receiver-fixture.js', '--port', '0', '--name', `PearTube E2E TV ${privateDir.split('-').at(-1)}`, '--storage', join(privateDir, 'receiver'), '--bootstrap', bootstrap], {
@@ -75,6 +81,7 @@ try {
   const fixture = {
     storage: `e2e-${Date.now()}`, tracker: relay.status().tracker, bootstrap,
     lan, movieKey: movie.key, movieTitle: movie.title, receiverId: receiver.deviceId, pairCode: receiver.pairCode,
+    ...(searchHost ? { firstRunTitle: movie.title } : {}),
     entries: entries.map(({ key, id, title }) => ({ key, id, title }))
   }
   const fixturePath = join(privateDir, 'fixture.json')
@@ -183,7 +190,9 @@ try {
       receiverProcess.kill('SIGTERM')
       await closed
     }
-    try { await relay?.close() } finally { await testnet?.destroy() }
+    try { await searchHost?.close() } finally {
+      try { await relay?.close() } finally { await testnet?.destroy() }
+    }
   } finally {
     try {
       for (const [data, platform] of [['physical-e2e', 'iphoneos'], ['simulator', 'iphonesimulator']]) {

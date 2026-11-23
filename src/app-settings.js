@@ -18,11 +18,17 @@ export const APP_SETTINGS_DEFAULTS = Object.freeze({
 const list = (v, split) => (Array.isArray(v) ? v : String(v ?? '').split(split))
   .map(s => typeof s === 'object' && s ? s : String(s).trim())
   .filter(Boolean)
-const isHostPort = s => {
-  const i = s.lastIndexOf(':')
-  const port = Number(s.slice(i + 1))
-  return i > 0 && Number.isInteger(port) && port > 0 && port < 65536
+
+// A bootstrap node as dht-rpc reads it (parseNode): `host:port`, or `ip@host:port` to try that address first. It
+// splits on ':' and keeps two parts, so a node has one ':' and a port of 1-65535, and an IPv6 address cannot be one
+// (brackets are refused too: they are how an IPv6 address is written). The relay's settings (settings.js) call both
+// functions, so the apps and the relay refuse the same nodes; `looksIPv6` only chooses the message.
+const BOOTSTRAP_NODE = /^[^\s:[\]]+:(\d{1,5})$/
+export function isBootstrapNode (s) {
+  const port = Number(BOOTSTRAP_NODE.exec(s)?.[1])
+  return port > 0 && port < 65536
 }
+export const looksIPv6 = s => s.includes('[') || s.indexOf(':') !== s.lastIndexOf(':')
 
 // A followed channel as a settings field writes it: a 64-hex key, `channel:<key>` / `tracker:<key>`, a channel
 // link, or a saved `{ key, alias }`.
@@ -56,8 +62,8 @@ export function normalizeAppSettings (raw = {}, { requireChannel = false, previo
   const badRelay = relayThrough.find(k => !HEX64.test(k))
   if (badRelay) throw new Error(`Relay key ${badRelay} is not 64 hex characters.`)
   const bootstrap = list(raw.bootstrap, /[\s,]+/).map(String)
-  const badNode = bootstrap.find(n => !isHostPort(n))
-  if (badNode) throw new Error(`Bootstrap node ${badNode} is not host:port.`)
+  const badNode = bootstrap.find(n => !isBootstrapNode(n))
+  if (badNode) throw new Error(`Bootstrap node ${badNode} is not host:port.${looksIPv6(badNode) ? ' IPv6 addresses are not supported.' : ''}`)
   if (requireChannel && !tracker && !mnemonic && !sources.length) {
     throw new Error('Add a channel key, a 12-word recovery phrase, or a peartube://channel/ link.')
   }

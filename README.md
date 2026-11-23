@@ -306,7 +306,7 @@ A saved `watchDir` is dropped too: the import folder is set only by `PEARTUBE_WA
 | `PEARTUBE_API_HOST` | `0.0.0.0` | Interface bound by the UI and `/v1` API server |
 | `PEARTUBE_API_PORT` | `8174` | UI, `/v1` API, `/v1/blob` streams, Stremio addon and M3U port |
 | `PEARTUBE_DHT_PORT` | random | Fixed UDP port, only needed when forwarding a port behind a double-randomized NAT |
-| `PEARTUBE_BOOTSTRAP` | mainnet | Peer-discovery network; comma-separated `host:port` servers |
+| `PEARTUBE_BOOTSTRAP` | mainnet | Peer-discovery network; comma-separated `host:port` servers, or `ip@host:port` to try that address first; IPv6 addresses are not supported |
 | `PEARTUBE_PRIVATE_ROUTING` | off | `1`: two-hop encrypted guard circuits on stock HyperDHT; endpoint addresses and channel keys are never announced publicly |
 | `PEARTUBE_PRIVATE_RELAY` | off | `1`: standalone Corestore-free guard forwarder (`bin/private-relay.js`); cannot combine with channel or content flags |
 | `PEARTUBE_PRIVATE_RELAY_PORT` | `PEARTUBE_DHT_PORT` | UDP port for the standalone guard forwarder |

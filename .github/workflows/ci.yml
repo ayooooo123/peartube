@@ -74,6 +74,7 @@ jobs:
       - id: chrome
         uses: browser-actions/setup-chrome@v1
       - run: npm ci
+      - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg
       - run: node --test --test-name-pattern='one library' test/ui.e2e.js
         env:
           PUPPETEER_EXECUTABLE_PATH: ${{ steps.chrome.outputs.chrome-path }}

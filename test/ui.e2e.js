@@ -242,7 +242,9 @@ async function launchBrowser () {
   // `--disable-gpu` alone leaves WebGL to the platform: Chromium on a Linux machine with no GPU falls back to
   // software GL and writes a deprecation warning into the page's console, and on macOS the page gets no WebGL.
   // `--enable-unsafe-swiftshader` asks for software GL by name, so the player takes one path on every machine.
-  const proc = spawn(exe, ['--headless=new', '--remote-debugging-port=0', '--user-data-dir=' + dir, '--no-first-run', '--no-default-browser-check', '--disable-gpu', '--enable-unsafe-swiftshader', '--disable-extensions', '--use-mock-keychain', '--password-store=basic', '--disable-sync', '--disable-features=BraveWallet,BraveRewards,BraveNews', 'about:blank'], { stdio: 'ignore' })
+  // `--no-sandbox` and `--disable-dev-shm-usage`: the CI's Chromium starts under the runner's user without a
+  // usable sandbox and with a small `/dev/shm`; with either missing it exits before it writes `DevToolsActivePort`.
+  const proc = spawn(exe, ['--headless=new', '--remote-debugging-port=0', '--user-data-dir=' + dir, '--no-first-run', '--no-default-browser-check', '--disable-gpu', '--enable-unsafe-swiftshader', '--disable-extensions', '--use-mock-keychain', '--password-store=basic', '--disable-sync', '--disable-features=BraveWallet,BraveRewards,BraveNews', '--no-sandbox', '--disable-dev-shm-usage', 'about:blank'], { stdio: 'ignore' })
   const portFile = join(dir, 'DevToolsActivePort')
   const connect = async () => {
     for (let i = 0; i < 200 && !existsSync(portFile); i++) await sleep(100)

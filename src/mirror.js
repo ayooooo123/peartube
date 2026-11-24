@@ -194,6 +194,7 @@ export async function createMirrorHost ({
   importWaitMs = 120_000,
   onchange = null,
   // Called with the host before the startup backfill and folder import, so a caller can close it while they run.
+  // A host that is closed inside this call starts neither.
   onstarting = null
 }) {
   const plugins = new Map()
@@ -201,7 +202,10 @@ export async function createMirrorHost ({
   const watchStateFile = join(storage, 'mirror-watch.json')
   let watchLedger = {}
   try { watchLedger = JSON.parse(readFileSync(watchStateFile, 'utf8')) } catch {}
-  let closed = false
+  let closed = null // The close promise, set before the first plugin stops.
+  let stopCaller = null // The plugin whose stop() the host is calling right now: the synchronous part of that call only.
+  let othersStopped = null // What a close() call made in that part gets.
+  const closeCallers = new Set() // The plugins that made such a call.
 
   function saveWatchLedger () {
     writeFileSync(watchStateFile + '.tmp', JSON.stringify(watchLedger, null, 2), { mode: 0o600 })
@@ -1190,7 +1194,7 @@ export async function createMirrorHost ({
 
   let timer = null
   onstarting?.({ close })
-  if (mirrorChannel) {
+  if (mirrorChannel && !closed) {
     await run('channel-backfill').catch(() => {})
   }
   if (rechunk && !closed) {
@@ -1284,13 +1288,46 @@ export async function createMirrorHost ({
     onchange?.()
   }
 
-  async function close () {
-    closed = true
+  // A restart, a shutdown signal, or a plugin's stop can call close() on the same host.
+  // A call made while a plugin's stop is in its synchronous part, by that stop or by code that it
+  // calls, gets a second promise, so that the stop does not wait for itself: the promise resolves
+  // with undefined once the stops of the plugins that made no such call have settled, and it never
+  // rejects, so failures reach only the callers of the shared promise.
+  // Every other call gets the one shared promise, as before: it waits for every stop, stops the
+  // traffic gate once, then throws the single failure as it is or an AggregateError. Every stop
+  // still runs once and all stops start in the first call.
+  // Limit: a close() call that a stop makes after its first await gets the shared promise, because
+  // the host cannot tell it from another caller. Such a stop waits for itself.
+  function close () {
+    if (stopCaller) {
+      closeCallers.add(stopCaller)
+      return othersStopped
+    }
+    if (closed) return closed
+    const { promise, resolve } = Promise.withResolvers()
+    closed = promise
+    resolve(stopAll())
+    return closed
+  }
+
+  async function stopAll () {
     clearInterval(timer)
-    // Every stop starts before any is awaited: a plugin with work parked on this host (a mirror waiting for an
-    // import) must mark it stopped now, not after an earlier plugin's stop has finished.
-    await Promise.all([...plugins.values()].map(p => p.stop?.()))
+    // Cancel parked work in this turn. Keep the node available until every stop has settled.
+    const others = Promise.withResolvers()
+    othersStopped = others.promise
+    const stops = [...plugins.values()].map(plugin => {
+      stopCaller = plugin
+      const stop = (async () => plugin.stop?.())()
+      stopCaller = null
+      return { plugin, stop }
+    })
+    // A stop's own close() must not wait for that stop, so this promise covers only the other plugins.
+    others.resolve(Promise.allSettled(stops.filter(s => !closeCallers.has(s.plugin)).map(s => s.stop)).then(() => {}))
+    const stopped = await Promise.allSettled(stops.map(s => s.stop))
     traffic.stop()
+    const errors = stopped.filter(r => r.status === 'rejected').map(r => r.reason)
+    if (errors.length === 1) throw errors[0]
+    if (errors.length) throw new AggregateError(errors, `${errors.length} plugins failed to stop`)
   }
 
   // Whether the file at `<blobs>:<blockOffset>` has been checked and is media (src/search.js offers only those).

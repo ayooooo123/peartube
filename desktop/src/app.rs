@@ -32,8 +32,8 @@ use crate::api::{
     ALL_SOURCES, AcquireJob, AcquireRequest, ApiClient, DiscoverBrowseResult, DiscoverCreator,
     DiscoverFeed, DiscoverFollowRequest, DiscoverItem, PluginInfo, RumbleCandidate,
     SoulseekCandidate, SoulseekShelf, SoundcloudCandidate, SourceSearchResult, VisitedShelf,
-    YoutubeCandidate, extract_shared_url, is_web_url, load_visited_shelves, record_visited_shelf,
-    run_blocking, save_visited_shelves, unwrap_peartube_add,
+    YoutubeCandidate, extract_shared_url, is_web_url, load_visited_shelves, parse_mirror_job,
+    record_visited_shelf, run_blocking, save_visited_shelves, unwrap_peartube_add,
 };
 use crate::cast_screen::CastSheetForm;
 use crate::catalog::{Catalog, build_catalog, is_music_entry};
@@ -420,6 +420,16 @@ impl PearTube {
         self.jobs.iter().filter(|j| j.is_active()).count()
     }
 
+    pub fn failed_job_count(&self) -> usize {
+        self.jobs.iter().filter(|j| j.is_failed()).count()
+    }
+
+    pub fn merge_job(&mut self, job: AcquireJob) {
+        self.jobs.retain(|j| j.job_id != job.job_id);
+        self.jobs.insert(0, job);
+        self.jobs.sort_by_key(|j| std::cmp::Reverse(j.created.unwrap_or(0)));
+    }
+
     pub fn open_room(&mut self, room: Room, cx: &mut Context<Self>) {
         let entering_discover = matches!(room, Room::Discover);
         self.detail = None;
@@ -660,40 +670,110 @@ impl PearTube {
         self.open_uri_or_key(extracted, cx);
     }
 
+    fn apply_jobs_update(&mut self, mut jobs: Vec<AcquireJob>, cx: &mut Context<Self>) -> bool {
+        jobs.sort_by_key(|j| std::cmp::Reverse(j.created.unwrap_or(0)));
+        let prev_done: HashSet<String> = self
+            .jobs
+            .iter()
+            .filter(|j| j.is_done())
+            .map(|j| j.job_id.clone())
+            .collect();
+        let prev_failed: HashSet<String> = self
+            .jobs
+            .iter()
+            .filter(|j| j.is_failed())
+            .map(|j| j.job_id.clone())
+            .collect();
+        let prev_known: HashSet<String> = self.jobs.iter().map(|j| j.job_id.clone()).collect();
+
+        let newly_done: Vec<&AcquireJob> = jobs
+            .iter()
+            .filter(|j| j.is_done() && !prev_done.contains(&j.job_id))
+            .collect();
+        let newly_failed: Vec<&AcquireJob> = jobs
+            .iter()
+            .filter(|j| {
+                j.is_failed()
+                    && !prev_failed.contains(&j.job_id)
+                    && (self.had_active_jobs || prev_known.contains(&j.job_id))
+            })
+            .collect();
+
+        let active_now = jobs.iter().any(AcquireJob::is_active);
+        let should_refresh_library = !newly_done.is_empty() || (self.had_active_jobs && !active_now);
+
+        if let Some(failed) = newly_failed.first() {
+            let title = if failed.title.is_empty() {
+                "Download"
+            } else {
+                failed.title.as_str()
+            };
+            let reason = failed
+                .error
+                .as_deref()
+                .filter(|s| !s.trim().is_empty())
+                .unwrap_or("Download failed");
+            self.clear_saving_notice();
+            self.error = Some(format!("“{title}” failed: {reason}").into());
+        } else if !newly_done.is_empty() && !active_now {
+            let title = newly_done[0].title.as_str();
+            let msg = if newly_done.len() == 1 && !title.is_empty() {
+                format!("Saved “{title}” to your library.")
+            } else {
+                format!("Saved {} items to your library.", newly_done.len())
+            };
+            self.notice = Some(DownloadNotice {
+                message: msg.into(),
+                saved_path: None,
+            });
+        } else if !active_now && self.had_active_jobs {
+            self.clear_saving_notice();
+        }
+
+        self.had_active_jobs = active_now;
+        self.jobs = jobs;
+        if active_now {
+            self.ensure_jobs_poller(cx);
+        } else {
+            self.jobs_poll = None;
+        }
+        cx.notify();
+        should_refresh_library
+    }
+
+    fn clear_saving_notice(&mut self) {
+        if let Some(notice) = &self.notice {
+            let msg = notice.message.as_ref();
+            if notice.saved_path.is_none()
+                && (msg.starts_with("Saving ") || msg.starts_with("Queuing "))
+            {
+                self.notice = None;
+            }
+        }
+    }
+
+    fn on_mirror_queued(&mut self, label: &str, reply: serde_json::Value, cx: &mut Context<Self>) {
+        if let Some(job) = parse_mirror_job(&reply) {
+            self.merge_job(job);
+        }
+        self.had_active_jobs = true;
+        self.refresh_jobs(cx);
+        self.ensure_jobs_poller(cx);
+        self.show_notice(format!("Saving “{label}” to your library…").into(), cx);
+    }
+
     pub fn refresh_jobs(&mut self, cx: &mut Context<Self>) {
         let Some(client) = self.api_client() else {
             return;
         };
         cx.spawn(async move |this, cx| {
             let res = run_blocking(move || client.list_jobs()).await;
-            let Ok(Ok(mut jobs)) = res else {
+            let Ok(Ok(jobs)) = res else {
                 return;
             };
-            jobs.sort_by_key(|j| std::cmp::Reverse(j.created.unwrap_or(0)));
-            let mut should_refresh_library = false;
-            let _ = this.update(cx, |this, cx| {
-                let prev_done: HashSet<String> = this
-                    .jobs
-                    .iter()
-                    .filter(|j| j.is_done())
-                    .map(|j| j.job_id.clone())
-                    .collect();
-                let newly_done = jobs
-                    .iter()
-                    .any(|j| j.is_done() && !prev_done.contains(&j.job_id));
-                let active_now = jobs.iter().any(AcquireJob::is_active);
-                if newly_done || (this.had_active_jobs && !active_now) {
-                    should_refresh_library = true;
-                }
-                this.had_active_jobs = active_now;
-                this.jobs = jobs;
-                if active_now {
-                    this.ensure_jobs_poller(cx);
-                } else {
-                    this.jobs_poll = None;
-                }
-                cx.notify();
-            });
+            let should_refresh_library = this
+                .update(cx, |this, cx| this.apply_jobs_update(jobs, cx))
+                .unwrap_or(false);
             if should_refresh_library {
                 refresh(&this, cx).await;
             }
@@ -716,33 +796,14 @@ impl PearTube {
                     break;
                 };
                 let res = run_blocking(move || client.list_jobs()).await;
-                let Ok(Ok(mut jobs)) = res else {
+                let Ok(Ok(jobs)) = res else {
                     continue;
                 };
-                jobs.sort_by_key(|j| std::cmp::Reverse(j.created.unwrap_or(0)));
-                let mut should_refresh_library = false;
                 let mut keep_polling = false;
+                let mut should_refresh_library = false;
                 let updated = this.update(cx, |this, cx| {
-                    let prev_done: HashSet<String> = this
-                        .jobs
-                        .iter()
-                        .filter(|j| j.is_done())
-                        .map(|j| j.job_id.clone())
-                        .collect();
-                    let newly_done = jobs
-                        .iter()
-                        .any(|j| j.is_done() && !prev_done.contains(&j.job_id));
-                    let active_now = jobs.iter().any(AcquireJob::is_active);
-                    if newly_done || (this.had_active_jobs && !active_now) {
-                        should_refresh_library = true;
-                    }
-                    this.had_active_jobs = active_now;
-                    this.jobs = jobs;
-                    keep_polling = active_now;
-                    if !active_now {
-                        this.jobs_poll = None;
-                    }
-                    cx.notify();
+                    should_refresh_library = this.apply_jobs_update(jobs, cx);
+                    keep_polling = this.had_active_jobs;
                 });
                 if should_refresh_library {
                     refresh(&this, cx).await;
@@ -1412,13 +1473,11 @@ impl PearTube {
                 Err(err) => Err(err),
             };
             let _ = this.update(cx, |this, cx| match outcome {
-                Ok(_) => {
-                    this.had_active_jobs = true;
-                    this.refresh_jobs(cx);
-                    this.ensure_jobs_poller(cx);
-                    this.show_notice(format!("Saving “{label}” to your library…").into(), cx);
+                Ok(reply) => this.on_mirror_queued(&label, reply, cx),
+                Err(err) => {
+                    this.clear_saving_notice();
+                    this.fail(err, cx);
                 }
-                Err(err) => this.fail(err, cx),
             });
         })
         .detach();
@@ -1439,13 +1498,11 @@ impl PearTube {
                 Err(err) => Err(err),
             };
             let _ = this.update(cx, |this, cx| match outcome {
-                Ok(_) => {
-                    this.had_active_jobs = true;
-                    this.refresh_jobs(cx);
-                    this.ensure_jobs_poller(cx);
-                    this.show_notice(format!("Saving “{label}” to your library…").into(), cx);
+                Ok(reply) => this.on_mirror_queued(&label, reply, cx),
+                Err(err) => {
+                    this.clear_saving_notice();
+                    this.fail(err, cx);
                 }
-                Err(err) => this.fail(err, cx),
             });
         })
         .detach();
@@ -1466,13 +1523,11 @@ impl PearTube {
                 Err(err) => Err(err),
             };
             let _ = this.update(cx, |this, cx| match outcome {
-                Ok(_) => {
-                    this.had_active_jobs = true;
-                    this.refresh_jobs(cx);
-                    this.ensure_jobs_poller(cx);
-                    this.show_notice(format!("Saving “{label}” to your library…").into(), cx);
+                Ok(reply) => this.on_mirror_queued(&label, reply, cx),
+                Err(err) => {
+                    this.clear_saving_notice();
+                    this.fail(err, cx);
                 }
-                Err(err) => this.fail(err, cx),
             });
         })
         .detach();
@@ -1494,13 +1549,11 @@ impl PearTube {
                 Err(err) => Err(err),
             };
             let _ = this.update(cx, |this, cx| match outcome {
-                Ok(_) => {
-                    this.had_active_jobs = true;
-                    this.refresh_jobs(cx);
-                    this.ensure_jobs_poller(cx);
-                    this.show_notice(format!("Saving “{label}” to your library…").into(), cx);
+                Ok(reply) => this.on_mirror_queued(&label, reply, cx),
+                Err(err) => {
+                    this.clear_saving_notice();
+                    this.fail(err, cx);
                 }
-                Err(err) => this.fail(err, cx),
             });
         })
         .detach();
@@ -2385,9 +2438,6 @@ impl PearTube {
     fn close_player(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.cast_modal = None;
         window.set_background_appearance(WindowBackgroundAppearance::Opaque);
-        if window.is_fullscreen() {
-            window.toggle_fullscreen();
-        }
         self.player_events = None;
         cx.background_executor()
             .spawn(async move {

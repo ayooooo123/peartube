@@ -214,8 +214,7 @@ impl ApiClient {
 
     pub fn list_jobs(&self) -> Result<Vec<AcquireJob>, String> {
         let val = self.get("/v1/jobs")?;
-        let arr = val.get("jobs").cloned().unwrap_or(Value::Array(Vec::new()));
-        serde_json::from_value(arr).map_err(|e| format!("Parse jobs list: {e}"))
+        Ok(parse_jobs_value(&val))
     }
 
     pub fn cancel_job(&self, job_id: &str) -> Result<Value, String> {
@@ -894,27 +893,74 @@ pub struct AcquireRequest {
     pub music: Option<MusicMeta>,
 }
 
+fn deserialize_string_or_default<'de, D>(deserializer: D) -> Result<String, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Ok(Option::<String>::deserialize(deserializer)?.unwrap_or_default())
+}
+
+fn deserialize_u64_or_default<'de, D>(deserializer: D) -> Result<u64, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Ok(deserialize_opt_u64(deserializer)?.unwrap_or(0))
+}
+
+/// Parses a `/v1/jobs` reply tolerantly so one unexpected job never hides the rest.
+pub fn parse_jobs_value(val: &Value) -> Vec<AcquireJob> {
+    val.get("jobs")
+        .and_then(Value::as_array)
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|item| serde_json::from_value::<AcquireJob>(item.clone()).ok())
+                .filter(|job| !job.job_id.is_empty())
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Extracts the queued `AcquireJob` from a `/v1/providers/<name>/mirror` reply.
+pub fn parse_mirror_job(val: &Value) -> Option<AcquireJob> {
+    let candidate = val.get("job").unwrap_or(val);
+    serde_json::from_value::<AcquireJob>(candidate.clone())
+        .ok()
+        .filter(|job| !job.job_id.is_empty())
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct AcquireJob {
+    #[serde(deserialize_with = "deserialize_string_or_default")]
     pub job_id: String,
     pub id: Option<String>,
+    #[serde(deserialize_with = "deserialize_string_or_default")]
     pub title: String,
+    #[serde(deserialize_with = "deserialize_string_or_default")]
     pub plugin: String,
     pub source: Option<String>,
+    #[serde(deserialize_with = "deserialize_string_or_default")]
     pub status: String,
     pub phase: Option<String>,
     pub peer: Option<String>,
     pub file: Option<String>,
+    #[serde(deserialize_with = "deserialize_opt_u64")]
     pub file_index: Option<u64>,
+    #[serde(deserialize_with = "deserialize_opt_u64")]
     pub file_count: Option<u64>,
+    #[serde(deserialize_with = "deserialize_opt_u64")]
     pub queue_place: Option<u64>,
+    #[serde(deserialize_with = "deserialize_opt_u64")]
     pub speed: Option<u64>,
+    #[serde(deserialize_with = "deserialize_u64_or_default")]
     pub bytes: u64,
+    #[serde(deserialize_with = "deserialize_opt_u64")]
     pub total: Option<u64>,
+    #[serde(deserialize_with = "deserialize_opt_u64")]
     pub size: Option<u64>,
     pub error: Option<String>,
     pub note: Option<String>,
+    #[serde(deserialize_with = "deserialize_opt_u64")]
     pub created: Option<u64>,
 }
 
@@ -988,17 +1034,23 @@ pub struct PluginInfo {
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Deserialize)]
-#[serde(default)]
+#[serde(rename_all = "camelCase", default)]
 pub struct SoulseekCandidate {
     #[serde(alias = "peer")]
     pub username: String,
     pub filename: String,
+    #[serde(deserialize_with = "deserialize_u64_or_default")]
     pub size: u64,
     pub slots: bool,
+    #[serde(deserialize_with = "deserialize_u64_or_default")]
     pub queue: u64,
+    #[serde(deserialize_with = "deserialize_opt_u64")]
     pub bitrate: Option<u64>,
+    #[serde(alias = "sample_rate", deserialize_with = "deserialize_opt_u64")]
     pub sample_rate: Option<u64>,
+    #[serde(alias = "bit_depth", deserialize_with = "deserialize_opt_u64")]
     pub bit_depth: Option<u64>,
+    #[serde(deserialize_with = "deserialize_opt_u64")]
     pub length: Option<u64>,
     pub lossy: Option<bool>,
 }
@@ -2178,5 +2230,106 @@ mod tests {
             percent_encode_component("rumble:c/My Channel"),
             "rumble%3Ac%2FMy%20Channel"
         );
+    }
+
+    #[test]
+    fn parse_jobs_value_handles_live_soulseek_and_null_fields() {
+        let raw = json!({
+            "jobs": [
+                {
+                    "jobId": "85392f88-0cee-49da-8e3a-801c57747d43",
+                    "id": null,
+                    "title": "Hypnotize (2005)",
+                    "plugin": "soulseek",
+                    "channel": true,
+                    "private": false,
+                    "status": "failed",
+                    "created": 1795535808714u64,
+                    "peer": "cameras",
+                    "file": "01 - Attack.flac",
+                    "fileIndex": 1,
+                    "fileCount": 12,
+                    "phase": "failed",
+                    "queuePlace": 0,
+                    "speed": 0,
+                    "bytes": 134139776u64,
+                    "total": 2768866937u64,
+                    "error": "disconnected: server session disconnected",
+                    "idleMs": null
+                },
+                {
+                    "jobId": "null-fields-job",
+                    "title": null,
+                    "plugin": null,
+                    "status": "running",
+                    "bytes": null,
+                    "speed": 1024.7
+                },
+                {
+                    "notAJob": true
+                }
+            ]
+        });
+        let jobs = parse_jobs_value(&raw);
+        assert_eq!(jobs.len(), 2);
+        assert_eq!(jobs[0].job_id, "85392f88-0cee-49da-8e3a-801c57747d43");
+        assert!(jobs[0].is_failed());
+        assert_eq!(jobs[0].bytes, 134_139_776);
+        assert_eq!(jobs[0].total, Some(2_768_866_937));
+        assert_eq!(
+            jobs[0].error.as_deref(),
+            Some("disconnected: server session disconnected")
+        );
+        assert_eq!(jobs[1].job_id, "null-fields-job");
+        assert_eq!(jobs[1].bytes, 0);
+        assert_eq!(jobs[1].speed, Some(1025));
+    }
+
+    #[test]
+    fn parse_mirror_job_extracts_nested_job() {
+        let reply = json!({
+            "queued": true,
+            "job": {
+                "jobId": "job-slsk-1",
+                "title": "Blue Train",
+                "plugin": "soulseek",
+                "status": "queued",
+                "peer": "vinylpeer",
+                "fileIndex": 1,
+                "fileCount": 5,
+                "bytes": 0,
+                "total": 250_000_000u64
+            }
+        });
+        let job = parse_mirror_job(&reply).expect("nested mirror job");
+        assert_eq!(job.job_id, "job-slsk-1");
+        assert_eq!(job.peer.as_deref(), Some("vinylpeer"));
+        assert!(job.is_active());
+    }
+
+    #[test]
+    fn soulseek_candidate_parses_camel_and_snake_case() {
+        let camel: SoulseekCandidate = serde_json::from_value(json!({
+            "username": "peer1",
+            "filename": "Music\\Album\\01.flac",
+            "size": 1000,
+            "sampleRate": 96000,
+            "bitDepth": 24
+        }))
+        .expect("camelCase");
+        assert_eq!(camel.sample_rate, Some(96000));
+        assert_eq!(camel.bit_depth, Some(24));
+
+        let snake: SoulseekCandidate = serde_json::from_value(json!({
+            "peer": "peer2",
+            "filename": "Music\\Album\\02.flac",
+            "size": 2000,
+            "sample_rate": 44100,
+            "bit_depth": 16
+        }))
+        .expect("snake_case");
+        assert_eq!(snake.username, "peer2");
+        assert_eq!(snake.sample_rate, Some(44100));
+        assert_eq!(snake.bit_depth, Some(16));
     }
 }

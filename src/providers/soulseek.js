@@ -488,7 +488,7 @@ export function createSoulseekPlugin ({
 
     // One file through the addon, failed by a watchdog when the peer never answers or never connects back (the addon
     // itself waits forever), and when the job is cancelled. A peer that reported a queue place is waited on.
-    const downloadOne = (item, tmpDest, onProgress) => new Promise((resolve, reject) => {
+    const downloadAttempt = (activeClient, item, tmpDest, onProgress) => new Promise((resolve, reject) => {
       let phase = 'queued'
       let since = Date.now()
       let answered = false
@@ -515,7 +515,7 @@ export function createSoulseekPlugin ({
         }
       }, 1000)
       watchdog.unref?.()
-      c.download(username, item.filename, tmpDest, prog => {
+      activeClient.download(username, item.filename, tmpDest, prog => {
         if (settled) return
         const next = String(prog?.phase || phase)
         const got = Number(prog?.bytes) || 0
@@ -527,6 +527,29 @@ export function createSoulseekPlugin ({
         onProgress(prog, phase)
       }).then(ok, err => fail(peerError(err, username, port, secrets())))
     })
+
+    const downloadOne = async (item, tmpDest, onProgress) => {
+      const maxRetries = 3
+      let activeClient = c
+      for (let attempt = 0; attempt <= maxRetries; attempt++) {
+        try {
+          return await downloadAttempt(activeClient, item, tmpDest, onProgress)
+        } catch (err) {
+          const retryable = /server session disconnected/i.test(String(err?.message || ''))
+          if (attempt === maxRetries || closed || job.cancelled || !retryable) throw err
+          Object.assign(job, { status: 'queued', phase: 'queued', speed: 0, progressAt: Date.now() })
+          onchange?.()
+          const waitMs = 2000 * (attempt + 1)
+          for (let waited = 0; waited < waitMs; waited += 200) {
+            if (closed || job.cancelled) throw new Error('Cancelled')
+            await new Promise(resolve => setTimeout(resolve, Math.min(200, waitMs - waited)))
+          }
+          if (closed || job.cancelled) throw new Error('Cancelled')
+          // ast-grep-ignore: js-no-empty-catch -- keep the existing client when reconnect has not finished yet; the next download attempt will surface any persistent login error
+          try { activeClient = await ensureLoggedIn() } catch {}
+        }
+      }
+    }
 
     const runDownload = async () => {
       let completedBytes = 0

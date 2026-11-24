@@ -280,6 +280,7 @@ async function start () {
     slskListenPort: cfg('slskListenPort'),
     slskShare: cfg('slskShare'),
     slskShareMaxFiles: cfg('slskShareMaxFiles'),
+    soulseekOpts: { persistJobs: true },
     youtube: {
       info: (query, opts) => ubitInfo(query, { configDir: ubitConfigDir, ...opts }),
       download: (url, dir, opts) => downloadPage(url, dir, { configDir: ubitConfigDir, ...opts })

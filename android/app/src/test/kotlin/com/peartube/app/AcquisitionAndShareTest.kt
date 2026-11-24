@@ -158,6 +158,32 @@ class AcquisitionAndShareTest {
         assertFalse(failed.isActive)
         assertTrue(failed.isFailed)
         assertEquals("Failed: Source returned 404", failed.statusLabel())
+
+        val retrying = AcquireJob.from(
+            JSONObject()
+                .put("jobId", "job-6")
+                .put("title", "In Rainbows")
+                .put("plugin", "soulseek")
+                .put("status", "queued")
+                .put("phase", "retrying")
+                .put("note", "Connection paused — retrying in 15s (2/5)…"),
+        )
+        assertTrue(retrying.isActive)
+        assertTrue(retrying.isRetrying)
+        assertEquals("Retrying…", retrying.statusLabel())
+        assertEquals("Connection paused — retrying in 15s (2/5)…", retrying.note)
+
+        val retryableFailed = AcquireJob.from(
+            JSONObject()
+                .put("jobId", "job-7")
+                .put("title", "Kid A")
+                .put("plugin", "soulseek")
+                .put("status", "failed")
+                .put("retryable", true)
+                .put("error", "peer offline"),
+        )
+        assertTrue(retryableFailed.isFailed)
+        assertTrue(retryableFailed.retryable)
     }
 
     @Test

@@ -963,6 +963,31 @@ impl PearTube {
         .detach();
     }
 
+    pub fn retry_job(&mut self, job_id: String, cx: &mut Context<Self>) {
+        let Some(client) = self.api_client() else {
+            return;
+        };
+        cx.spawn(async move |this, cx| {
+            let id_clone = job_id.clone();
+            let res = run_blocking(move || client.retry_job(&id_clone)).await;
+            let _ = this.update(cx, |this, cx| match res {
+                Ok(Ok(job)) => {
+                    let title = if job.title.is_empty() { "download".to_string() } else { job.title.clone() };
+                    this.merge_job(job);
+                    this.show_notice(SharedString::from(format!("Resuming {title}…")), cx);
+                    this.refresh_jobs(cx);
+                }
+                Ok(Err(err)) => {
+                    this.show_notice(SharedString::from(format!("Retry failed: {err}")), cx);
+                }
+                Err(err) => {
+                    this.show_notice(SharedString::from(format!("Retry failed: {err}")), cx);
+                }
+            });
+        })
+        .detach();
+    }
+
     pub fn show_notice(&mut self, message: SharedString, cx: &mut Context<Self>) {
         self.notice = Some(DownloadNotice {
             message,

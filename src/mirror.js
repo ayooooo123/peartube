@@ -1221,6 +1221,9 @@ export async function createMirrorHost ({
   if (mediaCheckEnabled && !closed) {
     run('media-check').catch(() => {})
   }
+  if (!closed) {
+    soulseekPlugin.resumePersisted?.(ctxFor('soulseek'))
+  }
 
   timer = pollIntervalMs > 0 && !closed
     ? setInterval(async () => {
@@ -1452,6 +1455,20 @@ export async function createMirrorHost ({
         if (j) return j
       }
       return null
+    },
+    retryProviderJob (jobId) {
+      for (const [name, p] of plugins) {
+        const j = p.retryJob?.(jobId, ctxFor(name))
+        if (j) return j
+      }
+      return null
+    },
+    wakeProviderJobs () {
+      let count = 0
+      for (const [name, p] of plugins) {
+        count += Number(p.wakeJobs?.(ctxFor(name))) || 0
+      }
+      return count
     }
   }
 }

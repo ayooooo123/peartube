@@ -221,6 +221,12 @@ impl ApiClient {
         self.delete(&format!("/v1/jobs/{job_id}"))
     }
 
+    pub fn retry_job(&self, job_id: &str) -> Result<AcquireJob, String> {
+        let val = self.post(&format!("/v1/jobs/{job_id}/retry"), &json!({}), DEFAULT_TIMEOUT)?;
+        let job_val = val.get("job").cloned().unwrap_or(val);
+        serde_json::from_value(job_val).map_err(|e| format!("Parse retry reply: {e}"))
+    }
+
     pub fn list_plugins(&self) -> Result<Vec<PluginInfo>, String> {
         let val = self.get("/v1/plugins")?;
         let arr = val.get("plugins").cloned().unwrap_or(Value::Array(Vec::new()));
@@ -960,6 +966,8 @@ pub struct AcquireJob {
     pub size: Option<u64>,
     pub error: Option<String>,
     pub note: Option<String>,
+    #[serde(default)]
+    pub retryable: bool,
     #[serde(deserialize_with = "deserialize_opt_u64")]
     pub created: Option<u64>,
 }
@@ -998,10 +1006,16 @@ impl AcquireJob {
 
     pub fn status_label(&self) -> String {
         match self.status.as_str() {
-            "queued" => match self.queue_place {
-                Some(q) if q > 0 => format!("Queued (#{q})"),
-                _ => "Queued".into(),
-            },
+            "queued" => {
+                if self.phase.as_deref() == Some("retrying") {
+                    "Retrying…".into()
+                } else {
+                    match self.queue_place {
+                        Some(q) if q > 0 => format!("Queued (#{q})"),
+                        _ => "Queued".into(),
+                    }
+                }
+            }
             "running" => "Downloading".into(),
             "copying" => "Copying from peers".into(),
             "transferring" => match (self.file_index, self.file_count) {

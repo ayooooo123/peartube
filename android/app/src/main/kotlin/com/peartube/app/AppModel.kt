@@ -2,6 +2,8 @@ package com.peartube.app
 
 import android.app.Application
 import android.content.ContentValues
+import android.net.ConnectivityManager
+import android.net.Network
 import android.net.Uri
 import android.net.wifi.WifiManager
 import android.os.Environment
@@ -452,6 +454,33 @@ class AppModel(private val app: Application) {
             }
         }
         starts.trySend(settings.value)
+        registerNetworkRecoveryCallback()
+    }
+
+    private fun registerNetworkRecoveryCallback() {
+        runCatching {
+            val cm = app.getSystemService(ConnectivityManager::class.java) ?: return
+            cm.registerDefaultNetworkCallback(object : ConnectivityManager.NetworkCallback() {
+                override fun onAvailable(network: Network) {
+                    if (status.value?.apiUrl.isNullOrBlank()) return
+                    scope.launch {
+                        loopbackApi.resumeJobs()
+                        refreshAcquireJobs()
+                    }
+                }
+            })
+        }
+    }
+
+    fun onForeground() {
+        inForeground = true
+        applyBackgroundPolicy()
+        if (!status.value?.apiUrl.isNullOrBlank()) {
+            scope.launch {
+                loopbackApi.resumeJobs()
+                refreshAcquireJobs()
+            }
+        }
     }
 
     /** Storage contribution: persisted, then applied to the live worklet. */
@@ -501,6 +530,8 @@ class AppModel(private val app: Application) {
 
     // The one rule for the background: in front, or behind with a cast, active music, a download or
     // the sync window open, the worklet runs and both locks are held; otherwise both stop.
+    // While any download or acquire/Soulseek job is active, keep a dataSync Foreground Service
+    // running so Android's Cached App Freezer does not stall sockets with the screen off.
     @Synchronized
     fun applyBackgroundPolicy() {
         if (inForeground || shouldKeepWorkerAwake()) {
@@ -512,6 +543,7 @@ class AppModel(private val app: Application) {
             if (wifiLock.isHeld) wifiLock.release()
             if (multicastLock.isHeld) multicastLock.release()
         }
+        TransferService.sync(app, acquireJobs.value, downloads.value)
     }
 
     fun openUriOrKey(raw: String) {
@@ -1069,6 +1101,20 @@ class AppModel(private val app: Application) {
                 },
                 onFailure = { err ->
                     error.value = err.message ?: "Could not update job."
+                },
+            )
+        }
+    }
+
+    fun retryJob(jobId: String) {
+        scope.launch {
+            loopbackApi.retryJob(jobId).fold(
+                onSuccess = { job ->
+                    recordSubmittedJob(job)
+                    notice.value = "Resuming ${job.title.ifBlank { "download" }}…"
+                },
+                onFailure = { err ->
+                    error.value = err.message ?: "Could not retry download."
                 },
             )
         }

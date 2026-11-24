@@ -6,8 +6,8 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.graphics.vector.addPathNodes
 import androidx.compose.ui.unit.dp
 
-// The player's icons, from Material Icons' path data (Apache-2.0). None of them are text:
-// Android draws characters such as ⏸ as colour emoji whatever the variation selector.
+// Icons from Material Icons' path data (Apache-2.0). None of them are text:
+// Android draws characters such as pause as colour emoji whatever the variation selector.
 
 val PlayIcon = icon("Play", "M8 5v14l11-7z")
 val PauseIcon = icon("Pause", "M6 19h4V5H6v14zm8-14v14h4V5h-4z")
@@ -24,7 +24,7 @@ val CheckIcon = icon("Selected", "M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.
 val ExpandIcon = icon("Choose", "M16.59 8.59L12 13.17 7.41 8.59 6 10l6 6 6-6z")
 val CastIcon = icon("Cast", "M1 18v3h3a3 3 0 0 0-3-3zm0-4v2a5 5 0 0 1 5 5h2a7 7 0 0 0-7-7zm0-4v2a9 9 0 0 1 9 9h2A11 11 0 0 0 1 10zm20-7H3a2 2 0 0 0-2 2v3h2V5h18v14h-7v2h7a2 2 0 0 0 2-2V5a2 2 0 0 0-2-2z")
 val CastConnectedIcon = icon("Casting", "M1 18v3h3a3 3 0 0 0-3-3zm0-4v2a5 5 0 0 1 5 5h2a7 7 0 0 0-7-7zm0-4v2a9 9 0 0 1 9 9h2A11 11 0 0 0 1 10zM21 3H3a2 2 0 0 0-2 2v3h2V5h18v14h-7v2h7a2 2 0 0 0 2-2V5a2 2 0 0 0-2-2zM5 7v1.63A13 13 0 0 1 13.37 17H19V7z")
-val TvIcon = icon("TV Mode", "M21 3H3a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h5v2h8v-2h5a2 2 0 0 0 2-2V5a2 2 0 0 0-2-2zm0 14H3V5h18z")
+val TvIcon = icon("TVs", "M21 3H3a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h5v2h8v-2h5a2 2 0 0 0 2-2V5a2 2 0 0 0-2-2zm0 14H3V5h18z")
 val QrCodeScannerIcon = icon("Scan QR code", "M4 4h4V2H2v6h2V4zm16 0v4h2V2h-6v2h4zM4 16H2v6h6v-2H4v-4zm16 4h-4v2h6v-6h-2v4zM6 6h5v5H6V6zm1 1v3h3V7H7zm6-1h5v5h-5V6zm1 1v3h3V7h-3zM6 13h5v5H6v-5zm1 1v3h3v-3H7zm6-1h2v2h-2zm3 0h2v3h-2zm-3 3h3v2h-3zm4 1h1v1h-1z")
 val QrCodeIcon = icon("QR code", "M3 3h7v7H3V3zm2 2v3h3V5H5zm9-2h7v7h-7V3zm2 2v3h3V5h-3zM3 14h7v7H3v-7zm2 2v3h3v-3H5zm9-2h3v3h-3zm4 0h3v2h-3zm-4 4h2v3h-2zm3-1h4v4h-4z")
 val SettingsIcon = icon("Settings", "M19.43 12.98c.04-.32.07-.65.07-.98s-.03-.66-.08-.98l2.11-1.65-2-3.46-2.49 1a7.3 7.3 0 0 0-1.69-.98L15 3h-4l-.35 2.93c-.61.25-1.18.58-1.69.98l-2.49-1-2 3.46 2.11 1.65a7.6 7.6 0 0 0 0 1.96l-2.11 1.65 2 3.46 2.49-1c.51.4 1.08.73 1.69.98L11 21h4l.35-2.93c.61-.25 1.18-.58 1.69-.98l2.49 1 2-3.46-2.1-1.65zM13 15.5a3.5 3.5 0 1 1 0-7 3.5 3.5 0 0 1 0 7z")
@@ -40,6 +40,20 @@ val DeleteSweepIcon = icon("Free up cache", "M3 6h11v2H3V6zm2 3h7v12H5V9zm2-6h3v
 val AddIcon = icon("Add", "M19 11h-6V5h-2v6H5v2h6v6h2v-6h6z")
 val InfoIcon = icon("Content info", "M11 17h2v-6h-2v6zm1-15a10 10 0 1 0 0 20 10 10 0 0 0 0-20zm0 18a8 8 0 1 1 0-16 8 8 0 0 1 0 16zM11 9h2V7h-2v2z")
 val DownloadIcon = icon("Download", "M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z")
+
+// Navigation & music transport icons
+val HomeIcon = icon("Home", "M10 20v-6h4v6h5v-8h3L12 3 2 12h3v8z")
+val ListenIcon = icon("Listen", "M12 3v10.55c-.59-.34-1.27-.55-2-.55-2.21 0-4 1.79-4 4s1.79 4 4 4 4-1.79 4-4V7h4V3h-6z")
+val WatchIcon = icon("Watch", "M18 4l2 4h-3l-2-4h-2l2 4h-3l-2-4H8l2 4H7L5 4H4c-1.1 0-1.99.9-1.99 2L2 18c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V4h-4z")
+val DiscoverIcon = icon("Discover", "M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm2.19 12.19L6 18l3.81-8.19L18 6l-3.81 8.19zM12 10.9c-.61 0-1.1.49-1.1 1.1s.49 1.1 1.1 1.1 1.1-.49 1.1-1.1-.49-1.1-1.1-1.1z")
+val SkipNextIcon = icon("Next", "M6 18l8.5-6L6 6v12zM16 6v12h2V6h-2z")
+val SkipPreviousIcon = icon("Previous", "M6 6h2v12H6zm3.5 6l8.5 6V6z")
+val ShuffleIcon = icon("Shuffle", "M10.59 9.17L5.41 4 4 5.41l5.17 5.17 1.42-1.41zM14.5 4l2.04 2.04L4 18.59 5.41 20 17.96 7.46 20 9.5V4h-5.5zm.33 9.41l-1.41 1.41 3.13 3.13L14.5 20H20v-5.5l-2.04 2.04-3.13-3.13z")
+val RepeatIcon = icon("Repeat", "M7 7h10v3l4-4-4-4v3H5v6h2V7zm10 10H7v-3l-4 4 4 4v-3h12v-6h-2v4z")
+val RepeatOneIcon = icon("Repeat one", "M7 7h10v3l4-4-4-4v3H5v6h2V7zm10 10H7v-3l-4 4 4 4v-3h12v-6h-2v4zm-4-2V9h-1l-2 1v1h1.5v4H13z")
+val QueueMusicIcon = icon("Up next", "M15 6H3v2h12V6zm0 4H3v2h12v-2zM3 16h8v-2H3v2zM17 6v8.18c-.31-.11-.65-.18-1-.18-1.66 0-3 1.34-3 3s1.34 3 3 3 3-1.34 3-3V8h3V6h-5z")
+val SortIcon = icon("Sort", "M3 18h6v-2H3v2zM3 6v2h18V6H3zm0 7h12v-2H3v2z")
+val CopyIcon = icon("Copy", "M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z")
 
 private fun icon(name: String, path: String) =
     ImageVector.Builder(name, 24.dp, 24.dp, 24f, 24f)

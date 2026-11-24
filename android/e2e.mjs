@@ -111,7 +111,7 @@ function fieldUnder (ns, label) {
   return ns.filter(n => n.cls === 'android.widget.EditText' && n.y > at.y).sort((a, b) => a.y - b.y)[0] ?? null
 }
 const emptyState = ns => ns.some(n => n.desc === 'Settings') &&
-  !ns.some(n => n.desc === 'Close Under the Hood') && byText('Add Channel or Link')(ns)
+  !ns.some(n => n.desc === 'Close Under the Hood') && byText('Add to library')(ns)
 const library = what => waitFor(what, emptyState, 30_000)
 const trackerField = ns => fieldUnder(ns, 'Primary channel key (optional)')
 const advanced = async () => tap(await scrollTo('advanced network options', byText('Advanced Network & Engine')))
@@ -139,7 +139,10 @@ async function fullPlayback () {
   shot('list.png')
 
   tap(await waitFor('a playable movie or episode', ns => ns.find(n => rowPattern.test(n.text))))
-  await sleep(3000)
+  await sleep(1500)
+  const detailPlay = nodes().find(n => n.text === 'Play')
+  if (detailPlay) tap(detailPlay)
+  await sleep(2000)
   if (!nodes().some(n => n.pkg === pkg)) {
     throw new Error('Android fullscreen notice is in front: tap Got it on the phone, then run this again')
   }

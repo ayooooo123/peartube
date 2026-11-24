@@ -227,6 +227,20 @@ data class Status(
     }
 }
 
+data class MusicMeta(
+    val title: String? = null,
+    val artist: String? = null,
+) {
+    companion object {
+        fun from(json: JSONObject?): MusicMeta? {
+            if (json == null) return null
+            val title = json.optString("title").takeUnless { json.isNull("title") || it.isEmpty() }
+            val artist = json.optString("artist").takeUnless { json.isNull("artist") || it.isEmpty() }
+            return if (title == null && artist == null) null else MusicMeta(title = title, artist = artist)
+        }
+    }
+}
+
 data class Entry(
     val key: String,
     val id: String,
@@ -248,6 +262,7 @@ data class Entry(
     val seriesKey: String = "",
     val baseTitle: String = "",
     val year: String? = null,
+    val music: MusicMeta? = null,
 ) {
     val isEpisode: Boolean get() = season != null && episode != null
     val episodeLabel: String get() = if (season != null && episode != null) "S%02dE%02d".format(Locale.ROOT, season, episode) else "Movie"
@@ -275,6 +290,7 @@ data class Entry(
             seriesKey = json.optString("seriesKey"),
             baseTitle = json.optString("baseTitle", json.getString("title")),
             year = if (json.isNull("year")) null else json.optString("year").takeIf { it.isNotEmpty() },
+            music = MusicMeta.from(json.optJSONObject("music")),
         )
     }
 }

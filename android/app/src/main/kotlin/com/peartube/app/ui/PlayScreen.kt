@@ -240,7 +240,7 @@ fun PlayScreen(model: AppModel, host: PlayerHost, entry: Entry, startPositionMs:
                 if (!scrubbing && ((!st.buffering && abs(st.positionMs - it) < 1_500) || SystemClock.uptimeMillis() - seekedAt > timeoutMs)) target = null
             }
             if (st.ended) {
-                model.screen.value = Screen.List
+                model.closeVideo()
                 break
             }
             delay(250)
@@ -289,7 +289,7 @@ fun PlayScreen(model: AppModel, host: PlayerHost, entry: Entry, startPositionMs:
         model.recordWatchProgress(entry, state.positionMs, state.durationMs)
         activity.setImmersive(false, view)
         activity.requestedOrientation = exitOrientation
-        model.screen.value = Screen.List
+        model.closeVideo()
     }
     fun playPause() {
         show()
@@ -354,9 +354,9 @@ fun PlayScreen(model: AppModel, host: PlayerHost, entry: Entry, startPositionMs:
                                 TrackPicker(audioOptions, selectAudio, { menuOpen = it }) { open -> OverlayButton(AudioIcon, "Audio", open) }
                             }
                         OverlayButton(InfoIcon, "Content info", { infoOpen = !infoOpen; show() })
-                        OverlayButton(CastIcon, "Cast to TV", {
+                        OverlayButton(TvIcon, "Play on a TV", {
                             model.recordWatchProgress(liveEntry, state.positionMs, state.durationMs)
-                            model.castEntryOrSheet(liveEntry, state.positionMs)
+                            model.openTvsPickerForEntry(liveEntry, state.positionMs)
                         })
                     }
                     Row(
@@ -433,7 +433,7 @@ fun PlayScreen(model: AppModel, host: PlayerHost, entry: Entry, startPositionMs:
                 onClose = { infoOpen = false },
                 onSwitch = { next, preserveTime ->
                     model.recordWatchProgress(liveEntry, state.positionMs, state.durationMs)
-                    model.screen.value = Screen.Play(next, if (preserveTime) state.positionMs else null)
+                    model.replaceTopScreen(Screen.Play(next, if (preserveTime) state.positionMs else null))
                 },
                 modifier = Modifier.align(if (landscape) Alignment.CenterEnd else Alignment.BottomCenter),
             )

@@ -79,7 +79,7 @@ fun SettingsScreen(model: AppModel) {
     Column(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding()) {
         Row(Modifier.fillMaxWidth().padding(start = 16.dp, end = 4.dp, top = 8.dp, bottom = 8.dp), verticalAlignment = Alignment.CenterVertically) {
             Text("Settings", fontSize = 24.sp, fontWeight = FontWeight.Bold, color = Ink, modifier = Modifier.weight(1f))
-            TextButton(onClick = { model.screen.value = Screen.List }) { Text("Cancel", color = Ink) }
+            TextButton(onClick = { model.popScreen() }) { Text("Cancel", color = Ink) }
         }
         HorizontalDivider(color = Line)
         Column(

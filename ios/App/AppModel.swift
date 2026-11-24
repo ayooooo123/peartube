@@ -7,7 +7,13 @@ final class AppModel: ObservableObject {
     @Published var settings = Settings()
     @Published var status: [String: Any] = [:]
     @Published var identity: [String: Any] = [:]
-    @Published var entries: [MediaEntry] = []
+    @Published var entries: [MediaEntry] = [] {
+        didSet {
+            catalog = LibraryCatalog.build(entries: entries)
+            music.restoreIfNeeded(catalog: catalog)
+        }
+    }
+    @Published private(set) var catalog = LibraryCatalog.empty
     @Published var history: [String: WatchProgress] = [:]
     @Published var cast: [String: Any] = [:]
     @Published var selectedReceiver: String?
@@ -22,6 +28,16 @@ final class AppModel: ObservableObject {
     private var globalAskedAt = Date.distantPast
     @Published var filter = "All"
     @Published var sourceFilter = ""
+    @Published var room: Room = .home {
+        didSet {
+            if room != oldValue {
+                try? storage?.save(UIPreferences(lastRoom: room), name: "ui-state.json")
+            }
+        }
+    }
+    @Published var focusSearchTrigger = 0
+    @Published var showAdd = false
+    @Published var showMusicPlayer = false
     @Published var showSettings = false
     @Published var showDiagnostics = false
     @Published var showCast = false
@@ -36,7 +52,8 @@ final class AppModel: ObservableObject {
     @Published private(set) var busy = false
     @Published var soundfontBusy = false
     @Published var soundfontPresent = false
-    let player = NativePlayer()
+    let player = NativePlayer(keepScreenAwake: true)
+    let music = MusicController()
     private(set) var storage: AppStorage?
     private var worker: Worker?
     /// The worklet's one-time `init`; `runStart` awaits it so it reaches the worklet first.
@@ -63,7 +80,27 @@ final class AppModel: ObservableObject {
             let storage = try AppStorage(suffix: suffix); self.storage = storage
             settings = storage.load("settings.json", fallback: Settings())
             history = storage.load("watch-history.json", fallback: [String: WatchProgress]())
+            let prefs = storage.load("ui-state.json", fallback: UIPreferences())
+            room = prefs.lastRoom
+            let musicState = storage.load("music-state.json", fallback: PersistedMusicState())
+            music.loadPersisted(musicState)
             soundfontPresent = FileManager.default.fileExists(atPath: storage.soundfont.path)
+
+            music.onBeforeStartMusic = { [weak self] in self?.closePlaybackForMusic() }
+            music.onWarmKey = { [weak self] key in
+                Task { _ = try? await self?.worker?.request("warm", ["key": key]) }
+            }
+            music.soundfontPath = { [weak self] in
+                guard let self, self.soundfontPresent else { return nil }
+                return self.storage?.soundfont.path
+            }
+            music.onSaveState = { [weak self] state in
+                try? self?.storage?.save(state, name: "music-state.json")
+            }
+            music.onNotice = { [weak self] message in
+                self?.notice = message
+            }
+
             let worker = try Worker(); self.worker = worker
             worker.onEvent = { [weak self] event in self?.receive(event) }
             // The worklet takes its cast storage once, before any other method reaches it (the Mac and the
@@ -75,6 +112,7 @@ final class AppModel: ObservableObject {
                 while !Task.isCancelled {
                     try? await Task.sleep(for: .milliseconds(250))
                     guard let self else { return }
+                    self.music.poll()
                     if self.background { continue }
                     self.player.poll(); self.tickCount += 1
                     self.recordProgress()
@@ -139,7 +177,7 @@ final class AppModel: ObservableObject {
         guard !busy else { return }
         do {
             try storage?.save(next, name: "settings.json")
-            recordProgress(force: true); player.close()
+            recordProgress(force: true); player.close(); music.stop()
             settings = next; entries = []; status = [:]; sourceFilter = ""; showSettings = false
             await start()
         } catch { self.error = error.localizedDescription }
@@ -180,6 +218,18 @@ final class AppModel: ObservableObject {
         } while refreshAgain && running
         writeEvidence(force: true)
     }
+    var apiBaseURL: URL? {
+        let raw = status.string("apiUrl")
+        return raw.isEmpty ? nil : URL(string: raw)
+    }
+    func posterURL(imdb: String?) -> URL? {
+        guard let imdb, !imdb.isEmpty, let apiBaseURL else { return nil }
+        return apiBaseURL.appendingPathComponent("v1/poster/\(imdb)")
+    }
+    func backdropURL(imdb: String?) -> URL? {
+        guard let imdb, !imdb.isEmpty, let apiBaseURL else { return nil }
+        return apiBaseURL.appendingPathComponent("v1/backdrop/\(imdb)")
+    }
     var sources: [[String: Any]] { status.objects("sources") }
     var discovered: [[String: Any]] { status.objects("discoveredSources") }
     var receivers: [CastReceiver] { cast.objects("receivers").map { CastReceiver(json: $0) } }
@@ -194,7 +244,19 @@ final class AppModel: ObservableObject {
         }.sorted { a, b in a.title.localizedStandardCompare(b.title) == .orderedAscending }
     }
     var continueEntries: [MediaEntry] {
-        entries.filter { history[$0.key]?.partial == true }.sorted { (history[$0.key]?.updatedAt ?? 0) > (history[$1.key]?.updatedAt ?? 0) }
+        entries.filter { !$0.isAlbumTrack && history[$0.key]?.partial == true }
+            .sorted { (history[$0.key]?.updatedAt ?? 0) > (history[$1.key]?.updatedAt ?? 0) }
+    }
+    var continueVideos: [(tile: LibraryTile, entry: MediaEntry, progress: WatchProgress)] {
+        var out: [(tile: LibraryTile, entry: MediaEntry, progress: WatchProgress)] = []
+        for tile in catalog.allVideos {
+            for item in tile.items {
+                if let p = history[item.entry.key], p.partial {
+                    out.append((tile: tile, entry: item.entry, progress: p))
+                }
+            }
+        }
+        return out.sorted { $0.progress.updatedAt > $1.progress.updatedAt }
     }
     func seriesNext(_ episodes: [MediaEntry]) -> MediaEntry? {
         let ordered = episodes.sorted { $0.episodeOrder < $1.episodeOrder }
@@ -204,15 +266,43 @@ final class AppModel: ObservableObject {
         return ordered[i + 1]
     }
     func resumePosition(_ entry: MediaEntry) -> Double { history[entry.key].flatMap { $0.partial ? $0.positionMs : nil } ?? 0 }
+
+    func openSearch(query text: String? = nil, askRelays: Bool = false) {
+        room = .search
+        if let text {
+            query = text
+            if askRelays {
+                Task { await searchGlobal(text) }
+            }
+        } else {
+            focusSearchTrigger += 1
+        }
+    }
+
     func play(_ entry: MediaEntry, at position: Double? = nil, localOnly: Bool = false) {
         if entry.locked {
             error = "Subscriber pass needed: paste this channel's peartube://access/… pass to unlock."
             return
         }
+        if entry.canQueueAsTrack {
+            if let row = catalog.trackRow(forKey: entry.key) {
+                if let album = catalog.tile(forKey: row.albumKey) {
+                    let tracks = catalog.tracks(forAlbum: album)
+                    let idx = tracks.firstIndex { $0.entry.key == entry.key } ?? 0
+                    music.playTrackList(tracks, startIndex: idx, sourceLabel: album.album.isEmpty ? album.title : album.album)
+                } else {
+                    music.playTrackList([row], startIndex: 0, sourceLabel: row.albumTitle)
+                }
+                return
+            }
+        }
         let start = position ?? resumePosition(entry)
         if !localOnly, let receiver = session["receiverId"] as? String ?? selectedReceiver {
             Task { await castPlay(receiver: receiver, entry: entry, position: start) }; return
         }
+        // Rule 3: Music waits for a video. Pause music, keep its track/position/queue, and mark `Paused for a video`.
+        music.pauseForVideo()
+        showMusicPlayer = false
         recordProgress(force: true)
         let warmKey = entry.key
         Task { _ = try? await self.worker?.request("warm", ["key": warmKey]) }
@@ -221,6 +311,7 @@ final class AppModel: ObservableObject {
         showSettings = false
         writeEvidence(force: true)
     }
+
     func switchFormat(_ entry: MediaEntry) {
         let position = player.state.positionMs
         let paused = !player.state.playing
@@ -229,7 +320,21 @@ final class AppModel: ObservableObject {
         Task { _ = try? await self.worker?.request("warm", ["key": warmKey]) }
         player.open(entry, at: position, paused: paused, soundfont: soundfontPresent ? storage?.soundfont.path : nil)
     }
-    func closePlayback() { recordProgress(force: true); player.close(); writeEvidence(force: true) }
+
+    func closePlayback() {
+        recordProgress(force: true)
+        player.close(deactivateAudioSession: !music.isPlaying)
+        writeEvidence(force: true)
+    }
+
+    /// Rule 4: Starting music closes an open video while preserving its watch position for Keep playing.
+    private func closePlaybackForMusic() {
+        guard player.entry != nil else { return }
+        recordProgress(force: true)
+        player.close(deactivateAudioSession: false)
+        writeEvidence(force: true)
+    }
+
     func recordProgress(force: Bool = false) {
         let key = player.entry?.key ?? session.object("state").object("entry").string("key")
         let playback = player.entry == nil ? remoteState : player.state
@@ -253,13 +358,17 @@ final class AppModel: ObservableObject {
             let result = try await worker.request("openUri", ["uri": input]) as? [String: Any] ?? [:]
             if !result.object("source").isEmpty {
                 let spec = SourceSpec(result.object("source")); settings.add(spec); settings.configured = true
-                try storage?.save(settings, name: "settings.json"); showSettings = false
+                try storage?.save(settings, name: "settings.json"); showSettings = false; showAdd = false
             }
-            if !result.object("entry").isEmpty { play(MediaEntry(result.object("entry"))) }
+            if !result.object("entry").isEmpty {
+                showAdd = false
+                play(MediaEntry(result.object("entry")))
+            }
             if result.string("action") == "receiver" {
+                showAdd = false
                 await refreshCast()
                 let id = result.object("receiver").string("id")
-                guard let receiver = receivers.first(where: { $0.id == id }) else { throw AppFailure("The paired receiver is missing from the saved screen list.") }
+                guard let receiver = receivers.first(where: { $0.id == id }) else { throw AppFailure("The paired receiver is missing from the saved TV list.") }
                 await selectReceiver(receiver)
             }
             query = ""; await refresh()
@@ -313,6 +422,9 @@ final class AppModel: ObservableObject {
             notice = "Removed from channel"; await refresh()
         } catch { self.error = error.localizedDescription }
     }
+    func canDelete(_ entry: MediaEntry) -> Bool {
+        status.flag("writable") && !status.string("channel").isEmpty && status.string("channel") == entry.source
+    }
     func rotateSubscriberPass() async {
         do {
             let res = try await worker?.request("rotateEpoch", [:]) as? [String: Any] ?? [:]
@@ -353,7 +465,7 @@ final class AppModel: ObservableObject {
         Task { await refreshCast() }
     }
     func selectReceiver(_ receiver: CastReceiver) async {
-        guard receiver.paired || receiver.json.string("auth") == "none" else { error = "Enter this screen's six-character code or scan its QR code first."; return }
+        guard receiver.paired || receiver.openAuth else { error = "Enter this TV's six-character code or scan its QR code first."; return }
         selectedReceiver = receiver.id
         if let pendingCast { await castPlay(receiver: receiver.id, entry: pendingCast, position: pendingCastPosition) }
         else {
@@ -362,10 +474,10 @@ final class AppModel: ObservableObject {
     }
     func pairReceiver(id: String, code: String, address: String = "") async {
         let value = code.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
-        guard value.count == 6, value.allSatisfy({ $0.isASCII && ($0.isLetter || $0.isNumber) }) else { error = "Enter the six-character pairing code shown on the TV."; return }
+        guard value.count == 6, value.allSatisfy({ $0.isASCII && ($0.isLetter || $0.isNumber) }) else { error = "Enter the six-character code shown on the TV."; return }
         let raw = address.trimmingCharacters(in: .whitespacesAndNewlines)
-        if id.isEmpty && raw.isEmpty { error = "Choose a screen or enter its receiver link or 64-character key before pairing."; return }
-        await pair(id.isEmpty ? ["code": value, "address": raw] : ["id": id, "code": value], unpaired: "Paired. Choose the saved screen to connect.")
+        if id.isEmpty && raw.isEmpty { error = "Choose a TV or enter its link before pairing."; return }
+        await pair(id.isEmpty ? ["code": value, "address": raw] : ["id": id, "code": value], unpaired: "Paired. Choose the TV to connect.")
     }
     func pairURI(_ input: String) async {
         let raw = input.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -386,7 +498,7 @@ final class AppModel: ObservableObject {
     func castPlay(receiver: String, entry: MediaEntry, position: Double) async {
         do {
             _ = try await castRequest("castPlay", ["receiverId": receiver, "key": entry.key, "preferMode": "auto", "startPositionMs": position])
-            recordProgress(force: true); player.close(); pendingCast = nil; showCast = false; selectedReceiver = receiver
+            recordProgress(force: true); player.close(deactivateAudioSession: !music.isPlaying); pendingCast = nil; showCast = false; selectedReceiver = receiver
         } catch { self.error = error.localizedDescription }
     }
     func control(_ action: String, _ params: [String: Any] = [:]) async {
@@ -402,6 +514,7 @@ final class AppModel: ObservableObject {
         let position = remoteState.positionMs; let paused = !remoteState.playing
         do {
             _ = try await castRequest("castStop", ["stopPlayback": true]); selectedReceiver = nil; showRemote = false
+            music.pauseForVideo()
             player.open(entry, at: position, paused: paused, soundfont: soundfontPresent ? storage?.soundfont.path : nil)
         } catch { self.error = error.localizedDescription }
     }
@@ -416,7 +529,7 @@ final class AppModel: ObservableObject {
         }
     }
     private func reconcileBackground() {
-        let keepAwake = !session.isEmpty || !downloads.isEmpty
+        let keepAwake = !session.isEmpty || !downloads.isEmpty || music.isPlaying
         if background && !keepAwake { worker?.suspend() } else { worker?.resume() }
     }
     func download(_ entry: MediaEntry) {
@@ -548,7 +661,7 @@ final class AppModel: ObservableObject {
         let document = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first
         let playerState = player.state.json
         let evidence: [String: Any] = ["schemaVersion": 1, "timestamp": Date().timeIntervalSince1970, "workerStarted": running,
-            "screen": player.entry != nil ? "player" : showSettings ? "settings" : "library", "background": background,
+            "screen": player.entry != nil ? "player" : showSettings ? "settings" : room.rawValue, "background": background,
             "settings": ["tracker": settings.tracker, "sources": settings.sources.map(\.json), "bootstrap": settings.bootstrap, "lanDiscovery": settings.lanDiscovery, "privateRouting": settings.privateRouting],
             "status": status, "entries": entries.map(\.evidence), "visibleEntryKeys": visibleEntries.map(\.key),
             "player": ["entryKey": player.entry?.key as Any? ?? NSNull(), "state": playerState],

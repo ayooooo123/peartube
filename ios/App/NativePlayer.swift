@@ -7,6 +7,7 @@ import AVFoundation
 final class NativePlayer: ObservableObject {
     @Published private(set) var state = PlaybackState()
     @Published private(set) var entry: MediaEntry?
+    private let keepScreenAwake: Bool
     private var handle: OpaquePointer?
     private var lastState: String?
     private weak var view: PlayerUIView?
@@ -18,7 +19,8 @@ final class NativePlayer: ObservableObject {
     private var interruption: NSObjectProtocol?
     private var routeChange: NSObjectProtocol?
 
-    init() {
+    init(keepScreenAwake: Bool = true) {
+        self.keepScreenAwake = keepScreenAwake
         interruption = NotificationCenter.default.addObserver(forName: AVAudioSession.interruptionNotification, object: nil, queue: .main) { [weak self] note in
             let type = (note.userInfo?[AVAudioSessionInterruptionTypeKey] as? NSNumber)?.uintValue
             let options = (note.userInfo?[AVAudioSessionInterruptionOptionKey] as? NSNumber)?.uintValue ?? 0
@@ -54,7 +56,7 @@ final class NativePlayer: ObservableObject {
         guard let view, let entry else { return }
         do {
             let session = AVAudioSession.sharedInstance()
-            try session.setCategory(.playback, mode: .moviePlayback)
+            try session.setCategory(.playback, mode: keepScreenAwake ? .moviePlayback : .default)
             try session.setActive(true)
         } catch { state = PlaybackState(json: ["error": error.localizedDescription]); return }
         handle = peartube_player_create(Unmanaged.passUnretained(view).toOpaque())
@@ -67,7 +69,7 @@ final class NativePlayer: ObservableObject {
         resize(view.bounds.size)
         if pendingPaused { check(peartube_player_pause(handle)) }
         if suspended { check(peartube_player_suspend(handle)) }
-        UIApplication.shared.isIdleTimerDisabled = !suspended
+        if keepScreenAwake { UIApplication.shared.isIdleTimerDisabled = !suspended }
     }
     func resize(_ size: CGSize) {
         if let handle { check(peartube_player_frame(handle, Double(size.width), Double(size.height))) }
@@ -101,7 +103,7 @@ final class NativePlayer: ObservableObject {
         guard !suspended else { return }
         wasPlaying = state.playing; suspended = true
         if let handle { check(peartube_player_suspend(handle)) }
-        UIApplication.shared.isIdleTimerDisabled = false
+        if keepScreenAwake { UIApplication.shared.isIdleTimerDisabled = false }
     }
     func resume() {
         guard suspended else { return }
@@ -110,16 +112,18 @@ final class NativePlayer: ObservableObject {
             check(peartube_player_resume(handle))
             if !wasPlaying { check(peartube_player_pause(handle)) }
         }
-        UIApplication.shared.isIdleTimerDisabled = entry != nil
+        if keepScreenAwake { UIApplication.shared.isIdleTimerDisabled = entry != nil }
     }
-    func close() {
+    func close(deactivateAudioSession: Bool = true) {
         retire(); entry = nil; state = PlaybackState(); pendingPosition = nil; suspended = false
-        try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+        if deactivateAudioSession {
+            try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+        }
     }
     private func retire() {
         lastState = nil
         if let handle { self.handle = nil; peartube_player_destroy(handle) }
-        UIApplication.shared.isIdleTimerDisabled = false
+        if keepScreenAwake { UIApplication.shared.isIdleTimerDisabled = false }
     }
     private func check(_ code: Int32) { if code < 0 { bridgeError() } }
     private func bridgeError() {

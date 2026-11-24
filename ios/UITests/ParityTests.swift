@@ -74,16 +74,19 @@ final class ParityTests: XCTestCase {
         XCTAssertTrue(row.waitForExistence(timeout: 150), "The on-device worklet did not synchronize the relay movie. \(app.debugDescription)")
         screenshot("library-synchronized")
 
+        try tap("nav.watch")
         try tap("filters.series")
         XCTAssertFalse(row.exists, "A movie must not appear in the series filter")
         try tap("filters.movies")
         XCTAssertTrue(row.waitForExistence(timeout: 10))
         try tap("filters.all")
 
+        try tap("nav.search")
         let search = element("search.field")
         search.tap(); search.typeText("no-such-peartube-entry")
         XCTAssertFalse(row.waitForExistence(timeout: 2))
         search.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: "no-such-peartube-entry".count))
+        try tap("nav.watch")
         XCTAssertTrue(row.waitForExistence(timeout: 10))
 
         try tap("library.hood")
@@ -390,6 +393,7 @@ final class FirstRunTests: XCTestCase {
         try await waitForFixture(title: title, bootstrap: bootstrap)
         launch(bootstrap: bootstrap)
         assertEmptyLibrary()
+        requireApp(); app.buttons["nav.search"].tap()
         let search = app.textFields["search.field"]
         requireApp(); search.tap(); search.typeText(title + "\n")
         let hits = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH 'global.play.'"))

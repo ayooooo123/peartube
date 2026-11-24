@@ -1,42 +1,54 @@
-//! Minimalist cinema library: movie cards, collapsible series with season pills,
-//! unified Smart Omnibar, and the cheeky hidden "Under the Hood" swarm drawer.
+//! Top navigation bar, `Add to library` modal, Under the Hood drawer,
+//! room/detail dispatcher, and shared formatting helpers.
 
-use std::collections::BTreeSet;
+#![forbid(unsafe_code)]
 
 use gpui_kit::assets::IconName as Lucide;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
-use gpui_kit::component::input::Input;
-use gpui_kit::component::menu::{DropdownMenu as _, PopupMenuItem};
+use gpui_kit::component::input::{Input, InputState};
 use gpui_kit::component::scroll::ScrollableElement as _;
 use gpui_kit::component::{Icon, IconName, Sizable as _, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use peartube::worker::{Entry, Status};
 
-use crate::app::{LibraryFilter, PearTube};
+use crate::app::{DetailView, ListenTab, PearTube, Room, WatchKind};
 use crate::qr::qr_card;
-use crate::theme::{ACCENT, BG, BRAND, CARD, CARD_ELEVATED, DIM, INK, LINE};
+use crate::theme::{ACCENT, BG, BRAND, CARD, DANGER, DIM, INK, LINE};
 
 pub fn format_bytes(bytes: u64) -> String {
     const KB: u64 = 1024;
     const MB: u64 = 1024 * KB;
     const GB: u64 = 1024 * MB;
-    if bytes >= GB { format!("{:.1} GB", bytes as f64 / GB as f64) }
-    else if bytes >= MB { format!("{:.1} MB", bytes as f64 / MB as f64) }
-    else if bytes >= KB { format!("{:.0} KB", bytes as f64 / KB as f64) }
-    else { format!("{bytes} B") }
+    if bytes >= GB {
+        format!("{:.1} GB", bytes as f64 / GB as f64)
+    } else if bytes >= MB {
+        format!("{:.1} MB", bytes as f64 / MB as f64)
+    } else if bytes >= KB {
+        format!("{:.0} KB", bytes as f64 / KB as f64)
+    } else {
+        format!("{bytes} B")
+    }
 }
 
 pub fn label(entry: &Entry) -> String {
     if let (Some(s), Some(e)) = (entry.season, entry.episode) {
         format!("S{s:02}E{e:02}")
-    } else {
+    } else if entry.id.starts_with("imdb:") {
         "Movie".to_string()
+    } else {
+        "Clip".to_string()
     }
 }
 
 pub fn origin(entry: &Entry) -> &'static str {
-    if entry.local || (entry.size > 0 && entry.cached_bytes >= entry.size) { "Saved" } else { "Stream" }
+    if entry.local || (entry.size > 0 && entry.cached_bytes >= entry.size) {
+        "Saved here"
+    } else if entry.cached_bytes > 0 {
+        "Partly saved"
+    } else {
+        "On the network"
+    }
 }
 
 pub fn p2p_summary(status: Option<&Status>) -> Option<String> {
@@ -46,998 +58,315 @@ pub fn p2p_summary(status: Option<&Status>) -> Option<String> {
         ("Public DHT", &s.routes.public_route),
         ("LAN", &s.routes.lan),
     ];
-    if s.down_bps == 0 && s.up_bps == 0 && s.inflight_blocks == 0
+    if s.down_bps == 0
+        && s.up_bps == 0
+        && s.inflight_blocks == 0
         && routes.iter().all(|(_, route)| route.rx_bytes == 0 && route.tx_bytes == 0)
     {
         return None;
     }
-    let rtt = if s.rtt > 0 { format!(" · {} ms", s.rtt) } else { String::new() };
+    let rtt = if s.rtt > 0 {
+        format!(" · {} ms", s.rtt)
+    } else {
+        String::new()
+    };
     let paths = routes
         .into_iter()
         .map(|(name, route)| format!("{name} ↓ {} ↑ {}", format_bytes(route.rx_bytes), format_bytes(route.tx_bytes)))
         .collect::<Vec<_>>()
         .join(" · ");
-    Some(format!("↓ {}/s · ↑ {}/s · {} blks{rtt}\n{paths}", format_bytes(s.down_bps), format_bytes(s.up_bps), s.inflight_blocks))
+    Some(format!(
+        "↓ {}/s · ↑ {}/s · {} blks{rtt}\n{paths}",
+        format_bytes(s.down_bps),
+        format_bytes(s.up_bps),
+        s.inflight_blocks
+    ))
 }
 
 pub fn column() -> Div {
-    v_flex().w_full().max_w(px(920.)).mx_auto().px_6()
+    v_flex().w_full().max_w(px(1080.)).mx_auto().px_6()
 }
 
+pub struct AddModalForm {
+    pub input: Entity<InputState>,
+    pub error: Option<SharedString>,
+}
 
-enum CatalogItem<'a> {
-    Movie(&'a Entry, usize),
-    Series {
-        group_key: String,
-        title: String,
-        year: Option<String>,
-        episodes: Vec<&'a Entry>,
-    },
+impl AddModalForm {
+    pub fn new(window: &mut Window, cx: &mut Context<PearTube>) -> Self {
+        let input = cx.new(|cx| {
+            InputState::new(window, cx)
+                .placeholder("peartube://channel/… or 64-character channel key")
+        });
+        AddModalForm { input, error: None }
+    }
 }
 
 impl PearTube {
+    /// Renders the main Listen and Watch workspace (top bar + active room/detail).
     pub fn render_list(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let status = self.status.as_ref();
-        let peers = status.map_or(0, |s| s.peers + s.lan_peers);
-        let transferring = status.is_some_and(|s| s.down_bps > 0 || s.up_bps > 0 || s.inflight_blocks > 0);
-        let raw_input = self.search.read(cx).value().to_string();
-        let query = raw_input.trim().to_lowercase();
+        let active_nav = self.active_nav_room();
+        let casting = self.cast.session.is_some();
 
-        let filtered: Vec<&Entry> = self
-            .entries
-            .iter()
-            .filter(|e| {
-                let is_ep = e.season.is_some();
-                let on_device = e.local || (e.size > 0 && e.cached_bytes >= e.size);
-                let pass_filter = match &self.filter {
-                    LibraryFilter::All => true,
-                    LibraryFilter::Movies => !is_ep,
-                    LibraryFilter::Series => is_ep,
-                    LibraryFilter::OnDevice => on_device,
-                    LibraryFilter::Source(src) => &e.source == src,
-                };
-                if !pass_filter {
-                    return false;
-                }
-                query.is_empty() || e.title.to_lowercase().contains(&query) || e.id.to_lowercase().contains(&query)
-            })
-            .collect();
-
-        let mut movies: Vec<&Entry> = Vec::new();
-        let mut series_map: std::collections::BTreeMap<String, (String, Option<String>, Vec<&Entry>)> = std::collections::BTreeMap::new();
-        for e in filtered {
-            if e.season.is_some() {
-                let slot = series_map.entry(e.series_key.clone()).or_insert_with(|| (e.base_title.clone(), e.year.clone(), Vec::new()));
-                slot.2.push(e);
-            } else {
-                movies.push(e);
-            }
-        }
-
-        // Deduplicate alternate movie formats onto primary card with format count badge
-        movies.sort_by(|a, b| a.id.cmp(&b.id).then(b.size.cmp(&a.size)));
-        let mut catalog: Vec<(String, CatalogItem)> = Vec::new();
-        for chunk in movies.chunk_by(|a, b| !a.id.is_empty() && a.id == b.id) {
-            let best = chunk[0];
-            catalog.push((best.title.to_lowercase(), CatalogItem::Movie(best, chunk.len())));
-        }
-        for (gk, (title, year, mut eps)) in series_map {
-            eps.sort_by(|a, b| (a.season, a.episode).cmp(&(b.season, b.episode)).then(b.size.cmp(&a.size)));
-            eps.dedup_by(|a, b| a.id == b.id);
-            catalog.push((title.to_lowercase(), CatalogItem::Series { group_key: gk, title, year, episodes: eps }));
-        }
-        catalog.sort_by(|a, b| a.0.cmp(&b.0));
-
-        // Continue watching: newest first, one card per title (episodes of a show collapse to the
-        // latest), so the hero is what you actually stopped on.
-        let mut resume: Vec<(Entry, u64, f32)> = self
-            .entries
-            .iter()
-            .filter_map(|e| {
-                let prog = self.watch_history.get(&e.id)?;
-                if prog.duration_ms == 0 { return None }
-                let pos = self.resume_position_for(e);
-                if pos == 0 { return None }
-                let ratio = (prog.position_ms as f32 / prog.duration_ms as f32).clamp(0.01, 1.);
-                if ratio >= 0.98 { return None }
-                Some((e.clone(), pos, ratio))
-            })
-            .collect();
-        resume.sort_by(|a, b| {
-            let ua = self.watch_history.get(&a.0.id).map_or(0, |w| w.updated_at);
-            let ub = self.watch_history.get(&b.0.id).map_or(0, |w| w.updated_at);
-            ub.cmp(&ua)
-        });
-        let mut seen_titles = BTreeSet::new();
-        resume.retain(|(e, _, _)| seen_titles.insert(e.series_key.clone()));
-        resume.truncate(8);
-        let browse = query.is_empty();
-
-        let empty_msg = if self.entries.is_empty() {
-            if self.status.is_none() { "Connecting to your private cinema…" } else { "Your library is quiet. Waiting for peers or channels to sync…" }
-        } else {
-            "Nothing matches that filter."
+        let nav_tab = |id: &'static str, text: &'static str, is_active: bool, target: Room, cx: &mut Context<Self>| {
+            div()
+                .id(id)
+                .px_2p5()
+                .py_2()
+                .border_b_2()
+                .border_color(if is_active { Hsla::from(rgb(BRAND)) } else { transparent_black() })
+                .text_sm()
+                .font_weight(if is_active { FontWeight::SEMIBOLD } else { FontWeight::MEDIUM })
+                .text_color(if is_active { rgb(INK) } else { rgb(DIM) })
+                .cursor_pointer()
+                .hover(|s| s.text_color(rgb(INK)))
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.open_room(target.clone(), cx);
+                }))
+                .child(text)
         };
 
-        let dot_color = if transferring { BRAND } else if peers > 0 { ACCENT } else { DIM };
-        let pulse_label = if status.is_none() {
-            "Connecting…".to_string()
-        } else if peers > 0 {
-            format!("{peers} live")
-        } else {
-            "Standby".to_string()
+        let body: AnyElement = match &self.detail {
+            Some(DetailView::Album(key)) => self.render_album_detail(key, cx).into_any_element(),
+            Some(DetailView::Artist(key)) => self.render_artist_detail(key, cx).into_any_element(),
+            Some(DetailView::Title(key)) => self.render_title_detail(key, cx).into_any_element(),
+            Some(DetailView::Playing) => self.render_playing_view(cx).into_any_element(),
+            None => match &self.room {
+                Room::Home => self.render_home(cx).into_any_element(),
+                Room::Listen(tab) => self.render_listen(tab.clone(), cx).into_any_element(),
+                Room::Watch(kind) => self.render_watch(kind.clone(), cx).into_any_element(),
+                Room::Discover => self.render_discover(cx).into_any_element(),
+                Room::Search => self.render_search(cx).into_any_element(),
+            },
         };
-
-        let sources = status.map(|s| s.sources.clone()).unwrap_or_default();
 
         v_flex()
             .size_full()
             .relative()
+            // Quiet wide top bar (Rule 10: no peer counts or transfer rates while browsing)
             .child(
-                div().border_b_1().border_color(rgb(LINE)).child(
-                    column()
-                        .py_3()
-                        .gap_3()
+                div().border_b_1().border_color(rgb(LINE)).bg(rgb(BG)).child(
+                    h_flex()
+                        .w_full()
+                        .max_w(px(1240.))
+                        .mx_auto()
+                        .px_6()
+                        .h(px(54.))
+                        .items_center()
+                        .justify_between()
+                        .gap_4()
+                        // Left: Brand (opens Under the Hood) + room tabs
                         .child(
                             h_flex()
-                                .justify_between()
                                 .items_center()
-                                .min_h(px(36.))
+                                .gap_5()
                                 .child(
-                                    h_flex()
+                                    div()
                                         .id("brand-hood-trigger")
-                                        .items_center()
-                                        .gap_2p5()
-                                        .cursor_pointer()
                                         .px_2()
                                         .py_1()
                                         .ml(px(-8.))
-                                        .rounded(px(10.))
+                                        .rounded(px(8.))
+                                        .cursor_pointer()
                                         .hover(|s| s.bg(hsla(0., 0., 1., 0.04)))
                                         .on_click(cx.listener(|this, _, _, cx| {
                                             this.hood_open = !this.hood_open;
                                             cx.notify();
                                         }))
-                                        .child(div().text_xl().font_weight(FontWeight::BOLD).child("PearTube"))
-                                        .child(
-                                            h_flex()
-                                                .items_center()
-                                                .gap_1p5()
-                                                .px_2p5()
-                                                .py_0p5()
-                                                .rounded(px(99.))
-                                                .bg(rgb(CARD))
-                                                .border_1()
-                                                .border_color(rgb(LINE))
-                                                .child(div().size(px(7.)).rounded(px(99.)).bg(rgb(dot_color)))
-                                                .child(div().text_xs().text_color(rgb(DIM)).child(pulse_label)),
-                                        ),
+                                        .child(div().text_lg().font_weight(FontWeight::BOLD).child("PearTube")),
                                 )
                                 .child(
                                     h_flex()
                                         .items_center()
-                                        .gap_1p5()
-                                        .child({
-                                            let btn = Button::new("open-cast-header").icon(Icon::new(Lucide::Cast));
-                                            let btn = if let Some(s) = &self.cast.session {
-                                                btn.primary().small().label(s.receiver_name.clone())
-                                            } else {
-                                                btn.ghost().tooltip("Cast to TV")
-                                            };
-                                            btn.on_click(cx.listener(|this, _, window, cx| this.open_cast_sheet(None, window, cx)))
-                                        })
-                                        .child(
-                                            Button::new("settings")
-                                                .ghost()
-                                                .icon(IconName::Settings)
-                                                .tooltip("Settings")
-                                                .on_click(cx.listener(|this, _, window, cx| this.open_settings(window, cx))),
-                                        ),
+                                        .gap_1()
+                                        .child(nav_tab(
+                                            "nav-home",
+                                            "Home",
+                                            matches!(active_nav, Room::Home),
+                                            Room::Home,
+                                            cx,
+                                        ))
+                                        .child(nav_tab(
+                                            "nav-listen",
+                                            "Listen",
+                                            matches!(active_nav, Room::Listen(_)),
+                                            Room::Listen(ListenTab::Albums),
+                                            cx,
+                                        ))
+                                        .child(nav_tab(
+                                            "nav-watch",
+                                            "Watch",
+                                            matches!(active_nav, Room::Watch(_)),
+                                            Room::Watch(WatchKind::All),
+                                            cx,
+                                        ))
+                                        .child(nav_tab(
+                                            "nav-discover",
+                                            "Discover",
+                                            matches!(active_nav, Room::Discover),
+                                            Room::Discover,
+                                            cx,
+                                        )),
                                 ),
                         )
+                        // Center: unified search input (Rule 16)
                         .child(
-                            v_flex()
-                                .gap_2()
-                                .child(Input::new(&self.search).prefix(Icon::new(Lucide::Search).text_color(rgb(DIM))).cleanable(true)),
+                            div().flex_1().max_w(px(360.)).min_w(px(180.)).child(
+                                Input::new(&self.search)
+                                    .prefix(Icon::new(Lucide::Search).text_color(rgb(DIM)))
+                                    .cleanable(true),
+                            ),
                         )
-                        .child({
-                            let mut pills = vec![
-                                self.filter_pill("flt-all", "All", LibraryFilter::All, cx),
-                                self.filter_pill("flt-movies", "Movies", LibraryFilter::Movies, cx),
-                                self.filter_pill("flt-series", "Series", LibraryFilter::Series, cx),
-                                self.filter_pill("flt-saved", "On Device", LibraryFilter::OnDevice, cx),
-                            ];
-                            if sources.len() > 1 {
-                                let selected_src = match &self.filter {
-                                    LibraryFilter::Source(k) => Some(k.as_str()),
-                                    _ => None,
-                                };
-                                let cap = 12usize;
-                                let mut shown_selected = false;
-                                for s in sources.iter().take(cap) {
-                                    if selected_src == Some(s.key.as_str()) {
-                                        shown_selected = true;
-                                    }
-                                    let name = if !s.alias.is_empty() {
-                                        s.alias.clone()
-                                    } else if s.primary {
-                                        "Main Library".into()
-                                    } else {
-                                        format!("{}…", &s.key[..6.min(s.key.len())])
-                                    };
-                                    pills.push(self.filter_pill(&format!("flt-src-{}", s.key), &name, LibraryFilter::Source(s.key.clone()), cx));
-                                }
-                                if !shown_selected
-                                    && let Some(sel) = selected_src
-                                    && let Some(s) = sources.iter().skip(cap).find(|s| s.key == sel)
-                                {
-                                    let name = if !s.alias.is_empty() { s.alias.clone() } else { format!("{}…", &s.key[..6.min(s.key.len())]) };
-                                    pills.push(self.filter_pill(&format!("flt-src-{}", s.key), &name, LibraryFilter::Source(s.key.clone()), cx));
-                                }
-                                if sources.len() > cap {
-                                    let extra = sources.len() - cap;
-                                    pills.push(
-                                        div()
-                                            .id("flt-src-more")
-                                            .px_3()
-                                            .py_1()
-                                            .rounded(px(99.))
-                                            .bg(rgb(CARD))
-                                            .border_1()
-                                            .border_color(rgb(LINE))
-                                            .text_xs()
-                                            .text_color(rgb(DIM))
-                                            .cursor_pointer()
-                                            .on_click(cx.listener(|this, _, _, cx| {
-                                                this.hood_open = !this.hood_open;
-                                                cx.notify();
-                                            }))
-                                            .child(format!("+{extra} channels"))
-                                            .into_any_element(),
-                                    );
-                                }
-                            }
-                            h_flex().gap_1p5().flex_wrap().children(pills)
-                        }),
+                        // Right: Add (+), TVs (green dot when casting), Settings
+                        .child(
+                            h_flex()
+                                .items_center()
+                                .gap_1()
+                                .child(
+                                    Button::new("top-add")
+                                        .ghost()
+                                        .small()
+                                        .icon(Icon::new(Lucide::Plus))
+                                        .label("Add")
+                                        .tooltip("Add to library")
+                                        .on_click(cx.listener(|this, _, window, cx| this.open_add_modal(window, cx))),
+                                )
+                                .child(
+                                    div()
+                                        .relative()
+                                        .child(
+                                            Button::new("top-tvs")
+                                                .ghost()
+                                                .small()
+                                                .icon(Icon::new(Lucide::Tv))
+                                                .tooltip("TVs")
+                                                .on_click(cx.listener(|this, _, window, cx| this.open_cast_sheet(None, window, cx))),
+                                        )
+                                        .when(casting, |d| {
+                                            d.child(
+                                                div()
+                                                    .absolute()
+                                                    .top(px(4.))
+                                                    .right(px(4.))
+                                                    .size(px(7.))
+                                                    .rounded(px(99.))
+                                                    .bg(rgb(ACCENT)),
+                                            )
+                                        }),
+                                )
+                                .child(
+                                    Button::new("top-settings")
+                                        .ghost()
+                                        .small()
+                                        .icon(IconName::Settings)
+                                        .tooltip("Settings")
+                                        .on_click(cx.listener(|this, _, window, cx| this.open_settings(window, cx))),
+                                ),
+                        ),
                 ),
             )
             .when(self.hood_open, |this| this.child(self.render_under_the_hood(cx)))
             .child(
-                div().id("entries").flex_1().min_h_0().overflow_y_scrollbar().child(
-                    column()
-                        .py_5()
-                        .gap_3()
-                        .when(browse && !resume.is_empty(), |this| this.child(self.render_hero(&resume[0], cx)))
-                        .when(browse && resume.len() > 1, |this| this.child(self.render_rail(&resume[1..], cx)))
-                        .when(browse && !catalog.is_empty(), |this| {
-                            this.child(
+                div()
+                    .id("main-scroll")
+                    .flex_1()
+                    .min_h_0()
+                    .overflow_y_scrollbar()
+                    .child(body),
+            )
+    }
+
+    /// `Add to library` dialog (Rule 11 & Rule 18).
+    pub fn render_add_modal(&self, form: &AddModalForm, cx: &mut Context<Self>) -> impl IntoElement {
+        div()
+            .id("add-modal-backdrop")
+            .absolute()
+            .inset_0()
+            .bg(hsla(0., 0., 0., 0.62))
+            .flex()
+            .items_center()
+            .justify_center()
+            .p_6()
+            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+            .on_click(cx.listener(|this, _, _, cx| this.close_add_modal(cx)))
+            .child(
+                v_flex()
+                    .id("add-modal-card")
+                    .w(px(500.))
+                    .max_w_full()
+                    .rounded(px(18.))
+                    .bg(rgb(CARD))
+                    .border_1()
+                    .border_color(rgb(LINE))
+                    .overflow_hidden()
+                    .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                    .on_click(|_, _, cx| cx.stop_propagation())
+                    .child(
+                        h_flex()
+                            .justify_between()
+                            .items_center()
+                            .px_5()
+                            .py_4()
+                            .border_b_1()
+                            .border_color(rgb(LINE))
+                            .child(div().text_base().font_weight(FontWeight::BOLD).child("Add to library"))
+                            .child(
+                                Button::new("close-add-modal")
+                                    .ghost()
+                                    .small()
+                                    .icon(IconName::Close)
+                                    .tooltip("Close")
+                                    .on_click(cx.listener(|this, _, _, cx| this.close_add_modal(cx))),
+                            ),
+                    )
+                    .child(
+                        v_flex()
+                            .p_5()
+                            .gap_4()
+                            .when_some(form.error.clone(), |d, err| {
+                                d.child(div().text_sm().text_color(rgb(DANGER)).child(err))
+                            })
+                            .child(
+                                v_flex()
+                                    .gap_1p5()
+                                    .child(div().text_xs().text_color(rgb(DIM)).child("Channel link, watch link, subscriber pass, or 64-character key"))
+                                    .child(Input::new(&form.input).cleanable(true)),
+                            )
+                            .child(
                                 h_flex()
                                     .justify_between()
                                     .items_center()
-                                    .pt_2()
-                                    .child(div().text_lg().font_weight(FontWeight::BOLD).child("In your library"))
-                                    .child(div().text_xs().text_color(rgb(DIM)).child(format!("{} titles", catalog.len()))),
-                            )
-                        })
-                        .when(catalog.is_empty(), |this| {
-                            this.child(div().py_16().text_center().text_color(rgb(DIM)).child(empty_msg))
-                        })
-                        .children({
-                            let total_titles = catalog.len();
-                            let limit = self.visible_limit.max(80);
-                            let mut cards: Vec<_> = catalog
-                                .into_iter()
-                                .take(limit)
-                                .map(|(_, item)| match item {
-                                    CatalogItem::Movie(entry, alt_count) => self.render_movie_card(entry, alt_count, cx).into_any_element(),
-                                    CatalogItem::Series { group_key, title, year, episodes } => {
-                                        self.render_series_card(group_key, title, year, episodes, !query.is_empty(), cx).into_any_element()
-                                    }
-                                })
-                                .collect();
-                            if total_titles > limit {
-                                let rem = total_titles - limit;
-                                cards.push(
-                                    div()
-                                        .pt_2()
-                                        .flex()
-                                        .justify_center()
-                                        .child(
-                                            Button::new("catalog-show-more")
-                                                .ghost()
-                                                .small()
-                                                .label(format!("Show more ({rem} remaining)"))
-                                                .on_click(cx.listener(|this, _, _, cx| {
-                                                    this.visible_limit += 80;
-                                                    cx.notify();
-                                                })),
-                                        )
-                                        .into_any_element(),
-                                );
-                            }
-                            cards
-                        })
-                        .when(!query.is_empty(), |this| this.child(self.render_global(raw_input.trim(), cx))),
-                ),
-            )
-    }
-
-    /// What relays the app does not follow hold for the text in the search box. Enter asks them (`search_global`).
-    fn render_global(&self, typed: &str, cx: &mut Context<Self>) -> impl IntoElement {
-        let g = &self.global;
-        let asked = g.query == typed;
-        let note: Option<String> = if !asked {
-            Some("Press Enter to search relays you do not follow.".into())
-        } else if let Some(err) = &g.error {
-            Some(err.to_string())
-        } else if g.rows.is_empty() {
-            Some(if g.busy { "Asking relays…" } else { "No relay has it yet. Answers can take a few seconds." }.into())
-        } else {
-            None
-        };
-        v_flex()
-            .gap_2()
-            .pt_4()
-            .child(div().text_lg().font_weight(FontWeight::BOLD).child("On other relays"))
-            .when_some(note, |this, note| this.child(div().text_sm().text_color(rgb(DIM)).child(note)))
-            .when(asked, |this| {
-                this.children(g.rows.iter().map(|row| {
-                    let uri = row.magnet_url.clone();
-                    let meta = format!("{} · {} relay{}", format_bytes(row.size), row.relays, if row.relays == 1 { "" } else { "s" });
-                    h_flex()
-                        .id(SharedString::from(format!("global-{}", row.key)))
-                        .justify_between()
-                        .items_center()
-                        .gap_3()
-                        .p_3()
-                        .rounded(px(12.))
-                        .bg(rgb(CARD))
-                        .border_1()
-                        .border_color(rgb(LINE))
-                        .child(
-                            v_flex()
-                                .min_w_0()
-                                .child(div().font_weight(FontWeight::SEMIBOLD).child(row.title.clone()))
-                                .child(div().text_xs().text_color(rgb(DIM)).child(meta)),
-                        )
-                        .child(
-                            Button::new(SharedString::from(format!("global-play-{}", row.key)))
-                                .primary()
-                                .small()
-                                .label("Play")
-                                .on_click(cx.listener(move |this, _, _, cx| this.open_uri_or_key(uri.clone(), cx))),
-                        )
-                }))
-            })
-    }
-
-    fn filter_pill(&self, id: &str, label: &str, target: LibraryFilter, cx: &mut Context<Self>) -> AnyElement {
-        let active = self.filter == target;
-        let bg_col = if active { rgb(BRAND) } else { rgb(CARD) };
-        let txt_col = if active { rgb(0xffffff) } else { rgb(DIM) };
-        let border_col = if active { rgb(BRAND) } else { rgb(LINE) };
-        div()
-            .id(SharedString::from(id.to_string()))
-            .px_3()
-            .py_1()
-            .rounded(px(99.))
-            .bg(bg_col)
-            .border_1()
-            .border_color(border_col)
-            .text_xs()
-            .font_weight(if active { FontWeight::SEMIBOLD } else { FontWeight::MEDIUM })
-            .text_color(txt_col)
-            .cursor_pointer()
-            .hover(|s| if active { s } else { s.text_color(rgb(INK)) })
-            .on_click(cx.listener(move |this, _, _, cx| this.select_filter(target.clone(), cx)))
-            .child(label.to_string())
-            .into_any_element()
-    }
-
-    /// The one thing you were watching, at the size it deserves.
-    fn render_hero(&self, item: &(Entry, u64, f32), cx: &mut Context<Self>) -> impl IntoElement {
-        let (entry, resume_ms, ratio) = item;
-        let title = entry.base_title.clone();
-        let mut meta = vec![label(entry), format_bytes(entry.size)];
-        if let Some(y) = &entry.year {
-            meta.push(y.clone());
-        }
-        let meta_line = meta.join(" · ");
-        let pct = (ratio * 100.).round() as u32;
-        let resume_entry = entry.clone();
-        let restart_entry = entry.clone();
-        let start_at = *resume_ms;
-
-        v_flex()
-            .id("hero")
-            .rounded(px(18.))
-            .bg(rgb(CARD))
-            .border_1()
-            .border_color(rgb(LINE))
-            .p_6()
-            .child(
-                v_flex()
-                    .flex_1()
-                    .min_w_0()
-                    .gap_3()
-                    .child(
-                        div()
-                            .text_xs()
-                            .font_weight(FontWeight::BOLD)
-                            .text_color(rgb(DIM))
-                            .child("CONTINUE WATCHING"),
-                    )
-                    .child(div().text_3xl().font_weight(FontWeight::BOLD).child(title))
-                    .child(div().text_sm().text_color(rgb(DIM)).child(meta_line))
-                    .child(
-                        h_flex()
-                            .items_center()
-                            .gap_3()
-                            .child(
-                                div()
-                                    .flex_1()
-                                    .h(px(4.))
-                                    .rounded(px(2.))
-                                    .bg(hsla(0., 0., 1., 0.08))
                                     .child(
-                                        div()
-                                            .h_full()
-                                            .rounded(px(2.))
-                                            .w(relative(*ratio))
-                                            .bg(rgb(BRAND)),
+                                        Button::new("add-open-settings")
+                                            .ghost()
+                                            .small()
+                                            .label("Channel settings")
+                                            .on_click(cx.listener(|this, _, window, cx| {
+                                                this.close_add_modal(cx);
+                                                this.open_settings(window, cx);
+                                            })),
+                                    )
+                                    .child(
+                                        h_flex()
+                                            .gap_2()
+                                            .child(
+                                                Button::new("add-cancel")
+                                                    .ghost()
+                                                    .small()
+                                                    .label("Cancel")
+                                                    .on_click(cx.listener(|this, _, _, cx| this.close_add_modal(cx))),
+                                            )
+                                            .child(
+                                                Button::new("add-submit")
+                                                    .primary()
+                                                    .small()
+                                                    .label("Add")
+                                                    .on_click(cx.listener(|this, _, _, cx| {
+                                                        this.submit_add_modal(cx);
+                                                    })),
+                                            ),
                                     ),
-                            )
-                            .child(div().text_xs().text_color(rgb(DIM)).child(format!("{pct}%"))),
-                    )
-                    .child(
-                        h_flex()
-                            .gap_2()
-                            .child(Button::new("hero-resume").primary().label("Resume").on_click(
-                                cx.listener(move |this, _, window, cx| {
-                                    this.activate_entry(resume_entry.clone(), Some(start_at), window, cx)
-                                }),
-                            ))
-                            .child(Button::new("hero-restart").label("Start over").on_click(
-                                cx.listener(move |this, _, window, cx| {
-                                    this.activate_entry(restart_entry.clone(), Some(0), window, cx)
-                                }),
-                            )),
-                    ),
-            )
-    }
-
-    /// Everything else in progress, on one horizontal line.
-    fn render_rail(&self, items: &[(Entry, u64, f32)], cx: &mut Context<Self>) -> impl IntoElement {
-        v_flex()
-            .gap_2()
-            .child(
-                h_flex()
-                    .justify_between()
-                    .items_center()
-                    .child(div().text_lg().font_weight(FontWeight::BOLD).child("Continue watching"))
-                    .child(div().text_xs().text_color(rgb(DIM)).child(format!("{}", items.len()))),
-            )
-            .child(
-                h_flex()
-                    .id("continue-rail")
-                    .w_full()
-                    .gap_3()
-                    .overflow_x_scroll()
-                    .children(items.iter().map(|(entry, pos, ratio)| {
-                        let title = entry.base_title.clone();
-                        let kind = label(entry);
-                        let play = entry.clone();
-                        let start_at = *pos;
-                        let fill = *ratio;
-                        v_flex()
-                            .id(SharedString::from(format!("rail-{}", entry.key)))
-                            .w(px(170.))
-                            .flex_none()
-                            .rounded(px(14.))
-                            .bg(rgb(CARD))
-                            .border_1()
-                            .border_color(rgb(LINE))
-                            .overflow_hidden()
-                            .cursor_pointer()
-                            .hover(|s| {
-                                s.bg(rgb(CARD_ELEVATED))
-                                    .border_color(hsla(264. / 360., 0.6, 0.65, 0.45))
-                            })
-                            .on_click(cx.listener(move |this, _, window, cx| {
-                                this.activate_entry(play.clone(), Some(start_at), window, cx)
-                            }))
-                            .p_3()
-                            .gap_2()
-                            .child(div().text_sm().font_weight(FontWeight::SEMIBOLD).truncate().child(title))
-                            .child(div().text_xs().text_color(rgb(DIM)).child(kind))
-                            .child(
-                                div()
-                                    .h(px(3.))
-                                    .w_full()
-                                    .rounded(px(2.))
-                                    .bg(hsla(0., 0., 1., 0.06))
-                                    .child(div().h_full().rounded(px(2.)).w(relative(fill)).bg(rgb(BRAND))),
-                            )
-                    })),
-            )
-    }
-
-    fn render_movie_card(&self, entry: &Entry, alt_count: usize, cx: &mut Context<Self>) -> impl IntoElement {
-        let clean_title = entry.base_title.clone();
-        let year = &entry.year;
-        let play_entry = entry.clone();
-        let cast_entry = entry.clone();
-        let menu_cast = entry.clone();
-        let dl_entry = entry.clone();
-        let menu_dl = entry.clone();
-        let magnet = (!entry.magnet_url.is_empty()).then(|| entry.magnet_url.clone());
-        let clear_key = (!entry.local && entry.cached_bytes > 0).then(|| entry.key.clone());
-        let active_dl = self.downloads.get(&entry.key).map(|d| {
-            let got = d.downloaded.load(std::sync::atomic::Ordering::Relaxed);
-            let tot = d.total.max(entry.size);
-            let pct = if tot > 0 { ((got as f64 / tot as f64) * 100.0).clamp(0.0, 100.0) } else { 0.0 };
-            (got, tot, pct as f32 / 100.0)
-        });
-
-        let resume_ms = self.resume_position_for(entry);
-        let watch_ratio = self
-            .watch_history
-            .get(&entry.id)
-            .filter(|w| w.duration_ms > 0 && resume_ms > 0)
-            .map(|w| (w.position_ms as f32 / w.duration_ms as f32).clamp(0.02, 1.0));
-        let dl_ratio = active_dl.map(|(_, _, r)| r.clamp(0.02, 1.0));
-        let cache_ratio = (!entry.local && entry.size > 0 && entry.cached_bytes > 0 && entry.cached_bytes < entry.size)
-            .then(|| (entry.cached_bytes as f32 / entry.size as f32).clamp(0.02, 1.0));
-
-        let mut meta_parts = vec!["Movie".to_string()];
-        if let Some(y) = year {
-            meta_parts.push(y.clone());
-        }
-        meta_parts.push(format_bytes(entry.size));
-        if let Some((got, tot, _)) = active_dl {
-            if tot > 0 {
-                meta_parts.push(format!("Downloading {:.0}%", (got as f64 / tot as f64 * 100.0).min(100.0)));
-            } else {
-                meta_parts.push(format!("Downloading {}", format_bytes(got)));
-            }
-        } else if entry.local || (entry.size > 0 && entry.cached_bytes >= entry.size) {
-            meta_parts.push("Saved".into());
-        } else if entry.cached_bytes > 0 {
-            meta_parts.push(format!("{} buffered", format_bytes(entry.cached_bytes)));
-        }
-        if entry.locked {
-            meta_parts.push("Subscriber pass needed".into());
-        } else if entry.is_private {
-            meta_parts.push("Subscribers only".into());
-        }
-        if alt_count > 1 {
-            meta_parts.push(format!("{alt_count} versions"));
-        }
-        let can_delete = self.status.as_ref().is_some_and(|st| st.writable && !st.channel.is_empty() && st.channel == entry.source);
-        let del_key = can_delete.then(|| entry.key.clone());
-        let card_id = SharedString::from(format!("movie-{}", entry.key));
-        let cast_btn_id = SharedString::from(format!("cast-{}", entry.key));
-        let dl_btn_id = SharedString::from(format!("dl-{}", entry.key));
-        let more_btn_id = SharedString::from(format!("more-{}", entry.key));
-        let is_downloading = active_dl.is_some();
-        let cancel_key = entry.key.clone();
-        let menu_cancel_key = entry.key.clone();
-        let weak = cx.entity().downgrade();
-        v_flex()
-            .id(card_id)
-            .rounded(px(16.))
-            .bg(rgb(CARD))
-            .border_1()
-            .border_color(rgb(LINE))
-            .overflow_hidden()
-            .cursor_pointer()
-            .hover(|s| s.bg(rgb(CARD_ELEVATED)).border_color(hsla(264. / 360., 0.6, 0.65, 0.45)))
-            .on_click(cx.listener(move |this, _, window, cx| this.activate_entry(play_entry.clone(), None, window, cx)))
-            .child(
-                h_flex()
-                    .justify_between()
-                    .items_center()
-                    .gap_4()
-                    .px_4()
-                    .py_3p5()
-                    .child(
-                        v_flex()
-                            .flex_1()
-                            .min_w_0()
-                            .gap_1()
-                            .child(
-                                h_flex()
-                                    .items_center()
-                                    .gap_2()
-                                    .child(div().text_base().font_weight(FontWeight::SEMIBOLD).truncate().child(clean_title))
-                                    .when(resume_ms > 0, |this| {
-                                        this.child(
-                                            div()
-                                                .px_2()
-                                                .py_0p5()
-                                                .rounded(px(99.))
-                                                .bg(hsla(264. / 360., 0.8, 0.6, 0.20))
-                                                .text_xs()
-                                                .font_weight(FontWeight::MEDIUM)
-                                                .text_color(rgb(BRAND))
-                                                .child("Resume"),
-                                        )
-                                    }),
-                            )
-                            .child(div().text_xs().text_color(rgb(DIM)).child(meta_parts.join(" · "))),
-                    )
-                    .child(
-                        h_flex()
-                            .items_center()
-                            .gap_1()
-                            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                            .child(
-                                Button::new(cast_btn_id)
-                                    .ghost()
-                                    .small()
-                                    .icon(Icon::new(Lucide::Cast))
-                                    .tooltip("Play on TV")
-                                    .on_click(cx.listener(move |this, _, window, cx| this.cast_entry_or_sheet(cast_entry.clone(), 0, window, cx))),
-                            )
-                            .child(
-                                if is_downloading {
-                                    Button::new(dl_btn_id)
-                                        .ghost()
-                                        .small()
-                                        .icon(Icon::new(Lucide::X))
-                                        .tooltip("Cancel download")
-                                        .on_click(cx.listener(move |this, _, _, cx| this.cancel_download(&cancel_key, cx)))
-                                } else {
-                                    Button::new(dl_btn_id)
-                                        .ghost()
-                                        .small()
-                                        .icon(Icon::new(Lucide::Download))
-                                        .tooltip("Download to Downloads")
-                                        .on_click(cx.listener(move |this, _, _, cx| this.download_entry(dl_entry.clone(), None, cx)))
-                                },
-                            )
-                            .child({
-                                let (mag, clr, del) = (magnet.clone(), clear_key.clone(), del_key.clone());
-                                let w = weak.clone();
-                                let c_item = menu_cast.clone();
-                                let d_item = menu_dl.clone();
-                                let m_cancel = menu_cancel_key.clone();
-                                let is_locked = entry.locked;
-                                Button::new(more_btn_id)
-                                    .ghost()
-                                    .small()
-                                    .icon(Icon::new(Lucide::Ellipsis))
-                                    .dropdown_menu(move |mut menu, _, _| {
-                                        if !is_locked {
-                                            let w_cast = w.clone();
-                                            let ci = c_item.clone();
-                                            menu = menu.item(PopupMenuItem::new("Play on TV…").on_click(move |_, window, cx| {
-                                                let _ = w_cast.update(cx, |this, cx| this.open_cast_sheet(Some((ci.key.clone(), ci.title.clone(), 0)), window, cx));
-                                            }));
-                                            let w_dl = w.clone();
-                                            if is_downloading {
-                                                let ck = m_cancel.clone();
-                                                menu = menu.item(PopupMenuItem::new("Cancel Download").on_click(move |_, _, cx| {
-                                                    let _ = w_dl.update(cx, |this, cx| this.cancel_download(&ck, cx));
-                                                }));
-                                            } else {
-                                                let di = d_item.clone();
-                                                menu = menu.item(PopupMenuItem::new("Download Video").on_click(move |_, _, cx| {
-                                                    let _ = w_dl.update(cx, |this, cx| this.download_entry(di.clone(), None, cx));
-                                                }));
-                                            }
-                                        }
-                                        if let Some(url) = mag.clone() {
-                                            menu = menu.item(PopupMenuItem::new("Copy Stream Link").on_click(move |_, _, cx| {
-                                                cx.write_to_clipboard(ClipboardItem::new_string(url.clone()));
-                                            }));
-                                        }
-                                        if let Some(k) = clr.clone() {
-                                            let w_clr = w.clone();
-                                            menu = menu.item(PopupMenuItem::new("Free Up Downloaded Data").on_click(move |_, _, cx| {
-                                                let _ = w_clr.update(cx, |this, cx| this.clear_cache(Some(k.clone()), cx));
-                                            }));
-                                        }
-                                        if let Some(dk) = del.clone() {
-                                            let w_del = w.clone();
-                                            menu = menu.item(PopupMenuItem::new("Delete from Channel").on_click(move |_, _, cx| {
-                                                let _ = w_del.update(cx, |this, cx| this.remove_channel_entry(dk.clone(), cx));
-                                            }));
-                                        }
-                                        menu
-                                    })
-                            }),
-                    ),
-            )
-            .when_some(dl_ratio.or(watch_ratio).or(cache_ratio), |this, ratio| {
-                let bar_col = if dl_ratio.is_some() { rgb(ACCENT) } else if watch_ratio.is_some() { rgb(BRAND) } else { rgb(ACCENT) };
-                this.child(
-                    div()
-                        .w_full()
-                        .h(px(3.))
-                        .bg(hsla(0., 0., 1., 0.06))
-                        .child(div().h_full().w(relative(ratio)).bg(bar_col)),
-                )
-            })
-    }
-
-    fn render_series_card(&self, group_key: String, clean_title: String, year: Option<String>, episodes: Vec<&Entry>, force_open: bool, cx: &mut Context<Self>) -> impl IntoElement {
-        let seasons: Vec<u32> = episodes
-            .iter()
-            .filter_map(|e| e.season)
-            .collect::<BTreeSet<_>>()
-            .into_iter()
-            .collect();
-
-        let resume_ep = episodes
-            .iter()
-            .filter_map(|e| self.watch_history.get(&e.id).map(|w| (*e, w.updated_at, self.resume_position_for(e))))
-            .filter(|(_, _, pos)| *pos > 0)
-            .max_by_key(|(_, updated, _)| *updated)
-            .map(|(e, _, _)| e);
-        let quick_ep = resume_ep.unwrap_or(episodes[0]).clone();
-        let quick_label = if resume_ep.is_some() {
-            format!("Resume {}", label(&quick_ep))
-        } else {
-            format!("Play {}", label(&quick_ep))
-        };
-
-        let expanded = force_open || self.expanded_series.contains(&group_key);
-        let active_season = self
-            .selected_seasons
-            .get(&group_key)
-            .copied()
-            .filter(|s| seasons.contains(s))
-            .or_else(|| quick_ep.season)
-            .or_else(|| seasons.first().copied())
-            .unwrap_or(1);
-
-        let mut sub_parts = vec![format!("{} episodes", episodes.len())];
-        if seasons.len() > 1 {
-            sub_parts.push(format!("{} seasons", seasons.len()));
-        }
-        if let Some(y) = year {
-            sub_parts.push(y);
-        }
-
-        let toggle_key = group_key.clone();
-        let card_id = SharedString::from(format!("series-{group_key}"));
-        let play_btn_id = SharedString::from(format!("series-play-{group_key}"));
-
-        v_flex()
-            .id(card_id)
-            .rounded(px(16.))
-            .bg(rgb(CARD))
-            .border_1()
-            .border_color(rgb(LINE))
-            .overflow_hidden()
-            .child(
-                h_flex()
-                    .id(SharedString::from(format!("series-hdr-{group_key}")))
-                    .justify_between()
-                    .items_center()
-                    .gap_4()
-                    .px_4()
-                    .py_3p5()
-                    .cursor_pointer()
-                    .hover(|s| s.bg(rgb(CARD_ELEVATED)))
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        if this.expanded_series.contains(&toggle_key) {
-                            this.expanded_series.remove(&toggle_key);
-                        } else {
-                            this.expanded_series.insert(toggle_key.clone());
-                        }
-                        cx.notify();
-                    }))
-                    .child(
-                        h_flex()
-                            .items_center()
-                            .gap_3()
-                            .flex_1()
-                            .min_w_0()
-                            .child(Icon::new(if expanded { Lucide::ChevronDown } else { Lucide::ChevronRight }).text_color(rgb(DIM)))
-                            .child(
-                                v_flex()
-                                    .flex_1()
-                                    .min_w_0()
-                                    .gap_0p5()
-                                    .child(div().text_base().font_weight(FontWeight::SEMIBOLD).truncate().child(clean_title))
-                                    .child(div().text_xs().text_color(rgb(DIM)).child(sub_parts.join(" · "))),
                             ),
-                    )
-                    .child(
-                        div()
-                            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                            .child(
-                                Button::new(play_btn_id)
-                                    .primary()
-                                    .small()
-                                    .label(quick_label)
-                                    .on_click(cx.listener(move |this, _, window, cx| this.activate_entry(quick_ep.clone(), None, window, cx))),
-                            ),
-                    ),
-            )
-            .when(expanded, |this| {
-                let season_eps: Vec<&Entry> = episodes
-                    .iter()
-                    .copied()
-                    .filter(|e| force_open || seasons.len() <= 1 || e.season.is_none_or(|s| s == active_season))
-                    .collect();
-                this.child(
-                    v_flex()
-                        .border_t_1()
-                        .border_color(rgb(LINE))
-                        .bg(hsla(0., 0., 0., 0.18))
-                        .when(seasons.len() > 1 && !force_open, |this| {
-                            let gk = group_key.clone();
-                            this.child(
-                                h_flex()
-                                    .px_4()
-                                    .py_2p5()
-                                    .gap_1p5()
-                                    .flex_wrap()
-                                    .border_b_1()
-                                    .border_color(rgb(LINE))
-                                    .children(seasons.iter().copied().map(|s| {
-                                        let gk_s = gk.clone();
-                                        let sel = s == active_season;
-                                        let btn = Button::new(SharedString::from(format!("season-{gk}-{s}"))).small().label(format!("Season {s}"));
-                                        let btn = if sel { btn.primary() } else { btn.ghost() };
-                                        btn.on_click(cx.listener(move |this, _, _, cx| {
-                                            this.selected_seasons.insert(gk_s.clone(), s);
-                                            cx.notify();
-                                        }))
-                                    })),
-                            )
-                        })
-                        .children(season_eps.into_iter().enumerate().map(|(idx, ep)| self.render_episode_row(idx, ep, cx))),
-                )
-            })
-    }
-
-    fn render_episode_row(&self, index: usize, entry: &Entry, cx: &mut Context<Self>) -> impl IntoElement + use<> {
-        let ep_play = entry.clone();
-        let ep_cast = entry.clone();
-        let ep_menu_cast = entry.clone();
-        let ep_dl = entry.clone();
-        let ep_menu_dl = entry.clone();
-        let ep_code = label(entry);
-        let ep_dl_name = if entry.title.to_ascii_lowercase().contains(&ep_code.to_ascii_lowercase()) {
-            entry.title.clone()
-        } else {
-            format!("{} {}", entry.title, ep_code)
-        };
-        let ep_menu_dl_name = ep_dl_name.clone();
-        let magnet = (!entry.magnet_url.is_empty()).then(|| entry.magnet_url.clone());
-        let clear_key = (!entry.local && entry.cached_bytes > 0).then(|| entry.key.clone());
-        let active_dl = self.downloads.get(&entry.key).map(|d| {
-            let got = d.downloaded.load(std::sync::atomic::Ordering::Relaxed);
-            let tot = d.total.max(entry.size);
-            (got, tot)
-        });
-        let is_downloading = active_dl.is_some();
-        let ep_cancel_key = entry.key.clone();
-        let ep_menu_cancel_key = entry.key.clone();
-        let lock_tag = if entry.locked { " · Subscriber pass needed" } else if entry.is_private { " · Subscribers only" } else { "" };
-        let status_label = if let Some((got, tot)) = active_dl {
-            if tot > 0 {
-                format!("{} · Downloading {:.0}%{lock_tag}", format_bytes(entry.size), (got as f64 / tot as f64 * 100.0).min(100.0))
-            } else {
-                format!("{} · Downloading {}{lock_tag}", format_bytes(entry.size), format_bytes(got))
-            }
-        } else {
-            format!("{} · {}{lock_tag}", format_bytes(entry.size), origin(entry))
-        };
-        let can_delete = self.status.as_ref().is_some_and(|st| st.writable && !st.channel.is_empty() && st.channel == entry.source);
-        let ep_del_key = can_delete.then(|| entry.key.clone());
-        let ep_locked = entry.locked;
-        let resume = self.resume_position_for(entry) > 0;
-        let weak = cx.entity().downgrade();
-
-        h_flex()
-            .id(SharedString::from(format!("ep-{}", entry.key)))
-            .justify_between()
-            .items_center()
-            .px_4()
-            .py_2p5()
-            .when(index > 0, |this| this.border_t_1().border_color(rgb(LINE)))
-            .cursor_pointer()
-            .hover(|s| s.bg(hsla(0., 0., 1., 0.04)))
-            .on_click(cx.listener(move |this, _, window, cx| this.activate_entry(ep_play.clone(), None, window, cx)))
-            .child(
-                h_flex()
-                    .items_center()
-                    .gap_3()
-                    .flex_1()
-                    .min_w_0()
-                    .child(
-                        div()
-                            .px_2p5()
-                            .py_0p5()
-                            .rounded(px(6.))
-                            .bg(rgb(CARD_ELEVATED))
-                            .text_xs()
-                            .font_weight(FontWeight::BOLD)
-                            .child(ep_code),
-                    )
-                    .child(div().text_sm().text_color(rgb(DIM)).child(status_label))
-                    .when(resume, |this| this.child(div().text_xs().font_weight(FontWeight::MEDIUM).text_color(rgb(BRAND)).child("In Progress"))),
-            )
-            .child(
-                h_flex()
-                    .items_center()
-                    .gap_1()
-                    .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                    .child(
-                        Button::new(SharedString::from(format!("ep-cast-{}", entry.key)))
-                            .ghost()
-                            .small()
-                            .icon(Icon::new(Lucide::Cast))
-                            .tooltip("Play on TV")
-                            .on_click(cx.listener(move |this, _, window, cx| this.cast_entry_or_sheet(ep_cast.clone(), 0, window, cx))),
-                    )
-                    .child(
-                        if is_downloading {
-                            Button::new(SharedString::from(format!("ep-dl-{}", entry.key)))
-                                .ghost()
-                                .small()
-                                .icon(Icon::new(Lucide::X))
-                                .tooltip("Cancel download")
-                                .on_click(cx.listener(move |this, _, _, cx| this.cancel_download(&ep_cancel_key, cx)))
-                        } else {
-                            Button::new(SharedString::from(format!("ep-dl-{}", entry.key)))
-                                .ghost()
-                                .small()
-                                .icon(Icon::new(Lucide::Download))
-                                .tooltip("Download episode")
-                                .on_click(cx.listener(move |this, _, _, cx| this.download_entry(ep_dl.clone(), Some(ep_dl_name.clone()), cx)))
-                        },
-                    )
-                    .child(
-                        Button::new(SharedString::from(format!("ep-more-{}", entry.key)))
-                            .ghost()
-                            .small()
-                            .icon(Icon::new(Lucide::Ellipsis))
-                            .dropdown_menu(move |mut menu, _, _| {
-                                if !ep_locked {
-                                    let w_cast = weak.clone();
-                                    let ci = ep_menu_cast.clone();
-                                    menu = menu.item(PopupMenuItem::new("Play on TV…").on_click(move |_, window, cx| {
-                                        let _ = w_cast.update(cx, |this, cx| this.open_cast_sheet(Some((ci.key.clone(), ci.title.clone(), 0)), window, cx));
-                                    }));
-                                    let w_dl = weak.clone();
-                                    if is_downloading {
-                                        let ck = ep_menu_cancel_key.clone();
-                                        menu = menu.item(PopupMenuItem::new("Cancel Download").on_click(move |_, _, cx| {
-                                            let _ = w_dl.update(cx, |this, cx| this.cancel_download(&ck, cx));
-                                        }));
-                                    } else {
-                                        let di = ep_menu_dl.clone();
-                                        let dn = ep_menu_dl_name.clone();
-                                        menu = menu.item(PopupMenuItem::new("Download Episode").on_click(move |_, _, cx| {
-                                            let _ = w_dl.update(cx, |this, cx| this.download_entry(di.clone(), Some(dn.clone()), cx));
-                                        }));
-                                    }
-                                }
-                                if let Some(url) = magnet.clone() {
-                                    menu = menu.item(PopupMenuItem::new("Copy Stream Link").on_click(move |_, _, cx| {
-                                        cx.write_to_clipboard(ClipboardItem::new_string(url.clone()));
-                                    }));
-                                }
-                                if let Some(k) = clear_key.clone() {
-                                    let w_clr = weak.clone();
-                                    menu = menu.item(PopupMenuItem::new("Free Up Downloaded Data").on_click(move |_, _, cx| {
-                                        let _ = w_clr.update(cx, |this, cx| this.clear_cache(Some(k.clone()), cx));
-                                    }));
-                                }
-                                if let Some(dk) = ep_del_key.clone() {
-                                    let w_del = weak.clone();
-                                    menu = menu.item(PopupMenuItem::new("Delete from Channel").on_click(move |_, _, cx| {
-                                        let _ = w_del.update(cx, |this, cx| this.remove_channel_entry(dk.clone(), cx));
-                                    }));
-                                }
-                                menu
-                            }),
                     ),
             )
     }
@@ -1054,9 +383,9 @@ impl PearTube {
         let api_url = status.and_then(|s| s.api_url.clone());
 
         let mood = if peers > 0 {
-            format!("Connected to {peers} peer{} · A little cinema, anywhere.", if peers == 1 { "" } else { "s" })
+            format!("Connected to {peers} peer{}.", if peers == 1 { "" } else { "s" })
         } else {
-            "Searching the swarm for peers…".to_string()
+            "Searching for peers…".to_string()
         };
 
         div()
@@ -1085,7 +414,7 @@ impl PearTube {
                                             Button::new("hood-clear-cache")
                                                 .ghost()
                                                 .small()
-                                                .label(format!("Free Up {}", format_bytes(cached)))
+                                                .label(format!("Free up {}", format_bytes(cached)))
                                                 .on_click(cx.listener(|this, _, _, cx| this.clear_cache(None, cx))),
                                         )
                                     })
@@ -1094,6 +423,7 @@ impl PearTube {
                                             .ghost()
                                             .small()
                                             .icon(IconName::Close)
+                                            .tooltip("Close")
                                             .on_click(cx.listener(|this, _, _, cx| {
                                                 this.hood_open = false;
                                                 cx.notify();
@@ -1113,19 +443,30 @@ impl PearTube {
                                         .iter()
                                         .take(48)
                                         .map(|s| {
-                                            let label_txt = if s.alias.is_empty() { format!("{}…", &s.key[..8.min(s.key.len())]) } else { s.alias.clone() };
+                                            let label_txt = if s.alias.is_empty() {
+                                                format!("{}…", &s.key[..8.min(s.key.len())])
+                                            } else {
+                                                s.alias.clone()
+                                            };
                                             let rm_key = s.key.clone();
                                             Button::new(SharedString::from(format!("hood-rm-{}", s.key)))
                                                 .ghost()
                                                 .small()
                                                 .label(format!("{label_txt} ×"))
-                                                .tooltip("Unfollow source")
-                                                .on_click(cx.listener(move |this, _, _, cx| this.remove_subscribed_source(rm_key.clone(), cx)))
+                                                .tooltip("Unfollow channel")
+                                                .on_click(cx.listener(move |this, _, _, cx| {
+                                                    this.remove_subscribed_source(rm_key.clone(), cx)
+                                                }))
                                         })
                                         .collect();
                                     let mut row = v_flex().gap_1().child(h_flex().gap_1p5().flex_wrap().children(active));
                                     if total_src > 48 {
-                                        row = row.child(div().text_xs().text_color(rgb(DIM)).child(format!("Showing 48 of {total_src} subscribed channels")));
+                                        row = row.child(
+                                            div()
+                                                .text_xs()
+                                                .text_color(rgb(DIM))
+                                                .child(format!("Showing 48 of {total_src} followed channels")),
+                                        );
                                     }
                                     this.child(row)
                                 })
@@ -1138,7 +479,9 @@ impl PearTube {
                                             Button::new(id)
                                                 .small()
                                                 .label(lbl)
-                                                .on_click(cx.listener(move |this, _, _, cx| this.subscribe_discovered(d.clone(), cx)))
+                                                .on_click(cx.listener(move |this, _, _, cx| {
+                                                    this.subscribe_discovered(d.clone(), cx)
+                                                }))
                                         })
                                         .collect();
                                     this.child(h_flex().gap_2().flex_wrap().children(disc_btns))
@@ -1171,8 +514,13 @@ impl PearTube {
                                             v_flex()
                                                 .flex_1()
                                                 .gap_1()
-                                                .child(div().text_sm().font_weight(FontWeight::SEMIBOLD).child("Share Your Channel"))
-                                                .child(div().text_xs().text_color(rgb(DIM)).child("Read-only public feed; only your linked devices can publish or delete."))
+                                                .child(div().text_sm().font_weight(FontWeight::SEMIBOLD).child("Share your channel"))
+                                                .child(
+                                                    div()
+                                                        .text_xs()
+                                                        .text_color(rgb(DIM))
+                                                        .child("Read-only public feed; only your linked devices can publish or delete."),
+                                                )
                                                 .child(
                                                     h_flex()
                                                         .mt_1()
@@ -1182,7 +530,7 @@ impl PearTube {
                                                             Button::new("hood-copy-channel")
                                                                 .small()
                                                                 .icon(Icon::new(Lucide::Share2))
-                                                                .label("Copy Channel Link")
+                                                                .label("Copy channel link")
                                                                 .on_click(cx.listener(move |_, _, _, cx| {
                                                                     cx.write_to_clipboard(ClipboardItem::new_string(copy_uri.clone()));
                                                                 })),
@@ -1193,7 +541,7 @@ impl PearTube {
                                                                 Button::new("hood-copy-writer")
                                                                     .ghost()
                                                                     .small()
-                                                                    .label("Copy Device Key")
+                                                                    .label("Copy device key")
                                                                     .on_click(cx.listener(move |_, _, _, cx| {
                                                                         cx.write_to_clipboard(ClipboardItem::new_string(wk.clone()));
                                                                     })),
@@ -1204,8 +552,10 @@ impl PearTube {
                                                                 Button::new("hood-copy-mnemonic")
                                                                     .ghost()
                                                                     .small()
-                                                                    .label("Copy 12-Word Phrase")
-                                                                    .on_click(cx.listener(|this, _, _, cx| this.copy_recovery_phrase(cx))),
+                                                                    .label("Copy 12-word phrase")
+                                                                    .on_click(cx.listener(|this, _, _, cx| {
+                                                                        this.copy_recovery_phrase(cx)
+                                                                    })),
                                                             )
                                                         }),
                                                 ),
@@ -1229,7 +579,7 @@ impl PearTube {
                                                         Button::new("hood-copy-pass")
                                                             .ghost()
                                                             .small()
-                                                            .label("Copy Pass")
+                                                            .label("Copy pass")
                                                             .on_click(cx.listener(move |_, _, _, cx| {
                                                                 cx.write_to_clipboard(ClipboardItem::new_string(pass.clone()));
                                                             })),
@@ -1238,7 +588,7 @@ impl PearTube {
                                                         Button::new("hood-rotate-pass")
                                                             .ghost()
                                                             .small()
-                                                            .label("Rotate Pass")
+                                                            .label("Rotate pass")
                                                             .on_click(cx.listener(|this, _, _, cx| this.rotate_subscriber_pass(cx))),
                                                     ),
                                             ),
@@ -1249,13 +599,24 @@ impl PearTube {
                                     let chips: Vec<_> = writers
                                         .into_iter()
                                         .map(|w| {
-                                            let name = if !w.alias.is_empty() { w.alias } else { format!("{}…", &w.key[..8.min(w.key.len())]) };
-                                            let tag = if w.self_device { format!("{name} (this Mac)") } else { format!("{name} · {}", w.role) };
+                                            let name = if !w.alias.is_empty() {
+                                                w.alias
+                                            } else {
+                                                format!("{}…", &w.key[..8.min(w.key.len())])
+                                            };
+                                            let tag = if w.self_device {
+                                                format!("{name} (this Mac)")
+                                            } else {
+                                                format!("{name} · {}", w.role)
+                                            };
                                             let can_rm = w.key != ch_hex;
                                             let wk = w.key.clone();
-                                            let btn = Button::new(SharedString::from(format!("hood-writer-{}", w.key))).ghost().small();
+                                            let btn = Button::new(SharedString::from(format!("hood-writer-{}", w.key)))
+                                                .ghost()
+                                                .small();
                                             if can_rm {
-                                                btn.label(format!("{tag} ×")).on_click(cx.listener(move |this, _, _, cx| this.revoke_linked_writer(wk.clone(), cx)))
+                                                btn.label(format!("{tag} ×"))
+                                                    .on_click(cx.listener(move |this, _, _, cx| this.revoke_linked_writer(wk.clone(), cx)))
                                             } else {
                                                 btn.label(tag)
                                             }
@@ -1273,8 +634,12 @@ impl PearTube {
                                     Button::new("hood-engine-toggle")
                                         .ghost()
                                         .small()
-                                        .icon(Icon::new(if self.hood_engine_open { Lucide::ChevronDown } else { Lucide::ChevronRight }))
-                                        .label("Engine Room")
+                                        .icon(Icon::new(if self.hood_engine_open {
+                                            Lucide::ChevronDown
+                                        } else {
+                                            Lucide::ChevronRight
+                                        }))
+                                        .label("Engine room")
                                         .on_click(cx.listener(|this, _, _, cx| {
                                             this.hood_engine_open = !this.hood_engine_open;
                                             cx.notify();
@@ -1302,7 +667,7 @@ impl PearTube {
                                             }
                                         })
                                         .when_some(lan, |t, l| t.child(format!("LAN {l}")))
-                                        .when_some(api_url, |t, a| t.child(format!("Local Daemon {a}")))
+                                        .when_some(api_url, |t, a| t.child(format!("Local daemon {a}")))
                                         .when_some(p2p, |t, p| t.child(div().text_color(rgb(BRAND)).child(p))),
                                 )
                             }),

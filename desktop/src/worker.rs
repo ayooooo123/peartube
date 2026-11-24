@@ -16,7 +16,7 @@ use std::sync::{Arc, LazyLock};
 
 use futures_channel::{mpsc, oneshot};
 use parking_lot::Mutex;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use crate::settings::{Settings, SourceSpec};
@@ -127,8 +127,16 @@ pub struct Status {
     pub reciprocity: Reciprocity,
 }
 
+/// Track metadata carried on music entries (`music: { title, artist }`).
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", default)]
+pub struct MusicMeta {
+    pub title: Option<String>,
+    pub artist: Option<String>,
+}
+
 /// One tracker or channel entry, matching `/v1/search` results.
-#[derive(Clone, Debug, PartialEq, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Entry {
     pub key: String,
@@ -164,6 +172,8 @@ pub struct Entry {
     pub year: Option<String>,
     #[serde(default)]
     pub download_url: Option<String>,
+    #[serde(default)]
+    pub music: Option<MusicMeta>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Deserialize)]
@@ -845,6 +855,10 @@ impl Worker {
     }
     pub async fn cast_status(&self) -> Result<CastStatus, String> {
         parse(self.call("castStatus", json!({})).await?)
+    }
+
+    pub async fn cast_pair(&self, params: Value) -> Result<CastStatus, String> {
+        parse(self.call("castPair", params).await?)
     }
 
     pub async fn cast_remove(&self, id: &str) -> Result<CastStatus, String> {

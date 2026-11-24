@@ -6,12 +6,20 @@
 
 mod app;
 mod cast_screen;
+mod catalog;
+mod discover_search;
+mod home;
 mod list;
+mod listen;
+mod music;
+mod music_player;
 mod play;
 mod qr;
 mod settings_screen;
+mod sleeves;
 mod theme;
 mod video;
+mod watch;
 
 use std::borrow::Cow;
 use std::path::{Path, PathBuf};
@@ -22,10 +30,13 @@ use gpui_kit::*;
 
 actions!(peartube, [Quit]);
 
-// Cinema UI & player icons from Lucide.
+// Unified Listen and Watch & player icons from Lucide.
 icon_assets!(PlayerIcons, [
     Captions, Volume2, RotateCcw, Cast, Tv, TvMinimalPlay, QrCode, Info,
-    Ellipsis, ChevronDown, ChevronRight, Sparkles, Share2, SlidersHorizontal, Check, Plus, Search, Download, X
+    Ellipsis, ChevronDown, ChevronRight, ChevronLeft, Sparkles, Share2,
+    SlidersHorizontal, Check, Plus, Search, Download, X,
+    Play, Pause, SkipBack, SkipForward, Shuffle, Repeat, Repeat1, ListMusic,
+    ArrowUp, ArrowDown
 ]);
 /// gpui-component's icons plus the player's.
 struct AppAssets;

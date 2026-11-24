@@ -307,6 +307,7 @@ impl PearTube {
                         this.settings = new.clone();
                         this.status = None;
                         this.entries.clear();
+                        this.catalog = crate::catalog::Catalog::default();
                         this.show_list(cx);
                         this.start(new, cx);
                     }

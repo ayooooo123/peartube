@@ -104,6 +104,13 @@ impl PlayScreen {
             .unwrap_or(self.state.position.as_millis() as u64)
     }
 
+    pub fn progress_snapshot(&self) -> (String, String, u64, u64) {
+        let st = self.player.as_ref().map(|p| p.state()).unwrap_or_else(|| self.state.clone());
+        let pos = st.position.as_millis() as u64;
+        let dur = st.duration.map(|d| d.as_millis() as u64).unwrap_or(0);
+        (self.entry.id.clone(), self.entry.key.clone(), pos, dur)
+    }
+
     pub fn entry_key(&self) -> &str {
         &self.entry.key
     }

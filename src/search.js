@@ -41,27 +41,6 @@ function wake (run) {
   for (const resolve of ws) resolve()
 }
 
-// Waits until every in-flight ask finishes and at least one relay answered, capped at COLLECT_MS.
-async function waitForAsks (run) {
-  const deadline = Date.now() + COLLECT_MS
-  while (!(run.pending === 0 && run.answered > 0)) {
-    const left = deadline - Date.now()
-    if (left <= 0) return
-    await new Promise(resolve => {
-      let done = false
-      const finish = () => {
-        if (done) return
-        done = true
-        clearTimeout(timer)
-        resolve()
-      }
-      const timer = setTimeout(finish, left)
-      timer.unref?.()
-      run.waiters.push(finish)
-    })
-  }
-}
-
 // A query and a title fold the same way: case, width and the accents of Latin and Greek letters go; a mark stays
 // where its script uses it as a letter (Cyrillic й and ё, Indic, Arabic). Turkish has two i's; both fold to i,
 // and a Greek final sigma folds to σ. No Unicode property escapes: the apps' worklet runs QuickJS.
@@ -309,6 +288,27 @@ export function createGlobalSearch ({ swarm, peerConnections, connListeners, isP
     topicConns.clear()
   }
 
+  // Waits until every in-flight ask finishes and at least one relay answered, capped at COLLECT_MS.
+  // The timer stays ref'd while searchGlobal() is awaited so Node does not exit mid-wait; close() wakes all runs.
+  async function waitForAsks (run) {
+    const deadline = Date.now() + COLLECT_MS
+    while (!closed && !(run.pending === 0 && run.answered > 0)) {
+      const left = deadline - Date.now()
+      if (left <= 0) return
+      await new Promise(resolve => {
+        let done = false
+        const finish = () => {
+          if (done) return
+          done = true
+          clearTimeout(timer)
+          resolve()
+        }
+        const timer = setTimeout(finish, left)
+        run.waiters.push(finish)
+      })
+    }
+  }
+
   // Rows for `query` (words in any order) and/or `id`, after asks answer or COLLECT_MS. Asked again within FRESH_MS
   // it returns the answers that arrived since; after that it is a new search, so a file published or removed since is seen.
   async function searchGlobal ({ query = '', id = null, limit = MAX_HITS } = {}) {
@@ -346,9 +346,10 @@ export function createGlobalSearch ({ swarm, peerConnections, connListeners, isP
     serve,
     suspend: endSearch,
     close () {
+      closed = true
       endSearch()
       serve(null)
-      closed = true
+      for (const run of runs.values()) wake(run)
       swarm.off('connection', onSwarmConnection)
       connListeners.delete(onConnection)
     }

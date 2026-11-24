@@ -557,6 +557,7 @@ fun PosterArt(
         val titleRatio = if (isLong) 0.10f else 0.145f
         val titleSp = (maxWidth.value * titleRatio).coerceIn(9f, 21f).sp
         val titleLineSp = (titleSp.value * 1.02f).sp
+        val showYear = maxWidth >= 96.dp && !year.isNullOrBlank()
 
         GeometricPosterCanvas(hue = hue, modifier = Modifier.matchParentSize())
 
@@ -576,7 +577,7 @@ fun PosterArt(
                 letterSpacing = 1.3.sp,
                 maxLines = 1,
             )
-            if (maxWidth >= 96.dp && !year.isNullOrBlank()) {
+            if (showYear && year != null) {
                 Text(
                     text = year,
                     color = Color.White.copy(alpha = 0.72f),

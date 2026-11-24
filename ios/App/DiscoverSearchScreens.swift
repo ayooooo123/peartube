@@ -7,6 +7,34 @@ struct DiscoverScreen: View {
     @ObservedObject var model: AppModel
     let onNavigate: (AppRoute) -> Void
 
+    @State private var followInput = ""
+
+    private let topics = ["Music", "Tech", "Science", "Podcasts", "Gaming", "Documentary"]
+    private let sourceOptions: [(id: String, label: String)] = [
+        ("", "All"),
+        ("youtube", "YouTube"),
+        ("soundcloud", "SoundCloud"),
+        ("rumble", "Rumble")
+    ]
+
+    private var isBrowsingTopic: Bool { !model.discoverActiveTopic.isEmpty }
+
+    private var displayedItems: [DiscoverItem] {
+        if isBrowsingTopic {
+            let items = model.discoverBrowse?.items ?? []
+            if model.discoverSourceFilter.isEmpty { return items }
+            return items.filter { $0.source.lowercased() == model.discoverSourceFilter.lowercased() }
+        }
+        return model.discoverFeed?.items ?? []
+    }
+
+    private var displayedErrors: [DiscoverFeedError] {
+        if isBrowsingTopic {
+            return model.discoverBrowse?.errors ?? []
+        }
+        return model.discoverFeed?.errors ?? []
+    }
+
     var body: some View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 26) {
@@ -14,7 +42,7 @@ struct DiscoverScreen: View {
                     Text("Discover")
                         .font(.title2.weight(.bold))
                         .foregroundStyle(PTColor.ink)
-                    Text("Search Soulseek, YouTube, SoundCloud, Rumble, and other relays, or follow channels on your network.")
+                    Text("Follow YouTube, SoundCloud, and Rumble creators, browse topics, or search sources and relays.")
                         .font(.subheadline)
                         .foregroundStyle(PTColor.dim)
                     Button {
@@ -25,6 +53,21 @@ struct DiscoverScreen: View {
                     .buttonStyle(PTPrimaryButtonStyle())
                     .accessibilityIdentifier("discover.searchRelays")
                 }
+
+                // Follow a creator
+                followCreatorSection
+
+                // Explore topics
+                exploreTopicsSection
+
+                // Creators you follow + Source filter
+                creatorsAndSourceSection
+
+                // Non-blocking error banners
+                discoverErrorBanners
+
+                // Feed / Browse cards
+                discoverCardsSection
 
                 // Shelves you visited (persisted in visited-shelves.json)
                 if !model.visitedShelves.isEmpty {
@@ -146,7 +189,472 @@ struct DiscoverScreen: View {
             .padding(16)
         }
         .background(PTColor.bg)
-        .refreshable { await model.refresh() }
+        .task(id: model.apiBaseURL) {
+            guard model.apiBaseURL != nil else { return }
+            if model.discoverFeed == nil && !model.discoverLoading {
+                await model.loadDiscoverFeed(refresh: false)
+            }
+        }
+        .refreshable {
+            await model.refresh()
+            if isBrowsingTopic {
+                await model.browseDiscoverTopic(model.discoverActiveTopic)
+            } else {
+                await model.loadDiscoverFeed(refresh: true)
+            }
+        }
+    }
+
+    private var followCreatorSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            PTSectionHeader(title: "Follow a creator")
+            HStack(spacing: 8) {
+                TextField("@handle, YouTube, SoundCloud, or Rumble link", text: $followInput)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                    .foregroundStyle(PTColor.ink)
+                    .submitLabel(.go)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 10)
+                    .background(PTColor.surface, in: RoundedRectangle(cornerRadius: PTRadius.control))
+                    .overlay(RoundedRectangle(cornerRadius: PTRadius.control).strokeBorder(PTColor.line, lineWidth: 1))
+                    .accessibilityIdentifier("discover.followInput")
+                    .onSubmit { submitFollow() }
+
+                Button {
+                    submitFollow()
+                } label: {
+                    if model.discoverFollowBusy {
+                        ProgressView().controlSize(.mini)
+                    } else {
+                        Text("Follow")
+                    }
+                }
+                .buttonStyle(PTPrimaryButtonStyle(compact: true))
+                .disabled(model.discoverFollowBusy || followInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                .accessibilityIdentifier("discover.followButton")
+            }
+        }
+    }
+
+    private func submitFollow() {
+        let target = followInput.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !target.isEmpty, !model.discoverFollowBusy else { return }
+        Task {
+            let ok = await model.followDiscoverCreator(url: target)
+            if ok { followInput = "" }
+        }
+    }
+
+    private var exploreTopicsSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            PTSectionHeader(
+                title: "Explore topics",
+                actionTitle: isBrowsingTopic ? "Clear" : nil,
+                actionIdentifier: "discover.topics.clear",
+                action: isBrowsingTopic ? { model.clearDiscoverBrowse() } : nil
+            )
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 8) {
+                    ForEach(topics, id: \.self) { topic in
+                        let selected = model.discoverActiveTopic.caseInsensitiveCompare(topic) == .orderedSame
+                        PTChipButton(
+                            title: topic,
+                            selected: selected,
+                            identifier: "discover.topic.\(topic.lowercased())"
+                        ) {
+                            if selected {
+                                model.clearDiscoverBrowse()
+                            } else {
+                                Task { await model.browseDiscoverTopic(topic) }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private var creatorsAndSourceSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            PTSectionHeader(
+                title: "Creators you follow",
+                actionTitle: model.discoverLoading ? nil : "Refresh",
+                actionIdentifier: "discover.feed.refresh",
+                action: model.discoverLoading ? nil : {
+                    Task {
+                        if isBrowsingTopic {
+                            await model.browseDiscoverTopic(model.discoverActiveTopic)
+                        } else {
+                            await model.loadDiscoverFeed(refresh: true)
+                        }
+                    }
+                }
+            )
+
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 8) {
+                    PTChipButton(
+                        title: "All",
+                        count: model.discoverCreators.isEmpty ? nil : model.discoverCreators.count,
+                        selected: !isBrowsingTopic && model.discoverCreatorFilter.isEmpty,
+                        identifier: "discover.creator.all"
+                    ) {
+                        model.clearDiscoverBrowse()
+                        model.discoverCreatorFilter = ""
+                        Task { await model.loadDiscoverFeed(refresh: false) }
+                    }
+
+                    ForEach(model.discoverCreators) { creator in
+                        let selected = !isBrowsingTopic && model.discoverCreatorFilter == creator.id
+                        HStack(spacing: 4) {
+                            Button {
+                                model.clearDiscoverBrowse()
+                                model.discoverCreatorFilter = selected ? "" : creator.id
+                                Task { await model.loadDiscoverFeed(refresh: false) }
+                            } label: {
+                                HStack(spacing: 6) {
+                                    if let avatarURL = model.discoverImageURL(creator.avatar) {
+                                        AsyncImage(url: avatarURL) { phase in
+                                            if case .success(let img) = phase {
+                                                img.resizable().scaledToFill()
+                                            } else {
+                                                PTColor.raised
+                                            }
+                                        }
+                                        .frame(width: 18, height: 18)
+                                        .clipShape(Circle())
+                                    }
+                                    Text(creator.displayName)
+                                        .font(.subheadline.weight(.medium))
+                                        .foregroundStyle(selected ? PTColor.ink : PTColor.dim)
+                                        .lineLimit(1)
+                                }
+                            }
+                            .buttonStyle(.plain)
+
+                            Button {
+                                Task { await model.unfollowDiscoverCreator(id: creator.id) }
+                            } label: {
+                                Image(systemName: "xmark")
+                                    .font(.caption2.weight(.semibold))
+                                    .foregroundStyle(PTColor.dim)
+                                    .padding(4)
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityLabel("Unfollow \(creator.displayName)")
+                            .accessibilityIdentifier("discover.creator.unfollow.\(creator.id)")
+                        }
+                        .padding(.leading, 11)
+                        .padding(.trailing, 7)
+                        .padding(.vertical, 6)
+                        .background(selected ? PTColor.brand.opacity(0.22) : PTColor.surface, in: Capsule())
+                        .overlay(Capsule().strokeBorder(selected ? PTColor.brand : PTColor.line, lineWidth: 1))
+                        .accessibilityIdentifier("discover.creator.\(creator.id)")
+                        .contextMenu {
+                            Button("Unfollow \(creator.displayName)", systemImage: "person.badge.minus", role: .destructive) {
+                                Task { await model.unfollowDiscoverCreator(id: creator.id) }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Source filter pills
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 8) {
+                    ForEach(sourceOptions, id: \.id) { opt in
+                        let selected = model.discoverSourceFilter == opt.id
+                        PTChipButton(
+                            title: opt.label,
+                            selected: selected,
+                            identifier: "discover.source.\(opt.id.isEmpty ? "all" : opt.id)"
+                        ) {
+                            model.discoverSourceFilter = opt.id
+                            Task {
+                                if isBrowsingTopic {
+                                    await model.browseDiscoverTopic(model.discoverActiveTopic)
+                                } else {
+                                    await model.loadDiscoverFeed(refresh: false)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var discoverErrorBanners: some View {
+        if let err = model.discoverError, !err.isEmpty {
+            HStack(alignment: .top, spacing: 10) {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .font(.subheadline)
+                    .foregroundStyle(PTColor.bad)
+                Text(err)
+                    .font(.caption)
+                    .foregroundStyle(PTColor.bad)
+                Spacer(minLength: 8)
+                Button {
+                    model.discoverError = nil
+                } label: {
+                    Image(systemName: "xmark")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(PTColor.dim)
+                }
+                .buttonStyle(.plain)
+            }
+            .padding(12)
+            .background(PTColor.surface, in: RoundedRectangle(cornerRadius: PTRadius.control))
+            .overlay(RoundedRectangle(cornerRadius: PTRadius.control).strokeBorder(PTColor.bad.opacity(0.45), lineWidth: 1))
+            .accessibilityIdentifier("discover.errorBanner")
+        }
+
+        if !displayedErrors.isEmpty {
+            VStack(alignment: .leading, spacing: 6) {
+                ForEach(displayedErrors) { feedErr in
+                    HStack(alignment: .top, spacing: 8) {
+                        Image(systemName: "exclamationmark.circle")
+                            .font(.caption)
+                            .foregroundStyle(PTColor.warn)
+                            .padding(.top, 1)
+                        Text("\(feedErr.displayLabel): \(feedErr.message)")
+                            .font(.caption)
+                            .foregroundStyle(PTColor.warn)
+                        Spacer(minLength: 0)
+                    }
+                }
+            }
+            .padding(12)
+            .background(PTColor.surface, in: RoundedRectangle(cornerRadius: PTRadius.control))
+            .overlay(RoundedRectangle(cornerRadius: PTRadius.control).strokeBorder(PTColor.warn.opacity(0.45), lineWidth: 1))
+            .accessibilityIdentifier("discover.sourceErrors")
+        }
+    }
+
+    private var discoverCardsSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            if isBrowsingTopic {
+                PTSectionHeader(
+                    title: "Browse · \(model.discoverActiveTopic)",
+                    actionTitle: "Back to feed",
+                    actionIdentifier: "discover.browse.back",
+                    action: { model.clearDiscoverBrowse() }
+                )
+            } else {
+                PTSectionHeader(title: "Latest uploads")
+            }
+
+            if model.discoverLoading && displayedItems.isEmpty {
+                HStack(spacing: 10) {
+                    ProgressView().tint(PTColor.brand)
+                    Text(isBrowsingTopic ? "Browsing \(model.discoverActiveTopic)…" : "Loading creator feed…")
+                        .font(.subheadline)
+                        .foregroundStyle(PTColor.dim)
+                }
+                .padding(.vertical, 12)
+            } else if displayedItems.isEmpty {
+                Text(emptyDiscoverMessage)
+                    .font(.subheadline)
+                    .foregroundStyle(PTColor.dim)
+                    .padding(.vertical, 4)
+            } else {
+                LazyVStack(alignment: .leading, spacing: 12) {
+                    ForEach(displayedItems) { item in
+                        discoverItemCard(item)
+                    }
+                }
+            }
+        }
+    }
+
+    private var emptyDiscoverMessage: String {
+        if isBrowsingTopic {
+            return "No results found for \"\(model.discoverActiveTopic)\" right now."
+        }
+        if model.discoverCreators.isEmpty {
+            return "Follow a YouTube, SoundCloud, or Rumble creator above, or pick a topic to browse."
+        }
+        return "No recent uploads match the current filter."
+    }
+
+    private func discoverItemCard(_ item: DiscoverItem) -> some View {
+        let primaryKey = model.discoverStateKey(for: item, audioOverride: false)
+        let audioKey = model.discoverStateKey(for: item, audioOverride: true)
+        let primaryState = model.saveStates[primaryKey] ?? .idle
+        let audioState = model.saveStates[audioKey] ?? .idle
+        let inLibrary = model.isDiscoverItemInLibrary(item)
+        let primaryAdding = model.isDiscoverItemAdding(item, audioOverride: false)
+        let audioAdding = model.isDiscoverItemAdding(item, audioOverride: true)
+        let creatorFollowed = model.isDiscoverCreatorFollowed(item)
+
+        return VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .top, spacing: 12) {
+                discoverThumbnail(item)
+
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack(spacing: 6) {
+                        Text(item.sourceBadge)
+                            .font(.caption2.weight(.semibold))
+                            .foregroundStyle(PTColor.brandRing)
+                            .padding(.horizontal, 7)
+                            .padding(.vertical, 2)
+                            .background(PTColor.brand.opacity(0.18), in: Capsule())
+
+                        if item.audioOnly {
+                            Text("Audio")
+                                .font(.caption2.weight(.medium))
+                                .foregroundStyle(PTColor.dim)
+                        }
+                        Spacer(minLength: 0)
+                    }
+
+                    Text(item.title)
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(PTColor.ink)
+                        .lineLimit(2)
+
+                    HStack(spacing: 6) {
+                        Text(item.creatorName)
+                            .font(.caption)
+                            .foregroundStyle(PTColor.dim)
+                            .lineLimit(1)
+
+                        if isBrowsingTopic && !item.creatorUrl.isEmpty {
+                            if creatorFollowed {
+                                Text("Following")
+                                    .font(.caption2.weight(.medium))
+                                    .foregroundStyle(PTColor.ok)
+                            } else {
+                                Button("Follow") {
+                                    Task {
+                                        await model.followDiscoverCreator(url: item.creatorUrl, name: item.creatorName)
+                                    }
+                                }
+                                .font(.caption2.weight(.semibold))
+                                .foregroundStyle(PTColor.brandRing)
+                                .disabled(model.discoverFollowBusy)
+                                .accessibilityIdentifier("discover.item.follow.\(item.id)")
+                            }
+                        }
+                    }
+                }
+            }
+
+            HStack(spacing: 8) {
+                if inLibrary {
+                    Label("In library", systemImage: "checkmark.circle.fill")
+                        .font(.subheadline.weight(.medium))
+                        .foregroundStyle(PTColor.ok)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 7)
+                        .background(PTColor.raised, in: RoundedRectangle(cornerRadius: PTRadius.control))
+                        .overlay(RoundedRectangle(cornerRadius: PTRadius.control).strokeBorder(PTColor.line, lineWidth: 1))
+                        .accessibilityIdentifier("discover.item.inLibrary.\(item.id)")
+                } else {
+                    Button {
+                        Task { await model.addDiscoverItem(item, audioOverride: false) }
+                    } label: {
+                        discoverAddButtonLabel(primaryState: primaryState, isAdding: primaryAdding)
+                    }
+                    .buttonStyle(PTPrimaryButtonStyle(compact: true))
+                    .disabled(primaryAdding)
+                    .accessibilityIdentifier("discover.item.add.\(item.id)")
+
+                    if !item.audioOnly {
+                        Button {
+                            Task { await model.addDiscoverItem(item, audioOverride: true) }
+                        } label: {
+                            switch audioState {
+                            case .saving:
+                                HStack(spacing: 4) {
+                                    ProgressView().controlSize(.mini)
+                                    Text("Audio…")
+                                }
+                            case .saved:
+                                Label("Audio", systemImage: "checkmark")
+                            case .idle, .failed:
+                                Label("Audio", systemImage: "waveform")
+                            }
+                        }
+                        .buttonStyle(PTQuietButtonStyle(compact: true))
+                        .disabled(audioAdding)
+                        .accessibilityIdentifier("discover.item.audio.\(item.id)")
+                    }
+                }
+                Spacer(minLength: 0)
+            }
+
+            if case .failed(let message) = primaryState {
+                Text(message)
+                    .font(.caption)
+                    .foregroundStyle(PTColor.bad)
+            }
+            if case .failed(let message) = audioState {
+                Text(message)
+                    .font(.caption)
+                    .foregroundStyle(PTColor.bad)
+            }
+        }
+        .padding(12)
+        .background(PTColor.surface, in: RoundedRectangle(cornerRadius: PTRadius.card))
+        .overlay(RoundedRectangle(cornerRadius: PTRadius.card).strokeBorder(PTColor.line, lineWidth: 1))
+        .accessibilityIdentifier("discover.item.\(item.id)")
+    }
+
+    @ViewBuilder
+    private func discoverThumbnail(_ item: DiscoverItem) -> some View {
+        ZStack(alignment: .bottomTrailing) {
+            if let url = model.discoverImageURL(item.thumbnail) {
+                AsyncImage(url: url) { phase in
+                    switch phase {
+                    case .success(let img):
+                        img.resizable().scaledToFill()
+                    default:
+                        discoverPlaceholderIcon(for: item)
+                    }
+                }
+            } else {
+                discoverPlaceholderIcon(for: item)
+            }
+
+            if let dur = item.durationText {
+                Text(dur)
+                    .font(.caption2.monospacedDigit().weight(.semibold))
+                    .foregroundStyle(PTColor.ink)
+                    .padding(.horizontal, 5)
+                    .padding(.vertical, 2)
+                    .background(PTColor.bg.opacity(0.82), in: RoundedRectangle(cornerRadius: 4))
+                    .padding(4)
+            }
+        }
+        .frame(width: 112, height: 64)
+        .clipShape(RoundedRectangle(cornerRadius: 8))
+        .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(PTColor.line, lineWidth: 1))
+    }
+
+    private func discoverPlaceholderIcon(for item: DiscoverItem) -> some View {
+        ZStack {
+            PTColor.raised
+            Image(systemName: item.audioOnly ? "waveform" : "play.rectangle")
+                .font(.title3)
+                .foregroundStyle(PTColor.dim)
+        }
+    }
+
+    @ViewBuilder
+    private func discoverAddButtonLabel(primaryState: InlineSaveState, isAdding: Bool) -> some View {
+        if isAdding {
+            HStack(spacing: 6) {
+                ProgressView().controlSize(.mini)
+                Text("Adding…")
+            }
+        } else if case .saved(let msg) = primaryState {
+            Label(msg, systemImage: "checkmark")
+        } else {
+            Text("Add to PearTube")
+        }
     }
 
     private func shelfSubtitle(_ shelf: VisitedShelf) -> String {

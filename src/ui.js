@@ -288,6 +288,45 @@ export const page = `<!doctype html>
   .person strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .person small { color: var(--dim); }
   .disc-planned { margin-top: 36px; }
+  .disc-bar { margin-top: 18px; padding: 16px; }
+  .disc-follow { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .disc-follow input { flex: 1 1 260px; width: auto; min-width: 0; }
+  .disc-topics { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-top: 12px; }
+  .disc-topics-label { color: var(--dim); font-size: 12.5px; font-weight: 600; margin-right: 2px; }
+  .disc-controls { display: flex; flex-direction: column; gap: 10px; margin: 16px 0 12px; }
+  .disc-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .disc-creator { display: inline-flex; align-items: center; gap: 4px; min-height: 34px; padding: 3px 6px 3px 4px; border-radius: var(--r-pill); border: 1px solid var(--line); background: var(--surface); color: var(--text); font-size: 13px; max-width: 100%; }
+  .disc-creator[data-active='true'] { background: var(--text); color: var(--bg); border-color: var(--text); }
+  .disc-creator-btn { display: inline-flex; align-items: center; gap: 7px; border: 0; background: transparent; color: inherit; font: inherit; font-weight: 600; padding: 0 4px 0 0; cursor: pointer; min-height: 26px; min-width: 0; max-width: 240px; }
+  .disc-creator-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .disc-creator-src { font-size: 11px; font-weight: 500; opacity: .72; flex: none; }
+  .disc-creator-x { width: 22px; height: 22px; flex: none; border-radius: 50%; border: 0; background: transparent; color: inherit; opacity: .65; cursor: pointer; display: inline-flex; align-items: center; justify-content: center; font: inherit; font-size: 15px; line-height: 1; padding: 0; }
+  .disc-creator-x:hover { opacity: 1; background: color-mix(in srgb, currentColor 14%, transparent); }
+  .disc-ava { width: 24px; height: 24px; border-radius: 50%; flex: none; overflow: hidden; display: grid; place-items: center; font-size: 11px; font-weight: 700; color: #fff; background: hsl(var(--hue, 260) 42% 40%); position: relative; }
+  .disc-ava img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+  .disc-browse-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin: 14px 0 10px; }
+  .disc-browse-head h3 { margin: 0; font-size: 16px; }
+  .disc-browse-creators { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 14px; }
+  .disc-bcreator { display: flex; align-items: center; gap: 10px; padding: 8px 10px; border: 1px solid var(--line); border-radius: var(--r-card); background: var(--surface); min-width: 0; max-width: 300px; }
+  .disc-bcreator .disc-ava { width: 32px; height: 32px; font-size: 13px; }
+  .disc-bcreator .info { flex: 1; min-width: 0; }
+  .disc-bcreator .name { font-size: 13.5px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .disc-bcreator .btn { min-height: 30px; padding: 0 10px; font-size: 12.5px; }
+  .disc-errs { margin: 10px 0; padding: 10px 12px; border-radius: var(--r-control); background: var(--raised); border-left: 3px solid var(--warn); color: var(--dim); font-size: 13px; overflow-wrap: anywhere; }
+  .disc-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(280px, 100%), 1fr)); gap: 16px; margin-top: 12px; }
+  .disc-card { display: flex; flex-direction: column; background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-card); overflow: hidden; min-width: 0; transition: border-color var(--t-fast) var(--ease); }
+  .disc-card:hover { border-color: color-mix(in srgb, var(--dim) 40%, var(--line)); }
+  .disc-thumb { position: relative; width: 100%; aspect-ratio: 16 / 9; background: linear-gradient(160deg, var(--raised), var(--line)); overflow: hidden; display: flex; align-items: center; justify-content: center; }
+  .disc-thumb img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; z-index: 1; }
+  .disc-badge-src { position: absolute; z-index: 2; top: 8px; left: 8px; padding: 2px 8px; border-radius: var(--r-pill); background: rgba(8,9,12,.76); color: var(--on-media); font-size: 11px; font-weight: 600; letter-spacing: .01em; }
+  .disc-badge-dur { position: absolute; z-index: 2; right: 8px; bottom: 8px; padding: 2px 6px; border-radius: 5px; background: rgba(8,9,12,.78); color: var(--on-media); font-size: 11.5px; font-weight: 600; font-variant-numeric: tabular-nums; }
+  .disc-body { display: flex; flex-direction: column; gap: 4px; padding: 12px 14px 10px; flex: 1; min-width: 0; }
+  .disc-title { font-weight: 600; font-size: 14.5px; line-height: 1.35; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow-wrap: anywhere; }
+  .disc-meta { color: var(--dim); font-size: 12.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .disc-acts { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 0 14px 12px; }
+  .disc-acts .btn { min-height: 34px; padding: 0 12px; font-size: 13px; }
+  .disc-acts .btn.in-lib { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 35%, var(--line)); background: transparent; opacity: .88; }
+  .disc-empty { color: var(--dim); font-size: 14px; padding: 14px 0; margin: 0; }
   .rows { display: flex; flex-direction: column; }
   .row-item { display: flex; gap: 12px; align-items: center; padding: 12px 0; border-top: 1px solid var(--line); }
   #detail .meta, #ytSave .meta { white-space: normal; font-size: 13px; line-height: 1.5; }
@@ -942,10 +981,29 @@ export const page = `<!doctype html>
     <!-- ==== end Sources ==== -->
   </section>
 
-  <!-- ==== Discover: back to a shelf that a person visited, and more from the artists in the library. Nothing here
-       asks a source until a press. ==== -->
+  <!-- ==== Discover: follow creators, browse topics on demand, and return to shelves and artists. Nothing asks a
+       third-party source until the user clicks a topic or has followed creators. ==== -->
   <section id="tab-discover" data-panel="discover" hidden>
     <div class="disc-top"><h2 class="page-title">Discover</h2><button class="btn primary" type="button" id="discAsk"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6.5"/><path d="M16 16l4.5 4.5"/></svg>Search your sources</button></div>
+    <div class="card disc-bar">
+      <form id="discFollowForm" class="disc-follow">
+        <input id="discFollowInput" type="text" autocomplete="off" spellcheck="false" aria-label="Creator handle or link" placeholder="Paste a YouTube @handle, SoundCloud artist, or Rumble channel link">
+        <button class="btn primary" type="submit" id="discFollowBtn">Follow</button>
+      </form>
+      <div class="msg" id="discFollowMsg" role="status"></div>
+      <div class="disc-topics" id="discTopics" role="group" aria-label="Browse topics"></div>
+    </div>
+    <div class="disc-controls" id="discControls">
+      <div class="disc-row" id="discCreators" role="group" aria-label="Followed creators"></div>
+      <div class="disc-row" id="discSources" role="group" aria-label="Filter by source"></div>
+    </div>
+    <div id="discBrowseBar" class="disc-browse-head" hidden>
+      <h3 id="discBrowseTitle"></h3>
+      <button class="chip" type="button" id="discBackFeed">Back to your feed</button>
+    </div>
+    <div id="discBrowseCreators" class="disc-browse-creators" hidden></div>
+    <div id="discErrors" class="disc-errs" role="status" hidden></div>
+    <div id="discFeedGrid"></div>
     <section aria-labelledby="discShelvesHead"><h2 id="discShelvesHead">Shelves you visited</h2><div class="people" id="discShelves"></div></section>
     <section aria-labelledby="discArtistsHead"><h2 id="discArtistsHead">More from artists you have</h2><div class="chips" id="discArtists" role="group" aria-labelledby="discArtistsHead"></div></section>
   </section>
@@ -3810,9 +3868,9 @@ function slskFolderItem (g) {
     files)
 }
 
-// ---- Discover: what to look for next. One main action (search the sources), the Soulseek shelves this browser
-// opened, newest first, and the library's artists. A press on an artist opens Search with the name and asks the
-// sources there, so every answer and its Save are in one place. Nothing here asks a source by itself.
+// ---- Discover: follow creators across YouTube, SoundCloud, and Rumble, browse topics on demand, and jump back to
+// visited Soulseek shelves or library artists. Nothing asks a third-party source until the user clicks a topic or has
+// followed creators. Every creator avatar and item thumbnail is fetched from the relay with authHeaders() into a blob URL.
 const SHELVES_KEY = 'peartube-shelves'
 function visitedShelves () {
   try {
@@ -3829,8 +3887,543 @@ const sinceWords = t => {
   return m < 2 ? 'just now' : m < 60 ? m + ' min ago' : m < 2880 ? Math.round(m / 60) + ' h ago' : Math.round(m / 1440) + ' days ago'
 }
 const hueOf = s => [...String(s)].reduce((n, c) => (n * 31 + c.codePointAt(0)) % 360, 7)
+
+const DISC_TOPICS = ['Music', 'Tech', 'Science', 'Podcasts', 'Gaming', 'Documentary']
+const DISC_SOURCES = [['', 'All'], ['youtube', 'YouTube'], ['soundcloud', 'SoundCloud'], ['rumble', 'Rumble']]
+const DISC_BROWSE_SOURCES = ['youtube', 'soundcloud', 'rumble']
+const DISC_ACTIVE_JOB = new Set(['queued', 'copying', 'running', 'transferring', 'announcing'])
+const DISC_THUMBS_MAX = 256
+
+const discState = {
+  loaded: false,
+  loadingCreators: false,
+  unavailable: false,
+  creators: [],
+  feedItems: [],
+  feedErrors: [],
+  feedLoading: false,
+  updatedAt: 0,
+  filterSource: '',
+  filterCreator: '',
+  mode: 'feed',
+  browseQuery: '',
+  browseCreators: [],
+  browseItems: [],
+  browseErrors: [],
+  browseLoading: false,
+  browseSeq: 0,
+  feedSeq: 0,
+  feedDirty: false,
+  pendingAcquire: new Set()
+}
+
+// Proxied thumbnails and avatars for Discover: only relay-relative /v1/ paths, fetched with owner auth into blob URLs.
+const discThumbs = new Map()
+const discThumbWait = []
+let discThumbBusy = 0
+const discThumbIO = 'IntersectionObserver' in window ? new IntersectionObserver(entries => {
+  for (const x of entries) {
+    if (x.isIntersecting) {
+      discThumbIO.unobserve(x.target)
+      discThumbAsk(x.target.dataset.dthumb)
+    }
+  }
+}, { rootMargin: '300px' }) : null
+
+function isRelayThumbPath (p) {
+  return typeof p === 'string' && p.startsWith('/v1/')
+}
+function discThumbsLetGo (root) {
+  if (!discThumbIO || !root) return
+  for (const box of root.querySelectorAll('[data-dthumb]')) discThumbIO.unobserve(box)
+}
+function discThumbAsk (path) {
+  if (!isRelayThumbPath(path) || discThumbs.has(path) || discThumbWait.includes(path)) return
+  discThumbWait.push(path)
+  discThumbPump()
+}
+function discThumbApply (path, url) {
+  if (!url) return
+  for (const box of document.querySelectorAll('[data-dthumb]')) {
+    if (box.dataset.dthumb === path && !box.querySelector('img')) {
+      box.prepend(h('img', { alt: '', src: url }))
+    }
+  }
+}
+function discThumbPump () {
+  while (discThumbBusy < 4 && discThumbWait.length) {
+    const path = discThumbWait.shift()
+    discThumbBusy++
+    fetch(path, { headers: authHeaders() })
+      .then(res => res.status === 200 ? res.blob().then(b => URL.createObjectURL(b)) : null)
+      .catch(() => null)
+      .then(url => {
+        discThumbs.set(path, url)
+        while (discThumbs.size > DISC_THUMBS_MAX) {
+          const oldest = discThumbs.keys().next().value
+          const oldUrl = discThumbs.get(oldest)
+          if (oldUrl) URL.revokeObjectURL(oldUrl)
+          discThumbs.delete(oldest)
+        }
+        discThumbApply(path, url)
+      })
+      .finally(() => { discThumbBusy--; discThumbPump() })
+  }
+}
+function discAttachThumb (box, path) {
+  if (!isRelayThumbPath(path)) return
+  box.dataset.dthumb = path
+  const cached = discThumbs.get(path)
+  if (cached) {
+    box.prepend(h('img', { alt: '', src: cached }))
+  } else if (cached === undefined) {
+    if (discThumbIO) discThumbIO.observe(box)
+    else discThumbAsk(path)
+  }
+}
+function discAvatarEl (name, avatarPath) {
+  const initial = ([...String(name || '?')][0] || '?').toUpperCase()
+  const box = h('span', { class: 'disc-ava', 'aria-hidden': 'true', style: '--hue:' + hueOf(name || '?') }, initial)
+  discAttachThumb(box, avatarPath)
+  return box
+}
+
+function discSourceName (src) {
+  if (src === 'youtube') return 'YouTube'
+  if (src === 'soundcloud') return 'SoundCloud'
+  if (src === 'rumble') return 'Rumble'
+  return sourceLabel(src)
+}
+function discEntryInLibrary (item) {
+  if (item.inLibrary) return true
+  if (!item.acquireId) return false
+  const want = item.acquireId.toLowerCase()
+  return S.entries.some(e => typeof e.id === 'string' && e.id.toLowerCase() === want)
+}
+function discActiveJob (item) {
+  if (!item.acquireId) return null
+  return S.jobs.find(j => j.id === item.acquireId && DISC_ACTIVE_JOB.has(j.status)) || null
+}
+function discErrorText (err) {
+  if (!err) return ''
+  const who = err.name || (err.source ? discSourceName(err.source) : '')
+  const msg = err.message || err.error || String(err)
+  return who ? who + ' (' + msg + ')' : msg
+}
+
+async function loadDiscoverFeed (forceRefresh) {
+  if (discState.unavailable) return
+  if (!discState.creators.length) {
+    discState.feedItems = []
+    discState.feedErrors = []
+    discState.feedLoading = false
+    renderDiscoverV2(true)
+    return
+  }
+  const seq = ++discState.feedSeq
+  discState.feedLoading = true
+  renderDiscoverV2(true)
+  const qs = new URLSearchParams()
+  if (discState.filterSource) qs.set('source', discState.filterSource)
+  if (discState.filterCreator) qs.set('creator', discState.filterCreator)
+  if (forceRefresh) qs.set('refresh', '1')
+  qs.set('limit', '40')
+  try {
+    const res = await api('/v1/discover/feed?' + qs.toString())
+    if (seq !== discState.feedSeq) return
+    discState.creators = Array.isArray(res.creators) ? res.creators : discState.creators
+    discState.feedItems = Array.isArray(res.items) ? res.items : []
+    discState.feedErrors = Array.isArray(res.errors) ? res.errors : []
+    discState.updatedAt = Number(res.updatedAt) || Date.now()
+  } catch (err) {
+    if (seq !== discState.feedSeq) return
+    if (err.status === 404) {
+      discState.unavailable = true
+    } else {
+      discState.feedErrors = [{ name: 'Feed', message: err.message }]
+    }
+  } finally {
+    if (seq === discState.feedSeq) {
+      discState.feedLoading = false
+      renderDiscoverV2(true)
+    }
+  }
+}
+
+async function loadDiscoverInitial () {
+  if (discState.loaded || discState.loadingCreators || discState.unavailable) return
+  if (needsToken && !token) return
+  discState.loadingCreators = true
+  renderDiscoverV2(true)
+  try {
+    const res = await api('/v1/discover/creators')
+    discState.creators = Array.isArray(res.creators) ? res.creators : []
+    discState.loaded = true
+    discState.loadingCreators = false
+    renderDiscoverV2(true)
+    if (discState.creators.length) await loadDiscoverFeed(false)
+  } catch (err) {
+    discState.loadingCreators = false
+    if (err.status === 404) {
+      discState.unavailable = true
+      discState.loaded = true
+    }
+    renderDiscoverV2(true)
+  }
+}
+
+async function browseDiscoverTopic (topic) {
+  const q = String(topic || '').trim()
+  if (!q) return
+  if (discState.mode === 'browse' && discState.browseQuery === q && !discState.browseLoading) {
+    discState.mode = 'feed'
+    discState.browseQuery = ''
+    if (discState.feedDirty) {
+      discState.feedDirty = false
+      loadDiscoverFeed(false)
+    } else {
+      renderDiscoverV2(true)
+    }
+    return
+  }
+  const seq = ++discState.browseSeq
+  discState.mode = 'browse'
+  discState.browseQuery = q
+  discState.browseLoading = true
+  discState.browseItems = []
+  discState.browseCreators = []
+  discState.browseErrors = []
+  renderDiscoverV2(true)
+  try {
+    const res = await api('/v1/discover/browse', { body: { query: q, sources: DISC_BROWSE_SOURCES, limit: 12 } })
+    if (seq !== discState.browseSeq) return
+    discState.browseCreators = Array.isArray(res.creators) ? res.creators : []
+    discState.browseItems = Array.isArray(res.items) ? res.items : []
+    discState.browseErrors = Array.isArray(res.errors) ? res.errors : []
+  } catch (err) {
+    if (seq !== discState.browseSeq) return
+    discState.browseErrors = [{ name: 'Browse', message: err.message }]
+  } finally {
+    if (seq === discState.browseSeq) {
+      discState.browseLoading = false
+      renderDiscoverV2(true)
+    }
+  }
+}
+
+async function followDiscoverCreator (payload, btn, msgId) {
+  return act(btn, async () => {
+    const res = await api('/v1/discover/creators', { body: payload })
+    discState.creators = Array.isArray(res.creators) ? res.creators : discState.creators
+    discState.loaded = true
+    const who = (res.creator && res.creator.name) || payload.name || 'Creator'
+    if (msgId) say(msgId, 'Following ' + who + '.', false)
+    else toast('Following ' + who)
+    if (discState.mode === 'browse') {
+      discState.feedDirty = true
+      const followedUrls = new Set(discState.creators.map(c => String(c.url || '').toLowerCase()))
+      const followedIds = new Set(discState.creators.map(c => c.id))
+      for (const bc of discState.browseCreators) {
+        if (followedIds.has(bc.id) || (bc.url && followedUrls.has(bc.url.toLowerCase())) || (res.creator && bc.source === res.creator.source && bc.name === res.creator.name)) {
+          bc.followed = true
+        }
+      }
+      renderDiscoverV2(true)
+    } else {
+      discState.feedDirty = false
+      await loadDiscoverFeed(false)
+    }
+  }, msgId)
+}
+
+async function unfollowDiscoverCreator (creator, btn) {
+  return act(btn, async () => {
+    const res = await api('/v1/discover/creators/' + encodeURIComponent(creator.id), { method: 'DELETE' })
+    discState.creators = Array.isArray(res.creators) ? res.creators : discState.creators.filter(c => c.id !== creator.id)
+    if (discState.filterCreator === creator.id) discState.filterCreator = ''
+    toast('Unfollowed ' + (creator.name || creator.id))
+    if (discState.mode === 'feed') {
+      discState.feedDirty = false
+      await loadDiscoverFeed(false)
+    } else {
+      discState.feedDirty = true
+      renderDiscoverV2(true)
+    }
+  })
+}
+
+async function acquireDiscoverItem (item, audioOnly, btn) {
+  const useAudio = Boolean(audioOnly || item.audioOnly)
+  const payload = {
+    id: item.acquireId,
+    title: item.title,
+    source: { url: item.url, page: true, audio: useAudio }
+  }
+  if (audioOnly && !item.audioOnly) {
+    payload.music = { title: item.title, artist: item.creatorName }
+  } else if (item.music) {
+    payload.music = item.music
+  }
+  discState.pendingAcquire.add(item.acquireId)
+  renderDiscoverV2(true)
+  try {
+    await act(btn, async () => {
+      const job = await api('/v1/acquire', { body: payload })
+      if (job && job.jobId && !S.jobs.some(j => j.jobId === job.jobId)) S.jobs.unshift(job)
+      toast('Adding “' + item.title + '” to PearTube')
+      refresh()
+    })
+  } finally {
+    discState.pendingAcquire.delete(item.acquireId)
+    renderDiscoverV2(true)
+  }
+}
+
+function discCardEl (item) {
+  const inLib = discEntryInLibrary(item)
+  const activeJob = discActiveJob(item)
+  const isAdding = Boolean(activeJob) || discState.pendingAcquire.has(item.acquireId)
+  const thumb = h('div', { class: 'disc-thumb', 'aria-hidden': 'true' },
+    h('span', { class: 'yt-ph' }),
+    h('span', { class: 'disc-badge-src' }, discSourceName(item.source)),
+    item.duration > 0 ? h('span', { class: 'disc-badge-dur' }, duration(item.duration)) : null)
+  discAttachThumb(thumb, item.thumbnail)
+
+  const metaParts = [item.creatorName]
+  if (item.publishedAt > 0) metaParts.push(sinceWords(item.publishedAt))
+
+  let mainBtn
+  if (inLib) {
+    mainBtn = h('button', { class: 'btn in-lib', type: 'button', disabled: true, 'data-fk': 'disc-act-' + item.id }, 'In library')
+  } else if (isAdding) {
+    mainBtn = h('button', { class: 'btn', type: 'button', disabled: true, 'data-fk': 'disc-act-' + item.id }, 'Adding…')
+  } else {
+    mainBtn = h('button', {
+      class: 'btn primary',
+      type: 'button',
+      'data-fk': 'disc-act-' + item.id,
+      onclick: e => acquireDiscoverItem(item, false, e.currentTarget)
+    }, 'Add to PearTube')
+  }
+
+  let audioBtn = null
+  if (!item.audioOnly && !inLib && !isAdding) {
+    audioBtn = h('button', {
+      class: 'btn quiet',
+      type: 'button',
+      'data-fk': 'disc-aud-' + item.id,
+      title: 'Save audio only to Listen',
+      onclick: e => acquireDiscoverItem(item, true, e.currentTarget)
+    }, 'Audio')
+  }
+
+  return h('article', { class: 'disc-card' },
+    thumb,
+    h('div', { class: 'disc-body' },
+      h('div', { class: 'disc-title', title: item.title }, item.title),
+      h('div', { class: 'disc-meta' }, metaParts.filter(Boolean).join(' · '))),
+    h('div', { class: 'disc-acts' }, mainBtn, audioBtn))
+}
+
+function discItemState (it) {
+  if (discEntryInLibrary(it)) return 'lib'
+  if (discActiveJob(it) || discState.pendingAcquire.has(it.acquireId)) return 'add'
+  return 'new'
+}
+
+let discoverV2Shown = ''
+function renderDiscoverV2 (force) {
+  const isBrowse = discState.mode === 'browse'
+  const rawItems = isBrowse ? discState.browseItems : discState.feedItems
+  const visibleItems = rawItems.filter(item => {
+    if (discState.filterSource && item.source !== discState.filterSource) return false
+    if (!isBrowse && discState.filterCreator && item.creatorId !== discState.filterCreator) return false
+    return true
+  })
+  const errors = isBrowse ? discState.browseErrors : discState.feedErrors
+  const itemStates = visibleItems.map(it => it.id + ':' + discItemState(it))
+  const sig = JSON.stringify([
+    discState.loaded, discState.loadingCreators, discState.unavailable,
+    discState.mode, discState.browseQuery, discState.browseLoading, discState.feedLoading,
+    discState.filterSource, discState.filterCreator,
+    discState.creators.map(c => c.id + ':' + c.name),
+    discState.browseCreators.map(c => c.id + ':' + (c.followed ? '1' : '0')),
+    errors.map(discErrorText),
+    itemStates
+  ])
+  if (!force && sig === discoverV2Shown) return
+  discoverV2Shown = sig
+
+  $('discFollowInput').disabled = discState.unavailable
+  $('discFollowBtn').disabled = discState.unavailable
+
+  redrawKeepingFocus($('discTopics'), [
+    h('span', { class: 'disc-topics-label' }, 'Browse'),
+    ...DISC_TOPICS.map(topic => h('button', {
+      class: 'chip',
+      type: 'button',
+      'data-fk': 'disc-topic-' + topic,
+      'aria-pressed': String(isBrowse && discState.browseQuery === topic),
+      disabled: discState.unavailable,
+      onclick: () => browseDiscoverTopic(topic)
+    }, topic))
+  ])
+
+  const creatorRow = $('discCreators')
+  discThumbsLetGo(creatorRow)
+  const creatorEls = []
+  if (discState.creators.length) {
+    creatorEls.push(h('button', {
+      class: 'chip',
+      type: 'button',
+      'data-fk': 'disc-creator-all',
+      'aria-pressed': String(!isBrowse && !discState.filterCreator),
+      onclick: () => {
+        discState.mode = 'feed'
+        discState.browseQuery = ''
+        discState.filterCreator = ''
+        loadDiscoverFeed(false)
+      }
+    }, 'All creators'))
+    for (const c of discState.creators) {
+      const active = !isBrowse && discState.filterCreator === c.id
+      const selectBtn = h('button', {
+        class: 'disc-creator-btn',
+        type: 'button',
+        'data-fk': 'disc-creator-' + c.id,
+        'aria-pressed': String(active),
+        onclick: () => {
+          discState.mode = 'feed'
+          discState.browseQuery = ''
+          discState.filterCreator = active ? '' : c.id
+          loadDiscoverFeed(false)
+        }
+      },
+        discAvatarEl(c.name, c.avatar),
+        h('span', { class: 'disc-creator-name' }, c.name),
+        h('span', { class: 'disc-creator-src' }, discSourceName(c.source)))
+      const unfollowBtn = h('button', {
+        class: 'disc-creator-x',
+        type: 'button',
+        'data-fk': 'disc-unfollow-' + c.id,
+        'aria-label': 'Unfollow ' + c.name,
+        title: 'Unfollow ' + c.name,
+        onclick: e => { e.stopPropagation(); unfollowDiscoverCreator(c, e.currentTarget) }
+      }, '×')
+      creatorEls.push(h('span', { class: 'disc-creator', 'data-active': String(active) }, selectBtn, unfollowBtn))
+    }
+    creatorEls.push(h('button', {
+      class: 'btn quiet',
+      type: 'button',
+      id: 'discRefresh',
+      'data-fk': 'disc-refresh',
+      disabled: discState.feedLoading,
+      onclick: () => {
+        discState.mode = 'feed'
+        discState.browseQuery = ''
+        loadDiscoverFeed(true)
+      }
+    }, discState.feedLoading ? 'Refreshing…' : 'Refresh'))
+  }
+  creatorRow.hidden = !creatorEls.length
+  redrawKeepingFocus(creatorRow, creatorEls)
+
+  const srcRow = $('discSources')
+  const showSources = !discState.unavailable && (discState.creators.length > 0 || isBrowse)
+  srcRow.hidden = !showSources
+  if (showSources) {
+    redrawKeepingFocus(srcRow, DISC_SOURCES.map(([val, label]) => h('button', {
+      class: 'chip',
+      type: 'button',
+      'data-fk': 'disc-src-' + (val || 'all'),
+      'aria-pressed': String(discState.filterSource === val),
+      onclick: () => {
+        discState.filterSource = val
+        if (discState.mode === 'feed') loadDiscoverFeed(false)
+        else renderDiscoverV2(true)
+      }
+    }, label)))
+  }
+
+  const browseBar = $('discBrowseBar')
+  browseBar.hidden = !isBrowse
+  if (isBrowse) $('discBrowseTitle').textContent = 'Topic: ' + discState.browseQuery
+
+  const bcBox = $('discBrowseCreators')
+  discThumbsLetGo(bcBox)
+  const bCreators = isBrowse ? discState.browseCreators.filter(c => !discState.filterSource || c.source === discState.filterSource) : []
+  bcBox.hidden = !bCreators.length
+  if (bCreators.length) {
+    redrawKeepingFocus(bcBox, bCreators.map(c => h('div', { class: 'disc-bcreator' },
+      discAvatarEl(c.name, c.avatar),
+      h('div', { class: 'info' },
+        h('div', { class: 'name', title: c.name }, c.name),
+        h('div', { class: 'meta' }, discSourceName(c.source))),
+      h('button', {
+        class: c.followed ? 'btn quiet' : 'btn',
+        type: 'button',
+        disabled: Boolean(c.followed),
+        'data-fk': 'disc-bfollow-' + c.id,
+        onclick: e => followDiscoverCreator({ source: c.source, url: c.url, name: c.name, channelId: c.channelId, handle: c.handle }, e.currentTarget)
+      }, c.followed ? 'Following' : 'Follow'))))
+  } else {
+    bcBox.replaceChildren()
+  }
+
+  const errBox = $('discErrors')
+  const errLines = errors.map(discErrorText).filter(Boolean)
+  errBox.hidden = !errLines.length
+  errBox.textContent = errLines.length ? 'Some sources could not be reached: ' + errLines.join(' · ') : ''
+
+  const gridWrap = $('discFeedGrid')
+  discThumbsLetGo(gridWrap)
+  if (discState.unavailable) {
+    gridWrap.replaceChildren(h('p', { class: 'disc-empty' }, 'Creator discovery is not available on this peer.'))
+    return
+  }
+  if ((isBrowse && discState.browseLoading) || (!isBrowse && (discState.feedLoading || discState.loadingCreators))) {
+    const label = isBrowse ? 'Browsing ' + discState.browseQuery + '…' : 'Loading creator drops…'
+    gridWrap.replaceChildren(h('div', { class: 'slsk-wait' }, h('span', { class: 'slsk-spin', 'aria-hidden': 'true' }), label))
+    return
+  }
+  if (!isBrowse && !discState.creators.length) {
+    gridWrap.replaceChildren(h('p', { class: 'disc-empty' }, 'Follow a YouTube, SoundCloud, or Rumble creator above, or pick a topic to browse.'))
+    return
+  }
+  if (!visibleItems.length) {
+    const emptyText = isBrowse ? 'No results matched this filter.' : 'No creator drops found for this filter.'
+    gridWrap.replaceChildren(h('p', { class: 'disc-empty' }, emptyText))
+    return
+  }
+  redrawKeepingFocus(gridWrap, [h('div', { class: 'disc-grid' }, ...visibleItems.map(discCardEl))])
+}
+
+$('discFollowForm').onsubmit = async ev => {
+  ev.preventDefault()
+  const raw = $('discFollowInput').value.trim()
+  if (!raw) {
+    say('discFollowMsg', 'Paste a YouTube @handle, SoundCloud artist, or Rumble channel link.', true)
+    return
+  }
+  say('discFollowMsg', '')
+  await followDiscoverCreator({ url: raw }, $('discFollowBtn'), 'discFollowMsg')
+  if (!$('discFollowMsg').classList.contains('err')) $('discFollowInput').value = ''
+}
+$('discBackFeed').onclick = () => {
+  discState.mode = 'feed'
+  discState.browseQuery = ''
+  if (discState.feedDirty) {
+    discState.feedDirty = false
+    loadDiscoverFeed(false)
+  } else {
+    renderDiscoverV2(true)
+  }
+}
+
 let discoverShown = ''
 function renderDiscover () {
+  if (!discState.loaded && !discState.loadingCreators && !discState.unavailable) loadDiscoverInitial()
+  renderDiscoverV2(false)
   const shelves = visitedShelves()
   const artists = artistList(libraryTiles().filter(t => t.kind === 'album')).filter(a => a.name !== 'Unknown artist')
     .sort((a, b) => b.albums.length - a.albums.length || a.name.localeCompare(b.name)).slice(0, 24)

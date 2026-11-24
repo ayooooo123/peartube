@@ -23,13 +23,14 @@ use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use peartube::settings::{Settings, SourceSpec};
 use peartube::soundfont;
-use peartube::worker::{CastStatus, DATA_DIR, DiscoveredSource, Entry, Event, GlobalHit, Status, worker};
+use peartube::worker::{CastStatus, DATA_DIR, DiscoveredSource, Entry, Event, GlobalHit, MusicMeta, Status, worker};
 use player::{Event as PlayerEvent, State as PlayerState};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
 use crate::api::{
-    ALL_SOURCES, AcquireJob, AcquireRequest, ApiClient, PluginInfo, RumbleCandidate,
+    ALL_SOURCES, AcquireJob, AcquireRequest, ApiClient, DiscoverBrowseResult, DiscoverCreator,
+    DiscoverFeed, DiscoverFollowRequest, DiscoverItem, PluginInfo, RumbleCandidate,
     SoulseekCandidate, SoulseekShelf, SoundcloudCandidate, SourceSearchResult, VisitedShelf,
     YoutubeCandidate, extract_shared_url, is_web_url, load_visited_shelves, record_visited_shelf,
     run_blocking, save_visited_shelves, unwrap_peartube_add,
@@ -162,6 +163,14 @@ pub struct ShelfState {
     pub error: Option<SharedString>,
 }
 
+/// Library/download state for one Discover v2 card.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DiscoverItemStatus {
+    Available,
+    Adding,
+    InLibrary,
+}
+
 pub struct PearTube {
     pub settings: Settings,
     pub status: Option<Status>,
@@ -182,6 +191,19 @@ pub struct PearTube {
     pub cast_modal: Option<CastSheetForm>,
     pub cast: CastStatus,
     pub search: Entity<InputState>,
+    pub discover_follow_input: Entity<InputState>,
+    pub discover_creators: Vec<DiscoverCreator>,
+    pub discover_feed: Option<DiscoverFeed>,
+    pub discover_browse: Option<DiscoverBrowseResult>,
+    pub discover_loading: bool,
+    pub discover_follow_busy: bool,
+    pub discover_error: Option<SharedString>,
+    pub discover_source_filter: Option<String>,
+    pub discover_creator_filter: Option<String>,
+    pub discover_active_topic: Option<String>,
+    pub discover_thumbs: HashMap<String, Arc<Image>>,
+    discover_thumbs_pending: HashSet<String>,
+    discover_clear_input: bool,
     pub bank: Bank,
     pub selected_seasons: HashMap<String, u32>,
     pub hood_open: bool,
@@ -211,6 +233,7 @@ pub struct PearTube {
     _urls: Task<()>,
     _search: Subscription,
     _track_filter: Subscription,
+    _discover_follow: Subscription,
 }
 
 fn load_watch_history() -> HashMap<String, WatchProgress> {
@@ -283,6 +306,20 @@ impl PearTube {
             }
         });
 
+        let discover_follow_input = cx.new(|cx| {
+            InputState::new(window, cx)
+                .placeholder("YouTube @handle or link, SoundCloud artist, or Rumble channel")
+        });
+        let discover_follow_sub = cx.subscribe_in(
+            &discover_follow_input,
+            window,
+            |this, _, event: &InputEvent, window, cx| {
+                if matches!(event, InputEvent::PressEnter { .. }) {
+                    this.submit_discover_follow_input(window, cx);
+                }
+            },
+        );
+
         let screen = if !settings.has_sources() {
             Screen::Settings(SettingsForm::new(&settings, window, cx))
         } else {
@@ -309,6 +346,19 @@ impl PearTube {
             cast_modal: None,
             cast: CastStatus::default(),
             search,
+            discover_follow_input,
+            discover_creators: Vec::new(),
+            discover_feed: None,
+            discover_browse: None,
+            discover_loading: false,
+            discover_follow_busy: false,
+            discover_error: None,
+            discover_source_filter: None,
+            discover_creator_filter: None,
+            discover_active_topic: None,
+            discover_thumbs: HashMap::new(),
+            discover_thumbs_pending: HashSet::new(),
+            discover_clear_input: false,
             bank: Bank {
                 selected: soundfont::path().is_some(),
                 busy: false,
@@ -343,6 +393,7 @@ impl PearTube {
             _urls: cx.spawn(async move |this, cx| follow_urls(this, url_rx, cx).await),
             _search: search_sub,
             _track_filter: track_filter_sub,
+            _discover_follow: discover_follow_sub,
         }
     }
 
@@ -370,10 +421,15 @@ impl PearTube {
     }
 
     pub fn open_room(&mut self, room: Room, cx: &mut Context<Self>) {
+        let entering_discover = matches!(room, Room::Discover);
         self.detail = None;
         self.room = room;
         self.screen = Screen::List;
-        cx.notify();
+        if entering_discover && self.discover_feed.is_none() && !self.discover_loading {
+            self.refresh_discover_feed(false, cx);
+        } else {
+            cx.notify();
+        }
     }
 
     pub fn open_detail(&mut self, detail: DetailView, cx: &mut Context<Self>) {
@@ -742,6 +798,12 @@ impl PearTube {
                     refresh(&this, cx).await;
                     let _ = this.update(cx, |this, cx| {
                         this.refresh_jobs(cx);
+                        if matches!(this.room, Room::Discover)
+                            && this.discover_feed.is_none()
+                            && !this.discover_loading
+                        {
+                            this.refresh_discover_feed(false, cx);
+                        }
                     });
                     peartube::worker::release_unused_memory();
                 }
@@ -1507,6 +1569,383 @@ impl PearTube {
             .retain(|s| !s.peer.eq_ignore_ascii_case(&peer));
         save_visited_shelves(&self.visited_shelves);
         cx.notify();
+    }
+
+    // ---- Discover v2 (followed creators feed & topic browsing) ----
+
+    pub fn discover_item_status(&self, item: &DiscoverItem) -> DiscoverItemStatus {
+        let in_entries = !item.acquire_id.is_empty()
+            && self
+                .entries
+                .iter()
+                .any(|e| e.id.eq_ignore_ascii_case(&item.acquire_id));
+        if item.in_library || in_entries {
+            return DiscoverItemStatus::InLibrary;
+        }
+        let in_jobs = !item.acquire_id.is_empty()
+            && self.jobs.iter().any(|j| {
+                j.is_active()
+                    && j.id
+                        .as_deref()
+                        .is_some_and(|id| id.eq_ignore_ascii_case(&item.acquire_id))
+            });
+        if in_jobs {
+            DiscoverItemStatus::Adding
+        } else {
+            DiscoverItemStatus::Available
+        }
+    }
+
+    pub fn is_discover_creator_followed(&self, source: &str, creator_url: &str, creator_name: &str) -> bool {
+        let clean_url = creator_url.trim();
+        let clean_name = creator_name.trim();
+        self.discover_creators.iter().any(|c| {
+            if !clean_url.is_empty() && c.url.eq_ignore_ascii_case(clean_url) {
+                return true;
+            }
+            c.source.eq_ignore_ascii_case(source)
+                && !clean_name.is_empty()
+                && c.name.eq_ignore_ascii_case(clean_name)
+        })
+    }
+
+    pub fn set_discover_source_filter(&mut self, source: Option<String>, cx: &mut Context<Self>) {
+        self.discover_source_filter = source.clone();
+        if let (Some(src), Some(cid)) = (source.as_deref(), self.discover_creator_filter.as_deref()) {
+            let keep = self
+                .discover_creators
+                .iter()
+                .any(|c| c.id == cid && c.source.eq_ignore_ascii_case(src));
+            if !keep {
+                self.discover_creator_filter = None;
+            }
+        }
+        if self.discover_active_topic.is_some() {
+            cx.notify();
+        } else {
+            self.refresh_discover_feed(false, cx);
+        }
+    }
+
+    pub fn set_discover_creator_filter(&mut self, creator_id: Option<String>, cx: &mut Context<Self>) {
+        self.discover_active_topic = None;
+        self.discover_browse = None;
+        self.discover_creator_filter = creator_id;
+        self.refresh_discover_feed(false, cx);
+    }
+
+    pub fn refresh_discover_feed(&mut self, force_refresh: bool, cx: &mut Context<Self>) {
+        let Some(client) = self.api_client() else {
+            self.discover_loading = false;
+            cx.notify();
+            return;
+        };
+        let source_filter = self.discover_source_filter.clone();
+        let creator_filter = self.discover_creator_filter.clone();
+        self.discover_loading = true;
+        self.discover_error = None;
+        cx.notify();
+
+        let req_source = source_filter.clone();
+        let req_creator = creator_filter.clone();
+        cx.spawn(async move |this, cx| {
+            let res = run_blocking(move || {
+                client.get_discover_feed(req_source.as_deref(), req_creator.as_deref(), force_refresh, 40)
+            })
+            .await;
+            let outcome = match res {
+                Ok(inner) => inner,
+                Err(err) => Err(err),
+            };
+            let _ = this.update(cx, |this, cx| {
+                if this.discover_source_filter != source_filter || this.discover_creator_filter != creator_filter {
+                    return;
+                }
+                this.discover_loading = false;
+                match outcome {
+                    Ok(feed) => {
+                        let thumb_paths = collect_discover_thumbs(&feed.creators, &feed.items);
+                        this.discover_creators = feed.creators.clone();
+                        this.discover_feed = Some(feed);
+                        this.discover_error = None;
+                        this.prefetch_discover_thumbs(thumb_paths, cx);
+                    }
+                    Err(err) => {
+                        this.discover_error = Some(err.into());
+                    }
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    pub fn submit_discover_follow_input(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+        let raw = self.discover_follow_input.read(cx).value().trim().to_string();
+        if raw.is_empty() {
+            self.discover_error = Some(
+                "Paste a YouTube @handle or channel link, SoundCloud artist link, or Rumble channel link.".into(),
+            );
+            cx.notify();
+            return;
+        }
+        self.follow_discover_creator(DiscoverFollowRequest::from_url(raw), true, cx);
+    }
+
+    pub fn follow_discover_creator(&mut self, req: DiscoverFollowRequest, from_input: bool, cx: &mut Context<Self>) {
+        if self.discover_follow_busy {
+            return;
+        }
+        let Some(client) = self.api_client() else {
+            self.discover_error = Some("Local engine is still starting — try again in a moment.".into());
+            cx.notify();
+            return;
+        };
+        self.discover_follow_busy = true;
+        self.discover_error = None;
+        cx.notify();
+
+        cx.spawn(async move |this, cx| {
+            let res = run_blocking(move || client.follow_discover_creator(&req)).await;
+            let outcome = match res {
+                Ok(inner) => inner,
+                Err(err) => Err(err),
+            };
+            let _ = this.update(cx, |this, cx| {
+                this.discover_follow_busy = false;
+                match outcome {
+                    Ok(reply) => {
+                        let name = reply.creator.display_name().to_string();
+                        this.discover_creators = reply.creators;
+                        if let Some(browse) = &mut this.discover_browse {
+                            for c in &mut browse.creators {
+                                if c.url.eq_ignore_ascii_case(&reply.creator.url)
+                                    || (c.source == reply.creator.source
+                                        && c.name.eq_ignore_ascii_case(&reply.creator.name))
+                                {
+                                    c.followed = Some(true);
+                                }
+                            }
+                        }
+                        if from_input {
+                            this.discover_clear_input = true;
+                        }
+                        this.discover_error = None;
+                        this.show_notice(format!("Following {name}").into(), cx);
+                        if this.discover_active_topic.is_none() {
+                            this.refresh_discover_feed(false, cx);
+                        }
+                    }
+                    Err(err) => {
+                        this.discover_error = Some(err.into());
+                    }
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    pub fn unfollow_discover_creator(&mut self, creator_id: String, cx: &mut Context<Self>) {
+        let Some(client) = self.api_client() else {
+            self.discover_error = Some("Local engine is still starting.".into());
+            cx.notify();
+            return;
+        };
+        let target = creator_id.clone();
+        cx.spawn(async move |this, cx| {
+            let res = run_blocking(move || client.unfollow_discover_creator(&target)).await;
+            let outcome = match res {
+                Ok(inner) => inner,
+                Err(err) => Err(err),
+            };
+            let _ = this.update(cx, |this, cx| match outcome {
+                Ok(reply) => {
+                    this.discover_creators = reply.creators;
+                    if this.discover_creator_filter.as_deref() == Some(creator_id.as_str()) {
+                        this.discover_creator_filter = None;
+                    }
+                    if this.discover_active_topic.is_none() {
+                        this.refresh_discover_feed(false, cx);
+                    } else {
+                        cx.notify();
+                    }
+                }
+                Err(err) => {
+                    this.discover_error = Some(err.into());
+                    cx.notify();
+                }
+            });
+        })
+        .detach();
+    }
+
+    pub fn browse_discover_topic(&mut self, topic: String, cx: &mut Context<Self>) {
+        let clean = topic.trim().to_string();
+        if clean.is_empty() {
+            return;
+        }
+        let Some(client) = self.api_client() else {
+            self.discover_error = Some("Local engine is still starting.".into());
+            cx.notify();
+            return;
+        };
+        self.discover_active_topic = Some(clean.clone());
+        self.discover_loading = true;
+        self.discover_error = None;
+        cx.notify();
+
+        let query = clean.clone();
+        cx.spawn(async move |this, cx| {
+            let res = run_blocking(move || {
+                client.browse_discover(&query, &["youtube", "soundcloud", "rumble"], 12)
+            })
+            .await;
+            let outcome = match res {
+                Ok(inner) => inner,
+                Err(err) => Err(err),
+            };
+            let _ = this.update(cx, |this, cx| {
+                if this.discover_active_topic.as_deref() != Some(clean.as_str()) {
+                    return;
+                }
+                this.discover_loading = false;
+                match outcome {
+                    Ok(browse) => {
+                        let thumb_paths = collect_discover_thumbs(&browse.creators, &browse.items);
+                        this.discover_browse = Some(browse);
+                        this.discover_error = None;
+                        this.prefetch_discover_thumbs(thumb_paths, cx);
+                    }
+                    Err(err) => {
+                        this.discover_error = Some(err.into());
+                    }
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    pub fn clear_discover_browse(&mut self, cx: &mut Context<Self>) {
+        self.discover_active_topic = None;
+        self.discover_browse = None;
+        self.discover_error = None;
+        if self.discover_feed.is_none() && !self.discover_loading {
+            self.refresh_discover_feed(false, cx);
+        } else {
+            cx.notify();
+        }
+    }
+
+    pub fn add_discover_item_to_library(
+        &mut self,
+        item: DiscoverItem,
+        audio_override: Option<bool>,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(client) = self.api_client() else {
+            self.fail("Local engine is not ready yet.".into(), cx);
+            return;
+        };
+        let audio = audio_override.unwrap_or(item.audio_only);
+        let music = if audio {
+            item.music.clone().or_else(|| {
+                let artist = (!item.creator_name.trim().is_empty()).then(|| item.creator_name.clone());
+                Some(MusicMeta {
+                    title: Some(item.title.clone()),
+                    artist,
+                })
+            })
+        } else {
+            item.music.clone()
+        };
+        let title = item.title.clone();
+        let req = AcquireRequest {
+            id: item.acquire_id.clone(),
+            title: title.clone(),
+            url: item.url.clone(),
+            page: true,
+            audio,
+            music,
+        };
+        self.show_notice(format!("Saving “{title}” to your library…").into(), cx);
+
+        cx.spawn(async move |this, cx| {
+            let res = run_blocking(move || client.acquire(&req)).await;
+            let outcome = match res {
+                Ok(inner) => inner,
+                Err(err) => Err(err),
+            };
+            let _ = this.update(cx, |this, cx| match outcome {
+                Ok(job) => {
+                    this.jobs.retain(|j| j.job_id != job.job_id);
+                    this.jobs.insert(0, job);
+                    this.had_active_jobs = true;
+                    this.ensure_jobs_poller(cx);
+                    cx.notify();
+                }
+                Err(err) => this.fail(err, cx),
+            });
+        })
+        .detach();
+    }
+
+    fn prefetch_discover_thumbs(&mut self, paths: Vec<String>, cx: &mut Context<Self>) {
+        let Some(client) = self.api_client() else {
+            return;
+        };
+        let mut to_fetch = Vec::new();
+        for path in paths {
+            if !path.starts_with("/v1/") {
+                continue;
+            }
+            if self.discover_thumbs.contains_key(&path) || self.discover_thumbs_pending.contains(&path) {
+                continue;
+            }
+            self.discover_thumbs_pending.insert(path.clone());
+            to_fetch.push(path);
+            if to_fetch.len() >= 48 {
+                break;
+            }
+        }
+        if to_fetch.is_empty() {
+            return;
+        }
+        cx.spawn(async move |this, cx| {
+            let fetched = run_blocking(move || {
+                let mut results = Vec::with_capacity(to_fetch.len());
+                for path in to_fetch {
+                    let img = client.get_bytes(&path).ok().and_then(|bytes| {
+                        let fmt = detect_image_format(&bytes)?;
+                        Some(Arc::new(Image::from_bytes(fmt, bytes)))
+                    });
+                    results.push((path, img));
+                }
+                results
+            })
+            .await;
+            let Ok(results) = fetched else {
+                return;
+            };
+            let _ = this.update(cx, |this, cx| {
+                let mut changed = false;
+                for (path, maybe_img) in results {
+                    this.discover_thumbs_pending.remove(&path);
+                    if let Some(img) = maybe_img {
+                        if this.discover_thumbs.len() >= 256 {
+                            this.discover_thumbs.clear();
+                        }
+                        this.discover_thumbs.insert(path, img);
+                        changed = true;
+                    }
+                }
+                if changed {
+                    cx.notify();
+                }
+            });
+        })
+        .detach();
     }
 
     pub fn clear_cache(&mut self, key: Option<String>, cx: &mut Context<Self>) {
@@ -2312,6 +2751,37 @@ fn stream_entry_to_downloads(
     }
 }
 
+fn collect_discover_thumbs(creators: &[DiscoverCreator], items: &[DiscoverItem]) -> Vec<String> {
+    let mut paths = Vec::new();
+    for item in items {
+        if item.thumbnail.starts_with("/v1/") {
+            paths.push(item.thumbnail.clone());
+        }
+    }
+    for creator in creators {
+        if creator.avatar.starts_with("/v1/") {
+            paths.push(creator.avatar.clone());
+        }
+    }
+    paths
+}
+
+fn detect_image_format(bytes: &[u8]) -> Option<ImageFormat> {
+    if bytes.len() >= 8 && &bytes[..8] == b"\x89PNG\r\n\x1a\n" {
+        return Some(ImageFormat::Png);
+    }
+    if bytes.len() >= 3 && bytes[0] == 0xff && bytes[1] == 0xd8 && bytes[2] == 0xff {
+        return Some(ImageFormat::Jpeg);
+    }
+    if bytes.len() >= 12 && &bytes[..4] == b"RIFF" && &bytes[8..12] == b"WEBP" {
+        return Some(ImageFormat::Webp);
+    }
+    if bytes.len() >= 6 && (&bytes[..6] == b"GIF87a" || &bytes[..6] == b"GIF89a") {
+        return Some(ImageFormat::Gif);
+    }
+    None
+}
+
 impl Render for PearTube {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         if let Some((entry, pos)) = self.pending_watch.take() {
@@ -2319,6 +2789,11 @@ impl Render for PearTube {
         }
         if let Some(url) = self.pending_add_url.take() {
             self.open_add_modal_with_url(url, window, cx);
+        }
+        if self.discover_clear_input {
+            self.discover_clear_input = false;
+            self.discover_follow_input
+                .update(cx, |inp, cx| inp.set_value("", window, cx));
         }
         let is_video = matches!(self.screen, Screen::Play(_));
         let is_list = matches!(self.screen, Screen::List);

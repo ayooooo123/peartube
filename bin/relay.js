@@ -13,6 +13,8 @@ import { createApi } from '../src/http.js'
 import { createMirrorHost } from '../src/mirror.js'
 import { createCastController } from '../src/cast.js'
 import { createSettings } from '../src/settings.js'
+import { createDiscover } from '../src/discover.js'
+import { send as fetchArt } from '../src/art.js'
 import { identify, posterUrl, backdropUrl, ubitInfo, downloadPage } from '../src/identify.js'
 import { API_PORT } from '../src/protocol.js'
 
@@ -104,6 +106,7 @@ const state = {
   cast: null,
   apiToken: env.PEARTUBE_API_TOKEN || null,
   settings,
+  discover: null,
   identify: link => identify(link, { cinemetaUrl: cfg('cinemetaUrl'), configDir: ubitConfigDir }),
   posterUrl: imdb => posterUrl(cfg('cinemetaUrl'), imdb),
   backdropUrl: imdb => backdropUrl(cfg('cinemetaUrl'), imdb),
@@ -114,6 +117,18 @@ const state = {
   }
 }
 const api = createApi(state)
+state.discover = createDiscover({
+  storage,
+  fetchBytes: (url, opts = {}) => fetchArt(url, {
+    binary: true,
+    timeoutMs: opts.timeoutMs || 12_000,
+    maxBytes: opts.maxBytes || 4 * 1024 * 1024,
+    headers: opts.headers || {}
+  }),
+  getMirror: () => state.mirror,
+  getEntries: () => state.node?.search(null) ?? [],
+  onchange: () => api.notify('update')
+})
 // The HTTPS listener lives here, not in http.js: the apps' worklet imports http.js and must not bundle TLS.
 const apiHttps = state.tls?.cert && state.tls?.key ? createHttpsServer({ cert: state.tls.cert, key: state.tls.key }, (req, res) => api.emit('request', req, res)) : null
 api.once('close', () => apiHttps?.close())

@@ -27,6 +27,23 @@ pub const ALL_SOURCES: &[(&str, &str)] = &[
     ("rumble", "Rumble"),
 ];
 
+/// Supported creator-discovery sources in display order.
+pub const DISCOVER_SOURCES: &[(&str, &str)] = &[
+    ("youtube", "YouTube"),
+    ("soundcloud", "SoundCloud"),
+    ("rumble", "Rumble"),
+];
+
+/// Preset topic chips shown in Discover v2.
+pub const DISCOVER_TOPICS: &[&str] = &[
+    "Music",
+    "Tech",
+    "Science",
+    "Podcasts",
+    "Gaming",
+    "Documentary",
+];
+
 /// Runs a blocking closure on a dedicated OS thread and resolves via a futures oneshot
 /// so 45-second HTTP calls never occupy GPUI's background executor threads.
 pub async fn run_blocking<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> Result<T, String> {
@@ -87,6 +104,18 @@ impl ApiClient {
     }
 
     fn request(&self, method: &str, path: &str, body: Option<&Value>, timeout: Duration) -> Result<Value, String> {
+        let resp = self.request_raw(method, path, body, timeout, "application/json")?;
+        parse_json_response(&resp)
+    }
+
+    fn request_raw(
+        &self,
+        method: &str,
+        path: &str,
+        body: Option<&Value>,
+        timeout: Duration,
+        accept: &str,
+    ) -> Result<HttpResponse, String> {
         let authority = self.parse_authority()?;
         let addr = authority
             .to_socket_addrs()
@@ -110,7 +139,7 @@ impl ApiClient {
         };
 
         let mut req = format!(
-            "{method} {path_part} HTTP/1.1\r\nHost: {authority}\r\nAccept: application/json\r\nConnection: close\r\n"
+            "{method} {path_part} HTTP/1.1\r\nHost: {authority}\r\nAccept: {accept}\r\nConnection: close\r\n"
         );
         if body.is_some() {
             req.push_str("Content-Type: application/json\r\n");
@@ -144,8 +173,16 @@ impl ApiClient {
             }
         }
 
-        let resp = parse_http_response(&raw)?;
-        parse_json_response(&resp)
+        parse_http_response(&raw)
+    }
+
+    pub fn get_bytes(&self, path: &str) -> Result<Vec<u8>, String> {
+        let resp = self.request_raw("GET", path, None, DEFAULT_TIMEOUT, "*/*")?;
+        if (200..300).contains(&resp.status) {
+            Ok(resp.body)
+        } else {
+            Err(format!("Local API returned HTTP {}", resp.status))
+        }
     }
 
     // ---- High-level typed endpoints ----
@@ -327,6 +364,78 @@ impl ApiClient {
             Err(err) => Err(err),
         }
     }
+
+    // ---- Discover v2 endpoints ----
+
+    #[allow(dead_code)]
+    pub fn list_discover_creators(&self) -> Result<Vec<DiscoverCreator>, String> {
+        let val = self.get("/v1/discover/creators")?;
+        let arr = val.get("creators").cloned().unwrap_or(Value::Array(Vec::new()));
+        serde_json::from_value(arr).map_err(|e| format!("Parse discover creators: {e}"))
+    }
+
+    pub fn follow_discover_creator(&self, req: &DiscoverFollowRequest) -> Result<DiscoverFollowResponse, String> {
+        let mut map = serde_json::Map::new();
+        map.insert("url".into(), Value::String(req.url.trim().to_string()));
+        if let Some(source) = req.source.as_deref().filter(|s| !s.trim().is_empty()) {
+            map.insert("source".into(), Value::String(source.trim().to_string()));
+        }
+        if let Some(name) = req.name.as_deref().filter(|s| !s.trim().is_empty()) {
+            map.insert("name".into(), Value::String(name.trim().to_string()));
+        }
+        if let Some(channel_id) = req.channel_id.as_deref().filter(|s| !s.trim().is_empty()) {
+            map.insert("channelId".into(), Value::String(channel_id.trim().to_string()));
+        }
+        if let Some(handle) = req.handle.as_deref().filter(|s| !s.trim().is_empty()) {
+            map.insert("handle".into(), Value::String(handle.trim().to_string()));
+        }
+        let val = self.post("/v1/discover/creators", &Value::Object(map), LONG_TIMEOUT)?;
+        serde_json::from_value(val).map_err(|e| format!("Parse follow creator reply: {e}"))
+    }
+
+    pub fn unfollow_discover_creator(&self, creator_id: &str) -> Result<DiscoverUnfollowResponse, String> {
+        let encoded = percent_encode_component(creator_id);
+        let val = self.delete(&format!("/v1/discover/creators/{encoded}"))?;
+        serde_json::from_value(val).map_err(|e| format!("Parse unfollow creator reply: {e}"))
+    }
+
+    pub fn get_discover_feed(
+        &self,
+        source: Option<&str>,
+        creator: Option<&str>,
+        refresh: bool,
+        limit: usize,
+    ) -> Result<DiscoverFeed, String> {
+        let mut params = Vec::new();
+        if let Some(src) = source.filter(|s| !s.trim().is_empty()) {
+            params.push(format!("source={}", percent_encode_component(src.trim())));
+        }
+        if let Some(cid) = creator.filter(|s| !s.trim().is_empty()) {
+            params.push(format!("creator={}", percent_encode_component(cid.trim())));
+        }
+        if refresh {
+            params.push("refresh=1".to_string());
+        }
+        params.push(format!("limit={}", limit.clamp(1, 100)));
+        let path = format!("/v1/discover/feed?{}", params.join("&"));
+        let val = self.request("GET", &path, None, LONG_TIMEOUT)?;
+        serde_json::from_value(val).map_err(|e| format!("Parse discover feed: {e}"))
+    }
+
+    pub fn browse_discover(
+        &self,
+        query: &str,
+        sources: &[&str],
+        limit: usize,
+    ) -> Result<DiscoverBrowseResult, String> {
+        let payload = json!({
+            "query": query.trim(),
+            "sources": sources,
+            "limit": limit.clamp(1, 20),
+        });
+        let val = self.post("/v1/discover/browse", &payload, LONG_TIMEOUT)?;
+        serde_json::from_value(val).map_err(|e| format!("Parse discover browse reply: {e}"))
+    }
 }
 
 // ---- HTTP/1.1 wire parser (pure, unit-tested) ----
@@ -432,6 +541,18 @@ fn parse_json_response(resp: &HttpResponse) -> Result<Value, String> {
 }
 
 // ---- URL extraction & percent decoding ----
+
+pub fn percent_encode_component(input: &str) -> String {
+    let mut out = String::with_capacity(input.len());
+    for &b in input.as_bytes() {
+        if b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.' | b'~') {
+            out.push(b as char);
+        } else {
+            out.push_str(&format!("%{b:02X}"));
+        }
+    }
+    out
+}
 
 pub fn percent_decode(input: &str) -> String {
     let bytes = input.as_bytes();
@@ -1371,6 +1492,186 @@ fn read_setting_bool(v: Option<&Value>) -> Option<bool> {
     v.get("value").and_then(Value::as_bool)
 }
 
+// ---- Discover v2 models ----
+
+fn deserialize_opt_u64<'de, D>(deserializer: D) -> Result<Option<u64>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let val = Option::<Value>::deserialize(deserializer)?;
+    let Some(v) = val else {
+        return Ok(None);
+    };
+    if let Some(n) = v.as_u64() {
+        return Ok(Some(n));
+    }
+    if let Some(f) = v.as_f64()
+        && f.is_finite()
+        && f >= 0.0
+    {
+        return Ok(Some(f.round() as u64));
+    }
+    Ok(None)
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct DiscoverFollowRequest {
+    pub url: String,
+    pub source: Option<String>,
+    pub name: Option<String>,
+    pub channel_id: Option<String>,
+    pub handle: Option<String>,
+}
+
+impl DiscoverFollowRequest {
+    pub fn from_url(url: impl Into<String>) -> Self {
+        DiscoverFollowRequest {
+            url: url.into(),
+            ..Default::default()
+        }
+    }
+
+    pub fn from_item(item: &DiscoverItem) -> Self {
+        DiscoverFollowRequest {
+            url: item.creator_url.clone(),
+            source: Some(item.source.clone()),
+            name: Some(item.creator_name.clone()),
+            channel_id: None,
+            handle: None,
+        }
+    }
+
+    pub fn from_creator(creator: &DiscoverCreator) -> Self {
+        let channel_id = (!creator.channel_id.is_empty()).then(|| creator.channel_id.clone());
+        let handle = (!creator.handle.is_empty()).then(|| creator.handle.clone());
+        DiscoverFollowRequest {
+            url: creator.url.clone(),
+            source: Some(creator.source.clone()),
+            name: Some(creator.name.clone()),
+            channel_id,
+            handle,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct DiscoverCreator {
+    pub id: String,
+    pub source: String,
+    pub handle: String,
+    pub name: String,
+    pub url: String,
+    pub channel_id: String,
+    pub avatar: String,
+    pub followed_at: u64,
+    pub followed: Option<bool>,
+}
+
+impl DiscoverCreator {
+    pub fn display_name(&self) -> &str {
+        if !self.name.trim().is_empty() {
+            self.name.trim()
+        } else if !self.handle.trim().is_empty() {
+            self.handle.trim()
+        } else {
+            self.id.as_str()
+        }
+    }
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct DiscoverItem {
+    pub id: String,
+    pub source: String,
+    pub kind: String,
+    pub item_id: String,
+    pub title: String,
+    pub creator_id: String,
+    pub creator_name: String,
+    pub creator_url: String,
+    pub url: String,
+    pub thumbnail: String,
+    #[serde(default, deserialize_with = "deserialize_opt_u64")]
+    pub duration: Option<u64>,
+    pub published_at: u64,
+    pub acquire_id: String,
+    pub audio_only: bool,
+    pub music: Option<MusicMeta>,
+    pub in_library: bool,
+}
+
+impl DiscoverItem {
+    pub fn source_label(&self) -> &'static str {
+        match self.source.as_str() {
+            "youtube" => "YouTube",
+            "soundcloud" => "SoundCloud",
+            "rumble" => "Rumble",
+            _ => "Web",
+        }
+    }
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct DiscoverFeedError {
+    pub creator_id: Option<String>,
+    pub source: Option<String>,
+    pub name: Option<String>,
+    #[serde(alias = "error")]
+    pub message: String,
+}
+
+impl DiscoverFeedError {
+    pub fn display_label(&self) -> String {
+        let prefix = self
+            .name
+            .as_deref()
+            .filter(|s| !s.trim().is_empty())
+            .or_else(|| self.source.as_deref().filter(|s| !s.trim().is_empty()))
+            .or_else(|| self.creator_id.as_deref().filter(|s| !s.trim().is_empty()));
+        match prefix {
+            Some(who) => format!("{who}: {}", self.message),
+            None => self.message.clone(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct DiscoverFeed {
+    pub creators: Vec<DiscoverCreator>,
+    pub items: Vec<DiscoverItem>,
+    pub errors: Vec<DiscoverFeedError>,
+    pub updated_at: u64,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct DiscoverBrowseResult {
+    pub query: String,
+    pub sources: Vec<String>,
+    pub creators: Vec<DiscoverCreator>,
+    pub items: Vec<DiscoverItem>,
+    pub errors: Vec<DiscoverFeedError>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct DiscoverFollowResponse {
+    pub creator: DiscoverCreator,
+    pub creators: Vec<DiscoverCreator>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct DiscoverUnfollowResponse {
+    pub removed: bool,
+    pub creators: Vec<DiscoverCreator>,
+}
+
 // ---- Visited Soulseek shelves persistence ----
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -1713,5 +2014,169 @@ mod tests {
         assert!(s2.password_set);
         assert!(!s2.share);
         assert!(s2.uses_slsk_keys);
+    }
+
+    #[test]
+    fn parse_discover_feed_json() {
+        let raw = json!({
+            "creators": [
+                {
+                    "id": "youtube:UC1234567890abcdefghij",
+                    "source": "youtube",
+                    "handle": "@veritasium",
+                    "name": "Veritasium",
+                    "url": "https://www.youtube.com/channel/UC1234567890abcdefghij",
+                    "channelId": "UC1234567890abcdefghij",
+                    "avatar": "/v1/discover/thumb/0123456789abcdef0123",
+                    "followedAt": 1730000000000u64
+                },
+                {
+                    "id": "soundcloud:98765",
+                    "source": "soundcloud",
+                    "handle": "@quartet",
+                    "name": "Quartet",
+                    "url": "https://soundcloud.com/quartet",
+                    "channelId": "98765",
+                    "avatar": "",
+                    "followedAt": 1730000001000u64
+                }
+            ],
+            "items": [
+                {
+                    "id": "youtube:dQw4w9WgXcQ",
+                    "source": "youtube",
+                    "kind": "video",
+                    "itemId": "dQw4w9WgXcQ",
+                    "title": "Why Quantum Computers Break Cryptography",
+                    "creatorId": "youtube:UC1234567890abcdefghij",
+                    "creatorName": "Veritasium",
+                    "creatorUrl": "https://www.youtube.com/channel/UC1234567890abcdefghij",
+                    "url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+                    "thumbnail": "/v1/discover/thumb/aaaaaaaaaaaaaaaaaaaa",
+                    "duration": 1420,
+                    "publishedAt": 1730000050000u64,
+                    "acquireId": "clip:1122334455667788",
+                    "audioOnly": false,
+                    "music": null,
+                    "inLibrary": false
+                },
+                {
+                    "id": "soundcloud:555111",
+                    "source": "soundcloud",
+                    "kind": "audio",
+                    "itemId": "555111",
+                    "title": "Midnight Session",
+                    "creatorId": "soundcloud:98765",
+                    "creatorName": "Quartet",
+                    "creatorUrl": "https://soundcloud.com/quartet",
+                    "url": "https://soundcloud.com/quartet/midnight-session",
+                    "thumbnail": "/v1/discover/thumb/bbbbbbbbbbbbbbbbbbbb",
+                    "duration": 312.6,
+                    "publishedAt": 1730000020000u64,
+                    "acquireId": "sc:abcdef012345:s01e01",
+                    "audioOnly": true,
+                    "music": { "title": "Midnight Session", "artist": "Quartet" },
+                    "inLibrary": true
+                }
+            ],
+            "errors": [
+                {
+                    "creatorId": "rumble:c/example",
+                    "source": "rumble",
+                    "name": "Example Channel",
+                    "message": "Rumble answered 403"
+                }
+            ],
+            "updatedAt": 1730000100000u64
+        });
+        let feed: DiscoverFeed = serde_json::from_value(raw).expect("discover feed");
+        assert_eq!(feed.creators.len(), 2);
+        assert_eq!(feed.creators[0].display_name(), "Veritasium");
+        assert_eq!(feed.creators[0].avatar, "/v1/discover/thumb/0123456789abcdef0123");
+        assert_eq!(feed.items.len(), 2);
+        assert_eq!(feed.items[0].source_label(), "YouTube");
+        assert_eq!(feed.items[0].duration, Some(1420));
+        assert!(!feed.items[0].audio_only);
+        assert!(!feed.items[0].in_library);
+        assert_eq!(feed.items[1].source_label(), "SoundCloud");
+        assert_eq!(feed.items[1].duration, Some(313));
+        assert!(feed.items[1].audio_only);
+        assert!(feed.items[1].in_library);
+        assert_eq!(
+            feed.items[1].music,
+            Some(MusicMeta {
+                title: Some("Midnight Session".into()),
+                artist: Some("Quartet".into()),
+            })
+        );
+        assert_eq!(feed.errors.len(), 1);
+        assert_eq!(feed.errors[0].display_label(), "Example Channel: Rumble answered 403");
+        assert_eq!(feed.updated_at, 1730000100000);
+    }
+
+    #[test]
+    fn parse_discover_browse_result_json() {
+        let raw = json!({
+            "query": "Science",
+            "sources": ["youtube", "soundcloud", "rumble"],
+            "creators": [
+                {
+                    "id": "youtube:aabbccddeeff",
+                    "source": "youtube",
+                    "handle": "",
+                    "name": "PBS Space Time",
+                    "url": "https://www.youtube.com/watch?v=xyz12345678",
+                    "channelId": "",
+                    "avatar": "/v1/discover/thumb/cccccccccccccccccccc",
+                    "followedAt": 0,
+                    "followed": true
+                }
+            ],
+            "items": [
+                {
+                    "id": "rumble:v999",
+                    "source": "rumble",
+                    "kind": "video",
+                    "itemId": "v999",
+                    "title": "Deep Sea Expedition",
+                    "creatorId": "rumble:112233445566",
+                    "creatorName": "Ocean Lab",
+                    "creatorUrl": "https://rumble.com/c/OceanLab",
+                    "url": "https://rumble.com/v999-deep-sea.html",
+                    "thumbnail": "",
+                    "duration": 905,
+                    "publishedAt": 0,
+                    "acquireId": "clip:fedcba9876543210",
+                    "audioOnly": false,
+                    "music": null,
+                    "inLibrary": false
+                }
+            ],
+            "errors": [
+                { "source": "soundcloud", "message": "Request timed out" }
+            ]
+        });
+        let res: DiscoverBrowseResult = serde_json::from_value(raw).expect("discover browse");
+        assert_eq!(res.query, "Science");
+        assert_eq!(res.sources, vec!["youtube", "soundcloud", "rumble"]);
+        assert_eq!(res.creators.len(), 1);
+        assert_eq!(res.creators[0].followed, Some(true));
+        assert_eq!(res.items.len(), 1);
+        assert_eq!(res.items[0].source_label(), "Rumble");
+        assert_eq!(res.items[0].acquire_id, "clip:fedcba9876543210");
+        assert_eq!(res.errors.len(), 1);
+        assert_eq!(res.errors[0].display_label(), "soundcloud: Request timed out");
+    }
+
+    #[test]
+    fn percent_encode_component_encodes_creator_ids() {
+        assert_eq!(
+            percent_encode_component("youtube:UC_123-abc"),
+            "youtube%3AUC_123-abc"
+        );
+        assert_eq!(
+            percent_encode_component("rumble:c/My Channel"),
+            "rumble%3Ac%2FMy%20Channel"
+        );
     }
 }

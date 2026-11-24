@@ -884,6 +884,8 @@ export const page = `<!doctype html>
   .tracks-thead, .tracks-trow { display: grid; grid-template-columns: 44px minmax(180px, 2.2fr) minmax(120px, 1.3fr) minmax(120px, 1.3fr) minmax(110px, 1fr) 84px 66px 40px; align-items: center; gap: 8px; padding: 0 12px; }
   .tracks-thead { min-height: 40px; border-bottom: 1px solid var(--line); color: var(--dim); font-size: 12.5px; font-weight: 600; }
   .tracks-trow { position: relative; min-height: 46px; border-bottom: 1px solid color-mix(in srgb, var(--line) 55%, transparent); }
+  .tracks-trow > :not(.row-hit) { position: relative; z-index: 1; pointer-events: none; }
+  .tracks-trow a, .tracks-trow button:not(.row-hit) { pointer-events: auto; }
   .tracks-trow:last-child { border-bottom: 0; }
   .tracks-trow:hover { background: var(--raised); }
   .tracks-trow.is-playing { background: var(--brand-soft); }

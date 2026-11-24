@@ -294,7 +294,8 @@ async function launchBrowser () {
     }
     if (m.method === 'Runtime.consoleAPICalled' && (m.params.type === 'error' || m.params.type === 'warning')) issues.push(m.params.type + ': ' + m.params.args.map(a => a.value ?? a.description).join(' '))
     if (m.method === 'Runtime.exceptionThrown') issues.push('exception: ' + (m.params.exceptionDetails.exception?.description || m.params.exceptionDetails.text))
-    if (m.method === 'Log.entryAdded' && (m.params.entry.level === 'error' || m.params.entry.level === 'warning')) issues.push(m.params.entry.level + ': ' + m.params.entry.text + ' ' + (m.params.entry.url || ''))
+    // A GPU driver's own hint is not the page: SwiftShader in the CI writes "GPU stall due to ReadPixels" there.
+    if (m.method === 'Log.entryAdded' && (m.params.entry.level === 'error' || m.params.entry.level === 'warning') && !/^\[\.WebGL-[^\]]*\]GL Driver Message/.test(m.params.entry.text)) issues.push(m.params.entry.level + ': ' + m.params.entry.text + ' ' + (m.params.entry.url || ''))
     if (m.method === 'Network.requestWillBeSent') {
       requests.push(m.params.request.url)
       // A redirect reuses the id: the hop that follows starts its own life.

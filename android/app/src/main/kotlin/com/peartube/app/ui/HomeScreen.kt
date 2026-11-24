@@ -405,8 +405,18 @@ private fun VideoShelfCard(
                 },
             )
         }
+        val subFacts = if (isOk) {
+            stateText
+        } else if (tile.kind == LibraryKind.Movie) {
+            listOfNotNull(
+                tile.year,
+                tile.items.firstOrNull()?.entry?.size?.takeIf { it > 0L }?.let { com.peartube.shared.formatBytes(it) },
+            ).joinToString(" · ").ifBlank { stateText }
+        } else {
+            tileFactsLine(tile)
+        }
         Text(
-            text = if (isOk) stateText else tileFactsLine(tile),
+            text = subFacts,
             color = if (isOk) Accent else Dim,
             fontSize = 11.sp,
             maxLines = 1,

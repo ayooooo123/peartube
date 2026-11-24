@@ -462,7 +462,18 @@ fun TitleDetailScreen(
                                 fontWeight = FontWeight.Medium,
                             )
                             Text(tile.title, color = Ink, fontSize = 21.sp, fontWeight = FontWeight.Bold, maxLines = 3, overflow = TextOverflow.Ellipsis)
-                            Text(tileFactsLine(tile), color = Dim, fontSize = 13.sp)
+                            val detailFacts = when (tile.kind) {
+                                LibraryKind.Movie -> listOfNotNull(
+                                    tile.year,
+                                    tile.items.firstOrNull()?.entry?.size?.takeIf { it > 0L }?.let { formatBytes(it) },
+                                    if (tile.items.size > 1) plural(tile.items.size, "version", "versions") else null,
+                                ).joinToString(" · ")
+                                LibraryKind.Clip -> tile.items.firstOrNull()?.entry?.size?.takeIf { it > 0L }?.let { formatBytes(it) } ?: ""
+                                else -> tileFactsLine(tile)
+                            }
+                            if (detailFacts.isNotBlank()) {
+                                Text(detailFacts, color = Dim, fontSize = 13.sp)
+                            }
                             Text(stateText, color = if (isOk) Accent else Dim, fontSize = 12.sp)
                         }
                     }

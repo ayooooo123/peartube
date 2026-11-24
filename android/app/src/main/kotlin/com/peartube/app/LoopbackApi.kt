@@ -695,7 +695,7 @@ class LoopbackApi(private val baseUrlProvider: () -> String?) {
         method = "POST",
         path = "/v1/identify",
         body = JSONObject().put("url", url),
-        readTimeoutMs = 45_000,
+        readTimeoutMs = 60_000,
     ).mapCatching { IdentifyResult.from(it) }
 
     suspend fun acquire(

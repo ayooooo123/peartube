@@ -16,18 +16,15 @@ import os from 'bare-os'
 import { createNode, followedSources, idleStatus } from '../src/index.js'
 import { API_PORT, parseUri } from '../src/protocol.js'
 import { nodeOptions, normalizeAppSettings } from '../src/app-settings.js'
-import { createApi } from '../src/http.js'
+import { openPeerApi } from '../src/peer-api.js'
 import { createLan, interfaceAdapter, lanAddress } from '../src/lan.js'
 import { createCastController, receiverKeyPair, reclaimLowDiskReceiverStorage, resolvePeerStorage } from '../src/cast.js'
 
-// Cinemeta's artwork is metahub's, addressed by IMDb id: the app's loopback API redirects /v1/poster and /v1/backdrop
-// there with no lookup, so the worklet needs no TLS (the host fetches the image).
-const metahub = (kind, size) => async imdb => `https://images.metahub.space/${kind}/${size}/${imdb}/img`
 const ipc = Bare.IPC
 let node = null
 // The settings the last start was given: a form saved while no node runs still keeps channel names.
 let lastSettings = null
-let api = null
+let peerApi = null
 let apiUrl = null
 let cast = null
 let castStorage = null
@@ -42,7 +39,7 @@ const send = msg => ipc.write(JSON.stringify(msg, wellFormed) + '\n')
 let updateTimer = null
 let lastUpdateAt = 0
 const update = () => {
-  api?.notify('update')
+  peerApi?.notify('update')
   if (updateTimer) return
   const delay = Date.now() - lastUpdateAt < 3000 ? 1500 : 200
   updateTimer = setTimeout(() => {
@@ -52,7 +49,7 @@ const update = () => {
   }, delay)
 }
 const sendCast = () => {
-  api?.notify('cast')
+  peerApi?.notify('cast')
   if (cast) send({ event: 'cast', cast: cast.status() })
 }
 // start, stop and LAN moves run one at a time, so a quick settings change
@@ -68,10 +65,10 @@ function serial (fn) {
 async function close () {
   if (updateTimer) { clearTimeout(updateTimer); updateTimer = null }
   const open = node
-  const openApi = api
+  const openApi = peerApi
   const openCast = cast
   node = null
-  api = null
+  peerApi = null
   apiUrl = null
   cast = null
   nodeOwner = null
@@ -79,10 +76,7 @@ async function close () {
   lanError = null
   lanNote = null
   if (openCast) await openCast.close().catch(() => {})
-  if (openApi) await new Promise(resolve => {
-    openApi.close(() => resolve())
-    openApi.closeAllConnections()
-  }).catch(() => {})
+  if (openApi) await openApi.close().catch(err => console.error('worker peerApi close failed:', err?.message || String(err)))
   if (!open) return
   open.swarm.off('update', update)
   await open.close()
@@ -214,27 +208,6 @@ async function current () {
   return node
 }
 
-function listenLoopback (srv, preferredPort) {
-  return new Promise(resolve => {
-    const tryBind = port => {
-      const onError = () => {
-        srv.removeListener('listening', onListen)
-        if (port !== 0) tryBind(0)
-        else resolve(null)
-      }
-      const onListen = () => {
-        srv.removeListener('error', onError)
-        const addr = srv.address()
-        resolve(addr?.port ? `http://127.0.0.1:${addr.port}` : null)
-      }
-      srv.once('error', onError)
-      srv.once('listening', onListen)
-      srv.listen(port, '127.0.0.1')
-    }
-    tryBind(preferredPort)
-  })
-}
-
 const methods = {
   // Sent once, right after the host spawns the worklet: where this device keeps its TV pairings, so casting works
   // before (and between) node starts.
@@ -261,17 +234,16 @@ const methods = {
     node.setCacheMaxBytes(opts.cacheMaxGb * 1e9)
     lanWanted = opts.lan
     await moveLan()
-    const srv = createApi({
+    peerApi = await openPeerApi({
       node,
-      acquirer: null,
-      posterUrl: metahub('poster', 'small'),
-      backdropUrl: metahub('background', 'medium'),
-      get cast () { return cast },
-      extraStatus: () => ({ lan: lanNote, apiUrl, lanStats: node?.lanStats?.() ?? null }),
-      onSourcesChanged: list => send({ event: 'sources', sources: followedSources(list) })
+      storage: opts.storage,
+      preferredPort: API_PORT,
+      getCast: () => cast,
+      extraStatus: url => ({ lan: lanNote, apiUrl: url, lanStats: node?.lanStats?.() ?? null }),
+      onSourcesChanged: list => send({ event: 'sources', sources: followedSources(list) }),
+      onchange: update
     })
-    apiUrl = await listenLoopback(srv, API_PORT)
-    api = apiUrl ? srv : null
+    apiUrl = peerApi.url
     const discovered = await node.discoveredSources()
     return { ...report(), discoveredSources: discovered }
   }),

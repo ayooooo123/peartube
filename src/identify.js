@@ -1,4 +1,3 @@
-import { spawn } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -60,6 +59,40 @@ function tagStatus (msg) {
 
 let bareBin = null
 let bareUbitCli = null
+let spawnFn = null
+let ubitAddonPromise = null
+
+// Loaded dynamically so mobile/desktop worklets (which pack no subprocess runtime) can import
+// this module for direct-URL identification and optional in-process ubit without bundling bare-subprocess.
+async function loadSpawn () {
+  if (spawnFn) return spawnFn
+  try {
+    const spec = ['node', 'child_process'].join(':')
+    const mod = await import(spec)
+    if (typeof mod?.spawn !== 'function') throw missing()
+    spawnFn = mod.spawn
+    return spawnFn
+  } catch {
+    throw missing()
+  }
+}
+
+async function loadUbitAddon () {
+  if (!ubitAddonPromise) {
+    ubitAddonPromise = (async () => {
+      try {
+        const spec = ['peartube', 'ubit', 'bare'].join('-')
+        const mod = await import(spec)
+        const resolved = mod?.info || mod?.download ? mod : mod?.default
+        return resolved && (typeof resolved.info === 'function' || typeof resolved.download === 'function') ? resolved : null
+      } catch {
+        // Optional in-process addon: absent on relay/Node builds that use bare-ubit or UBIT_BIN.
+        return null
+      }
+    })()
+  }
+  return ubitAddonPromise
+}
 
 function fromFileUrl (u) {
   const p = decodeURIComponent(new URL(u).pathname)
@@ -72,8 +105,18 @@ async function resolveUbit (args, { configDir = '', ubit = '' } = {}) {
   const bin = ubit || process.env.UBIT_BIN || ''
   if (bin) return { file: bin, args, env: ubitEnv(configDir) }
   try {
-    bareBin ||= globalThis.Bare ? process.execPath : (await import('bare-runtime')).default()
-    bareUbitCli ||= fromFileUrl(import.meta.resolve('bare-ubit/bin.js'))
+    if (!bareBin) {
+      if (globalThis.Bare) {
+        bareBin = process.execPath
+      } else {
+        const runtimePkg = ['bare', 'runtime'].join('-')
+        bareBin = (await import(runtimePkg)).default()
+      }
+    }
+    if (!bareUbitCli) {
+      const ubitBin = `${['bare', 'ubit'].join('-')}/bin.js`
+      bareUbitCli = fromFileUrl(import.meta.resolve(ubitBin))
+    }
     const cfg = configDir || process.env.UBIT_CONFIG_DIR || join(tmpdir(), 'peartube-ubit')
     const env = process.platform === 'win32' && process.env.SystemRoot ? { SystemRoot: process.env.SystemRoot } : {}
     return { file: bareBin, args: [bareUbitCli, '--config', cfg, ...args], env }
@@ -83,6 +126,15 @@ async function resolveUbit (args, { configDir = '', ubit = '' } = {}) {
 }
 
 async function ubitInfo (url, { configDir = '', ubit = '', timeoutMs = 45_000 } = {}) {
+  if (!ubit && !process.env.UBIT_BIN) {
+    const addon = await loadUbitAddon()
+    if (addon && typeof addon.info === 'function') {
+      const info = await addon.info(url, { configDir, timeoutMs })
+      if (info?.isDRM) throw Object.assign(new Error('This video is DRM-protected'), { status: 451 })
+      return info
+    }
+  }
+  const spawn = await loadSpawn()
   const cmd = await resolveUbit(['info', url, '--json'], { configDir, ubit })
   return new Promise((resolve, reject) => {
     let child
@@ -119,6 +171,13 @@ async function ubitInfo (url, { configDir = '', ubit = '', timeoutMs = 45_000 } 
 // `audio` asks for the page's audio only (`-a`: the best AAC stream, copied as it is into an M4A).
 export async function downloadPage (pageUrl, outDir, { configDir = '', ubit = '', stallTimeout = 30_000, controller = null, onProgress = null, audio = false } = {}) {
   if (controller?.aborted) throw new Error('Cancelled')
+  if (!ubit && !process.env.UBIT_BIN) {
+    const addon = await loadUbitAddon()
+    if (addon && typeof addon.download === 'function') {
+      return addon.download(pageUrl, outDir, { configDir, stallTimeout, controller, onProgress, audio })
+    }
+  }
+  const spawn = await loadSpawn()
   const cmd = await resolveUbit(['get', pageUrl, '--no-library', '--no-playlist', '--json', ...(audio ? ['-a'] : []), '-o', outDir], { configDir, ubit })
   return new Promise((resolve, reject) => {
     if (controller?.aborted) return reject(new Error('Cancelled'))

@@ -364,24 +364,28 @@ impl PlayScreen {
         player.seek(at);
     }
 
-    fn back(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.cast_open {
-            cx.emit(PlayEvent::DismissCast);
-            return;
-        }
-        if self.info_open {
-            self.info_open = false;
-            cx.notify();
-            return;
-        }
-        if window.is_fullscreen() {
-            self.toggle_fullscreen_smooth(window);
-            return;
-        }
+    fn leave(&mut self, cx: &mut Context<Self>) {
         if let Some(dur) = self.state.duration {
-            cx.emit(PlayEvent::Progress(self.entry.id.clone(), self.entry.key.clone(), self.state.position.as_millis() as u64, dur.as_millis() as u64));
+            cx.emit(PlayEvent::Progress(
+                self.entry.id.clone(),
+                self.entry.key.clone(),
+                self.state.position.as_millis() as u64,
+                dur.as_millis() as u64,
+            ));
         }
         cx.emit(PlayEvent::Back);
+    }
+
+    fn back(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        match escape_action(self.cast_open, self.info_open, window.is_fullscreen()) {
+            BackAction::DismissCast => cx.emit(PlayEvent::DismissCast),
+            BackAction::CloseInfo => {
+                self.info_open = false;
+                cx.notify();
+            }
+            BackAction::ExitFullscreen => self.toggle_fullscreen_smooth(window),
+            BackAction::Leave => self.leave(cx),
+        }
     }
 
     pub(crate) fn place(&mut self, bounds: Bounds<Pixels>, window: &mut Window) {
@@ -851,7 +855,7 @@ impl PlayScreen {
                     .px_3()
                     .py_2p5()
                     .bg(shade(180., 0.68))
-                    .child(overlay_button("back", IconName::ArrowLeft.into(), "Back").on_click(cx.listener(|this, _, window, cx| this.back(window, cx))))
+                    .child(overlay_button("back", IconName::ArrowLeft.into(), "Back").on_click(cx.listener(|this, _, _, cx| this.leave(cx))))
                     .child(div().flex_1().ml_2().truncate().font_weight(FontWeight::SEMIBOLD).child(format!("{}{ep_tag}", self.entry.title)))
                     .children(audio)
                     .children(subtitles)
@@ -1075,4 +1079,37 @@ fn pretty_decoder(dec: &str) -> (String, bool) {
     let lower = dec.to_lowercase();
     let hw = lower.contains("avplayer") || lower.contains("videotoolbox") || lower.contains("mediacodec") || lower.contains("hardware") || lower.contains("hw");
     (format!("{} · {dec}", if hw { "HW" } else { "SW" }), hw)
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BackAction {
+    DismissCast,
+    CloseInfo,
+    ExitFullscreen,
+    Leave,
+}
+
+fn escape_action(cast_open: bool, info_open: bool, is_fullscreen: bool) -> BackAction {
+    if cast_open {
+        BackAction::DismissCast
+    } else if info_open {
+        BackAction::CloseInfo
+    } else if is_fullscreen {
+        BackAction::ExitFullscreen
+    } else {
+        BackAction::Leave
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{BackAction, escape_action};
+
+    #[test]
+    fn escape_exits_overlays_then_fullscreen_then_leaves() {
+        assert_eq!(escape_action(true, true, true), BackAction::DismissCast);
+        assert_eq!(escape_action(false, true, true), BackAction::CloseInfo);
+        assert_eq!(escape_action(false, false, true), BackAction::ExitFullscreen);
+        assert_eq!(escape_action(false, false, false), BackAction::Leave);
+    }
 }

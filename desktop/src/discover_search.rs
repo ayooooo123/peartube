@@ -12,7 +12,7 @@ use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
 use crate::api::{
-    ALL_SOURCES, DISCOVER_SOURCES, DISCOVER_TOPICS, DiscoverCreator, DiscoverFeedError,
+    ALL_SOURCES, AcquireJob, DISCOVER_SOURCES, DISCOVER_TOPICS, DiscoverCreator, DiscoverFeedError,
     DiscoverFollowRequest, DiscoverItem, format_duration, group_soulseek_candidates, is_web_url,
     unwrap_peartube_add,
 };
@@ -1221,8 +1221,11 @@ impl PearTube {
             None
         };
 
+        let downloads_panel = self.render_downloads_panel("src-job", cx);
+
         v_flex()
             .gap_3()
+            .when_some(downloads_panel, |this, panel| this.child(panel))
             .child(
                 h_flex()
                     .justify_between()
@@ -1327,6 +1330,8 @@ impl PearTube {
                             let peer_browse = grp.peer.clone();
                             let files = grp.files.clone();
                             let save_title = grp.title.clone();
+                            let (btn_label, btn_disabled) =
+                                soulseek_save_button_state(self.matching_soulseek_job(&grp.peer, &grp.title));
                             let readiness = if grp.slots && grp.queue == 0 {
                                 "Ready".to_string()
                             } else if grp.queue > 0 {
@@ -1375,7 +1380,8 @@ impl PearTube {
                                             Button::new(SharedString::from(format!("slsk-save-{idx}")))
                                                 .primary()
                                                 .small()
-                                                .label("Save album")
+                                                .disabled(btn_disabled)
+                                                .label(btn_label)
                                                 .on_click(cx.listener(move |this, _, _, cx| {
                                                     this.mirror_soulseek_files(
                                                         peer_save.clone(),
@@ -1641,6 +1647,8 @@ impl PearTube {
             )
         });
 
+        let downloads_panel = self.render_downloads_panel("shelf-job", cx);
+
         column()
             .py_6()
             .gap_6()
@@ -1681,6 +1689,7 @@ impl PearTube {
                             })),
                     ),
             )
+            .when_some(downloads_panel, |this, panel| this.child(panel))
             .when_some(error, |this, err| {
                 this.child(
                     div()
@@ -1720,6 +1729,8 @@ impl PearTube {
                             let save_peer = peer_owned.clone();
                             let save_files = folder.files.clone();
                             let save_title = folder.title.clone();
+                            let (btn_label, btn_disabled) =
+                                soulseek_save_button_state(self.matching_soulseek_job(&peer_owned, &folder.title));
                             let meta = format!(
                                 "{} · {} · {}",
                                 plural(folder.files.len(), "track", "tracks"),
@@ -1758,7 +1769,8 @@ impl PearTube {
                                             Button::new(SharedString::from(format!("shelf-save-{idx}")))
                                                 .primary()
                                                 .small()
-                                                .label("Save album")
+                                                .disabled(btn_disabled)
+                                                .label(btn_label)
                                                 .on_click(cx.listener(move |this, _, _, cx| {
                                                     this.mirror_soulseek_files(
                                                         save_peer.clone(),
@@ -1790,5 +1802,80 @@ impl PearTube {
                         })),
                 )
             })
+    }
+
+    fn matching_soulseek_job(&self, peer: &str, title: &str) -> Option<&AcquireJob> {
+        self.jobs.iter().find(|job| {
+            job.plugin == "soulseek"
+                && job.peer.as_deref() == Some(peer)
+                && job.title == title
+        })
+    }
+
+    fn render_downloads_panel(&self, id_prefix: &str, cx: &mut Context<Self>) -> Option<Div> {
+        if self.jobs.is_empty() {
+            return None;
+        }
+        let active = self.active_job_count();
+        let failed = self.failed_job_count();
+        let heading = if active > 0 && failed > 0 {
+            format!("Downloads ({active} active · {failed} failed)")
+        } else if active > 0 {
+            format!("Downloads ({active} active)")
+        } else if failed > 0 {
+            format!("Downloads ({failed} failed)")
+        } else {
+            "Downloads".to_string()
+        };
+        let rows: Vec<AnyElement> = self
+            .jobs
+            .iter()
+            .take(8)
+            .cloned()
+            .map(|job| self.render_job_row(job, id_prefix, cx).into_any_element())
+            .collect();
+
+        Some(
+            v_flex()
+                .gap_2p5()
+                .p_3()
+                .rounded(px(14.))
+                .bg(rgb(CARD))
+                .border_1()
+                .border_color(if failed > 0 && active == 0 { rgb(DANGER) } else { rgb(LINE) })
+                .child(
+                    h_flex()
+                        .justify_between()
+                        .items_center()
+                        .child(div().text_sm().font_weight(FontWeight::SEMIBOLD).child(heading))
+                        .child(
+                            Button::new(SharedString::from(format!("{id_prefix}-refresh")))
+                                .ghost()
+                                .small()
+                                .label("Refresh")
+                                .on_click(cx.listener(|this, _, _, cx| this.refresh_jobs(cx))),
+                        ),
+                )
+                .children(rows),
+        )
+    }
+}
+
+fn soulseek_save_button_state(job: Option<&AcquireJob>) -> (String, bool) {
+    let Some(job) = job else {
+        return ("Save album".into(), false);
+    };
+    if job.is_active() {
+        let label = match job.progress_fraction() {
+            Some(frac) if job.bytes > 0 => format!("{}%", (frac * 100.0).round() as u32),
+            _ => job.status_label(),
+        };
+        (label, true)
+    } else if job.is_failed() {
+        ("Retry".into(), false)
+    } else if job.is_done() {
+        ("Saved".into(), false)
+    } else {
+        ("Save album".into(), false)
     }
 }

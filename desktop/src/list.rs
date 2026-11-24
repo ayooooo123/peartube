@@ -155,7 +155,7 @@ impl PearTube {
     pub fn render_list(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let active_nav = self.active_nav_room();
         let casting = self.cast.session.is_some();
-        let active_jobs = self.active_job_count();
+        let jobs_pill = top_bar_jobs_pill(&self.jobs);
 
         let nav_tab = |id: &'static str, text: &'static str, is_active: bool, target: Room, cx: &mut Context<Self>| {
             div()
@@ -272,12 +272,10 @@ impl PearTube {
                             h_flex()
                                 .items_center()
                                 .gap_1p5()
-                                .when(active_jobs > 0, |row| {
-                                    let pill_text = if active_jobs == 1 {
-                                        "Adding…".to_string()
-                                    } else {
-                                        format!("Adding ({active_jobs})…")
-                                    };
+                                .when_some(jobs_pill, |row, (pill_text, is_error)| {
+                                    let dot_color = if is_error { rgb(DANGER) } else { rgb(BRAND) };
+                                    let border_color = if is_error { rgb(DANGER) } else { rgb(LINE) };
+                                    let text_color = if is_error { rgb(DANGER) } else { rgb(INK) };
                                     row.child(
                                         h_flex()
                                             .id("top-adding-pill")
@@ -288,16 +286,16 @@ impl PearTube {
                                             .rounded(px(99.))
                                             .bg(rgb(CARD_ELEVATED))
                                             .border_1()
-                                            .border_color(rgb(LINE))
+                                            .border_color(border_color)
                                             .text_xs()
                                             .font_weight(FontWeight::MEDIUM)
-                                            .text_color(rgb(INK))
+                                            .text_color(text_color)
                                             .cursor_pointer()
                                             .hover(|s| s.border_color(rgb(BRAND)))
                                             .on_click(cx.listener(|this, _, window, cx| {
                                                 this.open_add_modal(window, cx);
                                             }))
-                                            .child(div().size(px(6.)).rounded(px(99.)).bg(rgb(BRAND)))
+                                            .child(div().size(px(6.)).rounded(px(99.)).bg(dot_color))
                                             .child(pill_text),
                                     )
                                 })
@@ -361,11 +359,12 @@ impl PearTube {
         let identified_url = form.identified_url.clone().unwrap_or_default();
         let has_preview = preview.is_some();
         let active_jobs = self.active_job_count();
+        let failed_jobs = self.failed_job_count();
         let job_rows: Vec<AnyElement> = self
             .jobs
             .iter()
             .cloned()
-            .map(|job| self.render_job_row(job, cx).into_any_element())
+            .map(|job| self.render_job_row(job, "add-job", cx).into_any_element())
             .collect();
         let has_jobs = !job_rows.is_empty();
 
@@ -573,9 +572,11 @@ impl PearTube {
                                                                 .text_sm()
                                                                 .font_weight(FontWeight::SEMIBOLD)
                                                                 .child(if active_jobs > 0 {
-                                                                    format!("Adding ({active_jobs} active)")
+                                                                    format!("Downloads ({active_jobs} active)")
+                                                                } else if failed_jobs > 0 {
+                                                                    format!("Downloads ({failed_jobs} failed)")
                                                                 } else {
-                                                                    "Adding".to_string()
+                                                                    "Downloads".to_string()
                                                                 }),
                                                         )
                                                         .child(
@@ -596,7 +597,7 @@ impl PearTube {
             )
     }
 
-    fn render_job_row(&self, job: AcquireJob, cx: &mut Context<Self>) -> impl IntoElement {
+    pub(crate) fn render_job_row(&self, job: AcquireJob, id_prefix: &str, cx: &mut Context<Self>) -> impl IntoElement {
         let active = job.is_active();
         let failed = job.is_failed();
         let done = job.is_done();
@@ -613,19 +614,23 @@ impl PearTube {
         }
         if job.bytes > 0 {
             if let Some(total) = job.total.filter(|&t| t > 0) {
-                meta_parts.push(format!("{} / {}", format_bytes(job.bytes), format_bytes(total)));
+                let pct_num = ((job.bytes as f64 / total as f64) * 100.0).clamp(0.0, 100.0).round() as u32;
+                meta_parts.push(format!(
+                    "{} / {} ({pct_num}%)",
+                    format_bytes(job.bytes),
+                    format_bytes(total)
+                ));
             } else {
                 meta_parts.push(format_bytes(job.bytes));
             }
+        } else if let Some(total) = job.total.filter(|&t| t > 0) {
+            meta_parts.push(format_bytes(total));
         }
         if let Some(speed) = job.speed.filter(|&s| s > 0 && active) {
             meta_parts.push(format!("{}/s", format_bytes(speed)));
         }
-        let meta_line = if meta_parts.is_empty() {
-            job.file.clone().unwrap_or_default()
-        } else {
-            meta_parts.join(" · ")
-        };
+        let meta_line = meta_parts.join(" · ");
+        let current_file = job.file.clone().filter(|f| !f.trim().is_empty());
 
         let status_color = if failed {
             rgb(DANGER)
@@ -636,15 +641,16 @@ impl PearTube {
         } else {
             rgb(DIM)
         };
+        let border_color = if failed { rgb(DANGER) } else { rgb(LINE) };
 
         v_flex()
-            .id(SharedString::from(format!("add-job-{}", job.job_id)))
+            .id(SharedString::from(format!("{id_prefix}-{}", job.job_id)))
             .gap_1p5()
             .p_3()
             .rounded(px(12.))
             .bg(rgb(BG))
             .border_1()
-            .border_color(rgb(LINE))
+            .border_color(border_color)
             .child(
                 h_flex()
                     .justify_between()
@@ -670,10 +676,13 @@ impl PearTube {
                                     .when(!meta_line.is_empty(), |row| {
                                         row.child(div().text_xs().text_color(rgb(DIM)).truncate().child(meta_line))
                                     }),
-                            ),
+                            )
+                            .when_some(current_file, |col, file| {
+                                col.child(div().text_xs().text_color(rgb(DIM)).truncate().child(file))
+                            }),
                     )
                     .child(
-                        Button::new(SharedString::from(format!("job-cancel-{}", job.job_id)))
+                        Button::new(SharedString::from(format!("{id_prefix}-cancel-{}", job.job_id)))
                             .ghost()
                             .small()
                             .label(if active { "Cancel" } else { "Dismiss" })
@@ -1009,5 +1018,74 @@ impl PearTube {
                             }),
                     ),
             )
+    }
+}
+
+/// Top-bar pill summary for active or failed acquisition jobs.
+/// Returns `(label, is_error)` when any job is active or failed.
+pub(crate) fn top_bar_jobs_pill(jobs: &[AcquireJob]) -> Option<(String, bool)> {
+    let active: Vec<&AcquireJob> = jobs.iter().filter(|j| j.is_active()).collect();
+    if let Some(first) = active.first() {
+        let text = if active.len() == 1 {
+            if let Some(frac) = first.progress_fraction().filter(|_| first.bytes > 0) {
+                format!("Adding · {}%", (frac * 100.0).round() as u32)
+            } else if first.status == "queued" {
+                match first.queue_place {
+                    Some(q) if q > 0 => format!("Queued (#{q})"),
+                    _ => "Adding…".into(),
+                }
+            } else {
+                "Adding…".into()
+            }
+        } else {
+            format!("Adding ({})…", active.len())
+        };
+        return Some((text, false));
+    }
+    let failed = jobs.iter().filter(|j| j.is_failed()).count();
+    if failed > 0 {
+        return Some((format!("{failed} failed"), true));
+    }
+    None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::top_bar_jobs_pill;
+    use crate::api::AcquireJob;
+
+    fn job(id: &str, status: &str) -> AcquireJob {
+        AcquireJob {
+            job_id: id.into(),
+            status: status.into(),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn top_bar_pill_shows_active_progress_and_failed_count() {
+        assert_eq!(top_bar_jobs_pill(&[]), None);
+        assert_eq!(top_bar_jobs_pill(&[job("1", "done")]), None);
+
+        let mut active = job("2", "transferring");
+        active.bytes = 500;
+        active.total = Some(2000);
+        assert_eq!(
+            top_bar_jobs_pill(&[active]),
+            Some(("Adding · 25%".into(), false))
+        );
+
+        let mut queued = job("3", "queued");
+        queued.queue_place = Some(12);
+        assert_eq!(
+            top_bar_jobs_pill(&[queued]),
+            Some(("Queued (#12)".into(), false))
+        );
+
+        let failed_only = vec![job("4", "failed"), job("5", "failed")];
+        assert_eq!(
+            top_bar_jobs_pill(&failed_only),
+            Some(("2 failed".into(), true))
+        );
     }
 }

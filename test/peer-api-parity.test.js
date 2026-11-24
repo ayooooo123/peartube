@@ -33,6 +33,7 @@ test('worklet/worker.js delegates to openPeerApi and src/identify.js has no stat
 
   const identifySrc = readFileSync(new URL('../src/identify.js', import.meta.url), 'utf8')
   assert.doesNotMatch(identifySrc, /^\s*import\b.*['"](node:child_process|bare-subprocess)['"]/m)
+  assert.match(identifySrc, /import\('peartube-ubit-bare'\)/)
 })
 
 test('openPeerApi exposes full-peer LoopbackApi routes matching peartube-native', { timeout: 60_000 }, async () => {

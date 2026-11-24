@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import process from 'node:process'
 import b4a from 'b4a'
 import { send } from './art.js'
 import { MEDIA_FILE, cleanMusic } from './protocol.js'
@@ -81,12 +82,11 @@ async function loadUbitAddon () {
   if (!ubitAddonPromise) {
     ubitAddonPromise = (async () => {
       try {
-        const spec = ['peartube', 'ubit', 'bare'].join('-')
-        const mod = await import(spec)
+        const mod = await import('peartube-ubit-bare')
         const resolved = mod?.info || mod?.download ? mod : mod?.default
         return resolved && (typeof resolved.info === 'function' || typeof resolved.download === 'function') ? resolved : null
       } catch {
-        // Optional in-process addon: absent on relay/Node builds that use bare-ubit or UBIT_BIN.
+        // Optional in-process addon: absent on Node builds that use bare-ubit or UBIT_BIN.
         return null
       }
     })()

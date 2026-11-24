@@ -46,3 +46,34 @@ test('the page renders from only the paths that the Rust relay image copies', as
     pageSha256: sha256(alone)
   }, null, 2) + '\n')
 })
+
+test('inline scripts parse cleanly and honor UI page invariants', async () => {
+  const { page } = await import('../src/ui.js')
+
+  const scripts = [...page.matchAll(/<script\b[^>]*>([\s\S]*?)<\/script>/gi)].map(m => m[1]).filter(s => s.trim())
+  assert.ok(scripts.length >= 1, 'page contains at least one inline script')
+  for (const [idx, code] of scripts.entries()) {
+    assert.doesNotThrow(() => new Function(code), `inline script #${idx} must parse cleanly (watch for unescaped backticks or broken escapes in src/ui.js)`)
+  }
+
+  // Catch single-escaped regexes inside src/ui.js template literal (e.g. /\s+/ becoming /s+/).
+  assert.ok(!/\/s\+\//.test(page), 'page must not contain /s+/ (single-escaped \\s+ inside src/ui.js template literal)')
+  assert.ok(!/a\.bitsPerSample|a\.sampleRate/.test(page), 'audio tracks from src/resolution.js use a.depth and a.rate, not bitsPerSample/sampleRate')
+
+  // Top bar replaces Sharing text button with the live Network pill.
+  assert.ok(page.includes('id="netPill"'), 'top bar contains the live #netPill link')
+  assert.ok(!/<nav[^>]*id="ownerNav"[\s\S]*?<\/nav>/i.exec(page)?.[0].includes('data-tab="sharing"'), '#ownerNav must not duplicate the Sharing link')
+
+  // Catch CSS containing-block and container-query traps that break layout.
+  const topBase = page.match(/^\s*\.top\s*\{[^}]*\}/m)?.[0] || ''
+  assert.ok(!topBase.includes('backdrop-filter'), 'base .top rule must not set backdrop-filter (creates containing block for fixed bottom .rooms on narrow screens)')
+  const posterGen = page.match(/^\s*\.poster\.gen\s*\{[^}]*\}/m)?.[0] || ''
+  assert.ok(!/\bcqi\b/.test(posterGen), '.poster.gen itself must not use cqi units (cqi resolves against ancestor container, causing grid overflow)')
+
+  // Every modal sheet dialog must carry a visible close control (design/unified-library.md §1.18).
+  const sheets = [...page.matchAll(/<dialog\b[^>]*class="[^"]*\bsheet\b[^"]*"[^>]*>([\s\S]*?)<\/dialog>/gi)]
+  assert.ok(sheets.length >= 1, 'page defines sheet dialogs')
+  for (const [idx, m] of sheets.entries()) {
+    assert.ok(m[1].includes('data-close'), `sheet dialog #${idx} must include a data-close control`)
+  }
+})

@@ -1,0 +1,17 @@
+id: kt-no-hardcoded-hex-color
+language: kotlin
+severity: error
+message: Use a semantic color token from Theme.kt instead of a hardcoded Color(0x...) literal.
+note: |
+  Define shared colors in Theme.kt (or generative palette constants in Sleeves.kt) so every screen stays aligned with the design system.
+  See docs/code-rules.md#kt-no-hardcoded-hex-color.
+files:
+  - android/app/src/main/kotlin/com/peartube/app/ui/**/*.kt
+ignores:
+  - "**/Theme.kt"
+  - "**/Sleeves.kt"
+rule:
+  pattern: Color($HEX)
+constraints:
+  HEX:
+    regex: '^0[xX][0-9a-fA-F_]+[uUlL]*$'

@@ -242,10 +242,11 @@ fun SettingsScreen(model: AppModel) {
                             ) { Text(if (gb == 0) "Unlimited" else "$gb GB") }
                         }
                     }
+                    val currentStatus = status
                     Hint(
                         when {
                             cacheMaxGb == 0 -> "Unlimited: cached blocks are only freed when you clear them."
-                            status != null -> "Using ${formatBytes(status!!.cachedBytes)} of $cacheMaxGb GB."
+                            currentStatus != null -> "Using ${formatBytes(currentStatus.cachedBytes)} of $cacheMaxGb GB."
                             else -> "At most $cacheMaxGb GB of cached blocks."
                         }
                     )

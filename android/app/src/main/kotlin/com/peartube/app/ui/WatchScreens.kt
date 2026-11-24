@@ -7,6 +7,8 @@ import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -65,6 +67,7 @@ import com.peartube.app.LibraryCatalog
 import com.peartube.app.LibraryKind
 import com.peartube.app.LibraryTile
 import com.peartube.app.Screen
+import com.peartube.app.VideoResumeInfo
 import com.peartube.app.WatchProgress
 import com.peartube.app.findStartedVideos
 import com.peartube.app.formatDurationWords
@@ -132,6 +135,14 @@ fun WatchScreen(
             WatchFilter.Clips -> allVideos.filter { it.kind == LibraryKind.Clip }
         }
     }
+    val startedVideos = remember(allVideos, history) {
+        findStartedVideos(allVideos, history)
+    }
+    val featuredLocal = remember(allVideos) {
+        allVideos.firstOrNull { it.allSaved }
+            ?: allVideos.firstOrNull { it.saved > 0 }
+            ?: allVideos.firstOrNull()
+    }
     val keepWatching = remember(allVideos, history, filter) {
         if (filter != WatchFilter.All) emptyList()
         else allVideos.mapNotNull { tile ->
@@ -149,6 +160,16 @@ fun WatchScreen(
     if (catalog.videos.isEmpty()) {
         Box(Modifier.fillMaxSize().padding(24.dp), contentAlignment = Alignment.Center) {
             Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Box(
+                    modifier = Modifier
+                        .size(72.dp)
+                        .clip(RoundedCornerShape(22.dp))
+                        .background(CardElevated),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(WatchIcon, null, tint = Dim, modifier = Modifier.size(34.dp))
+                }
+                Spacer(Modifier.height(2.dp))
                 Text(
                     if (catalog.albums.isNotEmpty()) "No video yet. Your albums are in Listen." else "Nothing in your library yet.",
                     color = Ink,
@@ -156,7 +177,7 @@ fun WatchScreen(
                     fontWeight = FontWeight.SemiBold,
                 )
                 Spacer(Modifier.height(4.dp))
-                PrimaryLightButton("Add to library", onClick = { model.pushScreen(Screen.Settings) })
+                PrimaryBrandButton("Add to library", onClick = { model.pushScreen(Screen.Settings) })
             }
         }
         return
@@ -167,11 +188,43 @@ fun WatchScreen(
     val clips = remember(shown) { shown.filter { it.kind == LibraryKind.Clip } }
 
     Column(Modifier.fillMaxSize()) {
+        // Watch display header + count / quick surprise action
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .padding(start = 16.dp, end = 16.dp, top = 12.dp, bottom = 4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            Text(
+                text = "Watch",
+                color = Ink,
+                fontSize = 28.sp,
+                fontWeight = FontWeight.ExtraBold,
+                letterSpacing = (-0.5).sp,
+                modifier = Modifier.weight(1f),
+            )
+            if (view == WatchView.Store || view == WatchView.Channels) {
+                QuietActionButton(
+                    text = "Play something",
+                    icon = DiceIcon,
+                    onClick = { model.playSurpriseVideo(allVideos.ifEmpty { catalog.videos }) },
+                )
+            } else {
+                Text(
+                    text = plural(catalog.videos.size, "title", "titles"),
+                    color = Dim,
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.Medium,
+                )
+            }
+        }
+
         // Segmented view switcher: Rows / Tonight / Store / Channels
         Row(
             Modifier
                 .fillMaxWidth()
-                .padding(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 4.dp)
+                .padding(horizontal = 16.dp, vertical = 6.dp)
                 .clip(ControlShape)
                 .background(CardBg)
                 .border(1.dp, Line, ControlShape)
@@ -186,7 +239,7 @@ fun WatchScreen(
                         .clip(RoundedCornerShape(8.dp))
                         .background(if (selected) CardElevated else Color.Transparent)
                         .clickable { view = item }
-                        .padding(vertical = 7.dp),
+                        .padding(vertical = 8.dp),
                     contentAlignment = Alignment.Center,
                 ) {
                     Text(
@@ -198,27 +251,6 @@ fun WatchScreen(
                     )
                 }
             }
-        }
-
-        // Top action bar: Play something + count
-        Row(
-            Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 16.dp, vertical = 4.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(10.dp),
-        ) {
-            QuietActionButton(
-                text = "Play something",
-                icon = DiceIcon,
-                onClick = { model.playSurpriseVideo(allVideos.ifEmpty { catalog.videos }) },
-            )
-            Spacer(Modifier.weight(1f))
-            Text(
-                text = plural(catalog.videos.size, "title", "titles"),
-                color = Dim,
-                fontSize = 12.sp,
-            )
         }
 
         when (view) {
@@ -281,11 +313,28 @@ fun WatchScreen(
                         )
                     }
                 } else {
+                    val heroStarted = startedVideos.firstOrNull()
+                    val heroFeatured = featuredLocal ?: shown.firstOrNull()
                     LazyColumn(
                         modifier = Modifier.weight(1f).fillMaxWidth(),
                         contentPadding = PaddingValues(top = 6.dp, bottom = 24.dp),
-                        verticalArrangement = Arrangement.spacedBy(12.dp),
+                        verticalArrangement = Arrangement.spacedBy(14.dp),
                     ) {
+                        if (filter == WatchFilter.All && (heroStarted != null || heroFeatured != null)) {
+                            item(key = "watch-featured-hero") {
+                                WatchFeaturedHero(
+                                    started = heroStarted,
+                                    featured = heroFeatured,
+                                    onContinue = { info -> model.playEntry(info.entry) },
+                                    onPlaySomething = { model.playSurpriseVideo(allVideos.ifEmpty { catalog.videos }) },
+                                    onDetails = { tileKey -> onOpenTitle(tileKey) },
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(horizontal = 16.dp),
+                                )
+                            }
+                        }
+
                         if (keepWatching.isNotEmpty()) {
                             item(key = "keep-watching") {
                                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -303,8 +352,9 @@ fun WatchScreen(
                                                 WideTitleArt(
                                                     title = tile.title,
                                                     seed = tile.seed,
-                                                    badge = if (tile.kind == LibraryKind.Series) entry.episodeLabel else if (tile.kind == LibraryKind.Movie) "Movie" else "Clip",
+                                                    badge = if (tile.kind == LibraryKind.Series) entry.episodeLabel else null,
                                                     progress = pct,
+                                                    kindLabel = posterKindLabel(tile.kind),
                                                     modifier = Modifier.fillMaxWidth(),
                                                 )
                                                 Text(
@@ -401,6 +451,132 @@ fun WatchScreen(
                 onOpenTitle(tile.key)
             },
         )
+    }
+}
+
+// ---- Featured hero banner for Watch Rows
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun WatchFeaturedHero(
+    started: VideoResumeInfo?,
+    featured: LibraryTile?,
+    onContinue: (VideoResumeInfo) -> Unit,
+    onPlaySomething: () -> Unit,
+    onDetails: (String) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val heroTile = started?.tile ?: featured ?: return
+    val (stateText, isOk) = tileStateLabel(heroTile)
+    val eyebrow = when {
+        started != null -> "CONTINUE"
+        heroTile.allSaved || heroTile.saved > 0 -> "ON THIS RELAY"
+        else -> "FEATURED"
+    }
+    val isLong = heroTile.title.length > 24
+    val factsText = if (started != null) {
+        val epPrefix = if (started.tile.kind == LibraryKind.Series && started.entry.isEpisode) {
+            "${started.entry.episodeLabel} · "
+        } else {
+            ""
+        }
+        val leftPart = if (started.progress.durationMs > 0L) {
+            formatTimeLeft(started.progress.durationMs - started.progress.positionMs)
+        } else {
+            "In progress"
+        }
+        "$epPrefix$leftPart"
+    } else {
+        tileFactsLine(heroTile)
+    }
+
+    HeroPanel(
+        hue = normalizeHue(heroTile.seed),
+        showOrb = true,
+        modifier = modifier,
+    ) {
+        Text(
+            text = eyebrow,
+            color = Color.White.copy(alpha = 0.80f),
+            fontSize = 11.sp,
+            fontWeight = FontWeight.Bold,
+            letterSpacing = 1.6.sp,
+        )
+        Text(
+            text = heroTile.title.uppercase(Locale.ROOT),
+            color = Color.White,
+            fontSize = if (isLong) 24.sp else 30.sp,
+            lineHeight = if (isLong) 26.sp else 31.sp,
+            fontWeight = FontWeight.ExtraBold,
+            letterSpacing = (-0.7).sp,
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis,
+        )
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            if (factsText.isNotBlank()) {
+                Text(
+                    text = factsText,
+                    color = Color.White.copy(alpha = 0.92f),
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f, fill = false),
+                )
+            }
+            Box(
+                Modifier
+                    .size(8.dp)
+                    .clip(CircleShape)
+                    .background(if (isOk) Accent else if (heroTile.saved > 0 || heroTile.partial) Warn else Color.White.copy(alpha = 0.45f)),
+            )
+            Text(
+                text = stateText,
+                color = Color.White.copy(alpha = 0.86f),
+                fontSize = 13.sp,
+                fontWeight = FontWeight.Medium,
+                maxLines = 1,
+            )
+        }
+        if (started != null && started.progress.positionMs > 0L && started.progress.durationMs > 0L) {
+            LinearProgressIndicator(
+                progress = { started.fraction.coerceIn(0.03f, 1f) },
+                modifier = Modifier.fillMaxWidth().height(4.dp).clip(PillShape),
+                color = BrandHover,
+                trackColor = Color.White.copy(alpha = 0.30f),
+            )
+        }
+        Spacer(Modifier.height(2.dp))
+        FlowRow(
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            if (started != null) {
+                HeroPrimaryButton(
+                    text = "Continue",
+                    icon = PlayIcon,
+                    onClick = { onContinue(started) },
+                )
+                HeroGlassButton(
+                    text = "Play something",
+                    icon = DiceIcon,
+                    onClick = onPlaySomething,
+                )
+            } else {
+                HeroPrimaryButton(
+                    text = "Play something",
+                    icon = DiceIcon,
+                    onClick = onPlaySomething,
+                )
+            }
+            HeroGlassButton(
+                text = "Details",
+                onClick = { onDetails(heroTile.key) },
+            )
+        }
     }
 }
 
@@ -579,7 +755,7 @@ private fun WatchTonightView(
             items(groupTiles, key = { "az-row-${it.key}" }) { tile ->
                 val resume = startedByTile[tile.key]
                 val (_, isOk) = tileStateLabel(tile)
-                val hue = (tile.seed % 360L).toFloat()
+                val hue = normalizeHue(tile.seed).toFloat()
                 val sub = if (resume != null) {
                     val epPrefix = if (tile.kind == LibraryKind.Series && resume.entry.isEpisode) "${resume.entry.episodeLabel} · " else ""
                     val leftPart = if (resume.progress.durationMs > 0L) formatTimeLeft(resume.progress.durationMs - resume.progress.positionMs) else "In progress"
@@ -619,6 +795,7 @@ private fun WatchTonightView(
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun TonightDecisionCard(
     eyebrow: String,
@@ -632,40 +809,68 @@ private fun TonightDecisionCard(
     secondaryIcon: androidx.compose.ui.graphics.vector.ImageVector? = null,
     onSecondary: (() -> Unit)? = null,
 ) {
-    val hue = (tile.seed % 360L).toFloat()
-    val tint = Color.hsl(hue, 0.34f, 0.15f)
     val (stateText, isOk) = tileStateLabel(tile)
-    Column(
-        modifier = modifier
-            .fillMaxWidth()
-            .clip(CardShape)
-            .background(Brush.linearGradient(listOf(tint, CardBg)))
-            .border(1.dp, Line, CardShape)
-            .padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(8.dp),
+    val isLong = tile.title.length > 24
+    HeroPanel(
+        hue = normalizeHue(tile.seed),
+        small = true,
+        showOrb = true,
+        modifier = modifier.fillMaxWidth(),
     ) {
-        Text(eyebrow, color = if (primary) BrandRing else Dim, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
-        Text(tile.title, color = Ink, fontSize = 18.sp, fontWeight = FontWeight.Bold, maxLines = 2, overflow = TextOverflow.Ellipsis)
+        Text(
+            text = eyebrow.uppercase(Locale.ROOT),
+            color = Color.White.copy(alpha = 0.80f),
+            fontSize = 11.sp,
+            fontWeight = FontWeight.Bold,
+            letterSpacing = 1.5.sp,
+        )
+        Text(
+            text = tile.title.uppercase(Locale.ROOT),
+            color = Color.White,
+            fontSize = if (isLong) 20.sp else 24.sp,
+            lineHeight = if (isLong) 22.sp else 25.sp,
+            fontWeight = FontWeight.ExtraBold,
+            letterSpacing = (-0.5).sp,
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis,
+        )
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            Text(subtitle, color = Dim, fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
-            Text("· $stateText", color = if (isOk) Accent else Dim, fontSize = 12.sp, maxLines = 1)
+            Text(
+                text = subtitle,
+                color = Color.White.copy(alpha = 0.90f),
+                fontSize = 13.sp,
+                fontWeight = FontWeight.SemiBold,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f, fill = false),
+            )
+            Text(
+                text = "· $stateText",
+                color = if (isOk) Accent else Color.White.copy(alpha = 0.78f),
+                fontSize = 12.sp,
+                fontWeight = FontWeight.Medium,
+                maxLines = 1,
+            )
         }
         if (progress != null && progress > 0f) {
             LinearProgressIndicator(
                 progress = { progress.coerceIn(0.03f, 1f) },
-                modifier = Modifier.fillMaxWidth().height(3.dp).clip(PillShape),
-                color = Brand,
-                trackColor = Line,
+                modifier = Modifier.fillMaxWidth().height(4.dp).clip(PillShape),
+                color = BrandHover,
+                trackColor = Color.White.copy(alpha = 0.30f),
             )
         }
-        Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
+        FlowRow(
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
             if (primary) {
-                PrimaryLightButton(text = "Play", icon = PlayIcon, onClick = onPlay)
+                HeroPrimaryButton(text = "Play", icon = PlayIcon, onClick = onPlay)
             } else {
-                QuietActionButton(text = "Play", icon = PlayIcon, onClick = onPlay)
+                HeroGlassButton(text = "Play", icon = PlayIcon, onClick = onPlay)
             }
             if (secondaryLabel != null && onSecondary != null) {
-                QuietActionButton(text = secondaryLabel, icon = secondaryIcon, onClick = onSecondary)
+                HeroGlassButton(text = secondaryLabel, icon = secondaryIcon, onClick = onSecondary)
             }
         }
     }
@@ -766,8 +971,8 @@ private fun VideoSpine(
         LibraryKind.Clip -> 34.dp
         LibraryKind.Album -> 40.dp
     }
-    val heightDp = (164 + (tile.seed % 5L).toInt() * 6).dp
-    val hue = (tile.seed % 360L).toFloat()
+    val heightDp = (164 + (normalizeHue(tile.seed) % 5) * 6).dp
+    val hue = normalizeHue(tile.seed).toFloat()
     val bodyTop = Color.hsl(hue, 0.42f, 0.24f)
     val bodyBottom = Color.hsl((hue + 14f) % 360f, 0.36f, 0.14f)
     val edge = Color.hsl(hue, 0.48f, 0.38f)
@@ -992,52 +1197,53 @@ private fun WatchChannelsView(
             val liveInto = (live.intoSec + (nowSec - live.fromSec)).coerceIn(0L, live.item.durationSec - 1L)
             val leftSec = (live.item.durationSec - liveInto).coerceAtLeast(1L)
             val pct = (liveInto.toFloat() / live.item.durationSec.toFloat()).coerceIn(0.02f, 1f)
-            val hue = (live.item.tile.seed % 360L).toFloat()
-            val tint = Color.hsl(hue, 0.34f, 0.15f)
+            val isLong = live.item.tile.title.length > 24
 
-            Column(
-                Modifier
+            HeroPanel(
+                hue = normalizeHue(live.item.tile.seed),
+                small = true,
+                showOrb = true,
+                modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 16.dp)
-                    .clip(CardShape)
-                    .background(Brush.linearGradient(listOf(tint, CardBg)))
-                    .border(1.dp, Line, CardShape)
-                    .padding(14.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp),
+                    .padding(horizontal = 16.dp),
             ) {
                 Text(
-                    text = "CH ${ch.number} · ${ch.name} · on now",
-                    color = BrandRing,
+                    text = "CH ${ch.number} · ${ch.name.uppercase(Locale.ROOT)} · ON NOW",
+                    color = Color.White.copy(alpha = 0.80f),
                     fontSize = 11.sp,
-                    fontWeight = FontWeight.SemiBold,
+                    fontWeight = FontWeight.Bold,
+                    letterSpacing = 1.4.sp,
                 )
                 Text(
-                    text = live.item.tile.title,
-                    color = Ink,
-                    fontSize = 17.sp,
-                    fontWeight = FontWeight.Bold,
+                    text = live.item.tile.title.uppercase(Locale.ROOT),
+                    color = Color.White,
+                    fontSize = if (isLong) 20.sp else 24.sp,
+                    lineHeight = if (isLong) 22.sp else 25.sp,
+                    fontWeight = FontWeight.ExtraBold,
+                    letterSpacing = (-0.5).sp,
                     maxLines = 2,
                     overflow = TextOverflow.Ellipsis,
                 )
                 val subPrefix = if (live.item.tile.kind == LibraryKind.Series) "${live.item.sub} · " else ""
                 Text(
                     text = "$subPrefix${formatTimeLeft(leftSec * 1000L)}",
-                    color = Dim,
-                    fontSize = 12.sp,
+                    color = Color.White.copy(alpha = 0.90f),
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.SemiBold,
                 )
                 LinearProgressIndicator(
                     progress = { pct },
-                    modifier = Modifier.fillMaxWidth().height(3.dp).clip(PillShape),
-                    color = Brand,
-                    trackColor = Line,
+                    modifier = Modifier.fillMaxWidth().height(4.dp).clip(PillShape),
+                    color = BrandHover,
+                    trackColor = Color.White.copy(alpha = 0.30f),
                 )
                 Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
-                    PrimaryLightButton(
+                    HeroPrimaryButton(
                         text = "Watch",
                         icon = PlayIcon,
                         onClick = { model.playEntry(live.item.entry, startPositionMs = liveInto * 1000L) },
                     )
-                    QuietActionButton(
+                    HeroGlassButton(
                         text = "Info",
                         onClick = { onInspect(live.item.tile) },
                     )
@@ -1103,7 +1309,7 @@ private fun WatchChannelsView(
                             ch.blocks.forEach { block ->
                                 val mins = ((block.toSec - block.fromSec).toFloat() / 60f).coerceAtLeast(12f)
                                 val blockWidth = (dpPerMin * mins - 4.dp).coerceAtLeast(52.dp)
-                                val hue = (block.item.tile.seed % 360L).toFloat()
+                                val hue = normalizeHue(block.item.tile.seed).toFloat()
                                 val bg = Color.hsl(hue, 0.34f, if (block.isLive) 0.22f else 0.14f)
                                 Column(
                                     modifier = Modifier
@@ -1207,7 +1413,7 @@ private fun VideoCoverDialog(
                     WideTitleArt(
                         title = tile.title,
                         seed = tile.seed,
-                        badge = "Clip",
+                        kindLabel = posterKindLabel(tile.kind),
                         modifier = Modifier.width(126.dp),
                     )
                 } else {
@@ -1215,6 +1421,7 @@ private fun VideoCoverDialog(
                         title = tile.title,
                         year = tile.year,
                         seed = tile.seed,
+                        kindLabel = posterKindLabel(tile.kind),
                         modifier = Modifier.width(90.dp),
                     )
                 }
@@ -1285,10 +1492,20 @@ private fun WatchVideoCard(
                 .background(CardBg)
                 .border(1.dp, Line, CardShape)
                 .clickable(onClick = onOpen)
-                .padding(14.dp),
+                .padding(12.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                PosterArt(
+                    title = tile.title,
+                    year = tile.year,
+                    seed = tile.seed,
+                    kindLabel = posterKindLabel(tile.kind),
+                    modifier = Modifier.width(58.dp),
+                )
                 Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                     Text(tile.title, color = Ink, fontSize = 16.sp, fontWeight = FontWeight.SemiBold, maxLines = 2, overflow = TextOverflow.Ellipsis)
                     Text(
@@ -1297,23 +1514,21 @@ private fun WatchVideoCard(
                         fontSize = 12.sp,
                     )
                     Text(stateText, color = if (isOk) Accent else Dim, fontSize = 11.sp)
+                    TextButton(
+                        onClick = { model.playEntry(next) },
+                        contentPadding = PaddingValues(horizontal = 0.dp, vertical = 2.dp),
+                    ) {
+                        Icon(PlayIcon, null, tint = Brand, modifier = Modifier.size(16.dp))
+                        Spacer(Modifier.width(4.dp))
+                        Text(
+                            "${if (latest != null && resume != null) "Resume" else "Play"} ${next.episodeLabel}",
+                            color = Brand,
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.Medium,
+                        )
+                    }
                 }
                 Icon(ChevronRightIcon, null, tint = Dim, modifier = Modifier.size(20.dp))
-            }
-            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                TextButton(
-                    onClick = { model.playEntry(next) },
-                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
-                ) {
-                    Icon(PlayIcon, null, tint = Brand, modifier = Modifier.size(16.dp))
-                    Spacer(Modifier.width(4.dp))
-                    Text(
-                        "${if (latest != null && resume != null) "Resume" else "Play"} ${next.episodeLabel}",
-                        color = Brand,
-                        fontSize = 13.sp,
-                        fontWeight = FontWeight.Medium,
-                    )
-                }
             }
         }
     } else {
@@ -1328,14 +1543,21 @@ private fun WatchVideoCard(
                 .clickable(onClick = onOpen),
         ) {
             Row(
-                Modifier.padding(start = 14.dp, end = 10.dp, top = 12.dp, bottom = 12.dp),
+                Modifier.padding(start = 12.dp, end = 8.dp, top = 12.dp, bottom = 12.dp),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(12.dp),
             ) {
+                PosterArt(
+                    title = tile.title,
+                    year = tile.year,
+                    seed = tile.seed,
+                    kindLabel = posterKindLabel(tile.kind),
+                    modifier = Modifier.width(58.dp),
+                )
                 Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(5.dp)) {
                     Text(tile.title, color = Ink, fontSize = 16.sp, fontWeight = FontWeight.SemiBold, maxLines = 2, overflow = TextOverflow.Ellipsis)
                     Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
-                        Text("Movie", color = Dim, fontSize = 12.sp)
+                        Text("Film", color = Dim, fontSize = 12.sp)
                         val detail = listOfNotNull(
                             tile.year,
                             if (tile.items.size > 1) "${tile.items.size} versions" else formatBytes(first.size),
@@ -1368,7 +1590,7 @@ private fun ClipCard(tile: LibraryTile, onOpen: () -> Unit, modifier: Modifier =
         WideTitleArt(
             title = tile.title,
             seed = tile.seed,
-            badge = "Clip",
+            kindLabel = posterKindLabel(tile.kind),
             modifier = Modifier.width(116.dp),
         )
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
@@ -1432,9 +1654,20 @@ fun TitleDetailScreen(
                 ) {
                     Row(horizontalArrangement = Arrangement.spacedBy(16.dp), verticalAlignment = Alignment.CenterVertically) {
                         if (tile.kind == LibraryKind.Clip) {
-                            WideTitleArt(title = tile.title, seed = tile.seed, badge = "Clip", modifier = Modifier.width(136.dp))
+                            WideTitleArt(
+                                title = tile.title,
+                                seed = tile.seed,
+                                kindLabel = posterKindLabel(tile.kind),
+                                modifier = Modifier.width(136.dp),
+                            )
                         } else {
-                            PosterArt(title = tile.title, year = tile.year, seed = tile.seed, modifier = Modifier.width(96.dp))
+                            PosterArt(
+                                title = tile.title,
+                                year = tile.year,
+                                seed = tile.seed,
+                                kindLabel = posterKindLabel(tile.kind),
+                                modifier = Modifier.width(96.dp),
+                            )
                         }
                         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                             Text(

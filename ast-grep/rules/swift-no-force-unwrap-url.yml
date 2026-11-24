@@ -1,0 +1,12 @@
+id: swift-no-force-unwrap-url
+language: swift
+severity: error
+message: "Avoid force-unwrapping URL(string: ...)! in production iOS code; invalid strings crash the app."
+note: |
+  Use guard let url = URL(string: raw) else { ... } or optional chaining instead of force-unwrapping URL(string:).
+  See docs/code-rules.md#swift-no-force-unwrap-url.
+files:
+  - ios/App/**/*.swift
+  - ios/Runtime/**/*.swift
+rule:
+  pattern: "URL(string: $X)!"

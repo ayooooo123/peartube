@@ -479,6 +479,7 @@ function drive (browser, base, result, shots) {
   // The bar's rooms; the relay's own pages are links in the bar, or in its More menu below 1400 px.
   const goTab = async name => {
     if (['Home', 'Listen', 'Watch', 'Discover', 'Search'].includes(name)) return void (await clickText(name, '.rooms'), await sleep(300))
+    if (name === 'Sharing') return void (await click('#netPill'), await sleep(300))
     if (await evaluate(`(() => { const a = document.querySelector('.owner a[data-tab="' + ${JSON.stringify(name.toLowerCase())} + '"]'); return !!a && a.offsetParent !== null })()`)) await clickText(name, '#ownerNav')
     else { await clickName('More', '.top'); await clickText(name, '.menu') }
     await sleep(300)
@@ -1609,10 +1610,10 @@ test('relay web UI: one library with Home, Listen, Watch, Discover and Search', 
       }
       return same(saw, { '#library': 'home Home', '#music': 'listen Listen' })
     })
-    // The bar: the rooms, one way to add, and the relay's own pages. Peers and rates are on Sharing.
+    // The bar: the rooms, live Network pill (replacing Sharing), one way to add, and the relay's own pages.
     await check('topBarWords', async () => {
       await open('#home')
-      return same(await texts('.top a, .top button'), ['PearTube', 'Home', 'Listen', 'Watch', 'Discover', 'Add to library', 'Channels', 'Sharing', 'Settings'])
+      return same(await texts('.top a, .top button'), ['PearTube', 'Home', 'Listen', 'Watch', 'Discover', '0 peers', 'Add to library', 'Channels', 'Settings'])
     })
     // The More menu holds the relay's own pages and the theme. A click outside it, Escape or Back closes it, and the
     // control that opened it takes the focus back. The theme item is the one that stays open after a press.
@@ -1652,7 +1653,7 @@ test('relay web UI: one library with Home, Listen, Watch, Discover and Search', 
       await evaluate(`localStorage.removeItem(THEME_KEY); applyTheme('system')`)
       await viewport(1440, 900, 'dark')
       return same({ saw, shut, esc, back, stay }, {
-        saw: { items: ['Channels', 'Sharing', 'Settings', 'Theme: follow this device', 'Close'], focus: true, scroll: 'hidden' },
+        saw: { items: ['Channels', 'Settings', 'Theme: follow this device', 'Close'], focus: true, scroll: 'hidden' },
         shut: [false, true, '#home'],
         esc: [false, true],
         back: [false, '#home'],
@@ -1689,9 +1690,10 @@ test('relay web UI: one library with Home, Listen, Watch, Discover and Search', 
     await check('peersOnSharing', async () => {
       await open('#home')
       const bar = await evaluate(`$('pills').textContent`)
+      const pill = await evaluate(`$('netPillPeers').textContent`)
       await goTab('Sharing')
-      const sharing = await evaluate(`['over the internet', 'sending now', 'receiving now'].filter(w => $('tab-sharing').textContent.includes(w))`)
-      return same({ bar, sharing }, { bar: '', sharing: ['over the internet', 'sending now', 'receiving now'] })
+      const sharing = await evaluate(`['Network', 'Receiving', 'Sharing', 'Home network', 'Internet', 'Private route'].filter(w => $('tab-sharing').textContent.includes(w))`)
+      return same({ bar, pill, sharing }, { bar: '', pill: '0 peers', sharing: ['Network', 'Receiving', 'Sharing', 'Home network', 'Internet', 'Private route'] })
     })
     // With no place in the address the page opens the room this browser was in last; a page that is no room is not one.
     await check('lastRoom', async () => {
@@ -2625,17 +2627,20 @@ test('relay web UI: one library with Home, Listen, Watch, Discover and Search', 
       await open('#home')
       await click('#moreBtn')
       const pages = await texts('dialog.menu .mi')
-      const open1 = { pages: pages.slice(0, 3), theme: (pages[3] || '').startsWith('Theme: '), open: await evaluate(`!!document.querySelector('dialog.menu[open]')`) }
+      const open1 = { pages: pages.slice(0, 2), theme: (pages[2] || '').startsWith('Theme: '), open: await evaluate(`!!document.querySelector('dialog.menu[open]')`) }
       await press('Escape')
       const shut = await evaluate(`[!!document.querySelector('dialog.menu[open]'), $('ownerNav').offsetParent === null, document.activeElement === $('moreBtn')]`)
       await click('#moreBtn')
-      await clickText('Sharing', 'dialog.menu')
+      await clickText('Channels', 'dialog.menu')
       const at = await place()
-      return same({ open: open1, shut, went: at.panel + ' ' + at.hash, name: await evaluate(`$('placeName').textContent`), after: await evaluate(`!!document.querySelector('dialog.menu[open]')`) }, {
-        open: { pages: ['Channels', 'Sharing', 'Settings'], theme: true, open: true },
+      await click('#netPill')
+      const atNet = await place()
+      return same({ open: open1, shut, went: at.panel + ' ' + at.hash, name: await evaluate(`$('placeName').textContent`), net: atNet.panel + ' ' + atNet.hash, after: await evaluate(`!!document.querySelector('dialog.menu[open]')`) }, {
+        open: { pages: ['Channels', 'Settings'], theme: true, open: true },
         shut: [false, true, true],
-        went: 'sharing #sharing',
+        went: 'channels #channels',
         name: 'Sharing',
+        net: 'sharing #sharing',
         after: false
       })
     })

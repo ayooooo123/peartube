@@ -22,7 +22,7 @@ pub(super) fn commit(temporary: &Path, bank: &Path) -> io::Result<()> {
     let mut file = File::open(temporary)?;
     let mut header = [0; 12];
     file.read_exact(&mut header)?;
-    let length = u64::from(u32::from_le_bytes(header[4..8].try_into().unwrap())) + 8;
+    let length = u64::from(u32::from_le_bytes([header[4], header[5], header[6], header[7]])) + 8;
     if &header[..4] != b"RIFF" || &header[8..] != b"sfbk" || file.metadata()?.len() != length {
         return Err(io::Error::new(io::ErrorKind::InvalidData, "Select a complete SoundFont 2 (.sf2) file"));
     }

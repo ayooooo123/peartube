@@ -757,7 +757,7 @@ final class AppModel: ObservableObject {
         }
         saveStates[candidate.id] = .saving
         let (artist, trackTitle) = splitArtistAndTitle(candidate.title, fallbackAuthor: candidate.displayAuthor, defaultArtist: "YouTube")
-        let album = (candidate.album?.isEmpty == false ? candidate.album! : trackTitle)
+        let album = candidate.album.flatMap { $0.isEmpty ? nil : $0 } ?? trackTitle
         do {
             let api = try await ensureLoopback()
             let job = try await api.mirrorYouTube(
@@ -777,7 +777,7 @@ final class AppModel: ObservableObject {
     func mirrorSoundCloudTrack(_ candidate: SourceCandidate) async {
         saveStates[candidate.id] = .saving
         let (artist, trackTitle) = splitArtistAndTitle(candidate.title, fallbackAuthor: candidate.displayAuthor, defaultArtist: "SoundCloud")
-        let album = (candidate.album?.isEmpty == false ? candidate.album! : trackTitle)
+        let album = candidate.album.flatMap { $0.isEmpty ? nil : $0 } ?? trackTitle
         var track: [String: Any] = ["title": trackTitle, "track": 1, "disc": 1]
         if let tid = candidate.trackId, !tid.isEmpty { track["trackId"] = tid }
         if let u = candidate.url, !u.isEmpty { track["url"] = u }
@@ -1286,7 +1286,10 @@ final class AppModel: ObservableObject {
         let rawName = filenameFromDisposition(disposition) ?? fallback
         let fileName = rawName.replacingOccurrences(of: "[/\\\\:*?\"<>|\\x00-\\x1f]+", with: " ", options: .regularExpression)
             .split(whereSeparator: \.isWhitespace).joined(separator: " ")
-        let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!.appendingPathComponent("Downloads", isDirectory: true)
+        guard let docDir = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first else {
+            throw AppFailure("Documents directory unavailable")
+        }
+        let docs = docDir.appendingPathComponent("Downloads", isDirectory: true)
         try FileManager.default.createDirectory(at: docs, withIntermediateDirectories: true)
         let finalURL = docs.appendingPathComponent(fileName)
         let partURL = docs.appendingPathComponent(".\(fileName).part")

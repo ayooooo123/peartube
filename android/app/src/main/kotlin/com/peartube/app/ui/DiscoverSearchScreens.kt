@@ -141,9 +141,9 @@ private suspend fun fetchLoopbackBitmap(url: String): ImageBitmap? = withContext
 }
 
 private fun sourceAccentColor(source: String): Color = when (source.lowercase(Locale.ROOT)) {
-    "youtube" -> Color(0xFFE05252)
-    "soundcloud" -> Color(0xFFFF7A33)
-    "rumble" -> Color(0xFF7FD14B)
+    "youtube" -> SourceYoutube
+    "soundcloud" -> SourceSoundCloud
+    "rumble" -> SourceRumble
     else -> Brand
 }
 

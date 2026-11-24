@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -103,13 +104,23 @@ fun ListenScreen(
         tracks.map { it.toTrackItem() }
     }
 
-    if (catalog.albums.isEmpty()) {
+    if (catalog.albums.isEmpty() || catalog.allTracks.isEmpty()) {
         Box(Modifier.fillMaxSize().padding(24.dp), contentAlignment = Alignment.Center) {
             Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Box(
+                    modifier = Modifier
+                        .size(72.dp)
+                        .clip(RoundedCornerShape(22.dp))
+                        .background(CardElevated),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(ListenIcon, null, tint = Dim, modifier = Modifier.size(34.dp))
+                }
+                Spacer(Modifier.height(2.dp))
                 Text("No albums yet.", color = Ink, fontSize = 18.sp, fontWeight = FontWeight.SemiBold)
                 Text("Follow a channel with music or search other relays.", color = Dim, fontSize = 14.sp)
                 Spacer(Modifier.height(4.dp))
-                PrimaryLightButton("Add to library", onClick = { model.pushScreen(Screen.Settings) })
+                PrimaryBrandButton("Add to library", onClick = { model.pushScreen(Screen.Settings) })
             }
         }
         return
@@ -126,15 +137,39 @@ fun ListenScreen(
     val actionLabel = if (tab == ListenTab.Tracks) "Tracks" else "Library"
 
     Column(Modifier.fillMaxSize()) {
-        // Top actions row: Play all (or Resume when paused) and Shuffle
+        // Listen display header + count
         Row(
             Modifier
                 .fillMaxWidth()
-                .padding(start = 16.dp, end = 16.dp, top = 10.dp, bottom = 4.dp),
+                .padding(start = 16.dp, end = 16.dp, top = 12.dp, bottom = 4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            Text(
+                text = "Listen",
+                color = Ink,
+                fontSize = 28.sp,
+                fontWeight = FontWeight.ExtraBold,
+                letterSpacing = (-0.5).sp,
+                modifier = Modifier.weight(1f),
+            )
+            Text(
+                text = countLabel,
+                color = Dim,
+                fontSize = 13.sp,
+                fontWeight = FontWeight.Medium,
+            )
+        }
+
+        // Top actions row: Play all (or Resume when paused) violet primary + Shuffle
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .padding(start = 16.dp, end = 16.dp, top = 4.dp, bottom = 4.dp),
             horizontalArrangement = Arrangement.spacedBy(10.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            PrimaryLightButton(
+            PrimaryBrandButton(
                 text = if (waitingPaused) "Resume" else "Play all",
                 icon = PlayIcon,
                 enabled = waitingPaused || actionItems.isNotEmpty(),
@@ -149,11 +184,22 @@ fun ListenScreen(
             QuietActionButton(
                 text = "Shuffle",
                 icon = ShuffleIcon,
+                enabled = actionItems.isNotEmpty(),
                 onClick = {
                     if (actionItems.isNotEmpty()) {
                         model.music.playTrackList(actionItems, -1, actionLabel, shuffleOn = true)
                     }
                 },
+            )
+            Spacer(Modifier.weight(1f))
+            FilterChip(
+                selected = savedOnly,
+                onClick = { savedOnly = !savedOnly },
+                label = { Text("Saved here", fontSize = 12.sp) },
+                colors = FilterChipDefaults.filterChipColors(
+                    selectedContainerColor = Brand.copy(alpha = 0.22f),
+                    selectedLabelColor = Ink,
+                ),
             )
         }
 
@@ -189,23 +235,11 @@ fun ListenScreen(
             }
         }
 
-        // Count + Saved here switch
-        Row(
-            Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 16.dp, vertical = 4.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Text(countLabel, color = Dim, fontSize = 13.sp, modifier = Modifier.weight(1f))
-            FilterChip(
-                selected = savedOnly,
-                onClick = { savedOnly = !savedOnly },
-                label = { Text("Saved here", fontSize = 12.sp) },
-                colors = FilterChipDefaults.filterChipColors(
-                    selectedContainerColor = Brand.copy(alpha = 0.22f),
-                    selectedLabelColor = Ink,
-                ),
-            )
+        if (filteredAlbums.isEmpty() || allFilteredItems.isEmpty()) {
+            Box(Modifier.fillMaxSize().padding(24.dp), contentAlignment = Alignment.Center) {
+                Text("No album here is saved on this device.", color = Dim, fontSize = 14.sp)
+            }
+            return
         }
 
         if (tab == ListenTab.Tracks) {
@@ -282,13 +316,6 @@ fun ListenScreen(
                     )
                 }
             }
-        }
-
-        if (filteredAlbums.isEmpty()) {
-            Box(Modifier.fillMaxSize().padding(24.dp), contentAlignment = Alignment.Center) {
-                Text("No album here is saved on this device.", color = Dim, fontSize = 14.sp)
-            }
-            return
         }
 
         when (tab) {
@@ -834,7 +861,7 @@ internal fun DetailTopBar(title: String, onBack: () -> Unit) {
     Row(
         Modifier
             .fillMaxWidth()
-            .height(52.dp)
+            .heightIn(min = 52.dp)
             .padding(horizontal = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {

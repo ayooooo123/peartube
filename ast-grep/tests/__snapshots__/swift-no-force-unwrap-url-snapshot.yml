@@ -1,0 +1,16 @@
+id: swift-no-force-unwrap-url
+snapshots:
+  ? |
+    let url = URL(string: raw)!
+  : labels:
+    - source: 'URL(string: raw)!'
+      style: primary
+      start: 10
+      end: 27
+  ? |
+    openURL(URL(string: "https://example.com")!)
+  : labels:
+    - source: 'URL(string: "https://example.com")!'
+      style: primary
+      start: 8
+      end: 43

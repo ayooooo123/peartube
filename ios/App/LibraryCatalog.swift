@@ -129,10 +129,11 @@ enum CatalogText {
         let episode: Int?
     }
 
-    private static let imdbRegex = try! NSRegularExpression(pattern: "^imdb:(tt[0-9]+)(?::s([0-9]+)e([0-9]+))?$")
-    private static let trailingEpisodeRegex = try! NSRegularExpression(pattern: "\\s+S[0-9]+E[0-9]+$", options: .caseInsensitive)
+    private static let imdbRegex = try? NSRegularExpression(pattern: "^imdb:(tt[0-9]+)(?::s([0-9]+)e([0-9]+))?$")
+    private static let trailingEpisodeRegex = try? NSRegularExpression(pattern: "\\s+S[0-9]+E[0-9]+$", options: .caseInsensitive)
 
     static func matchIMDb(_ mediaID: String) -> IMDbMatch? {
+        guard let imdbRegex else { return nil }
         let range = NSRange(mediaID.startIndex..<mediaID.endIndex, in: mediaID)
         guard let m = imdbRegex.firstMatch(in: mediaID, range: range),
               let r1 = Range(m.range(at: 1), in: mediaID) else { return nil }
@@ -143,6 +144,7 @@ enum CatalogText {
     }
 
     static func stripTrailingEpisode(_ title: String) -> String {
+        guard let trailingEpisodeRegex else { return title }
         let range = NSRange(title.startIndex..<title.endIndex, in: title)
         return trailingEpisodeRegex.stringByReplacingMatches(in: title, range: range, withTemplate: "")
     }
@@ -466,23 +468,22 @@ struct LibraryCatalog {
             let imdbMatch = CatalogText.matchIMDb(entry.mediaID)
             let isMusic = imdbMatch == nil && entry.seasonNumber != nil
             let kind: TileKind
-            if let m = imdbMatch {
-                kind = m.season != nil ? .show : .movie
-            } else {
-                kind = isMusic ? .album : .clip
-            }
-
             let key: String
-            switch kind {
-            case .clip:
-                key = "v:\(entry.mediaID)/\(entry.sha256)"
-            case .album:
+            if let m = imdbMatch {
+                if m.season != nil {
+                    kind = .show
+                    key = "show:\(m.imdb)"
+                } else {
+                    kind = .movie
+                    key = "movie:\(m.imdb)"
+                }
+            } else if isMusic {
+                kind = .album
                 let sk = entry.seriesKey.isEmpty ? entry.mediaID : entry.seriesKey
                 key = "album:\(sk)"
-            case .movie:
-                key = "movie:\(imdbMatch!.imdb)"
-            case .show:
-                key = "show:\(imdbMatch!.imdb)"
+            } else {
+                kind = .clip
+                key = "v:\(entry.mediaID)/\(entry.sha256)"
             }
 
             let item = TileItem(

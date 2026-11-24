@@ -61,18 +61,16 @@ struct MainShellView: View {
     private var topBar: some View {
         HStack(spacing: 4) {
             Button { model.showDiagnostics = true } label: {
-                HStack(spacing: 8) {
+                HStack(spacing: 6) {
                     Text("PearTube")
                         .font(.title3.weight(.bold))
                         .foregroundStyle(PTColor.ink)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.82)
                     if model.busy {
                         ProgressView()
                             .controlSize(.mini)
                             .tint(PTColor.brand)
-                    } else if model.status.number("peers") + model.status.number("lanPeers") > 0 {
-                        Circle()
-                            .fill(PTColor.ok)
-                            .frame(width: 7, height: 7)
                     }
                 }
                 .padding(.vertical, 8)
@@ -81,7 +79,7 @@ struct MainShellView: View {
             .accessibilityLabel("PearTube status")
             .accessibilityIdentifier("library.hood")
 
-            Spacer()
+            Spacer(minLength: 4)
 
             liveNetworkPill
 
@@ -89,15 +87,16 @@ struct MainShellView: View {
                 Button {
                     model.showAdd = true
                 } label: {
-                    HStack(spacing: 6) {
+                    HStack(spacing: 5) {
                         ProgressView()
                             .controlSize(.mini)
                             .tint(PTColor.brandRing)
                         Text(model.activeJobs.count > 1 ? "Adding \(model.activeJobs.count)…" : "Adding…")
                             .font(.caption.weight(.medium))
                             .foregroundStyle(PTColor.ink)
+                            .lineLimit(1)
                     }
-                    .padding(.horizontal, 10)
+                    .padding(.horizontal, 8)
                     .padding(.vertical, 5)
                     .background(PTColor.surface, in: Capsule())
                     .overlay(Capsule().strokeBorder(PTColor.brand.opacity(0.6), lineWidth: 1))
@@ -117,12 +116,12 @@ struct MainShellView: View {
                     Image(systemName: "tv")
                         .font(.title3)
                         .foregroundStyle(PTColor.ink)
-                        .frame(minWidth: 44, minHeight: 44)
+                        .frame(minWidth: 40, minHeight: 44)
                     if !model.session.isEmpty {
                         Circle()
                             .fill(PTColor.ok)
                             .frame(width: 8, height: 8)
-                            .offset(x: -7, y: 9)
+                            .offset(x: -5, y: 9)
                     }
                 }
             }

@@ -1,15 +1,18 @@
 package com.peartube.app.ui
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -20,6 +23,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Icon
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.Text
@@ -29,13 +33,16 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import java.util.Locale
 import com.peartube.app.AppModel
 import com.peartube.app.Entry
 import com.peartube.app.LibraryCatalog
@@ -66,6 +73,7 @@ private data class KeepItem(
     val seed: Long = 0L,
     val monogram: String = "",
     val badge: String? = null,
+    val kindLabel: String = "Clip",
     val onClick: () -> Unit,
 )
 
@@ -242,8 +250,10 @@ private fun HomeQuickStartPair(
     BoxWithConstraints(Modifier.fillMaxWidth().padding(horizontal = 16.dp)) {
         if (maxWidth >= 600.dp && hasMusic && hasVideo) {
             Row(
-                Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                Modifier
+                    .fillMaxWidth()
+                    .height(IntrinsicSize.Max),
+                horizontalArrangement = Arrangement.spacedBy(14.dp),
             ) {
                 ListenHeroCard(
                     catalog = catalog,
@@ -251,20 +261,20 @@ private fun HomeQuickStartPair(
                     onToggle = onToggleMusic,
                     onPlayAll = onPlayAllMusic,
                     onShuffle = onShuffleMusic,
-                    modifier = Modifier.weight(1f),
+                    modifier = Modifier.weight(1f).fillMaxHeight(),
                 )
                 WatchHeroCard(
                     catalog = catalog,
                     startedVideo = startedVideo,
                     onContinue = onContinueVideo,
                     onPlaySomething = onPlaySomething,
-                    modifier = Modifier.weight(1f),
+                    modifier = Modifier.weight(1f).fillMaxHeight(),
                 )
             }
         } else {
             Column(
                 Modifier.fillMaxWidth(),
-                verticalArrangement = Arrangement.spacedBy(12.dp),
+                verticalArrangement = Arrangement.spacedBy(14.dp),
             ) {
                 if (hasMusic) {
                     ListenHeroCard(
@@ -290,6 +300,7 @@ private fun HomeQuickStartPair(
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun ListenHeroCard(
     catalog: LibraryCatalog,
@@ -301,105 +312,159 @@ private fun ListenHeroCard(
 ) {
     val cur = musicState.currentTrack
     val collage = remember(catalog.albums) { catalog.albums.take(4) }
-    val tint = Color.hsl(258f, 0.40f, 0.16f)
+    val rawTitle = cur?.title ?: plural(catalog.allTracks.size, "track", "tracks")
+    val isLong = rawTitle.length > 22
+    val sub = when {
+        cur != null && musicState.pausedForVideo -> "Paused for a video"
+        cur != null -> cur.artist.ifBlank { cur.album.ifBlank { plural(catalog.albums.size, "album", "albums") } }
+        else -> plural(catalog.albums.size, "album", "albums")
+    }
 
-    Column(
-        modifier = modifier
-            .clip(CardShape)
-            .background(Brush.linearGradient(listOf(tint, CardBg)))
-            .border(1.dp, Line, CardShape)
-            .padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp),
+    HeroPanel(
+        hue = 258,
+        showOrb = false,
+        modifier = modifier,
+        backgroundOverlay = if (collage.isNotEmpty()) {
+            {
+                SleeveCollage(
+                    albums = collage,
+                    modifier = Modifier
+                        .align(Alignment.TopEnd)
+                        .padding(top = 14.dp, end = 14.dp),
+                )
+            }
+        } else {
+            null
+        },
     ) {
-        Row(
-            Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
-            verticalAlignment = Alignment.CenterVertically,
+        Text(
+            text = "LISTEN",
+            color = Color.White.copy(alpha = 0.80f),
+            fontSize = 11.sp,
+            fontWeight = FontWeight.Bold,
+            letterSpacing = 1.6.sp,
+        )
+        Text(
+            text = rawTitle.uppercase(Locale.ROOT),
+            color = Color.White,
+            fontSize = if (isLong) 22.sp else 28.sp,
+            lineHeight = if (isLong) 24.sp else 29.sp,
+            fontWeight = FontWeight.ExtraBold,
+            letterSpacing = (-0.6).sp,
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.fillMaxWidth(if (collage.isNotEmpty()) 0.72f else 1f),
+        )
+        Text(
+            text = sub,
+            color = if (cur != null && musicState.pausedForVideo) Warn else Color.White.copy(alpha = 0.90f),
+            fontSize = 14.sp,
+            fontWeight = FontWeight.SemiBold,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+        Spacer(Modifier.height(2.dp))
+        FlowRow(
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                Text("Listen", color = BrandRing, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
-                Text(
-                    text = cur?.title ?: plural(catalog.allTracks.size, "track", "tracks"),
-                    color = Ink,
-                    fontSize = 19.sp,
-                    fontWeight = FontWeight.Bold,
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis,
-                )
-                val sub = when {
-                    cur != null && musicState.pausedForVideo -> "Paused for a video"
-                    cur != null -> cur.artist.ifBlank { cur.album.ifBlank { plural(catalog.albums.size, "album", "albums") } }
-                    else -> plural(catalog.albums.size, "album", "albums")
-                }
-                Text(
-                    text = sub,
-                    color = if (cur != null && musicState.pausedForVideo) Warn else Dim,
-                    fontSize = 13.sp,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-            }
-            if (collage.isNotEmpty()) {
-                SleeveCollage(albums = collage)
-            }
-        }
-        Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
             if (cur != null) {
-                PrimaryLightButton(
+                HeroPrimaryButton(
                     text = if (musicState.playing) "Pause" else "Resume",
                     icon = if (musicState.playing) PauseIcon else PlayIcon,
                     onClick = onToggle,
                 )
             } else {
-                PrimaryLightButton(
+                HeroPrimaryButton(
                     text = "Play all",
                     icon = PlayIcon,
                     onClick = onPlayAll,
                     enabled = catalog.allTracks.isNotEmpty(),
                 )
             }
-            QuietActionButton(
+            HeroGlassButton(
                 text = "Shuffle",
                 icon = ShuffleIcon,
                 onClick = onShuffle,
+                enabled = catalog.allTracks.isNotEmpty(),
             )
         }
     }
 }
 
 @Composable
-private fun SleeveCollage(albums: List<LibraryTile>) {
+private fun SleeveCollage(
+    albums: List<LibraryTile>,
+    modifier: Modifier = Modifier,
+) {
+    val sleeveShape = RoundedCornerShape(10.dp)
     if (albums.size == 1) {
         val a = albums[0]
         AlbumSleeve(
             hue = a.hue,
             seed = a.seed,
             monogramText = a.monogramText,
-            cornerRadius = 8.dp,
-            fontSize = 18.sp,
-            modifier = Modifier.size(64.dp),
+            cornerRadius = 10.dp,
+            fontSize = 24.sp,
+            modifier = modifier
+                .size(96.dp)
+                .graphicsLayer { rotationZ = 6f }
+                .alpha(0.92f)
+                .shadow(10.dp, sleeveShape),
         )
         return
     }
     Column(
-        Modifier.size(64.dp),
-        verticalArrangement = Arrangement.spacedBy(3.dp),
+        modifier = modifier
+            .size(134.dp)
+            .graphicsLayer { rotationZ = 6f }
+            .alpha(0.92f),
+        verticalArrangement = Arrangement.spacedBy(6.dp),
     ) {
-        Row(Modifier.weight(1f), horizontalArrangement = Arrangement.spacedBy(3.dp)) {
+        Row(Modifier.weight(1f), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
             val a0 = albums[0]
-            AlbumSleeve(a0.hue, a0.seed, a0.monogramText, Modifier.weight(1f), cornerRadius = 5.dp, fontSize = 9.sp)
+            AlbumSleeve(
+                hue = a0.hue,
+                seed = a0.seed,
+                monogramText = a0.monogramText,
+                modifier = Modifier.weight(1f).shadow(8.dp, sleeveShape),
+                cornerRadius = 10.dp,
+                fontSize = 14.sp,
+            )
             val a1 = albums.getOrElse(1) { a0 }
-            AlbumSleeve(a1.hue, a1.seed, a1.monogramText, Modifier.weight(1f), cornerRadius = 5.dp, fontSize = 9.sp)
+            AlbumSleeve(
+                hue = a1.hue,
+                seed = a1.seed,
+                monogramText = a1.monogramText,
+                modifier = Modifier.weight(1f).shadow(8.dp, sleeveShape),
+                cornerRadius = 10.dp,
+                fontSize = 14.sp,
+            )
         }
-        Row(Modifier.weight(1f), horizontalArrangement = Arrangement.spacedBy(3.dp)) {
+        Row(Modifier.weight(1f), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
             val a2 = albums.getOrElse(2) { albums[0] }
-            AlbumSleeve(a2.hue, a2.seed, a2.monogramText, Modifier.weight(1f), cornerRadius = 5.dp, fontSize = 9.sp)
+            AlbumSleeve(
+                hue = a2.hue,
+                seed = a2.seed,
+                monogramText = a2.monogramText,
+                modifier = Modifier.weight(1f).shadow(8.dp, sleeveShape),
+                cornerRadius = 10.dp,
+                fontSize = 14.sp,
+            )
             val a3 = albums.getOrElse(3) { albums.getOrElse(1) { albums[0] } }
-            AlbumSleeve(a3.hue, a3.seed, a3.monogramText, Modifier.weight(1f), cornerRadius = 5.dp, fontSize = 9.sp)
+            AlbumSleeve(
+                hue = a3.hue,
+                seed = a3.seed,
+                monogramText = a3.monogramText,
+                modifier = Modifier.weight(1f).shadow(8.dp, sleeveShape),
+                cornerRadius = 10.dp,
+                fontSize = 14.sp,
+            )
         }
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun WatchHeroCard(
     catalog: LibraryCatalog,
@@ -408,71 +473,88 @@ private fun WatchHeroCard(
     onPlaySomething: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val hue = ((startedVideo?.tile?.seed ?: 20L) % 360L).toFloat()
-    val tint = Color.hsl(hue, 0.34f, 0.15f)
+    val hue = normalizeHue(startedVideo?.tile?.seed ?: 20L)
+    val rawTitle = startedVideo?.tile?.title ?: plural(catalog.videos.size, "title", "titles")
+    val isLong = rawTitle.length > 22
+    val facts = if (startedVideo != null) {
+        val epPrefix = if (startedVideo.tile.kind == LibraryKind.Series && startedVideo.entry.isEpisode) {
+            "${startedVideo.entry.episodeLabel} · "
+        } else {
+            ""
+        }
+        val leftPart = if (startedVideo.progress.durationMs > 0L) {
+            formatTimeLeft(startedVideo.progress.durationMs - startedVideo.progress.positionMs)
+        } else {
+            "In progress"
+        }
+        "$epPrefix$leftPart"
+    } else {
+        val parts = buildList {
+            if (catalog.movies.isNotEmpty()) add(plural(catalog.movies.size, "movie", "movies"))
+            if (catalog.series.isNotEmpty()) add(plural(catalog.series.size, "series", "series"))
+            if (catalog.clips.isNotEmpty()) add(plural(catalog.clips.size, "clip", "clips"))
+        }
+        parts.joinToString(" · ").ifEmpty { "Movies, series and clips" }
+    }
 
-    Column(
-        modifier = modifier
-            .clip(CardShape)
-            .background(Brush.linearGradient(listOf(tint, CardBg)))
-            .border(1.dp, Line, CardShape)
-            .padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(10.dp),
+    HeroPanel(
+        hue = hue,
+        showOrb = true,
+        modifier = modifier,
     ) {
-        Text("Watch", color = Dim, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
         Text(
-            text = startedVideo?.tile?.title ?: plural(catalog.videos.size, "title", "titles"),
-            color = Ink,
-            fontSize = 19.sp,
+            text = "WATCH",
+            color = Color.White.copy(alpha = 0.80f),
+            fontSize = 11.sp,
             fontWeight = FontWeight.Bold,
+            letterSpacing = 1.6.sp,
+        )
+        Text(
+            text = rawTitle.uppercase(Locale.ROOT),
+            color = Color.White,
+            fontSize = if (isLong) 22.sp else 28.sp,
+            lineHeight = if (isLong) 24.sp else 29.sp,
+            fontWeight = FontWeight.ExtraBold,
+            letterSpacing = (-0.6).sp,
             maxLines = 2,
             overflow = TextOverflow.Ellipsis,
         )
-        val facts = if (startedVideo != null) {
-            val epPrefix = if (startedVideo.tile.kind == LibraryKind.Series && startedVideo.entry.isEpisode) {
-                "${startedVideo.entry.episodeLabel} · "
-            } else {
-                ""
-            }
-            val leftPart = if (startedVideo.progress.durationMs > 0L) {
-                formatTimeLeft(startedVideo.progress.durationMs - startedVideo.progress.positionMs)
-            } else {
-                "In progress"
-            }
-            "$epPrefix$leftPart"
-        } else {
-            val parts = buildList {
-                if (catalog.movies.isNotEmpty()) add(plural(catalog.movies.size, "movie", "movies"))
-                if (catalog.series.isNotEmpty()) add(plural(catalog.series.size, "series", "series"))
-                if (catalog.clips.isNotEmpty()) add(plural(catalog.clips.size, "clip", "clips"))
-            }
-            parts.joinToString(" · ").ifEmpty { "Movies, series and clips" }
-        }
-        Text(facts, color = Dim, fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        Text(
+            text = facts,
+            color = Color.White.copy(alpha = 0.90f),
+            fontSize = 14.sp,
+            fontWeight = FontWeight.SemiBold,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
 
         if (startedVideo != null && startedVideo.progress.positionMs > 0L && startedVideo.progress.durationMs > 0L) {
             LinearProgressIndicator(
                 progress = { startedVideo.fraction.coerceIn(0.03f, 1f) },
                 modifier = Modifier.fillMaxWidth().height(4.dp).clip(PillShape),
-                color = Brand,
-                trackColor = Line,
+                color = BrandHover,
+                trackColor = Color.White.copy(alpha = 0.30f),
             )
         }
 
-        Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
+        Spacer(Modifier.height(2.dp))
+        FlowRow(
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
             if (startedVideo != null) {
-                PrimaryLightButton(
+                HeroPrimaryButton(
                     text = "Continue",
                     icon = PlayIcon,
                     onClick = { onContinue(startedVideo) },
                 )
-                QuietActionButton(
+                HeroGlassButton(
                     text = "Play something",
                     icon = DiceIcon,
                     onClick = onPlaySomething,
                 )
             } else {
-                PrimaryLightButton(
+                HeroPrimaryButton(
                     text = "Play something",
                     icon = DiceIcon,
                     onClick = onPlaySomething,
@@ -521,7 +603,8 @@ private fun buildKeepPlaying(
                 progress = pct,
                 isMusic = false,
                 seed = tile.seed,
-                badge = if (tile.kind == LibraryKind.Series) entry.episodeLabel else if (tile.kind == LibraryKind.Movie) "Movie" else "Clip",
+                badge = if (tile.kind == LibraryKind.Series) entry.episodeLabel else null,
+                kindLabel = posterKindLabel(tile.kind),
                 onClick = { model.playEntry(entry) },
             ),
         )
@@ -575,6 +658,7 @@ private fun KeepPlayingCard(item: KeepItem) {
                 seed = item.seed,
                 badge = item.badge,
                 progress = item.progress,
+                kindLabel = item.kindLabel,
                 modifier = Modifier.fillMaxWidth(),
             )
         }
@@ -680,6 +764,7 @@ private fun VideoShelfCard(
             title = tile.title,
             year = tile.year,
             seed = tile.seed,
+            kindLabel = posterKindLabel(tile.kind),
             modifier = Modifier.fillMaxWidth(),
         )
         Text(tile.title, color = Ink, fontSize = 14.sp, fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis)
@@ -724,7 +809,12 @@ private fun WideVideoShelfCard(tile: LibraryTile, onClick: () -> Unit) {
         modifier = Modifier.width(204.dp).clickable(onClick = onClick),
         verticalArrangement = Arrangement.spacedBy(6.dp),
     ) {
-        WideTitleArt(title = tile.title, seed = tile.seed, badge = "Clip", modifier = Modifier.fillMaxWidth())
+        WideTitleArt(
+            title = tile.title,
+            seed = tile.seed,
+            kindLabel = posterKindLabel(tile.kind),
+            modifier = Modifier.fillMaxWidth(),
+        )
         Text(tile.title, color = Ink, fontSize = 14.sp, fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis)
         Text(listOfNotNull("Clip", sizeText).joinToString(" · "), color = Dim, fontSize = 12.sp, maxLines = 1)
     }

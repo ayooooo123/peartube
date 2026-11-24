@@ -109,7 +109,8 @@ If a match is correct code, put a comment on the line before it: `// ast-grep-ig
 - `no-buffer-alloc-unsafe` (JS): use `Buffer.alloc` / `b4a.alloc` so uninitialized heap bytes do not leak.
 - `js-no-nested-ternary` (JS): use flat `if`/`else` or helper functions instead of nested ternaries.
 - `js-no-empty-catch` (JS): handle or log caught errors, or annotate intentional ignores with `// ast-grep-ignore: js-no-empty-catch -- <reason>`.
-- `kt-no-force-nonnull` & `kt-no-catch-throwable` (Kotlin, `android/**/src/main/`): avoid `!!` and un-rethrown `catch (e: Throwable)` (which breaks coroutine cancellation).
-- `swift-no-force-try-cast` (Swift, `ios/App/` & `ios/Runtime/`): avoid `try!` and `as!`.
+- `kt-no-force-nonnull`, `kt-no-catch-throwable` & `kt-no-hardcoded-hex-color` (Kotlin, `android/**/src/main/`): avoid `!!`, un-rethrown `catch (e: Throwable)` (which breaks coroutine cancellation), and hardcoded `Color(0x...)` literals outside `Theme.kt` and `Sleeves.kt`.
+- `swift-no-force-try-cast` & `swift-no-force-unwrap-url` (Swift, `ios/App/` & `ios/Runtime/`): avoid `try!`, `as!`, and force-unwrapped `URL(string: ...)!`.
+- `test/ui-page.test.js` (Relay web UI invariants): parses every inline `<script>` in `src/ui.js`, rejects single-escaped `/s+/` regex mistakes, rejects `a.bitsPerSample`/`a.sampleRate` mismatches (`src/resolution.js` emits `a.depth`/`a.rate`), rejects base `.top { backdrop-filter: ... }` (which breaks fixed bottom navigation on narrow screens) and `cqi` padding on `.poster.gen` itself, and enforces `data-close` on every `.sheet` dialog.
 - `.oxlintrc.json`: enforces `eqeqeq`, `no-var`, `max-depth` (4), `max-params` (5), and `max-lines` (500) on all new and non-grandfathered JS files.
 - `desktop/clippy.toml` & `web/clippy.toml`: set Clippy complexity thresholds and deny `todo`, `dbg_macro`, and `await_holding_lock`.

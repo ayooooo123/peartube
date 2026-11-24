@@ -1,0 +1,11 @@
+id: kt-no-hardcoded-hex-color
+valid:
+  - |
+    Box(Modifier.background(Brand))
+  - |
+    Box(Modifier.background(Color.White.copy(alpha = 0.16f)))
+invalid:
+  - |
+    Box(Modifier.background(Color(0xFF111111)))
+  - |
+    Text("Live", color = Color(0xFFFF0000))

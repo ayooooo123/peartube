@@ -47,12 +47,15 @@ private let globePoints: [SpherePoint] = (0..<320).map { i in
 struct NetworkView: View {
     @ObservedObject var model: AppModel
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.horizontalSizeClass) private var sizeClass
     @State private var mode: NetworkVizMode = .globe
     @State private var vizClock = NetworkVizClock()
 
     private let routeColors: [Color] = [PTColor.ok, PTColor.brandHover, PTColor.warn]
 
     private var snap: NetworkSnapshot { model.networkSnapshot }
+
+    private var isWideLayout: Bool { sizeClass == .regular }
 
     private var sceneCaption: String {
         if snap.totalPeers == 0 {
@@ -73,7 +76,7 @@ struct NetworkView: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: 14) {
             Picker("Network view", selection: $mode) {
                 ForEach(NetworkVizMode.allCases) { item in
                     Text(item.rawValue).tag(item)
@@ -82,10 +85,23 @@ struct NetworkView: View {
             .pickerStyle(.segmented)
             .accessibilityIdentifier("network.modePicker")
 
-            sceneCard
-            ratePairCard
-            reciprocityCard
-            routesCard
+            if isWideLayout {
+                HStack(alignment: .top, spacing: 16) {
+                    sceneCard
+                        .frame(maxWidth: .infinity)
+                    VStack(spacing: 12) {
+                        ratePairCard
+                        reciprocityCard
+                        routesCard
+                    }
+                    .frame(minWidth: 280, maxWidth: 360)
+                }
+            } else {
+                sceneCard
+                ratePairCard
+                reciprocityCard
+                routesCard
+            }
         }
     }
 
@@ -96,7 +112,18 @@ struct NetworkView: View {
             ? "No peers connected"
             : "\(plural(snapshot.totalPeers, "peer", "peers")): " + routes.map { "\($0.peers) on \($0.label.lowercased())" }.joined(separator: ", ")
 
-        return VStack(alignment: .leading, spacing: 8) {
+        return ZStack {
+            RadialGradient(
+                stops: [
+                    .init(color: PTColor.brand.opacity(0.18), location: 0.0),
+                    .init(color: PTColor.surface, location: 0.65)
+                ],
+                center: UnitPoint(x: 0.5, y: 0.42),
+                startRadius: 6,
+                endRadius: isWideLayout ? 280 : 210
+            )
+            .background(PTColor.surface)
+
             TimelineView(.animation(minimumInterval: 1.0 / 30.0, paused: reduceMotion)) { timeline in
                 Canvas { ctx, size in
                     if !reduceMotion {
@@ -112,32 +139,44 @@ struct NetworkView: View {
                     }
                 }
             }
-            .frame(height: 196)
-            .frame(maxWidth: .infinity)
+            .padding(.bottom, 22)
             .accessibilityLabel(a11ySummary)
             .accessibilityIdentifier("network.canvas")
 
-            HStack(spacing: 10) {
-                ForEach(Array(routes.enumerated()), id: \.element.key) { idx, route in
-                    HStack(spacing: 5) {
-                        Circle()
-                            .fill(routeColors[idx])
-                            .frame(width: 7, height: 7)
-                        Text("\(route.label) · \(route.peers)")
-                            .font(.caption2.monospacedDigit())
-                            .foregroundStyle(route.peers > 0 ? PTColor.ink : PTColor.dim)
-                            .lineLimit(1)
+            // Hide route legend overlay on wide layouts where the Routes card sits beside the canvas.
+            if !isWideLayout && mode != .flow {
+                VStack(alignment: .leading, spacing: 4) {
+                    ForEach(Array(routes.enumerated()), id: \.element.key) { idx, route in
+                        HStack(spacing: 6) {
+                            Circle()
+                                .fill(routeColors.indices.contains(idx) ? routeColors[idx] : PTColor.dim)
+                                .frame(width: 8, height: 8)
+                            Text("\(route.label) · \(route.peers)")
+                                .font(.caption2.weight(.semibold).monospacedDigit())
+                                .foregroundStyle(route.peers > 0 ? PTColor.ink : PTColor.dim)
+                                .lineLimit(1)
+                        }
                     }
                 }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 10)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                .allowsHitTesting(false)
             }
 
             Text(sceneCaption)
-                .font(.caption2)
+                .font(.caption.weight(.semibold))
                 .foregroundStyle(PTColor.dim)
+                .multilineTextAlignment(.center)
+                .padding(.horizontal, 14)
+                .padding(.bottom, 12)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
+                .allowsHitTesting(false)
         }
-        .padding(12)
-        .background(PTColor.surface, in: RoundedRectangle(cornerRadius: PTRadius.card))
-        .overlay(RoundedRectangle(cornerRadius: PTRadius.card).strokeBorder(PTColor.line, lineWidth: 1))
+        .frame(height: isWideLayout ? 310 : 232)
+        .frame(maxWidth: .infinity)
+        .clipShape(RoundedRectangle(cornerRadius: 20))
+        .overlay(RoundedRectangle(cornerRadius: 20).strokeBorder(PTColor.line, lineWidth: 1))
     }
 
     private var ratePairCard: some View {
@@ -285,9 +324,9 @@ struct NetworkView: View {
     private func drawGlobe(ctx: inout GraphicsContext, size: CGSize, routes: [RouteSnapshot]) {
         let w = Double(size.width)
         let h = Double(size.height)
-        guard w > 10, h > 10 else { return }
+        guard w > 10, h > 10, routes.count >= 3 else { return }
         let cx = w / 2.0
-        let cy = h * 0.48
+        let cy = h * 0.47
         let r = min(w, h * 1.2) * 0.22
         let squash = 0.36
         let roll: [Double] = [-0.2, 0.13, -0.34]
@@ -372,7 +411,7 @@ struct NetworkView: View {
     private func drawSwarm(ctx: inout GraphicsContext, size: CGSize, routes: [RouteSnapshot]) {
         let w = Double(size.width)
         let h = Double(size.height)
-        guard w > 10, h > 10 else { return }
+        guard w > 10, h > 10, routes.count >= 3 else { return }
         let cx = w / 2.0
         let cy = h / 2.0
         let top = min(w, h) * 0.43
@@ -416,8 +455,8 @@ struct NetworkView: View {
     private func drawFlow(ctx: inout GraphicsContext, size: CGSize, snapshot: NetworkSnapshot) {
         let w = Double(size.width)
         let h = Double(size.height)
-        guard w > 40, h > 40 else { return }
         let routes = snapshot.routes
+        guard w > 40, h > 40, routes.count >= 3 else { return }
         let ys: [Double] = [h * 0.28, h * 0.54, h * 0.80]
         let leftX = w * 0.28
         let boxW = min(92.0, w * 0.28)

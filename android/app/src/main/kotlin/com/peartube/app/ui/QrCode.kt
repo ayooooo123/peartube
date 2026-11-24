@@ -79,7 +79,7 @@ fun QrScannerView(onScanned: (String) -> Unit, onClose: () -> Unit) {
         future?.addListener({
             if (!stopped.get()) {
                 try {
-                    val owner = future!!.get()
+                    val owner = future.get()
                     provider = owner
                     val p = Preview.Builder().build().also { it.setSurfaceProvider(preview.surfaceProvider) }
                     livePreview = p
@@ -154,8 +154,9 @@ fun QrScannerView(onScanned: (String) -> Unit, onClose: () -> Unit) {
             Text("Scan a little magic", color = Ink, fontSize = 22.sp, modifier = Modifier.weight(1f))
             IconButton(onClick = onClose) { Icon(CloseIcon, "Close scanner", tint = Ink) }
         }
+        val currentProblem = problem
         when {
-            problem != null -> Text(problem!!, color = Dim)
+            currentProblem != null -> Text(currentProblem, color = Dim)
             !allowed -> Text(if (requested) "Camera access is off. Select a nearby TV from Cast, or allow camera access in Android Settings to scan a link." else "Allow camera access to scan a TV or channel QR code.", color = Dim)
             else -> {
                 Box(Modifier.fillMaxWidth().height(320.dp).clip(RoundedCornerShape(24.dp))) {

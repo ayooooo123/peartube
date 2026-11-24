@@ -13,7 +13,7 @@ use peartube::worker::{RouteTraffic, Status};
 
 use crate::app::{NetworkTab, PearTube, Room};
 use crate::list::{column, format_bytes, format_rate, total_peers};
-use crate::theme::{ACCENT, BG, BRAND, BRAND_HOVER, CARD, CARD_ELEVATED, DIM, INK, LINE, WARN};
+use crate::theme::{ACCENT, BRAND, BRAND_HOVER, CARD, CARD_ELEVATED, DIM, INK, LINE, WARN};
 
 const ROUTE_COLORS: [u32; 3] = [ACCENT, BRAND_HOVER, WARN];
 const ROUTE_NAMES: [&str; 3] = ["Home network", "Internet", "Private route"];
@@ -115,7 +115,6 @@ fn render_scene_card(tab: NetworkTab, st: &Status, phase: f32) -> Div {
     } else {
         "Connections, not locations"
     };
-    let routes = route_slice(st);
     let st_clone = st.clone();
 
     let scene_canvas: AnyElement = match tab {
@@ -134,41 +133,33 @@ fn render_scene_card(tab: NetworkTab, st: &Status, phase: f32) -> Div {
         NetworkTab::Flow => render_flow_scene(st).into_any_element(),
     };
 
-    v_flex()
+    div()
+        .relative()
         .flex_1()
         .min_w(px(440.))
-        .rounded(px(16.))
+        .h(px(420.))
+        .rounded(px(22.))
         .bg(rgb(CARD))
         .border_1()
         .border_color(rgb(LINE))
         .overflow_hidden()
-        .child(div().w_full().h(px(380.)).relative().bg(rgb(BG)).child(scene_canvas))
+        .child(scene_canvas)
         .child(
-            h_flex()
-                .justify_between()
-                .items_center()
-                .flex_wrap()
-                .gap_3()
+            div()
+                .absolute()
+                .left_0()
+                .right_0()
+                .bottom(px(14.))
+                .flex()
+                .justify_center()
                 .px_4()
-                .py_3()
-                .border_t_1()
-                .border_color(rgb(LINE))
                 .child(
-                    h_flex()
-                        .gap_4()
-                        .flex_wrap()
-                        .children((0..3).map(|k| {
-                            let p = routes[k].peers;
-                            h_flex()
-                                .items_center()
-                                .gap_1p5()
-                                .text_xs()
-                                .text_color(if p > 0 { rgb(INK) } else { rgb(DIM) })
-                                .child(div().size(px(8.)).rounded(px(99.)).bg(rgb(ROUTE_COLORS[k])))
-                                .child(format!("{} · {p}", ROUTE_NAMES[k]))
-                        })),
-                )
-                .child(div().text_xs().text_color(rgb(DIM)).child(caption)),
+                    div()
+                        .text_xs()
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .text_color(rgb(DIM))
+                        .child(caption),
+                ),
         )
 }
 
@@ -186,7 +177,7 @@ fn render_rates_card(st: &Status, down_hist: Vec<u64>, up_hist: Vec<u64>) -> Div
     h_flex()
         .p_4()
         .gap_4()
-        .rounded(px(14.))
+        .rounded(px(18.))
         .bg(rgb(CARD))
         .border_1()
         .border_color(rgb(LINE))
@@ -194,16 +185,16 @@ fn render_rates_card(st: &Status, down_hist: Vec<u64>, up_hist: Vec<u64>) -> Div
             v_flex()
                 .flex_1()
                 .gap_1()
-                .child(div().text_xs().font_weight(FontWeight::MEDIUM).text_color(rgb(DIM)).child("Receiving"))
-                .child(div().text_lg().font_weight(FontWeight::BOLD).text_color(rgb(BRAND_HOVER)).child(format_rate(st.down_bps)))
+                .child(div().text_xs().font_weight(FontWeight::BOLD).text_color(rgb(DIM)).child("RECEIVING"))
+                .child(div().text_xl().font_weight(FontWeight::EXTRA_BOLD).text_color(rgb(BRAND_HOVER)).child(format_rate(st.down_bps)))
                 .child(render_sparkline(down_hist, BRAND_HOVER)),
         )
         .child(
             v_flex()
                 .flex_1()
                 .gap_1()
-                .child(div().text_xs().font_weight(FontWeight::MEDIUM).text_color(rgb(DIM)).child("Sharing"))
-                .child(div().text_lg().font_weight(FontWeight::BOLD).text_color(rgb(ACCENT)).child(format_rate(st.up_bps)))
+                .child(div().text_xs().font_weight(FontWeight::BOLD).text_color(rgb(DIM)).child("SHARING"))
+                .child(div().text_xl().font_weight(FontWeight::EXTRA_BOLD).text_color(rgb(ACCENT)).child(format_rate(st.up_bps)))
                 .child(render_sparkline(up_hist, ACCENT)),
         )
 }
@@ -226,25 +217,26 @@ fn render_reciprocity_card(st: &Status) -> Div {
     v_flex()
         .p_4()
         .gap_3()
-        .rounded(px(14.))
+        .rounded(px(18.))
         .bg(rgb(CARD))
         .border_1()
         .border_color(rgb(LINE))
-        .child(div().text_sm().font_weight(FontWeight::MEDIUM).child(sentence))
+        .child(div().text_sm().font_weight(FontWeight::SEMIBOLD).child(sentence))
         .child(
             h_flex()
                 .w_full()
-                .h(px(6.))
+                .h(px(10.))
                 .rounded(px(99.))
-                .bg(hsla(0., 0., 1., 0.07))
+                .bg(rgb(CARD_ELEVATED))
                 .overflow_hidden()
                 .when(share_frac > 0.0, |bar| bar.child(div().h_full().w(relative(share_frac)).bg(rgb(ACCENT))))
-                .when(recv_frac > 0.0, |bar| bar.child(div().h_full().w(relative(recv_frac)).bg(rgb(BRAND)))),
+                .when(recv_frac > 0.0, |bar| bar.child(div().h_full().w(relative(recv_frac)).bg(rgb(BRAND_HOVER)))),
         )
         .child(
             h_flex()
                 .justify_between()
                 .text_xs()
+                .font_weight(FontWeight::SEMIBOLD)
                 .child(div().text_color(rgb(ACCENT)).child(format!("Shared {}", format_bytes(tx))))
                 .child(div().text_color(rgb(BRAND_HOVER)).child(format!("Received {}", format_bytes(rx)))),
         )
@@ -261,7 +253,7 @@ fn render_routes_card(st: &Status) -> Div {
     v_flex()
         .p_4()
         .gap_3()
-        .rounded(px(14.))
+        .rounded(px(18.))
         .bg(rgb(CARD))
         .border_1()
         .border_color(rgb(LINE))
@@ -382,14 +374,32 @@ fn paint_ring(window: &mut Window, cx: f32, cy: f32, rad: f32, width: f32, color
     });
 }
 
+/// Subtle radial brand glow centered at (50%, 42%), matching `.scene` in `sketch.css`.
+fn paint_scene_glow(bounds: Bounds<Pixels>, window: &mut Window) {
+    let w = f32::from(bounds.size.width);
+    let h = f32::from(bounds.size.height);
+    if w < 20.0 || h < 20.0 {
+        return;
+    }
+    let cx = f32::from(bounds.origin.x) + w * 0.50;
+    let cy = f32::from(bounds.origin.y) + h * 0.42;
+    let max_r = w.max(h) * 0.56;
+    let brand = Hsla::from(rgb(BRAND));
+    paint_circle(window, cx, cy, max_r, brand.opacity(0.045));
+    paint_circle(window, cx, cy, max_r * 0.72, brand.opacity(0.065));
+    paint_circle(window, cx, cy, max_r * 0.46, brand.opacity(0.075));
+    paint_circle(window, cx, cy, max_r * 0.24, brand.opacity(0.055));
+}
+
 fn paint_globe_scene(bounds: Bounds<Pixels>, st: &Status, phase: f32, window: &mut Window) {
     let w = f32::from(bounds.size.width);
     let h = f32::from(bounds.size.height);
     if w < 20.0 || h < 20.0 {
         return;
     }
+    paint_scene_glow(bounds, window);
     let cx = f32::from(bounds.origin.x) + w * 0.5;
-    let cy = f32::from(bounds.origin.y) + h * 0.48;
+    let cy = f32::from(bounds.origin.y) + h * 0.46;
     let radius = w.min(h * 1.2) * 0.22;
     let routes = route_slice(st);
     let turns = [
@@ -512,9 +522,10 @@ fn paint_swarm_scene(bounds: Bounds<Pixels>, st: &Status, phase: f32, window: &m
     if w < 20.0 || h < 20.0 {
         return;
     }
+    paint_scene_glow(bounds, window);
     let cx = f32::from(bounds.origin.x) + w * 0.5;
-    let cy = f32::from(bounds.origin.y) + h * 0.5;
-    let top = w.min(h) * 0.43;
+    let cy = f32::from(bounds.origin.y) + h * 0.47;
+    let top = w.min(h) * 0.41;
     let rings = [0.42_f32, 0.70, 0.98];
     let routes = route_slice(st);
 
@@ -561,7 +572,7 @@ fn render_flow_scene(st: &Status) -> Div {
     let st_paint = st.clone();
     let routes = route_slice(st);
     let kept = format!("{} kept", format_bytes(st.cached_bytes));
-    let ys = [110.0_f32, 190.0, 270.0];
+    let ys = [115.0_f32, 198.0, 281.0];
 
     let side_labels = |right_side: bool| -> Div {
         let mut col = div()
@@ -642,6 +653,7 @@ fn paint_flow_ribbons(bounds: Bounds<Pixels>, st: &Status, window: &mut Window) 
     if w < 120.0 || h < 80.0 {
         return;
     }
+    paint_scene_glow(bounds, window);
     let ox = f32::from(bounds.origin.x);
     let oy = f32::from(bounds.origin.y);
     let routes = route_slice(st);
@@ -657,7 +669,7 @@ fn paint_flow_ribbons(bounds: Bounds<Pixels>, st: &Status, window: &mut Window) 
 
     let stack_y = |ws: [f32; 3]| -> [f32; 3] {
         let total = ws[0] + ws[1] + ws[2] + 12.0;
-        let mut y = oy + h * 0.5 - total * 0.5;
+        let mut y = oy + h * 0.47 - total * 0.5;
         let mut mids = [0.0; 3];
         for k in 0..3 {
             mids[k] = y + ws[k] * 0.5;
@@ -667,12 +679,12 @@ fn paint_flow_ribbons(bounds: Bounds<Pixels>, st: &Status, window: &mut Window) 
     };
     let in_y = stack_y(in_w);
     let out_y = stack_y(out_w);
-    let ys = [oy + 110.0, oy + 190.0, oy + 270.0];
+    let ys = [oy + 115.0, oy + 198.0, oy + 281.0];
 
     let box_w = 112.0_f32.min(w * 0.24);
-    let box_h = 152.0_f32.min(h * 0.55);
+    let box_h = 152.0_f32.min(h * 0.52);
     let box_x = ox + (w - box_w) * 0.5;
-    let box_y = oy + (h - box_h) * 0.5;
+    let box_y = oy + (h * 0.47 - box_h * 0.5);
     let left_x = ox + 150.0_f32.min(w * 0.25);
     let right_x = ox + w - 150.0_f32.min(w * 0.25);
 

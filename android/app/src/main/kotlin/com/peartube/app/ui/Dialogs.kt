@@ -232,11 +232,12 @@ fun AddToLibrarySheet(
 
     fun submit() {
         if (trimmed.isEmpty()) return
-        if (isWebUrl) {
+        val targetUrl = unwrappedHttp
+        if (targetUrl != null) {
             if (sheet.identified != null) {
                 model.submitAcquireFromSheet()
             } else {
-                model.identifyUrl(unwrappedHttp!!)
+                model.identifyUrl(targetUrl)
             }
         } else {
             model.openUriOrKey(trimmed)

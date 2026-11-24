@@ -91,18 +91,9 @@ function parseCard (chunk, siteOrigin, thumbUrls) {
         thumbUrls.set(rumbleId, thumbUrl)
         while (thumbUrls.size > 256) thumbUrls.delete(thumbUrls.keys().next().value)
       }
-    } catch {}
+    } catch { return { title, channel, length, rumbleId, url, thumbnail: `/v1/providers/rumble/thumb/${rumbleId}`, video: true } }
   }
-
-  return {
-    title,
-    channel,
-    length,
-    rumbleId,
-    url,
-    thumbnail: `/v1/providers/rumble/thumb/${rumbleId}`,
-    video: true
-  }
+  return { title, channel, length, rumbleId, url, thumbnail: `/v1/providers/rumble/thumb/${rumbleId}`, video: true }
 }
 
 export function parseRumbleSearchHtml (html, { limit = RUMBLE_SEARCH_CAP, siteOrigin = 'https://rumble.com', thumbUrls = null } = {}) {
@@ -155,6 +146,7 @@ export function createRumblePlugin ({
   const thumbUrls = new Map()
   const thumbs = new Map()
   const workRoot = join(storage, 'rumble-work')
+  // ast-grep-ignore: js-no-empty-catch -- best-effort cleanup of leftover scratch dir at startup
   if (canSave) try { rmSync(workRoot, { recursive: true, force: true }) } catch {}
   let closed = false
   let chain = Promise.resolve()
@@ -281,29 +273,10 @@ export function createRumblePlugin ({
     const defaultExt = audio ? '.m4a' : '.mp4'
     const jobId = randomUUID()
     const job = {
-      jobId,
-      id: entryId,
-      title,
-      plugin: NAME,
-      source: NAME,
-      audio,
-      channel: true,
-      private: false,
-      status: 'queued',
-      phase: 'queued',
-      created: Date.now(),
-      peer: null,
-      queuePlace: null,
-      file: fileOf(items[0], defaultExt),
-      fileIndex: 1,
-      fileCount: items.length,
-      speed: 0,
-      bytes: 0,
-      total: null,
-      error: null,
-      skipped: [],
-      note: null,
-      progressAt: Date.now(),
+      jobId, id: entryId, title, plugin: NAME, source: NAME, audio, channel: true, private: false,
+      status: 'queued', phase: 'queued', created: Date.now(), peer: null, queuePlace: null,
+      file: fileOf(items[0], defaultExt), fileIndex: 1, fileCount: items.length, speed: 0,
+      bytes: 0, total: null, error: null, skipped: [], note: null, progressAt: Date.now(),
       controller: { aborted: false, onabort: null }
     }
     trimJobs()
@@ -371,9 +344,9 @@ export function createRumblePlugin ({
           if (audio) {
             const pinPath = join(finalDir, ALBUM_PIN)
             let pinned = null
-            try { pinned = JSON.parse(readFileSync(pinPath, 'utf8'))?.release } catch {}
+            try { pinned = JSON.parse(readFileSync(pinPath, 'utf8'))?.release } catch { pinned = null }
             let held = []
-            try { held = readdirSync(finalDir).filter(n => !/^[.@]/.test(n)) } catch {}
+            try { held = readdirSync(finalDir).filter(n => !/^[.@]/.test(n)) } catch { held = [] }
             if (pinned ? pinned !== entryId : held.length) throw Object.assign(new Error(`The folder “${folderName}” already holds other files`), { status: 409 })
             mkdirSync(finalDir, { recursive: true })
             writeFileSync(pinPath, JSON.stringify({ release: entryId, title, artist }) + '\n')
@@ -382,11 +355,7 @@ export function createRumblePlugin ({
           }
           for (const g of got) {
             const dst = freePath(finalDir, fileOf(g.item, g.ext))
-            try {
-              renameSync(g.path, dst)
-            } catch {
-              copyFileSync(g.path, dst)
-            }
+            try { renameSync(g.path, dst) } catch { copyFileSync(g.path, dst) }
             if (!audio) {
               const sidecarId = g.item.rumbleId ? `rmb:${g.item.rumbleId}` : entryId
               writeFileSync(`${dst}.json`, JSON.stringify({ id: sidecarId, title: g.item.title }) + '\n')
@@ -436,6 +405,7 @@ export function createRumblePlugin ({
         onchange?.()
         throw Object.assign(new Error(job.error || 'Cancelled'), { status: err?.status || 502 })
       } finally {
+        // ast-grep-ignore: js-no-empty-catch -- best-effort cleanup of per-job scratch dir
         if (workDir) try { rmSync(workDir, { recursive: true, force: true }) } catch {}
       }
     }

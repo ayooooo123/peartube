@@ -255,6 +255,7 @@ impl ApiClient {
         let (artist, track_title) = split_artist_title(&cand.title, cand.artist.as_deref().or(Some(fallback_artist)));
         let payload = json!({
             "url": cand.url,
+            "trackId": cand.id,
             "id": cand.id,
             "title": cand.title,
             "artist": artist,
@@ -262,6 +263,7 @@ impl ApiClient {
             "audio": true,
             "tracks": [{
                 "url": cand.url,
+                "trackId": cand.id,
                 "id": cand.id,
                 "title": track_title,
                 "track": 1,
@@ -274,6 +276,7 @@ impl ApiClient {
         let (artist, track_title) = split_artist_title(&cand.title, cand.channel.as_deref().or(Some(fallback_artist)));
         let payload = json!({
             "url": cand.url,
+            "rumbleId": cand.id,
             "id": cand.id,
             "title": cand.title,
             "channel": cand.channel,
@@ -1016,6 +1019,7 @@ pub struct YoutubeCandidate {
 #[derive(Clone, Debug, Default, PartialEq, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct SoundcloudCandidate {
+    #[serde(alias = "trackId")]
     pub id: Option<String>,
     pub title: String,
     pub url: String,
@@ -1031,6 +1035,7 @@ pub struct SoundcloudCandidate {
 #[derive(Clone, Debug, Default, PartialEq, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct RumbleCandidate {
+    #[serde(alias = "rumbleId")]
     pub id: Option<String>,
     pub title: String,
     pub url: String,

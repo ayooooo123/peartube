@@ -378,7 +378,7 @@ struct AcquireJob: Identifiable, Decodable, Hashable {
     }
 
     enum CodingKeys: String, CodingKey {
-        case jobId, id, title, plugin, source, status, phase, bytes, total, speed
+        case job, jobId, id, title, plugin, source, status, phase, bytes, total, speed
         case peer, queuePlace, file, fileIndex, fileCount, error, note, created
     }
 
@@ -423,7 +423,8 @@ struct AcquireJob: Identifiable, Decodable, Hashable {
     }
 
     init(from decoder: Decoder) throws {
-        let c = try decoder.container(keyedBy: CodingKeys.self)
+        let root = try decoder.container(keyedBy: CodingKeys.self)
+        let c = (try? root.nestedContainer(keyedBy: CodingKeys.self, forKey: .job)) ?? root
         let idField = (try? c.decodeIfPresent(String.self, forKey: .id)) ?? ""
         self.jobId = (try? c.decodeIfPresent(String.self, forKey: .jobId)) ?? (idField.isEmpty ? UUID().uuidString : idField)
         self.mediaId = idField
@@ -1140,11 +1141,11 @@ struct LoopbackApi {
 
     func updateSoulseekSettings(user: String, password: String?, share: Bool) async throws -> SoulseekSettings {
         var payload: [String: Any] = [
-            "soulseekUser": user,
-            "soulseekShare": share
+            "slskUser": user,
+            "slskShare": share
         ]
         if let password, !password.isEmpty {
-            payload["soulseekPassword"] = password
+            payload["slskPass"] = password
         }
         let data = try await requestRaw(method: "PUT", path: "v1/settings", body: payload, timeout: 20)
         return SoulseekSettings.decode(from: data)

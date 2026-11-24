@@ -245,20 +245,23 @@ data class AcquireJob(
     }
 
     companion object {
-        fun from(json: JSONObject): AcquireJob = AcquireJob(
-            jobId = json.optString("jobId").ifBlank { json.optString("id") },
-            id = json.optString("id"),
-            title = json.optString("title"),
-            plugin = json.optString("plugin"),
-            status = json.optString("status", "queued"),
-            bytes = json.optLong("bytes", 0L).coerceAtLeast(0L),
-            total = optPositiveLong(json, "total"),
-            error = json.optString("error").takeUnless { json.isNull("error") || it.isBlank() },
-            peer = json.optString("peer").takeUnless { json.isNull("peer") || it.isBlank() },
-            queuePlace = optNonNegativeInt(json, "queuePlace"),
-            tracksDone = optNonNegativeInt(json, "tracksDone"),
-            tracksTotal = optNonNegativeInt(json, "tracksTotal"),
-        )
+        fun from(raw: JSONObject): AcquireJob {
+            val json = raw.optJSONObject("job") ?: raw
+            return AcquireJob(
+                jobId = json.optString("jobId").ifBlank { json.optString("id") },
+                id = json.optString("id"),
+                title = json.optString("title"),
+                plugin = json.optString("plugin"),
+                status = json.optString("status", "queued"),
+                bytes = json.optLong("bytes", 0L).coerceAtLeast(0L),
+                total = optPositiveLong(json, "total"),
+                error = json.optString("error").takeUnless { json.isNull("error") || it.isBlank() },
+                peer = json.optString("peer").takeUnless { json.isNull("peer") || it.isBlank() },
+                queuePlace = optNonNegativeInt(json, "queuePlace"),
+                tracksDone = optNonNegativeInt(json, "tracksDone") ?: optNonNegativeInt(json, "fileIndex"),
+                tracksTotal = optNonNegativeInt(json, "tracksTotal") ?: optNonNegativeInt(json, "fileCount"),
+            )
+        }
     }
 }
 
@@ -479,18 +482,43 @@ data class SourceSearchResult(
         get() = soulseek.isEmpty() && youtube.isEmpty() && soundcloud.isEmpty() && rumble.isEmpty()
 
     companion object {
+        private fun itemsForSource(json: JSONObject, bySource: JSONObject, source: String): JSONArray? {
+            bySource.optJSONArray(source)?.let { return it }
+            val nested = bySource.optJSONObject(source)
+            nested?.optJSONArray("candidates")?.let { return it }
+            nested?.optJSONArray("results")?.let { return it }
+            val flat = json.optJSONArray("results") ?: return null
+            val matched = JSONArray()
+            for (i in 0 until flat.length()) {
+                val obj = flat.optJSONObject(i) ?: continue
+                if (obj.optString("source").equals(source, ignoreCase = true)) {
+                    matched.put(obj)
+                }
+            }
+            return matched.takeIf { it.length() > 0 }
+        }
+
         fun from(json: JSONObject): SourceSearchResult {
             val bySource = json.optJSONObject("bySource") ?: JSONObject()
-            val slskArr = bySource.optJSONObject("soulseek")?.optJSONArray("candidates")
-            val ytArr = bySource.optJSONObject("youtube")?.optJSONArray("candidates")
-            val scArr = bySource.optJSONObject("soundcloud")?.optJSONArray("candidates")
-            val rumbleArr = bySource.optJSONObject("rumble")?.optJSONArray("candidates")
+            val slskArr = itemsForSource(json, bySource, "soulseek")
+            val ytArr = itemsForSource(json, bySource, "youtube")
+            val scArr = itemsForSource(json, bySource, "soundcloud")
+            val rumbleArr = itemsForSource(json, bySource, "rumble")
 
             val sourcesArr = json.optJSONArray("sources")
             val sources = if (sourcesArr == null) emptyList() else List(sourcesArr.length()) { sourcesArr.optString(it) }.filter { it.isNotBlank() }
 
-            val errorsObj = json.optJSONObject("errors")
             val errors = buildMap {
+                val errorsArr = json.optJSONArray("errors")
+                if (errorsArr != null) {
+                    for (i in 0 until errorsArr.length()) {
+                        val item = errorsArr.optJSONObject(i) ?: continue
+                        val src = item.optString("source").trim()
+                        val msg = item.optString("message").ifBlank { item.optString("error") }.trim()
+                        if (src.isNotEmpty() && msg.isNotEmpty()) put(src, msg)
+                    }
+                }
+                val errorsObj = json.optJSONObject("errors")
                 if (errorsObj != null) {
                     val keys = errorsObj.keys()
                     while (keys.hasNext()) {
@@ -752,6 +780,7 @@ class LoopbackApi(private val baseUrlProvider: () -> String?) {
         files: List<String> = emptyList(),
     ): Result<AcquireJob> {
         val payload = JSONObject()
+            .put("username", peer)
             .put("peer", peer)
             .put("folder", folder)
             .put("artist", artist)
@@ -771,7 +800,7 @@ class LoopbackApi(private val baseUrlProvider: () -> String?) {
     suspend fun browseSoulseek(peer: String): Result<SoulseekShelf> = requestJson(
         method = "POST",
         path = "/v1/providers/soulseek/browse",
-        body = JSONObject().put("peer", peer),
+        body = JSONObject().put("username", peer).put("peer", peer),
         readTimeoutMs = 40_000,
     ).mapCatching { SoulseekShelf.from(it) }
 
@@ -863,10 +892,10 @@ class LoopbackApi(private val baseUrlProvider: () -> String?) {
         sharePublicMusic: Boolean,
     ): Result<SoulseekPeerSettings> {
         val payload = JSONObject()
-            .put("soulseekUser", username.trim())
-            .put("soulseekShare", sharePublicMusic)
-        if (password != null) {
-            payload.put("soulseekPassword", password)
+            .put("slskUser", username.trim())
+            .put("slskShare", sharePublicMusic)
+        if (!password.isNullOrEmpty()) {
+            payload.put("slskPass", password)
         }
         return requestJson(
             method = "PUT",

@@ -58,33 +58,48 @@ function extractScriptUrls (html, siteBase) {
 }
 
 function artworkUrlFor (e) {
-  const raw = typeof e?.artwork_url === 'string' && /^https?:\/\//i.test(e.artwork_url)
-    ? e.artwork_url
-    : (typeof e?.user?.avatar_url === 'string' && /^https?:\/\//i.test(e.user.avatar_url) ? e.user.avatar_url : null)
+  let raw = null
+  if (typeof e?.artwork_url === 'string' && /^https?:\/\//i.test(e.artwork_url)) {
+    raw = e.artwork_url
+  } else if (typeof e?.user?.avatar_url === 'string' && /^https?:\/\//i.test(e.user.avatar_url)) {
+    raw = e.user.avatar_url
+  }
   if (!raw) return null
   return /sndcdn\.com/i.test(raw) ? raw.replace(/-large\.(jpg|jpeg|png|webp)$/i, '-t300x300.$1') : raw
 }
 
+function trackListFrom (data) {
+  if (Array.isArray(data?.collection)) return data.collection
+  if (Array.isArray(data?.tracks)) return data.tracks
+  return Array.isArray(data) ? data : []
+}
+
+function trackUrlFor (e) {
+  if (typeof e?.permalink_url === 'string' && /^https?:\/\//i.test(e.permalink_url)) return e.permalink_url
+  if (typeof e?.url === 'string' && /^https?:\/\//i.test(e.url)) return e.url
+  return ''
+}
+
+function trackLengthFor (e) {
+  const rawSec = Number(e?.length)
+  if (Number.isFinite(rawSec) && rawSec > 0) return Math.round(rawSec)
+  const rawMs = Number(e?.duration ?? e?.full_duration)
+  if (Number.isFinite(rawMs) && rawMs > 0) return Math.round(rawMs / 1000)
+  return null
+}
+
 export function normalizeSoundcloudResults (data, limit = SOUNDCLOUD_SEARCH_CAP, thumbUrls = null) {
-  const list = Array.isArray(data?.collection)
-    ? data.collection
-    : (Array.isArray(data?.tracks) ? data.tracks : (Array.isArray(data) ? data : []))
+  const list = trackListFrom(data)
   const rows = []
   const seen = new Set()
   for (const e of list) {
     const trackId = String(e?.id ?? e?.trackId ?? '').trim()
     if (!TRACK_ID.test(trackId) || seen.has(trackId)) continue
-    const url = typeof e?.permalink_url === 'string' && /^https?:\/\//i.test(e.permalink_url)
-      ? e.permalink_url
-      : (typeof e?.url === 'string' && /^https?:\/\//i.test(e.url) ? e.url : '')
+    const url = trackUrlFor(e)
     if (!url) continue
     seen.add(trackId)
     const artist = String(e?.user?.username || e?.user?.full_name || e?.artist || e?.publisher_metadata?.artist || '').trim().slice(0, 120) || null
-    const rawSec = Number(e?.length)
-    const rawMs = Number(e?.duration ?? e?.full_duration)
-    const length = Number.isFinite(rawSec) && rawSec > 0
-      ? Math.round(rawSec)
-      : (Number.isFinite(rawMs) && rawMs > 0 ? Math.round(rawMs / 1000) : null)
+    const length = trackLengthFor(e)
     const art = artworkUrlFor(e)
     if (thumbUrls && art) {
       thumbUrls.set(trackId, art)
@@ -129,6 +144,7 @@ export function createSoundcloudPlugin ({
   const thumbUrls = new Map()
   const thumbs = new Map()
   const workRoot = join(storage, 'soundcloud-work')
+  // ast-grep-ignore: js-no-empty-catch -- best-effort cleanup of leftover scratch dir at startup
   if (canSave) try { rmSync(workRoot, { recursive: true, force: true }) } catch {}
   let closed = false
   let chain = Promise.resolve()
@@ -154,7 +170,9 @@ export function createSoundcloudPlugin ({
         if (res.status !== 200) continue
         const found = extractClientId(asText(res.body))
         if (found) return found
-      } catch {}
+      } catch {
+        continue
+      }
     }
     throw Object.assign(new Error('Could not find a SoundCloud client_id'), { status: 502 })
   }
@@ -263,28 +281,10 @@ export function createSoundcloudPlugin ({
     const fileOf = (t, ext) => safeSegment(`${String(t.track).padStart(2, '0')} - ${t.title}`, String(t.track).padStart(2, '0')) + ext
     const jobId = randomUUID()
     const job = {
-      jobId,
-      id: release,
-      title: albumTitle,
-      plugin: NAME,
-      source: NAME,
-      channel: true,
-      private: false,
-      status: 'queued',
-      phase: 'queued',
-      created: Date.now(),
-      peer: null,
-      queuePlace: null,
-      file: fileOf(tracks[0], '.mp3'),
-      fileIndex: 1,
-      fileCount: tracks.length,
-      speed: 0,
-      bytes: 0,
-      total: null,
-      error: null,
-      skipped: [],
-      note: null,
-      progressAt: Date.now(),
+      jobId, id: release, title: albumTitle, plugin: NAME, source: NAME, channel: true, private: false,
+      status: 'queued', phase: 'queued', created: Date.now(), peer: null, queuePlace: null,
+      file: fileOf(tracks[0], '.mp3'), fileIndex: 1, fileCount: tracks.length, speed: 0,
+      bytes: 0, total: null, error: null, skipped: [], note: null, progressAt: Date.now(),
       controller: { aborted: false, onabort: null }
     }
     trimJobs()
@@ -351,9 +351,9 @@ export function createSoundcloudPlugin ({
         const place = () => {
           const pinPath = join(finalDir, ALBUM_PIN)
           let pinned = null
-          try { pinned = JSON.parse(readFileSync(pinPath, 'utf8'))?.release } catch {}
+          try { pinned = JSON.parse(readFileSync(pinPath, 'utf8'))?.release } catch { pinned = null }
           let held = []
-          try { held = readdirSync(finalDir).filter(n => !/^[.@]/.test(n)) } catch {}
+          try { held = readdirSync(finalDir).filter(n => !/^[.@]/.test(n)) } catch { held = [] }
           if (pinned ? pinned !== release : held.length) throw Object.assign(new Error(`The folder “${folderName}” already holds other files`), { status: 409 })
           mkdirSync(finalDir, { recursive: true })
           writeFileSync(pinPath, JSON.stringify({ release, title: albumTitle, artist }) + '\n')
@@ -409,6 +409,7 @@ export function createSoundcloudPlugin ({
         onchange?.()
         throw Object.assign(new Error(job.error || 'Cancelled'), { status: err?.status || 502 })
       } finally {
+        // ast-grep-ignore: js-no-empty-catch -- best-effort cleanup of per-job scratch dir
         if (workDir) try { rmSync(workDir, { recursive: true, force: true }) } catch {}
       }
     }

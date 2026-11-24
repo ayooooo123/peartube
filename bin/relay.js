@@ -144,6 +144,8 @@ let guardConfig = ''
 let lifecycle = Promise.resolve()
 let mirrorStarting = null
 let mirrorHost = null
+// The stop in flight, if any. A restart and a shutdown signal can both ask for one, and they share it.
+let stopping = null
 // Set once a node's close() has failed: that node may still hold the store open.
 let closeFailure = null
 async function shutdown () {
@@ -153,7 +155,9 @@ async function shutdown () {
   setTimeout(() => { try { os.kill?.(process.pid, 9) } catch {} process.exit(1) }, 3000).unref()
   api.close()
   const guardStopped = stopGuard()
-  // Let an open or reopen in flight finish (bounded by the kill timer) so its node is closed, not cut off mid-open.
+  // A step in flight gets 2 s to end by itself. An open that finishes in that time has its node closed below, not cut
+  // off mid-open. A reopen ends with its stop, because `start` opens nothing from now on; if that stop takes longer,
+  // the stop below is the same one. The kill timer bounds all of it.
   await Promise.race([lifecycle, new Promise(resolve => setTimeout(resolve, 2000))])
   // A stop that failed is not a clean exit: a node that did not close, in this stop or in an earlier restart, may
   // still hold the store open. Say why and exit 1.
@@ -219,6 +223,8 @@ const searchServe = () => cfg('globalSearch') ? { isMedia: key => Boolean(state.
 // The node, its jobs, plugins and cast stack open from the current settings; a reopen closes them and opens them
 // again in this process, so settings that shape the node apply without restarting the relay. The API stays up.
 async function start () {
+  // A reopen whose stop ended after a shutdown signal gets no replacement node.
+  assertRunning()
   const using = settings.snapshot()
   const node = await createNode({
     storage,
@@ -288,7 +294,13 @@ async function start () {
     hiverelay,
     pluginsDir: env.PEARTUBE_PLUGINS_DIR || join(storage, 'plugins'),
     onchange: () => api.notify('update'),
-    onstarting: host => { mirrorHost = host }
+    onstarting: host => {
+      mirrorHost = host
+      // A stop that began while the plugins were still loading closes the host now, before it starts any work. So
+      // does a shutdown signal: shutdown may still be waiting for a step in flight, and then no stop has begun yet.
+      // ast-grep-ignore: close-error-dropped -- starts close early while closeAll awaits the same shared promise
+      if (stopping || shuttingDown) host.close().catch(() => {})
+    }
   }).then(mirror => { state.mirror = mirror }, err => {
     console.error(JSON.stringify({ msg: 'plugins failed to start', error: err?.message || String(err) }))
   })
@@ -296,13 +308,26 @@ async function start () {
 }
 
 // The node keeps serving until the plugins have stopped: closing the plugin host first ends a folder import between
-// files, so a reopen waits for one file, not the whole import.
+// files, so a reopen waits for one file, not the whole import. One stop runs at a time: a second caller (a shutdown
+// signal during a restart) gets the stop in flight, and returns only when that stop has closed the node.
 // A node whose close() fails (it rejects, or it throws before it returns its promise) may still hold the store open,
 // and no later close can reach it. `stop` rejects with that failure, then and on every later call: a reopen opens no
 // node on the same storage in this process (the caller gets the reason), and shutdown does not exit 0.
-async function stop () {
+function stop () {
+  if (stopping) return stopping
+  const { promise, resolve } = Promise.withResolvers()
+  stopping = promise
+  resolve(closeAll().finally(() => { stopping = null }))
+  return promise
+}
+async function closeAll () {
+  // ast-grep-ignore: close-error-dropped -- plugin stop failures must not block closing the node (PR #585)
   await mirrorHost?.close().catch(() => {})
+  // Plugins that are still loading have no host to close yet: `onstarting` closes it, and the second close waits
+  // for its stops.
   await mirrorStarting
+  // ast-grep-ignore: close-error-dropped -- plugin stop failures must not block closing the node (PR #585)
+  await mirrorHost?.close().catch(() => {})
   const { node, acquirer, cast } = state
   state.node = state.acquirer = state.cast = state.mirror = null
   mirrorHost = null
@@ -380,9 +405,21 @@ async function applyGuard () {
   guardConfig = want
 }
 
+// A step that is refused because shutdown has begun fails with this code. Nothing was started for it.
+const SHUTTING_DOWN = 'RELAY_SHUTTING_DOWN'
+const refusal = () => Object.assign(new Error('The relay is shutting down'), { code: SHUTTING_DOWN })
+
+// Once shutdown has begun, a lifecycle step starts nothing more. `start` and every step that waited its turn call
+// this when they begin, and a live settings change calls it after each wait.
+function assertRunning () {
+  if (shuttingDown) throw refusal()
+}
 function serial (fn) {
-  if (shuttingDown) return Promise.reject(new Error('The relay is shutting down'))
-  const run = lifecycle.then(fn)
+  if (shuttingDown) return Promise.reject(refusal())
+  const run = lifecycle.then(() => {
+    assertRunning()
+    return fn()
+  })
   lifecycle = run.catch(() => {})
   return run
 }
@@ -400,6 +437,8 @@ state.extraStatus = () => {
   }
 }
 // Live settings apply in place; any other change reopens the node. A failed reopen leaves its keys in `restartNeeded`.
+// A live change that had to wait (for the plugins to load, for the directory, for LAN discovery) and goes on after a
+// shutdown signal ends there: it starts no plugin run and nothing else, and the saved value applies at the next start.
 state.applySettings = changed => serial(async () => {
   const has = (...keys) => keys.some(k => changed.includes(k))
   if (!state.node || changed.some(k => !settings.isLive(k))) {
@@ -409,20 +448,27 @@ state.applySettings = changed => serial(async () => {
     if (has('allowedPeers')) node.setAllowedPeers(list(cfg('allowedPeers')))
     if (has('acquireConcurrency')) state.acquirer.setConcurrency(cfg('acquireConcurrency'))
     if (has('cacheMaxGb')) state.node.setCacheMaxBytes(cfg('cacheMaxGb') * 1e9)
-    if (has('directory')) await syncDirectory(node.listSources())
+    if (has('directory')) {
+      await syncDirectory(node.listSources())
+      assertRunning()
+    }
     // "Convert at every start": turning it on converts now, as a start would. Off only skips later starts.
     if (has('rechunk') && cfg('rechunk')) {
       await mirrorStarting
+      assertRunning()
       state.mirror?.run('blob-rechunk').catch(() => {})
     }
     if (has('feeds', 'replicate', 'replicateSources', 'replicateFreeGb', 'replicateMbps', 'globalSearch', 'slskUser', 'slskPass', 'slskServer')) {
       await mirrorStarting
+      assertRunning()
       state.mirror?.configure(mirrorConfig())
     }
     if (has('globalSearch')) node.serveSearch(searchServe())
     if (has('lan', 'lanHost')) {
       await state.cast.setLanHost(lanHost()).catch(() => {})
+      assertRunning()
       await node.setLan(lanFactory())
+      assertRunning()
     }
   }
   await applyGuard()
@@ -447,6 +493,9 @@ state.restart = () => serial(async () => {
 })
 await serial(start)
 await mirrorStarting
-await serial(applyGuard).catch(err => console.error(JSON.stringify({ msg: 'private guard failed to start', error: err.message })))
-console.log(JSON.stringify({ msg: 'relay ready', api: apiPort, ...(apiHttps && httpsPort > 0 ? { https: httpsPort } : {}), ...state.node.status() }))
+// After a shutdown signal there is no node to announce: `shutdown` ends the process. A step that was refused because
+// of the signal is a guard that the relay never tried to start, and is not reported. Every other failure is reported,
+// also after the signal: a guard that did start and then exited is a failure the owner has to see.
+if (!shuttingDown) await serial(applyGuard).catch(err => { if (err?.code !== SHUTTING_DOWN) console.error(JSON.stringify({ msg: 'private guard failed to start', error: err.message })) })
+if (!shuttingDown) console.log(JSON.stringify({ msg: 'relay ready', api: apiPort, ...(apiHttps && httpsPort > 0 ? { https: httpsPort } : {}), ...state.node.status() }))
 setInterval(() => { if (state.node) console.log(JSON.stringify({ msg: 'heartbeat', ...state.node.status() })) }, 60_000).unref()

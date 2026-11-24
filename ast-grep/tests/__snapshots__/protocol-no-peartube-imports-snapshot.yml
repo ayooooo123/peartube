@@ -1,0 +1,35 @@
+id: protocol-no-peartube-imports
+snapshots:
+  ? |
+    import helper from '../bin/relay.js'
+  : labels:
+    - source: import helper from '../bin/relay.js'
+      style: primary
+      start: 0
+      end: 36
+    - source: '''../bin/relay.js'''
+      style: secondary
+      start: 19
+      end: 36
+  ? |
+    import { createNode } from './index.js'
+  : labels:
+    - source: import { createNode } from './index.js'
+      style: primary
+      start: 0
+      end: 39
+    - source: '''./index.js'''
+      style: secondary
+      start: 27
+      end: 39
+  ? |
+    import { openSource } from './acquire.js'
+  : labels:
+    - source: import { openSource } from './acquire.js'
+      style: primary
+      start: 0
+      end: 41
+    - source: '''./acquire.js'''
+      style: secondary
+      start: 27
+      end: 41

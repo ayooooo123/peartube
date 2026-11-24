@@ -1,0 +1,15 @@
+id: worklet-no-relay-imports
+valid:
+  - |
+    import { parseUri } from '../src/protocol.js'
+  - |
+    import { createNode } from '../src/index.js'
+invalid:
+  - |
+    import { assertPublicUrl } from '../src/ssrf.js'
+  - |
+    import { identifyUrl } from '../src/identify.js'
+  - |
+    import { spawn } from 'bare-subprocess'
+  - |
+    import { execFile } from 'node:child_process'

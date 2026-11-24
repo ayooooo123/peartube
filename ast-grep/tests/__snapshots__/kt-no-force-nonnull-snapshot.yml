@@ -1,0 +1,16 @@
+id: kt-no-force-nonnull
+snapshots:
+  ? |
+    process(item!!)
+  : labels:
+    - source: item!!
+      style: primary
+      start: 8
+      end: 14
+  ? |
+    val name = user!!.name
+  : labels:
+    - source: user!!
+      style: primary
+      start: 11
+      end: 17

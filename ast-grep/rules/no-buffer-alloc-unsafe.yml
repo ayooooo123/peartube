@@ -1,0 +1,17 @@
+id: no-buffer-alloc-unsafe
+language: javascript
+severity: error
+message: Buffer.allocUnsafe returns uninitialized memory that can leak prior heap contents.
+note: |
+  Use Buffer.alloc(...) or b4a.alloc(...) instead.
+  See docs/code-rules.md#no-buffer-alloc-unsafe.
+files:
+  - src/**/*.js
+  - bin/**/*.js
+  - worklet/**/*.js
+rule:
+  any:
+    - pattern: Buffer.allocUnsafe($$$)
+    - pattern: Buffer.allocUnsafeSlow($$$)
+    - pattern: b4a.allocUnsafe($$$)
+    - pattern: b4a.allocUnsafeSlow($$$)

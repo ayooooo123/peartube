@@ -14,7 +14,68 @@
     // Sized arrays (QR modules, block maps) are filled right after.
     "unicorn/no-new-array": "off",
     // Filenames are scrubbed of control characters on purpose.
-    "no-control-regex": "off"
+    "no-control-regex": "off",
+    // Complexity and hygiene gates for all new and clean files.
+    "eqeqeq": ["error", "smart"],
+    "no-var": "error",
+    "max-depth": ["error", 4],
+    "max-params": ["error", 5],
+    "max-lines": ["error", { "max": 500, "skipBlankLines": true, "skipComments": true }]
   },
+  "overrides": [
+    {
+      // Test suites are allowed to be long; keep complexity rules active on them.
+      "files": ["test/**/*.js", "test/**/*.mjs"],
+      "rules": {
+        "max-lines": "off"
+      }
+    },
+    {
+      // Legacy files grandfathered on max-lines; shrink over time, never add new ones here.
+      "files": [
+        "src/cast.js",
+        "src/hiverelay.js",
+        "src/http.js",
+        "src/lan.js",
+        "src/mirror.js",
+        "src/node/blobs.js",
+        "src/private-overlay.js",
+        "src/providers/soulseek.js",
+        "src/ui.js",
+        "web/assets/player-worker.js"
+      ],
+      "rules": {
+        "max-lines": "off"
+      }
+    },
+    {
+      // Legacy files grandfathered on max-depth; new files cap at 4.
+      "files": [
+        "ios/e2e.mjs",
+        "src/acquire.js",
+        "src/apply.js",
+        "src/hiverelay.js",
+        "src/http.js",
+        "src/index.js",
+        "src/mirror.js",
+        "src/private-overlay.js",
+        "test/private-wan.mjs"
+      ],
+      "rules": {
+        "max-depth": "off"
+      }
+    },
+    {
+      // Legacy files grandfathered on max-params; new functions cap at 5.
+      "files": [
+        "src/acquire.js",
+        "src/mirror.js",
+        "web/assets/player-worker.js"
+      ],
+      "rules": {
+        "max-params": "off"
+      }
+    }
+  ],
   "ignorePatterns": ["desktop/target/**", "android/build/**", "android/**/build/**", "worklet/vendor/**"]
 }

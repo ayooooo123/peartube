@@ -1,0 +1,16 @@
+id: swift-no-force-try-cast
+snapshots:
+  ? |
+    let label = view as! UILabel
+  : labels:
+    - source: view as! UILabel
+      style: primary
+      start: 12
+      end: 28
+  ? |
+    let value = try! loadItem()
+  : labels:
+    - source: try! loadItem()
+      style: primary
+      start: 12
+      end: 27

@@ -1,0 +1,20 @@
+id: kt-no-catch-throwable
+valid:
+  - |
+    try { work() } catch (e: IOException) { log(e) }
+  - |
+    try {
+      work()
+    } catch (e: Throwable) {
+      if (e is CancellationException) throw e
+      log(e)
+    }
+invalid:
+  - |
+    try {
+      work()
+    } catch (e: Throwable) {
+      log(e)
+    }
+  - |
+    try { work() } catch (_: Throwable) {}

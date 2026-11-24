@@ -1,0 +1,13 @@
+id: no-holepunch-private-api
+valid:
+  - |
+    const stream = core.createReadStream()
+  - |
+    const key = store.get({ name: 'main' })
+invalid:
+  - |
+    const s = client._stream
+  - |
+    const raw = bee._core
+  - |
+    swarm._dht.destroy()

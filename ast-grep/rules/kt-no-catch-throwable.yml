@@ -1,0 +1,15 @@
+id: kt-no-catch-throwable
+language: kotlin
+severity: error
+message: Catching Throwable without rethrowing CancellationException breaks Kotlin coroutine cancellation.
+note: |
+  Catch a narrower Exception type, or rethrow CancellationException explicitly before handling the error.
+  See docs/code-rules.md#kt-no-catch-throwable.
+files:
+  - android/**/src/main/**/*.kt
+rule:
+  kind: catch_block
+  all:
+    - regex: :\s*Throwable\b
+    - not:
+        regex: CancellationException

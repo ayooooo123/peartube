@@ -1,0 +1,13 @@
+id: no-buffer-alloc-unsafe
+valid:
+  - |
+    const buf = Buffer.alloc(64)
+  - |
+    const b = b4a.alloc(32)
+invalid:
+  - |
+    const buf = Buffer.allocUnsafe(64)
+  - |
+    const buf = Buffer.allocUnsafeSlow(64)
+  - |
+    const b = b4a.allocUnsafe(32)

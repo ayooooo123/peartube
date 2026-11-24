@@ -1,0 +1,14 @@
+id: swift-no-force-try-cast
+language: swift
+severity: error
+message: Avoid try! and as! in production iOS code; both crash the app on unexpected input.
+note: |
+  Use do/try/catch, try?, or conditional cast (as?) with explicit fallback handling.
+  See docs/code-rules.md#swift-no-force-try-cast.
+files:
+  - ios/App/**/*.swift
+  - ios/Runtime/**/*.swift
+rule:
+  any:
+    - pattern: try! $X
+    - pattern: $X as! $T

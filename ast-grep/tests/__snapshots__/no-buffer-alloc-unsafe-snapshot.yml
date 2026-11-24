@@ -1,0 +1,23 @@
+id: no-buffer-alloc-unsafe
+snapshots:
+  ? |
+    const b = b4a.allocUnsafe(32)
+  : labels:
+    - source: b4a.allocUnsafe(32)
+      style: primary
+      start: 10
+      end: 29
+  ? |
+    const buf = Buffer.allocUnsafe(64)
+  : labels:
+    - source: Buffer.allocUnsafe(64)
+      style: primary
+      start: 12
+      end: 34
+  ? |
+    const buf = Buffer.allocUnsafeSlow(64)
+  : labels:
+    - source: Buffer.allocUnsafeSlow(64)
+      style: primary
+      start: 12
+      end: 38

@@ -1,0 +1,35 @@
+id: no-holepunch-private-api
+snapshots:
+  ? |
+    const raw = bee._core
+  : labels:
+    - source: bee._core
+      style: primary
+      start: 12
+      end: 21
+    - source: _core
+      style: secondary
+      start: 16
+      end: 21
+  ? |
+    const s = client._stream
+  : labels:
+    - source: client._stream
+      style: primary
+      start: 10
+      end: 24
+    - source: _stream
+      style: secondary
+      start: 17
+      end: 24
+  ? |
+    swarm._dht.destroy()
+  : labels:
+    - source: swarm._dht
+      style: primary
+      start: 0
+      end: 10
+    - source: _dht
+      style: secondary
+      start: 6
+      end: 10

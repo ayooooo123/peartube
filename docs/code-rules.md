@@ -98,7 +98,18 @@ If a match is correct code, put a comment on the line before it: `// ast-grep-ig
 
 ### Module boundaries
 
-- **The one way:** `src/protocol.js` and `src/apply.js` hold what peers and the apps agree on. Everything may import them, and they import no PearTube code. `bin/relay.js` puts the parts together.
-- **Why:** the apps and the Rust engine read the same rules; a rule that depends on relay code cannot be shared.
+- **The one way:** `src/protocol.js` and `src/apply.js` hold what peers and the apps agree on. Everything may import them, and they import no PearTube code (`src/apply.js` may import `./protocol.js` only). `worklet/` never imports relay-only modules (`src/ssrf.js`, `src/identify.js`, `bare-subprocess`, `node:child_process`). `bin/relay.js` puts the parts together.
+- **Why:** the apps and the Rust engine read the same rules; a rule that depends on relay code cannot be shared, and mobile worklets pack no subprocess runtime.
 - **Fault:** none found in the last checks.
-- **Check:** none yet.
+- **Check:** ast-grep rules `protocol-no-peartube-imports` and `worklet-no-relay-imports`.
+
+### Additional machine-checked hygiene and safety rules
+
+- `no-holepunch-private-api` (JS): use documented Holepunch APIs instead of private underscore fields (`._stream`, `._core`, `._dht`, `._swarm`, `._bee`, `._store`, `._mux`).
+- `no-buffer-alloc-unsafe` (JS): use `Buffer.alloc` / `b4a.alloc` so uninitialized heap bytes do not leak.
+- `js-no-nested-ternary` (JS): use flat `if`/`else` or helper functions instead of nested ternaries.
+- `js-no-empty-catch` (JS): handle or log caught errors, or annotate intentional ignores with `// ast-grep-ignore: js-no-empty-catch -- <reason>`.
+- `kt-no-force-nonnull` & `kt-no-catch-throwable` (Kotlin, `android/**/src/main/`): avoid `!!` and un-rethrown `catch (e: Throwable)` (which breaks coroutine cancellation).
+- `swift-no-force-try-cast` (Swift, `ios/App/` & `ios/Runtime/`): avoid `try!` and `as!`.
+- `.oxlintrc.json`: enforces `eqeqeq`, `no-var`, `max-depth` (4), `max-params` (5), and `max-lines` (500) on all new and non-grandfathered JS files.
+- `desktop/clippy.toml` & `web/clippy.toml`: set Clippy complexity thresholds and deny `todo`, `dbg_macro`, and `await_holding_lock`.

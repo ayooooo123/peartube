@@ -1,0 +1,17 @@
+id: no-holepunch-private-api
+language: javascript
+severity: error
+message: Avoid reaching into private underscore Holepunch internals.
+note: |
+  Use documented public APIs instead of private fields like ._stream, ._core, ._dht, ._swarm, ._bee, ._store, or ._mux.
+  Private fields break across Holepunch dependency updates and diverge from the Rust port.
+  See docs/code-rules.md#no-holepunch-private-api.
+files:
+  - src/**/*.js
+  - bin/**/*.js
+  - worklet/**/*.js
+rule:
+  kind: member_expression
+  has:
+    field: property
+    regex: ^_(stream|core|dht|swarm|bee|store|mux)$

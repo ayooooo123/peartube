@@ -1,0 +1,15 @@
+id: js-no-nested-ternary
+valid:
+  - |
+    const label = ok ? 'ready' : 'waiting'
+  - |
+    function pick(a, b) {
+      if (a) return 1
+      if (b) return 2
+      return 3
+    }
+invalid:
+  - |
+    const x = a ? (b ? 1 : 2) : 3
+  - |
+    const x = a ? 1 : b ? 2 : 3

@@ -1,0 +1,11 @@
+id: swift-no-force-try-cast
+valid:
+  - |
+    let value = try? loadItem()
+  - |
+    guard let label = view as? UILabel else { return }
+invalid:
+  - |
+    let value = try! loadItem()
+  - |
+    let label = view as! UILabel

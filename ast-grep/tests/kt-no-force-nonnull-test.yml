@@ -1,0 +1,11 @@
+id: kt-no-force-nonnull
+valid:
+  - |
+    val name = user?.name ?: "guest"
+  - |
+    val id = requireNotNull(rawId) { "missing id" }
+invalid:
+  - |
+    val name = user!!.name
+  - |
+    process(item!!)

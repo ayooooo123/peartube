@@ -916,7 +916,11 @@ impl PearTube {
             })
             .take(24)
             .collect();
-        let track_items: Vec<TrackItem> = matched_tracks.iter().map(|r| TrackItem::from_track_row(r)).collect();
+        let track_items: std::sync::Arc<[TrackItem]> = matched_tracks
+            .iter()
+            .map(|r| TrackItem::from_track_row(r))
+            .collect::<Vec<_>>()
+            .into();
 
         let matched_ms: Vec<&VideoTile> = self
             .catalog
@@ -1055,7 +1059,7 @@ impl PearTube {
                                         .border_t_1()
                                         .border_color(rgb(LINE))
                                         .children(matched_tracks.into_iter().enumerate().map(|(idx, row)| {
-                                            let list = track_items.clone();
+                                            let list = std::sync::Arc::clone(&track_items);
                                             let src = search_src.clone();
                                             h_flex()
                                                 .id(SharedString::from(format!("srch-trk-{idx}-{}", row.entry.key)))
@@ -1068,7 +1072,7 @@ impl PearTube {
                                                 .cursor_pointer()
                                                 .hover(|s| s.bg(hsla(0., 0., 1., 0.03)))
                                                 .on_click(cx.listener(move |this, _, window, cx| {
-                                                    this.play_music_list(list.clone(), idx, src.clone(), None, window, cx);
+                                                    this.play_music_list(list.to_vec(), idx, src.clone(), None, window, cx);
                                                 }))
                                                 .child(album_sleeve(row.hue, row.seed, &row.monogram, 34.))
                                                 .child(

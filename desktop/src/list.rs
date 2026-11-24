@@ -14,7 +14,7 @@ use gpui_kit::*;
 use peartube::worker::{Entry, Status};
 
 use crate::api::{AcquireJob, IdentifyResult, extract_shared_url, format_duration, is_web_url};
-use crate::app::{DetailView, ListenTab, NetworkTab, PearTube, Room, WatchKind};
+use crate::app::{DetailView, ListenTab, NetworkTab, PearTube, Room, WatchKind, WatchViewMode};
 use crate::qr::qr_card;
 use crate::theme::{ACCENT, BG, BRAND, BRAND_HOVER, CARD, CARD_ELEVATED, DANGER, DIM, INK, LINE};
 
@@ -108,6 +108,12 @@ pub fn column() -> Div {
     v_flex().w_full().max_w(px(1080.)).mx_auto().px_6()
 }
 
+pub fn grid_columns(window: &Window, card_width: f32, gap: f32) -> usize {
+    let viewport_w: f32 = window.viewport_size().width.into();
+    let avail = (viewport_w.min(1080.0) - 48.0).max(card_width);
+    ((avail + gap) / (card_width + gap)).floor().max(1.0) as usize
+}
+
 pub struct AddModalForm {
     pub input: Entity<InputState>,
     pub identified_url: Option<String>,
@@ -171,7 +177,7 @@ impl AddModalForm {
 
 impl PearTube {
     /// Renders the main Listen and Watch workspace (top bar + active room/detail).
-    pub fn render_list(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    pub fn render_list(&self, window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
         let active_nav = self.active_nav_room();
         let casting = self.cast.session.is_some();
         let jobs_pill = top_bar_jobs_pill(&self.jobs);
@@ -194,6 +200,13 @@ impl PearTube {
                 .child(text)
         };
 
+        let self_scrolling = self.detail.is_none()
+            && (matches!(self.room, Room::Listen(_))
+                || (self.watch_view == WatchViewMode::Rows
+                    && matches!(
+                        self.room,
+                        Room::Watch(WatchKind::Movies | WatchKind::Series | WatchKind::Clips)
+                    )));
         let body: AnyElement = match &self.detail {
             Some(DetailView::Album(key)) => self.render_album_detail(key, cx).into_any_element(),
             Some(DetailView::Artist(key)) => self.render_artist_detail(key, cx).into_any_element(),
@@ -202,8 +215,8 @@ impl PearTube {
             Some(DetailView::Playing) => self.render_playing_view(cx).into_any_element(),
             None => match &self.room {
                 Room::Home => self.render_home(cx).into_any_element(),
-                Room::Listen(tab) => self.render_listen(tab.clone(), cx).into_any_element(),
-                Room::Watch(kind) => self.render_watch(kind.clone(), cx).into_any_element(),
+                Room::Listen(tab) => self.render_listen(tab.clone(), window, cx).into_any_element(),
+                Room::Watch(kind) => self.render_watch(kind.clone(), window, cx).into_any_element(),
                 Room::Discover => self.render_discover(cx).into_any_element(),
                 Room::Search => self.render_search(cx).into_any_element(),
                 Room::Network(tab) => self.render_network(*tab, cx).into_any_element(),
@@ -364,14 +377,23 @@ impl PearTube {
                 ),
             )
             .when(self.hood_open, |this| this.child(self.render_under_the_hood(cx)))
-            .child(
+            .child(if self_scrolling {
+                div()
+                    .id("main-virtual")
+                    .flex_1()
+                    .min_h_0()
+                    .size_full()
+                    .child(body)
+                    .into_any_element()
+            } else {
                 div()
                     .id("main-scroll")
                     .flex_1()
                     .min_h_0()
                     .overflow_y_scrollbar()
-                    .child(body),
-            )
+                    .child(body)
+                    .into_any_element()
+            })
     }
 
     fn render_network_pill(&self, active_nav: &Room, cx: &mut Context<Self>) -> impl IntoElement {

@@ -1147,6 +1147,13 @@ impl PearTube {
         if !self.music_audio.is_open() {
             return;
         }
+        let prev_sig = (
+            self.music_state.playing,
+            self.music_state.buffering,
+            self.music_state.position.as_secs(),
+            self.music_state.duration.map(|d| d.as_secs()),
+            self.music_state.error.clone(),
+        );
         let st = self.music_audio.state();
         self.music_audio.apply_pending_seek(&st);
         self.music_state = st;
@@ -1164,6 +1171,7 @@ impl PearTube {
             return;
         }
 
+        let mut seek_created = false;
         if let (None, Some(dur)) = (&self.music_seek, self.music_state.duration) {
             if let Some(cur) = self.music_queue.current() {
                 let dur_secs = dur.as_secs();
@@ -1175,6 +1183,7 @@ impl PearTube {
             let seek = cx.new(|_| SliderState::new().min(0.).max(max_s).step(1.));
             let sub = cx.subscribe_in(&seek, window, Self::on_music_seek);
             self.music_seek = Some((seek, sub));
+            seek_created = true;
         }
         if let (Some((seek, _)), None) = (&self.music_seek, self.music_dragging) {
             let at = self.music_state.position.as_secs_f32().floor();
@@ -1193,7 +1202,16 @@ impl PearTube {
             }
             self.music_queue.save();
         }
-        cx.notify();
+        let next_sig = (
+            self.music_state.playing,
+            self.music_state.buffering,
+            self.music_state.position.as_secs(),
+            self.music_state.duration.map(|d| d.as_secs()),
+            self.music_state.error.clone(),
+        );
+        if seek_created || next_sig != prev_sig {
+            cx.notify();
+        }
     }
 
     fn on_music_seek(
@@ -1265,6 +1283,134 @@ impl PearTube {
         } else {
             self.show_notice("Added to Up next".into(), cx);
         }
+    }
+
+    pub fn play_all_library_tracks(
+        &mut self,
+        shuffle_override: Option<bool>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let items: Vec<TrackItem> = self.catalog.tracks.iter().map(TrackItem::from_track_row).collect();
+        self.play_music_list(items, 0, "Library".to_string(), shuffle_override, window, cx);
+    }
+
+    pub fn play_album_key(
+        &mut self,
+        album_key: &str,
+        start_index: usize,
+        shuffle_override: Option<bool>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some((items, label)) = self
+            .catalog
+            .album_by_key(album_key)
+            .map(|a| (TrackItem::from_album(a), a.album.clone()))
+        else {
+            return;
+        };
+        self.play_music_list(items, start_index, label, shuffle_override, window, cx);
+    }
+
+    pub fn queue_album_key(
+        &mut self,
+        album_key: &str,
+        play_next: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some((items, label)) = self
+            .catalog
+            .album_by_key(album_key)
+            .map(|a| (TrackItem::from_album(a), a.album.clone()))
+        else {
+            return;
+        };
+        if play_next {
+            self.play_music_next(items, label, window, cx);
+        } else {
+            self.play_music_last(items, label, window, cx);
+        }
+    }
+
+    pub fn play_artist_key(
+        &mut self,
+        artist_key: &str,
+        start_index: usize,
+        shuffle_override: Option<bool>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some((items, label)) = self.artist_tracks_by_key(artist_key) else {
+            return;
+        };
+        self.play_music_list(items, start_index, label, shuffle_override, window, cx);
+    }
+
+    pub fn queue_artist_key(
+        &mut self,
+        artist_key: &str,
+        play_next: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some((items, label)) = self.artist_tracks_by_key(artist_key) else {
+            return;
+        };
+        if play_next {
+            self.play_music_next(items, label, window, cx);
+        } else {
+            self.play_music_last(items, label, window, cx);
+        }
+    }
+
+    fn artist_tracks_by_key(&self, artist_key: &str) -> Option<(Vec<TrackItem>, String)> {
+        let artist = self.catalog.artist_by_key(artist_key)?;
+        let items: Vec<TrackItem> = artist
+            .album_keys
+            .iter()
+            .filter_map(|k| self.catalog.album_by_key(k))
+            .flat_map(TrackItem::from_album)
+            .collect();
+        Some((items, artist.name.clone()))
+    }
+
+    pub fn queue_track_entry(
+        &mut self,
+        entry_key: &str,
+        play_next: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(item) = self
+            .catalog
+            .tracks
+            .iter()
+            .find(|r| r.entry.key == entry_key)
+            .map(TrackItem::from_track_row)
+        else {
+            return;
+        };
+        let album = item.album.clone();
+        if play_next {
+            self.play_music_next(vec![item], album, window, cx);
+        } else {
+            self.play_music_last(vec![item], album, window, cx);
+        }
+    }
+
+    pub fn download_track_entry(&mut self, entry_key: &str, cx: &mut Context<Self>) {
+        let Some((entry, title)) = self
+            .catalog
+            .tracks
+            .iter()
+            .find(|r| r.entry.key == entry_key)
+            .map(|r| (r.entry.clone(), r.track_name.clone()))
+        else {
+            return;
+        };
+        self.download_entry(entry, Some(title), cx);
     }
 
     pub fn toggle_music_play(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -3036,7 +3182,7 @@ impl Render for PearTube {
         let is_video = matches!(self.screen, Screen::Play(_));
         let is_list = matches!(self.screen, Screen::List);
         let screen = match &self.screen {
-            Screen::List => self.render_list(cx).into_any_element(),
+            Screen::List => self.render_list(window, cx).into_any_element(),
             Screen::Settings(form) => self.render_settings(form, cx).into_any_element(),
             Screen::Play(play) => play.clone().into_any_element(),
         };

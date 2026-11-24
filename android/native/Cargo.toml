@@ -17,8 +17,8 @@ serde_json = "1"
 # The video player: peartube-media's engine, OxideAV codecs and the platform
 # video decoders. sync-player.py keeps this rev and the pins below in step
 # with desktop/Cargo.toml.
-player = { git = "https://github.com/ayooooo123/peartube-media", rev = "e85cd4edde1128fb4378f4f0a8b61a436d995a7a" }
-codecs = { git = "https://github.com/ayooooo123/peartube-media", rev = "e85cd4edde1128fb4378f4f0a8b61a436d995a7a" }
+player = { git = "https://github.com/ayooooo123/peartube-media", rev = "569bdd5d300e59e6caf3a1f449a3cec31c4e2ac6" }
+codecs = { git = "https://github.com/ayooooo123/peartube-media", rev = "569bdd5d300e59e6caf3a1f449a3cec31c4e2ac6" }
 oxideav-core = "*"
 
 # Stripped, fat LTO, one codegen unit. LTO drops code nothing references;

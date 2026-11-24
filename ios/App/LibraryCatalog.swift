@@ -243,6 +243,18 @@ struct TrackRow: Identifiable, Hashable {
 
     var id: String { entry.key }
     var displayArtist: String { artist.isEmpty ? "Unknown artist" : artist }
+
+    /// Quality string when known without probing remote files (Rule 12: unknown stays unknown).
+    var qualityLabel: String? {
+        if entry.isYouTube { return "YouTube · AAC 128" }
+        return nil
+    }
+
+    /// Numeric quality rank for sorting when known; nil sorts last in both directions.
+    var qualityRank: Int? {
+        if entry.isYouTube { return 128 }
+        return nil
+    }
 }
 
 struct ArtistGroup: Identifiable, Hashable {
@@ -253,9 +265,11 @@ struct ArtistGroup: Identifiable, Hashable {
 }
 
 enum TrackSortField: String, CaseIterable, Identifiable {
+    case library = "Library order"
     case title = "Title"
     case artist = "Artist"
     case album = "Album"
+    case quality = "Quality"
     case size = "Size"
 
     var id: String { rawValue }
@@ -336,28 +350,80 @@ struct LibraryCatalog {
                 || row.artist.localizedCaseInsensitiveContains(q)
                 || row.albumTitle.localizedCaseInsensitiveContains(q)
         }
+        func compareStrings(_ a: String, _ b: String) -> ComparisonResult {
+            a.localizedCaseInsensitiveCompare(b)
+        }
+        func tieBreak(_ a: TrackRow, _ b: TrackRow) -> Bool {
+            let cmp = compareStrings(a.title, b.title)
+            if cmp != .orderedSame { return cmp == .orderedAscending }
+            return a.entry.key < b.entry.key
+        }
         return filtered.sorted { a, b in
-            let order: ComparisonResult
             switch sortBy {
-            case .title:
-                order = a.title.localizedCaseInsensitiveCompare(b.title)
-            case .artist:
-                let aa = a.artist, ba = b.artist
-                if aa.isEmpty != ba.isEmpty { return !aa.isEmpty }
-                order = aa.localizedCaseInsensitiveCompare(ba)
-            case .album:
-                order = a.albumTitle.localizedCaseInsensitiveCompare(b.albumTitle)
-            case .size:
-                if a.entry.size == b.entry.size {
-                    order = a.title.localizedCaseInsensitiveCompare(b.title)
-                } else {
-                    return ascending ? a.entry.size < b.entry.size : a.entry.size > b.entry.size
+            case .library:
+                let aArtistEmpty = a.artist.isEmpty
+                let bArtistEmpty = b.artist.isEmpty
+                if aArtistEmpty != bArtistEmpty { return !aArtistEmpty }
+                let artistCmp = compareStrings(a.artist, b.artist)
+                if artistCmp != .orderedSame {
+                    return ascending ? artistCmp == .orderedAscending : artistCmp == .orderedDescending
                 }
+                let albumCmp = compareStrings(a.albumTitle, b.albumTitle)
+                if albumCmp != .orderedSame {
+                    return ascending ? albumCmp == .orderedAscending : albumCmp == .orderedDescending
+                }
+                if a.disc != b.disc { return ascending ? a.disc < b.disc : a.disc > b.disc }
+                if a.track != b.track { return ascending ? a.track < b.track : a.track > b.track }
+                return tieBreak(a, b)
+
+            case .title:
+                let aEmpty = a.title.isEmpty
+                let bEmpty = b.title.isEmpty
+                if aEmpty != bEmpty { return !aEmpty }
+                let cmp = compareStrings(a.title, b.title)
+                if cmp == .orderedSame { return tieBreak(a, b) }
+                return ascending ? cmp == .orderedAscending : cmp == .orderedDescending
+
+            case .artist:
+                let aEmpty = a.artist.isEmpty
+                let bEmpty = b.artist.isEmpty
+                if aEmpty != bEmpty { return !aEmpty }
+                let cmp = compareStrings(a.artist, b.artist)
+                if cmp == .orderedSame { return tieBreak(a, b) }
+                return ascending ? cmp == .orderedAscending : cmp == .orderedDescending
+
+            case .album:
+                let aEmpty = a.albumTitle.isEmpty
+                let bEmpty = b.albumTitle.isEmpty
+                if aEmpty != bEmpty { return !aEmpty }
+                let cmp = compareStrings(a.albumTitle, b.albumTitle)
+                if cmp == .orderedSame {
+                    if a.disc != b.disc { return a.disc < b.disc }
+                    if a.track != b.track { return a.track < b.track }
+                    return tieBreak(a, b)
+                }
+                return ascending ? cmp == .orderedAscending : cmp == .orderedDescending
+
+            case .quality:
+                switch (a.qualityRank, b.qualityRank) {
+                case (nil, nil):
+                    return tieBreak(a, b)
+                case (nil, _):
+                    return false
+                case (_, nil):
+                    return true
+                case (let aq?, let bq?):
+                    if aq == bq { return tieBreak(a, b) }
+                    return ascending ? aq < bq : aq > bq
+                }
+
+            case .size:
+                let aKnown = a.entry.size > 0
+                let bKnown = b.entry.size > 0
+                if aKnown != bKnown { return aKnown }
+                if a.entry.size == b.entry.size { return tieBreak(a, b) }
+                return ascending ? a.entry.size < b.entry.size : a.entry.size > b.entry.size
             }
-            if order == .orderedSame {
-                return a.title.localizedCaseInsensitiveCompare(b.title) == .orderedAscending
-            }
-            return ascending ? order == .orderedAscending : order == .orderedDescending
         }
     }
 

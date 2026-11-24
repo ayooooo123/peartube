@@ -62,6 +62,7 @@ import com.peartube.shared.formatBytes
 fun UnderTheHoodSheet(
     model: AppModel,
     onClose: () -> Unit,
+    onOpenNetwork: () -> Unit,
     onOpenSettings: () -> Unit,
 ) {
     val status by model.status.collectAsState()
@@ -97,6 +98,10 @@ fun UnderTheHoodSheet(
                 color = Accent,
                 fontSize = 14.sp,
             )
+            TextButton(onClick = onOpenNetwork) {
+                Icon(GlobeIcon, null, tint = Brand, modifier = Modifier.size(18.dp))
+                Text("Network activity (Globe, Swarm, Flow)", color = Brand, modifier = Modifier.padding(start = 6.dp))
+            }
             HorizontalDivider(color = Line)
             Text("Channels", color = Ink, fontWeight = FontWeight.SemiBold)
             val sources = status?.sources.orEmpty()

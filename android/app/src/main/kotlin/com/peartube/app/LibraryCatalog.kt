@@ -5,6 +5,7 @@ import java.text.Normalizer
 import java.util.Locale
 import kotlin.math.max
 import kotlin.math.roundToLong
+import kotlin.random.Random
 
 enum class LibraryKind {
     Movie,
@@ -14,9 +15,11 @@ enum class LibraryKind {
 }
 
 enum class TrackSort(val label: String) {
+    LibraryOrder("Library order"),
     Title("Title"),
     Artist("Artist"),
     Album("Album"),
+    Quality("Quality"),
     Size("Size"),
 }
 
@@ -63,6 +66,8 @@ data class ArtistGroup(
 data class TrackRow(
     val album: LibraryTile,
     val item: TileItem,
+    val quality: String? = null,
+    val qualityScore: Int? = null,
 ) {
     val entry: Entry get() = item.entry
     val name: String get() = trackName(entry)
@@ -70,6 +75,18 @@ data class TrackRow(
     val albumName: String get() = album.album.ifBlank { album.title }
     val number: String get() = trackNo(entry)
     val size: Long get() = entry.size
+    val effectiveQualityLabel: String?
+        get() = quality?.takeIf { it.isNotBlank() } ?: when {
+            isYt(entry) -> "YouTube · AAC 128 kbps"
+            isSc(entry) -> "SoundCloud"
+            else -> null
+        }
+    val effectiveQualityScore: Int?
+        get() = qualityScore?.takeIf { it > 0 } ?: when {
+            isYt(entry) -> 128
+            isSc(entry) -> 128
+            else -> null
+        }
 }
 
 data class LibraryCatalog(
@@ -139,6 +156,8 @@ private val SMALL_WORDS = setOf(
 
 fun isYt(e: Entry): Boolean = e.id.startsWith("yt:")
 
+fun isSc(e: Entry): Boolean = e.id.startsWith("sc:")
+
 fun isSaved(e: Entry): Boolean = e.local || (e.size > 0L && e.cachedBytes >= e.size)
 
 fun trackName(e: Entry): String {
@@ -171,6 +190,18 @@ fun formatTimeLeft(remainingMs: Long): String {
         "$mins min"
     }
     return "$parts left"
+}
+
+/** Duration in words without "left": "1 h 40 min", "42 min". */
+fun formatDurationWords(seconds: Long): String {
+    val m = max(1L, (max(0L, seconds) / 60.0).roundToLong())
+    val hrs = m / 60L
+    val mins = m % 60L
+    return if (hrs > 0L) {
+        if (mins > 0L) "$hrs h $mins min" else "$hrs h"
+    } else {
+        "$mins min"
+    }
 }
 
 fun tileFactsLine(t: LibraryTile): String {
@@ -547,7 +578,7 @@ fun findIn(words: String): QueryMatcher = QueryMatcher(words)
 fun buildTrackRows(
     albums: List<LibraryTile>,
     filter: String = "",
-    sort: TrackSort = TrackSort.Title,
+    sort: TrackSort = TrackSort.LibraryOrder,
     ascending: Boolean = true,
 ): List<TrackRow> {
     val all = albums.flatMap { album -> album.items.map { TrackRow(album, it) } }
@@ -559,15 +590,21 @@ fun buildTrackRows(
             matcher.matchesTrack(row.name, "${row.album.title} ${row.artist}")
         }
     }
+    if (sort == TrackSort.LibraryOrder) {
+        return if (ascending) filtered else filtered.reversed()
+    }
     val dir = if (ascending) 1 else -1
     return filtered.sortedWith { a, b ->
         when (sort) {
+            TrackSort.LibraryOrder -> 0
             TrackSort.Title -> compareStringsUnknownLast(a.name, b.name, dir)
             TrackSort.Artist -> compareStringsUnknownLast(a.artist, b.artist, dir)
                 .takeIf { it != 0 } ?: compareStringsUnknownLast(a.albumName, b.albumName, 1)
             TrackSort.Album -> compareStringsUnknownLast(a.albumName, b.albumName, dir)
                 .takeIf { it != 0 } ?: compareValues(a.item.season ?: 0, b.item.season ?: 0)
                 .takeIf { it != 0 } ?: compareValues(a.item.episode ?: 0, b.item.episode ?: 0)
+            TrackSort.Quality -> compareNullableIntsUnknownLast(a.effectiveQualityScore, b.effectiveQualityScore, dir)
+                .takeIf { it != 0 } ?: compareLongsUnknownLast(a.size, b.size, -1)
             TrackSort.Size -> compareLongsUnknownLast(a.size, b.size, dir)
         }
     }
@@ -589,6 +626,97 @@ private fun compareLongsUnknownLast(a: Long, b: Long, dir: Int): Int {
     if (aUnknown) return 1
     if (bUnknown) return -1
     return a.compareTo(b) * dir
+}
+
+private fun compareNullableIntsUnknownLast(a: Int?, b: Int?, dir: Int): Int {
+    val aUnknown = a == null || a <= 0
+    val bUnknown = b == null || b <= 0
+    if (aUnknown && bUnknown) return 0
+    if (aUnknown) return 1
+    if (bUnknown) return -1
+    return (a ?: 0).compareTo(b ?: 0) * dir
+}
+
+private val LEADING_ARTICLE_RE = Regex("^(?:the|a|an)\\s+", RegexOption.IGNORE_CASE)
+
+fun sortTitleKey(title: String): String =
+    title.trim().replace(LEADING_ARTICLE_RE, "").lowercase(Locale.ROOT)
+
+fun indexLetter(title: String): Char {
+    val key = sortTitleKey(title)
+    val first = key.firstOrNull { it.isLetterOrDigit() } ?: return '#'
+    return if (first.isLetter()) first.uppercaseChar() else '#'
+}
+
+data class VideoResumeInfo(
+    val tile: LibraryTile,
+    val entry: Entry,
+    val progress: WatchProgress,
+    val fraction: Float,
+)
+
+fun findStartedVideos(
+    videos: List<LibraryTile>,
+    history: Map<String, WatchProgress>,
+): List<VideoResumeInfo> {
+    val result = mutableListOf<VideoResumeInfo>()
+    for (tile in videos) {
+        val best = tile.items
+            .mapNotNull { item ->
+                val p = history[item.entry.key] ?: return@mapNotNull null
+                if (!p.partial) return@mapNotNull null
+                val pct = if (p.durationMs > 0L) p.positionMs.toFloat() / p.durationMs else 0f
+                if (p.durationMs > 0L && (pct < 0.01f || pct > 0.96f)) return@mapNotNull null
+                VideoResumeInfo(tile = tile, entry = item.entry, progress = p, fraction = pct)
+            }
+            .maxByOrNull { it.progress.updatedAt } ?: continue
+        result.add(best)
+    }
+    return result.sortedByDescending { it.progress.updatedAt }
+}
+
+fun nextEpisodeForSeries(
+    tile: LibraryTile,
+    history: Map<String, WatchProgress>,
+): Entry? {
+    val episodes = tile.items.map { it.entry }.distinctBy { it.id }
+    if (episodes.isEmpty()) return null
+    val latest = episodes
+        .mapNotNull { e -> history[e.key]?.let { e to it } }
+        .maxByOrNull { it.second.updatedAt }
+    val resume = latest?.takeIf { it.second.partial }?.first
+        ?: latest?.let { pair -> episodes.getOrNull(episodes.indexOf(pair.first) + 1) }
+    return resume ?: episodes.firstOrNull()
+}
+
+fun primaryEntryForVideo(
+    tile: LibraryTile,
+    history: Map<String, WatchProgress>,
+): Entry? = if (tile.kind == LibraryKind.Series) {
+    nextEpisodeForSeries(tile, history)
+} else {
+    tile.items.firstOrNull()?.entry
+}
+
+fun pickSurpriseVideo(
+    videos: List<LibraryTile>,
+    history: Map<String, WatchProgress>,
+    excludeKey: String? = null,
+    random: Random = Random.Default,
+): LibraryTile? {
+    if (videos.isEmpty()) return null
+    fun isUnwatched(t: LibraryTile): Boolean = t.items.none { history.containsKey(it.entry.key) }
+    val candidates = videos.filter { it.key != excludeKey }
+    val pool = candidates.filter { (it.allSaved || it.saved > 0) && isUnwatched(it) }.ifEmpty {
+        candidates.filter { isUnwatched(it) }
+    }.ifEmpty {
+        candidates.filter { it.allSaved || it.saved > 0 }
+    }.ifEmpty {
+        candidates
+    }.ifEmpty {
+        videos
+    }
+    return pool[random.nextInt(pool.size)]
 }
 
 fun TrackRow.toTrackItem(): TrackItem = TrackItem(

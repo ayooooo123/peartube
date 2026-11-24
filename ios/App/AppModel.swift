@@ -2,10 +2,38 @@ import Foundation
 import SwiftUI
 import UIKit
 
+struct RouteSnapshot: Equatable {
+    let key: String
+    let label: String
+    let peers: Int
+    let downBps: Double
+    let upBps: Double
+    let rxBytes: Double
+    let txBytes: Double
+}
+
+struct NetworkSnapshot: Equatable {
+    let lan: RouteSnapshot
+    let internet: RouteSnapshot
+    let privateRoute: RouteSnapshot
+    let downBps: Double
+    let upBps: Double
+    let rxBytes: Double
+    let txBytes: Double
+    let cachedBytes: Double
+    let cacheMaxBytes: Double
+    let reciprocityRatio: Double
+
+    var routes: [RouteSnapshot] { [lan, internet, privateRoute] }
+    var totalPeers: Int { lan.peers + internet.peers + privateRoute.peers }
+}
+
 @MainActor
 final class AppModel: ObservableObject {
     @Published var settings = Settings()
     @Published var status: [String: Any] = [:]
+    @Published private(set) var downBpsHistory: [Double] = []
+    @Published private(set) var upBpsHistory: [Double] = []
     @Published var identity: [String: Any] = [:]
     @Published var entries: [MediaEntry] = [] {
         didSet {
@@ -201,6 +229,7 @@ final class AppModel: ObservableObject {
                 "settings": settings.json
             ]
             status = try await worker.request("start", params) as? [String: Any] ?? [:]
+            recordNetworkSample()
             node = .running
             await refreshCast()
             await refresh()
@@ -213,7 +242,7 @@ final class AppModel: ObservableObject {
         do {
             try storage?.save(next, name: "settings.json")
             recordProgress(force: true); player.close(); music.stop()
-            settings = next; entries = []; status = [:]; sourceFilter = ""; showSettings = false
+            settings = next; entries = []; status = [:]; downBpsHistory = []; upBpsHistory = []; sourceFilter = ""; showSettings = false
             await start()
         } catch { self.error = error.localizedDescription }
     }
@@ -244,6 +273,7 @@ final class AppModel: ObservableObject {
             do {
                 guard let worker else { return }
                 status = try await worker.request("status") as? [String: Any] ?? [:]
+                recordNetworkSample()
                 let rows = try await worker.request("search", ["id": NSNull()]) as? [[String: Any]] ?? []
                 if let ident = try? await worker.request("identity", ["revealMnemonic": false]) as? [String: Any] { identity = ident }
                 var seen = Set<String>()
@@ -318,6 +348,93 @@ final class AppModel: ObservableObject {
         return ordered[i + 1]
     }
     func resumePosition(_ entry: MediaEntry) -> Double { history[entry.key].flatMap { $0.partial ? $0.positionMs : nil } ?? 0 }
+
+    var networkSnapshot: NetworkSnapshot {
+        let routesDict = status.object("routes")
+        func makeRoute(_ key: String, label: String, fallbackPeers: Int = 0) -> RouteSnapshot {
+            let r = routesDict.object(key)
+            let peers = r["peers"] != nil ? Int(r.number("peers")) : fallbackPeers
+            return RouteSnapshot(
+                key: key,
+                label: label,
+                peers: max(0, peers),
+                downBps: max(0, r.number("downBps")),
+                upBps: max(0, r.number("upBps")),
+                rxBytes: max(0, r.number("rxBytes")),
+                txBytes: max(0, r.number("txBytes"))
+            )
+        }
+        let lan = makeRoute("lan", label: "Home network", fallbackPeers: Int(status.number("lanPeers")))
+        let internet = makeRoute("public", label: "Internet", fallbackPeers: Int(status.number("peers")))
+        let priv = makeRoute("private", label: "Private route")
+        let rx = max(0, status.number("rxBytes"))
+        let tx = max(0, status.number("txBytes"))
+        let cached = max(0, status.number("cachedBytes"))
+        let rawMax = status.number("cacheMaxBytes")
+        let cacheMax = rawMax > 0 ? rawMax : Double(max(1, settings.cacheMaxGb)) * 1024.0 * 1024.0 * 1024.0
+        let rec = status.object("reciprocity")
+        let ratio = rec["ratio"] != nil ? max(0, rec.number("ratio")) : (rx > 0 ? tx / rx : 0)
+        return NetworkSnapshot(
+            lan: lan,
+            internet: internet,
+            privateRoute: priv,
+            downBps: max(0, status.number("downBps")),
+            upBps: max(0, status.number("upBps")),
+            rxBytes: rx,
+            txBytes: tx,
+            cachedBytes: cached,
+            cacheMaxBytes: cacheMax,
+            reciprocityRatio: ratio
+        )
+    }
+
+    private func recordNetworkSample() {
+        guard !status.isEmpty else { return }
+        downBpsHistory.append(max(0, status.number("downBps")))
+        upBpsHistory.append(max(0, status.number("upBps")))
+        if downBpsHistory.count > 40 {
+            downBpsHistory.removeFirst(downBpsHistory.count - 40)
+        }
+        if upBpsHistory.count > 40 {
+            upBpsHistory.removeFirst(upBpsHistory.count - 40)
+        }
+    }
+
+    func primaryEntry(for tile: LibraryTile) -> MediaEntry? {
+        if tile.kind == .show {
+            return seriesNext(tile.items.map(\.entry))
+        }
+        return tile.firstEntry
+    }
+
+    func pickSurpriseVideo(excluding excludedTileKey: String? = nil, from poolSource: [LibraryTile]? = nil) -> LibraryTile? {
+        let base = (poolSource ?? catalog.allVideos).filter { tile in
+            guard let entry = primaryEntry(for: tile) else { return false }
+            return entry.playable
+        }
+        guard !base.isEmpty else { return nil }
+        let candidates = base.filter { $0.key != excludedTileKey }
+        let usable = candidates.isEmpty ? base : candidates
+        func isUnwatched(_ tile: LibraryTile) -> Bool {
+            !tile.items.contains { (history[$0.entry.key]?.positionMs ?? 0) > 0 }
+        }
+        func isSaved(_ tile: LibraryTile) -> Bool {
+            tile.isFullySaved || tile.saved > 0
+        }
+        let savedUnwatched = usable.filter { isSaved($0) && isUnwatched($0) }
+        if let pick = savedUnwatched.randomElement() { return pick }
+        let anyUnwatched = usable.filter { isUnwatched($0) }
+        if let pick = anyUnwatched.randomElement() { return pick }
+        let anySaved = usable.filter { isSaved($0) }
+        if let pick = anySaved.randomElement() { return pick }
+        return usable.randomElement()
+    }
+
+    func playRandomVideo(excluding excludedTileKey: String? = nil, from poolSource: [LibraryTile]? = nil) {
+        guard let tile = pickSurpriseVideo(excluding: excludedTileKey, from: poolSource),
+              let entry = primaryEntry(for: tile) else { return }
+        play(entry)
+    }
 
     func openSearch(query text: String? = nil, askRelays: Bool = false) {
         room = .search

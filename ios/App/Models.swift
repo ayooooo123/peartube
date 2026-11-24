@@ -14,7 +14,12 @@ extension Dictionary where Key == String, Value == Any {
     func objects(_ key: String) -> [[String: Any]] { self[key] as? [[String: Any]] ?? [] }
 }
 
-func bytes(_ value: Double) -> String { ByteCountFormatter.string(fromByteCount: Int64(value), countStyle: .binary) }
+func bytes(_ value: Double) -> String { ByteCountFormatter.string(fromByteCount: Int64(max(0, value)), countStyle: .binary) }
+func rateText(_ bps: Double) -> String {
+    let clamped = max(0, bps)
+    if clamped < 1024 { return "\(Int(clamped.rounded())) B/s" }
+    return "\(bytes(clamped))/s"
+}
 func clock(_ ms: Double) -> String {
     let s = max(0, Int(ms / 1000))
     return s >= 3600 ? String(format: "%d:%02d:%02d", s / 3600, s / 60 % 60, s % 60) : String(format: "%d:%02d", s / 60, s % 60)

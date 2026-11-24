@@ -4,7 +4,7 @@
 
 #![forbid(unsafe_code)]
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::io::{BufWriter, Read, Write};
 use std::net::TcpStream;
 use std::path::{Path, PathBuf};
@@ -36,7 +36,7 @@ use crate::api::{
     record_visited_shelf, run_blocking, save_visited_shelves, unwrap_peartube_add,
 };
 use crate::cast_screen::CastSheetForm;
-use crate::catalog::{Catalog, build_catalog, is_music_entry};
+use crate::catalog::{Catalog, VideoTile, build_catalog, is_music_entry};
 use crate::list::AddModalForm;
 use crate::music::{MusicAudio, MusicQueue, PreviousAction, TrackItem};
 use crate::play::{PlayEvent, PlayScreen};
@@ -58,6 +58,23 @@ pub enum WatchKind {
     Clips,
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum WatchViewMode {
+    #[default]
+    Rows,
+    Tonight,
+    Store,
+    Channels,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum NetworkTab {
+    #[default]
+    Globe,
+    Swarm,
+    Flow,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Room {
     Home,
@@ -65,6 +82,7 @@ pub enum Room {
     Watch(WatchKind),
     Discover,
     Search,
+    Network(NetworkTab),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -78,10 +96,13 @@ pub enum DetailView {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TrackSortCol {
+    Order,
     Title,
     Artist,
     Album,
+    Quality,
     Size,
+    Time,
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
@@ -184,8 +205,19 @@ pub struct PearTube {
     pub listen_saved_only: bool,
     pub watch_saved_only: bool,
     pub watch_source_filter: Option<String>,
+    pub watch_view: WatchViewMode,
+    pub watch_surprise_key: Option<String>,
+    pub watch_cover_key: Option<String>,
+    pub watch_az_letter: Option<char>,
+    pub last_room_was_watch: bool,
     pub track_sort: (TrackSortCol, bool),
+    pub track_durations: HashMap<String, u64>,
     pub track_filter: Entity<InputState>,
+    pub net_down_hist: VecDeque<u64>,
+    pub net_up_hist: VecDeque<u64>,
+    pub net_phase: f32,
+    surprise_salt: u64,
+    _net_poll: Task<()>,
     pub artist_show_all: HashSet<String>,
     pub add_modal: Option<AddModalForm>,
     pub cast_modal: Option<CastSheetForm>,
@@ -339,8 +371,19 @@ impl PearTube {
             listen_saved_only: false,
             watch_saved_only: false,
             watch_source_filter: None,
-            track_sort: (TrackSortCol::Title, true),
+            watch_view: WatchViewMode::Rows,
+            watch_surprise_key: None,
+            watch_cover_key: None,
+            watch_az_letter: None,
+            last_room_was_watch: false,
+            track_sort: (TrackSortCol::Order, true),
+            track_durations: HashMap::new(),
             track_filter,
+            net_down_hist: VecDeque::with_capacity(40),
+            net_up_hist: VecDeque::with_capacity(40),
+            net_phase: 0.6,
+            surprise_salt: 1,
+            _net_poll: cx.spawn(async move |this, cx| poll_network_status(this, cx).await),
             artist_show_all: HashSet::new(),
             add_modal: None,
             cast_modal: None,
@@ -433,12 +476,102 @@ impl PearTube {
     pub fn open_room(&mut self, room: Room, cx: &mut Context<Self>) {
         let entering_discover = matches!(room, Room::Discover);
         self.detail = None;
+        self.watch_cover_key = None;
         self.room = room;
         self.screen = Screen::List;
         if entering_discover && self.discover_feed.is_none() && !self.discover_loading {
             self.refresh_discover_feed(false, cx);
         } else {
             cx.notify();
+        }
+    }
+
+    pub fn set_watch_view(&mut self, mode: WatchViewMode, cx: &mut Context<Self>) {
+        self.watch_view = mode;
+        self.watch_cover_key = None;
+        self.detail = None;
+        if !matches!(self.room, Room::Watch(_)) {
+            self.room = Room::Watch(WatchKind::All);
+        }
+        cx.notify();
+    }
+
+    pub fn record_status_sample(&mut self, status: Status) {
+        const MAX_SAMPLES: usize = 40;
+        if self.net_down_hist.len() >= MAX_SAMPLES {
+            self.net_down_hist.pop_front();
+        }
+        if self.net_up_hist.len() >= MAX_SAMPLES {
+            self.net_up_hist.pop_front();
+        }
+        self.net_down_hist.push_back(status.down_bps);
+        self.net_up_hist.push_back(status.up_bps);
+        self.status = Some(status);
+    }
+
+    pub fn pick_surprise_video(&self, exclude_key: Option<&str>, salt: u64) -> Option<VideoTile> {
+        let all: Vec<&VideoTile> = self
+            .catalog
+            .movies
+            .iter()
+            .chain(self.catalog.series.iter())
+            .chain(self.catalog.clips.iter())
+            .collect();
+        if all.is_empty() {
+            return None;
+        }
+        let is_unwatched = |tile: &&VideoTile| -> bool {
+            !tile.items.iter().any(|i| self.watch_history.contains_key(&i.entry.id))
+        };
+        let not_excluded = |tile: &&VideoTile| -> bool {
+            exclude_key.is_none_or(|ex| tile.key != ex)
+        };
+        let mut pool: Vec<&VideoTile> = all
+            .iter()
+            .copied()
+            .filter(|t| t.saved > 0 && is_unwatched(t) && not_excluded(t))
+            .collect();
+        if pool.is_empty() {
+            pool = all
+                .iter()
+                .copied()
+                .filter(|t| is_unwatched(t) && not_excluded(t))
+                .collect();
+        }
+        if pool.is_empty() {
+            pool = all.iter().copied().filter(not_excluded).collect();
+        }
+        if pool.is_empty() {
+            pool = all;
+        }
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_nanos() as u64)
+            .unwrap_or(0);
+        let mixed = nanos
+            .wrapping_add(salt.wrapping_mul(0x9e37_79b9_7f4a_7c15))
+            .wrapping_mul(0x2545_f491_4f6c_dd1d);
+        let idx = (mixed as usize) % pool.len();
+        pool.get(idx).map(|t| (*t).clone())
+    }
+
+    pub fn roll_surprise_video(&mut self, cx: &mut Context<Self>) {
+        self.surprise_salt = self.surprise_salt.wrapping_add(1);
+        let prev = self.watch_surprise_key.clone();
+        self.watch_surprise_key = self
+            .pick_surprise_video(prev.as_deref(), self.surprise_salt)
+            .map(|t| t.key);
+        cx.notify();
+    }
+
+    pub fn play_something(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.surprise_salt = self.surprise_salt.wrapping_add(1);
+        let picked = self.pick_surprise_video(None, self.surprise_salt);
+        if let Some(tile) = picked {
+            self.watch_surprise_key = Some(tile.key.clone());
+            if let Some(item) = tile.items.first() {
+                self.activate_entry(item.entry.clone(), None, window, cx);
+            }
         }
     }
 
@@ -1032,6 +1165,12 @@ impl PearTube {
         }
 
         if let (None, Some(dur)) = (&self.music_seek, self.music_state.duration) {
+            if let Some(cur) = self.music_queue.current() {
+                let dur_secs = dur.as_secs();
+                if dur_secs > 0 {
+                    self.track_durations.insert(cur.entry.key.clone(), dur_secs);
+                }
+            }
             let max_s = dur.as_secs_f32().max(1.0);
             let seek = cx.new(|_| SliderState::new().min(0.).max(max_s).step(1.));
             let sub = cx.subscribe_in(&seek, window, Self::on_music_seek);
@@ -1091,6 +1230,7 @@ impl PearTube {
             .play_list(items, start_index, source_label, shuffle_override)
             .is_some()
         {
+            self.last_room_was_watch = false;
             self.open_current_music_track(0, window, cx);
         }
     }
@@ -2368,6 +2508,8 @@ impl PearTube {
         self.hood_open = false;
         self.cast_modal = None;
         self.add_modal = None;
+        self.watch_cover_key = None;
+        self.last_room_was_watch = true;
 
         if self.music_queue.has_list() && (self.music_is_playing() || self.music_audio.is_open()) {
             let pos = self.music_position_ms();
@@ -2610,6 +2752,52 @@ async fn follow_urls(this: WeakEntity<PearTube>, mut rx: UnboundedReceiver<Strin
     }
 }
 
+async fn poll_network_status(this: WeakEntity<PearTube>, cx: &mut AsyncApp) {
+    let mut tick_count: u64 = 0;
+    loop {
+        let (alive, animating) = this
+            .read_with(cx, |this, _| {
+                let on_net_canvas = matches!(this.screen, Screen::List)
+                    && this.detail.is_none()
+                    && matches!(this.room, Room::Network(NetworkTab::Globe | NetworkTab::Swarm));
+                (true, on_net_canvas)
+            })
+            .unwrap_or((false, false));
+        if !alive {
+            break;
+        }
+        let step_ms = if animating { 120 } else { 2000 };
+        cx.background_executor().timer(Duration::from_millis(step_ms)).await;
+        if animating {
+            tick_count = tick_count.wrapping_add(1);
+            let _ = this.update(cx, |this, cx| {
+                this.net_phase += 0.12;
+                cx.notify();
+            });
+            // Poll real worker status roughly every ~2 seconds while animating.
+            if !tick_count.is_multiple_of(16) {
+                continue;
+            }
+        }
+        let should_poll = this
+            .read_with(cx, |this, _| {
+                this.settings.has_sources() && !matches!(this.screen, Screen::Play(_))
+            })
+            .unwrap_or(false);
+        if !should_poll {
+            continue;
+        }
+        if let Ok(w) = worker()
+            && let Ok(st) = w.status().await
+        {
+            let _ = this.update(cx, |this, cx| {
+                this.record_status_sample(st);
+                cx.notify();
+            });
+        }
+    }
+}
+
 async fn refresh(this: &WeakEntity<PearTube>, cx: &mut AsyncApp) {
     let Ok(w) = worker() else { return };
     let (has_sources, playing) = this
@@ -2623,7 +2811,7 @@ async fn refresh(this: &WeakEntity<PearTube>, cx: &mut AsyncApp) {
         let _ = this.update(cx, |this, cx| {
             let prev_err = this.error.clone();
             match st {
-                Ok(status) => this.status = Some(status),
+                Ok(status) => this.record_status_sample(status),
                 Err(err) => this.error = Some(err.into()),
             }
             if this.error != prev_err {
@@ -2641,7 +2829,7 @@ async fn refresh(this: &WeakEntity<PearTube>, cx: &mut AsyncApp) {
         match (result.0, result.1) {
             (Ok(status), Ok(entries)) => {
                 count_changed = this.entries.len() != entries.len();
-                this.status = Some(status);
+                this.record_status_sample(status);
                 this.catalog = build_catalog(&entries);
                 this.entries = entries;
             }
@@ -2860,6 +3048,10 @@ impl Render for PearTube {
             .add_modal
             .as_ref()
             .map(|form| self.render_add_modal(form, cx).into_any_element());
+        let cover_popup = self
+            .watch_cover_key
+            .as_deref()
+            .and_then(|key| self.render_watch_cover_modal(key, cx).map(IntoElement::into_any_element));
         let transparent_video = matches!(&self.screen, Screen::Play(play) if play.read(cx).has_picture());
         let remote_bar = if is_list {
             self.render_cast_remote_bar(cx).map(IntoElement::into_any_element)
@@ -2882,6 +3074,9 @@ impl Render for PearTube {
                         this.close_cast_modal(cx);
                     } else if this.add_modal.is_some() {
                         this.close_add_modal(cx);
+                    } else if this.watch_cover_key.is_some() {
+                        this.watch_cover_key = None;
+                        cx.notify();
                     } else if this.hood_open {
                         this.hood_open = false;
                         cx.notify();
@@ -2964,6 +3159,7 @@ impl Render for PearTube {
                     .flex_1()
                     .min_h_0()
                     .child(screen)
+                    .when_some(cover_popup, |this, popup| this.child(popup))
                     .when_some(add_popup, |this, popup| this.child(popup))
                     .when_some(cast_popup, |this, popup| this.child(popup)),
             )

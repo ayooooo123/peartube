@@ -88,34 +88,51 @@ data class Settings(
     }
 }
 data class RouteTraffic(
-    val peers: Long,
-    val rxBytes: Long,
-    val txBytes: Long,
-    val downBps: Long,
-    val upBps: Long,
+    val peers: Long = 0,
+    val rxBytes: Long = 0,
+    val txBytes: Long = 0,
+    val downBps: Long = 0,
+    val upBps: Long = 0,
 ) {
     companion object {
-        fun from(json: JSONObject) = RouteTraffic(
-            peers = json.getLong("peers"),
-            rxBytes = json.getLong("rxBytes"),
-            txBytes = json.getLong("txBytes"),
-            downBps = json.getLong("downBps"),
-            upBps = json.getLong("upBps"),
+        val Zero = RouteTraffic()
+
+        fun from(json: JSONObject?) = if (json == null) Zero else RouteTraffic(
+            peers = json.optLong("peers"),
+            rxBytes = json.optLong("rxBytes"),
+            txBytes = json.optLong("txBytes"),
+            downBps = json.optLong("downBps"),
+            upBps = json.optLong("upBps"),
         )
     }
 }
 
 data class TrafficRoutes(
-    val privateRoute: RouteTraffic,
-    val publicRoute: RouteTraffic,
-    val lan: RouteTraffic,
+    val privateRoute: RouteTraffic = RouteTraffic.Zero,
+    val publicRoute: RouteTraffic = RouteTraffic.Zero,
+    val lan: RouteTraffic = RouteTraffic.Zero,
 ) {
+    val totalPeers: Long get() = lan.peers + publicRoute.peers + privateRoute.peers
+
     companion object {
-        fun from(json: JSONObject) = TrafficRoutes(
-            privateRoute = RouteTraffic.from(json.getJSONObject("private")),
-            publicRoute = RouteTraffic.from(json.getJSONObject("public")),
-            lan = RouteTraffic.from(json.getJSONObject("lan")),
+        val Empty = TrafficRoutes()
+
+        fun from(json: JSONObject?) = if (json == null) Empty else TrafficRoutes(
+            privateRoute = RouteTraffic.from(json.optJSONObject("private")),
+            publicRoute = RouteTraffic.from(json.optJSONObject("public")),
+            lan = RouteTraffic.from(json.optJSONObject("lan")),
         )
+    }
+}
+
+data class NetworkHistory(
+    val down: List<Long> = emptyList(),
+    val up: List<Long> = emptyList(),
+) {
+    fun append(downBps: Long, upBps: Long, maxSamples: Int = 40): NetworkHistory {
+        val nextDown = (down + downBps.coerceAtLeast(0L)).takeLast(maxSamples)
+        val nextUp = (up + upBps.coerceAtLeast(0L)).takeLast(maxSamples)
+        return NetworkHistory(down = nextDown, up = nextUp)
     }
 }
 
@@ -179,6 +196,7 @@ data class Status(
     val blobs: String,
     val blobBytes: Long,
     val cachedBytes: Long = 0,
+    val cacheMaxBytes: Long = 0,
     val peers: Long,
     val lanPeers: Long,
     val downBps: Long = 0,
@@ -207,13 +225,14 @@ data class Status(
                 blobs = json.optString("blobs"),
                 blobBytes = json.optLong("blobBytes"),
                 cachedBytes = json.optLong("cachedBytes"),
+                cacheMaxBytes = json.optLong("cacheMaxBytes"),
                 peers = json.optLong("peers"),
                 lanPeers = json.optLong("lanPeers"),
                 downBps = json.optLong("downBps"),
                 upBps = json.optLong("upBps"),
                 rxBytes = json.optLong("rxBytes"),
                 txBytes = json.optLong("txBytes"),
-                routes = TrafficRoutes.from(json.getJSONObject("routes")),
+                routes = TrafficRoutes.from(json.optJSONObject("routes")),
                 inflightBlocks = json.optLong("inflightBlocks"),
                 rtt = json.optLong("rtt"),
                 retransmits = json.optLong("retransmits"),
@@ -519,6 +538,9 @@ data class CastStatus(
 
 private fun JSONArray?.strings(): List<String> =
     if (this == null) emptyList() else List(length()) { getString(it) }
+
+fun formatRate(bps: Long): String =
+    if (bps <= 0L) "0 B/s" else "${formatBytes(bps)}/s"
 
 fun p2pSummary(status: Status?): String? {
     val st = status ?: return null

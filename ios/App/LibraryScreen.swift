@@ -83,6 +83,8 @@ struct MainShellView: View {
 
             Spacer()
 
+            liveNetworkPill
+
             if model.hasActiveJobs {
                 Button {
                     model.showAdd = true
@@ -135,6 +137,41 @@ struct MainShellView: View {
         .padding(.horizontal, 12)
         .padding(.vertical, 2)
         .background(PTColor.bg)
+    }
+
+    private var liveNetworkPill: some View {
+        let snap = model.networkSnapshot
+        let totalRate = snap.downBps + snap.upBps
+        let labelText: String = {
+            if model.hasActiveJobs {
+                return "\(snap.totalPeers)"
+            }
+            if totalRate >= 1024 {
+                return "\(snap.totalPeers) · \(rateText(totalRate))"
+            }
+            return plural(snap.totalPeers, "peer", "peers")
+        }()
+
+        return Button {
+            model.showDiagnostics = true
+        } label: {
+            HStack(spacing: 5) {
+                Circle()
+                    .fill(snap.totalPeers > 0 ? PTColor.ok : PTColor.dim.opacity(0.6))
+                    .frame(width: 6, height: 6)
+                Text(labelText)
+                    .font(.caption.weight(.medium).monospacedDigit())
+                    .foregroundStyle(snap.totalPeers > 0 ? PTColor.ink : PTColor.dim)
+                    .lineLimit(1)
+            }
+            .padding(.horizontal, 9)
+            .padding(.vertical, 5)
+            .background(PTColor.surface, in: Capsule())
+            .overlay(Capsule().strokeBorder(PTColor.line, lineWidth: 1))
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Network: \(plural(snap.totalPeers, "peer", "peers"))")
+        .accessibilityIdentifier("library.network")
     }
 
     @ViewBuilder

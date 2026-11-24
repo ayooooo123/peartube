@@ -193,6 +193,11 @@ struct DiagnosticsScreen: View {
     var body: some View {
         NavigationStack {
             List {
+                Section {
+                    NetworkView(model: model)
+                        .listRowInsets(EdgeInsets(top: 10, leading: 12, bottom: 10, trailing: 12))
+                        .listRowBackground(PTColor.bg)
+                }
                 Section("Peer Engine") {
                     metric("Public Peers", "peers"); metric("LAN Peers", "lanPeers")
                     LabeledContent("LAN", value: model.status.string("lan").isEmpty ? "Off / unavailable" : model.status.string("lan"))

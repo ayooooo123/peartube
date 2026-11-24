@@ -1,6 +1,6 @@
 # One library for music and video: "Listen and Watch"
 
-Status: decision, 2026-11-22, with a second part from the same day: Discover, one Search, TVs without a TV page, the top bar's widths, the Tracks table, and what a row and Shuffle play. This document is the contract for the relay's web page (`src/ui.js`), which is built first. The Android and iPhone apps follow in a later step. The Mac app and the TV receiver are not part of this design.
+Status: decision, 2026-11-22, updated 2026-11-23 with the sketch sync across all platforms (Relay web UI, Android, iOS, and macOS Desktop): paired Home Listen/Watch actions, Listen `Play all`/`Shuffle` and sortable `Tracks` table, Watch views (`Rows` first, plus `Tonight`, `Video store`, and `Channels`, with `Play something`), and the `Network` visualizations (`Globe`, `Swarm`, `Flow`) using existing `/v1/status` data. The TV receiver is not part of this design.
 
 ## 0. Decision
 
@@ -45,15 +45,16 @@ Look: the pictures do the work and the chrome is quiet. No card around every blo
 | Listen | `#listen` (also `#music`), `#listen/artists`, `#listen/tracks` | Albums as square covers, artists, every track |
 | An album | `#album/<key>` | Cover, facts, `Play`, `Shuffle`, the track list, more by the artist |
 | An artist | `#artist/<name>` | The artist's albums and tracks |
-| Watch | `#watch`, `#watch/movies`, `#watch/series`, `#watch/clips` | `Keep watching`, posters, wide clips |
+| Watch | `#watch`, `#watch/movies`, `#watch/series`, `#watch/clips`, `#watch/tonight`, `#watch/shelf`, `#watch/channels` | `Rows` (default: `Keep watching`, posters, wide clips), `Tonight` (three picks + A–Z index), `Video store` (spine shelves), `Channels` (on-now cards + 4-hour guide) |
 | A title | `#title/<key>` | A movie with its versions, a series with its seasons and episodes, or a clip |
-| Discover | `#discover` | `Search your sources`, the shelves that a person visited, more from the artists in the library |
+| Discover | `#discover` | `Search your sources`, followed creators and topics, the shelves that a person visited, more from the artists in the library |
 | A shelf | `#shelf/<user>` | What one Soulseek user shares, with a filter |
 | Search | `#search`, `#search/<words>` (also `#find`, `#find/<words>`) | `In your library`, then `From your sources` |
 | Add to library | `#add` | A link, a folder, a catalog, a channel; what is being added now |
 | The music player | `#playing` | The cover, the controls and `Up next` |
 | TVs | A dialog from the TV icon (also `#tv`) | The TV that plays now, the paired TVs, and a field for a TV's code |
-| Owner pages | `#channels`, `#sharing`, `#settings` | Unchanged |
+| Network & Sharing | `#network`, `#network/swarm`, `#network/flow`, `#sharing` | `Globe`, `Swarm`, and `Flow` live route visualizations, Receiving/Sharing sparklines, reciprocity meter, route breakdown, plus relay sharing switches |
+| Owner pages | `#channels`, `#settings` | Unchanged |
 
 The video player is not a place. It covers the page, or it stays as a small picture while the person browses, as before.
 
@@ -73,15 +74,21 @@ The video player is not a place. It covers the page, or it stays as a small pict
 
 ## 3. Screens
 
-**Home.** `Keep playing` mixes what is not finished: videos with their time left, and the album of the saved music list. The newest of them is large; the others are rows beside it (under it on a narrow screen). Under that: `Albums` with the link `All albums`, and `Movies and series` with the link `All video`. A library with clips and no movie or series shows `Clips` with the link `All clips` in that place, so Home is not bare. With nothing unfinished, `Keep playing` is absent. With an empty library, Home says `Nothing in your library yet.` and offers `Add to library`.
+**Home.** At the top, paired quick-start cards for `Listen` (`Resume`/`Pause`/`Play all` and `Shuffle`, with album cover collage) and `Watch` (`Continue` and `Play something`). Below them, `Keep playing` mixes what is not finished: videos with their time left, and the album of the saved music list. Under that: `Albums` with the link `All albums`, and `Movies and series` with the link `All video`. A library with clips and no movie or series shows `Clips` with the link `All clips` in that place, so Home is not bare. With nothing unfinished, `Keep playing` is absent. With an empty library, Home says `Nothing in your library yet.` and offers `Add to library`.
 
-**Listen.** One control with `Albums`, `Artists`, `Tracks`; the count (`20 albums`); a `Saved here` switch. Albums are a grid of square covers with the album and the artist under each. Artists are a grid of sleeve stacks with the name and `3 albums`. Tracks is one table with a filter field: number, title, artist, album, quality, size and length. A press on a column head sorts by it and a second press turns the order; the head says how the list is sorted, for a screen reader too. Numbers are right-aligned. A cell that the page does not know stays empty, and such rows sort last. On a narrow screen the table keeps title, artist and length, and a `Sort` menu replaces the heads.
+**Listen.** Top actions `Play all` (or `Resume` when a track waits paused) and `Shuffle`; one control with `Albums`, `Artists`, `Tracks`; the count (`20 albums`); a `Saved here` switch. Albums are a grid of square covers with the album and the artist under each. Artists are a grid of sleeve stacks with the name and `3 albums`. Tracks is one sortable table with a filter field: number, title, artist, album, quality, size and length. A press on a column head sorts by it and a second press turns the order; the head says how the list is sorted (`aria-sort`), for a screen reader too. Numbers are right-aligned. A cell that the page does not know stays empty, and such rows sort last. On a narrow screen the table keeps title, artist, quality/size and length, and a `Sort` menu replaces the heads.
 
 **An album.** The cover at the left stays in view. Beside it: the word `Album`, the title, the artist (a link), a facts line (`5 tracks · 42 min`), a quieter line (`FLAC 24-bit 96 kHz · 1.6 GB · Saved here`), then `Play`, `Shuffle` and `More`. Then the tracks: number, name, length. The track that plays is marked. Under the tracks: `More by <artist>`. An album from YouTube says `YouTube · AAC 128 kbps` and has the tag `Lossy`.
 
 **An artist.** The word `Artist`, the name, `3 albums · 32 tracks`, `Play`, `Shuffle`; the albums as covers; the first eight tracks and `Show all 32`.
 
-**Watch.** Chips `All`, `Movies`, `Series`, `Clips` with their counts, and `Saved here`. With `All`: `Keep watching` (wide pictures with progress), `Movies and series` (tall posters), `Clips` (wide tiles). With one kind chosen: only that grid.
+**Watch.** Four switchable views sharing one library, with `Rows` first, and a `Play something` action that picks a random unwatched title:
+- `Rows` (default): chips `All`, `Movies`, `Series`, `Clips` with their counts, and `Saved here`. With `All`: `Keep watching` (wide pictures with progress), `Movies and series` (tall posters), `Clips` (wide tiles). With one kind chosen: only that grid.
+- `Tonight` (`#watch/tonight`): three decision cards (`Continue`, `Next episode`, and `Surprise me` with `Another`), then an A–Z letter jump bar and alphabetical index.
+- `Video store` (`#watch/shelf`): horizontal shelves of vertical spines for `Series`, `Films`, and `Clips` (sized by kind and season count, tinted by title hue). Selecting a spine opens a cover sheet with `Play`/`Continue` and `Details`.
+- `Channels` (`#watch/channels`): three deterministic pseudo-live channels (`CH 1 · Series`, `CH 2 · Films`, `CH 3 · Clips`) showing `on now` cards and a scrollable 4-hour guide.
+
+**Network (`#network`, `#network/swarm`, `#network/flow`, and top of `#sharing`).** Three views that share the live numbers from `/v1/status`: `Globe` (three orbital route bands around a dotted globe), `Swarm` (concentric route rings around this node), and `Flow` (received/shared ribbons into and out of this node's cache). Beside the picture: live `Receiving` and `Sharing` rate cards with sparklines, a reciprocity meter comparing shared vs received bytes, per-route peer counts and rates (`Home network`, `Internet`, `Private route`), and storage kept. Animations pause when reduced motion is preferred. On the relay page, the existing Sharing controls stay below the visualizations so all owner toggles remain in one place.
 
 **Add to library.** The add box with its preview, `Import folder`, `Mirror a catalog`, `Copy a channel`, and the list of what is being added. A finished add stays in the list for six hours or until it is dismissed; a failed one stays until it is dismissed. An album that is saved from a search result shows its progress on the Search page, where the save started.
 
@@ -160,17 +167,18 @@ For this change the parity row is **shared page, no native port**. Both relays s
 - The source search (its chips, its streamed groups, the save dialog for YouTube, the progress of a save). It stays under Search; it does not change.
 - Light and dark themes, and both widths that the page is checked at: 1440 × 900 and 390 × 844.
 
-## 8. Not built
+## 8. Not built (deferred for relay API + Rust parity)
 
-- The Android and iPhone apps (next step), the Mac app, the TV receiver.
+- The TV receiver.
+- Relay-side poster caching (`/v1/poster/:tt` still redirects to Cinemeta; approved 2026-11-23 for a follow-up relay + Rust parity PR).
+- Per-peer Network rows, daily transfer history, route-colored video seek bar, and optional country table (`Places on the globe`, deferred 2026-11-23).
 - A cover route, a first-seen date, lengths in lists, years, descriptions, episode names and pictures (section 5).
 - Reordering `Up next` by dragging. A row can be removed and the rest cleared.
 - Playlists, favourites, ratings, play counts, lyrics, a sleep timer.
 - A queue for video.
 - The same position on two devices.
 - Saving a whole video from YouTube. The existing action saves the sound and says so.
-- The network pill, the Network page and a seek bar coloured by route (a later step).
-- Editing the details of an entry. The owner may correct a title on the page, and the change goes to the channel, not into the file's tags. The build needs one owner-only route on the relay and one method on the node, which is a contract change for the Rust port; it is not built yet.
+- Editing the details of an entry (`Edit album` / `Edit details`). Approved 2026-11-23 without a year field and without persisting across file replacement; needs one owner-only route on the relay and one method on the node plus a Rust parity row.
 - A quality that is stored when a file is added. Until then, Tracks shows a quality only for a file whose header the relay has read.
 
 ## 9. Answers to the owner's questions, and the inputs taken

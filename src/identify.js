@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import b4a from 'b4a'
 import { send } from './art.js'
-import { MEDIA_FILE } from './protocol.js'
+import { MEDIA_FILE, cleanMusic } from './protocol.js'
 
 export { posterUrl, backdropUrl } from './art.js'
 
@@ -211,31 +211,63 @@ function fileName (raw, headers = {}) {
   return names.find(n => n && MEDIA_FILE.test(n)) || fromPath
 }
 
+const AUDIO_SITE = /^(soundcloud|bandcamp|mixcloud)$/i
+const AUDIO_FILE = /\.(m4a|mp3|flac|ogg|opus|wav|aac)$/i
+
+function hostOf (raw) {
+  try { return new URL(raw).hostname.toLowerCase().replace(/^www\./, '') } catch { return '' }
+}
+
+function guessSite (rawUrl, reported = '') {
+  const s = String(reported || '').trim()
+  if (s) return s
+  const host = hostOf(rawUrl)
+  if (!host) return ''
+  if (host === 'soundcloud.com' || host.endsWith('.soundcloud.com') || host === 'on.soundcloud.com') return 'SoundCloud'
+  if (host === 'bandcamp.com' || host.endsWith('.bandcamp.com')) return 'Bandcamp'
+  if (host === 'mixcloud.com' || host.endsWith('.mixcloud.com')) return 'Mixcloud'
+  if (host === 'rumble.com' || host.endsWith('.rumble.com')) return 'Rumble'
+  if (host === 'youtube.com' || host.endsWith('.youtube.com') || host === 'youtu.be') return 'YouTube'
+  return host
+}
+
 async function probe (url, opts) {
   let head = null
   try { head = await send(url, { method: 'HEAD' }) } catch {}
   const type = String(head?.headers['content-type'] || '').toLowerCase()
   const finalUrl = head?.url || url
   const name = fileName(finalUrl, head?.headers)
-  const looksMedia = type.startsWith('video/') || type.includes('matroska') || (MEDIA_FILE.test(name) && !type.startsWith('text/'))
+  const looksMedia = type.startsWith('video/') || type.startsWith('audio/') || type.includes('matroska') || (MEDIA_FILE.test(name) && !type.startsWith('text/'))
   if (head && head.status < 400 && looksMedia) {
-    return { kind: 'file', name, size: Number(head.headers['content-length']) || null, contentType: type || null }
+    return {
+      kind: 'file',
+      name,
+      site: guessSite(finalUrl),
+      audioOnly: Boolean(type.startsWith('audio/') || AUDIO_FILE.test(name)),
+      size: Number(head.headers['content-length']) || null,
+      contentType: type || null
+    }
   }
   if (head && head.status >= 400 && MEDIA_FILE.test(name)) throw new Error(`The link answered ${head.status}`)
   const info = await ubitInfo(url, opts)
   const formats = Array.isArray(info.formats) ? info.formats : []
   const height = Math.max(0, ...formats.map(f => Number(f.height) || 0)) || Number(info.height) || 0
   const size = Number(info.filesize) || Math.max(0, ...formats.map(f => Number(f.filesize) || 0)) || null
+  const pageId = String(info.webpageURL || url)
+  const site = guessSite(pageId, info.site)
+  const hasAudioOnlyFormats = formats.length > 0 && height === 0 && formats.every(f => !(Number(f.height) > 0) && (!f.vcodec || f.vcodec === 'none'))
+  const audioOnly = Boolean(info.audioOnly || info.isAudioOnly || AUDIO_SITE.test(site) || hasAudioOnlyFormats)
   return {
     kind: 'page',
     name: info.title || '',
-    site: info.site || '',
+    site,
+    audioOnly,
     uploader: info.author || info.uploader || '',
     duration: Number(info.duration) || null,
     thumbnail: info.thumbnail || null,
     size,
     resolution: height ? height + 'p' : '',
-    pageId: String(info.webpageURL || url)
+    pageId
   }
 }
 
@@ -283,13 +315,28 @@ export async function identify (url, { cinemetaUrl = '', configDir = '', ubit = 
   const link = await probe(url, { configDir, ubit })
   const parsed = parseName(link.name)
   if (link.resolution) parsed.resolution = link.resolution
+  const audioOnly = Boolean(link.audioOnly)
   // Page titles are free text; only ones that read like a release (a year or an episode) get movie suggestions.
-  const lookup = link.kind === 'file' || parsed.year || parsed.season != null
+  const lookup = !audioOnly && (link.kind === 'file' || parsed.year || parsed.season != null)
   const candidates = lookup ? await cinemetaSearch(cinemetaUrl, parsed).catch(() => []) : []
   const se = parsed.season != null ? ` S${String(parsed.season).padStart(2, '0')}E${String(parsed.episode).padStart(2, '0')}` : ''
-  const plain = {
-    id: 'clip:' + createHash('sha256').update(link.kind === 'page' ? link.pageId : url).digest('hex').slice(0, 16),
-    title: (link.kind === 'page' ? link.name : parsed.title + se) || parsed.title
+  let plain
+  let music = null
+  if (link.kind === 'page' && audioOnly) {
+    const isSc = /^soundcloud$/i.test(link.site) || /(^|\.)soundcloud\.com$/i.test(hostOf(link.pageId || url))
+    const hash12 = createHash('sha256').update(link.pageId).digest('hex').slice(0, 12)
+    const trackTitle = (link.name || parsed.title || '').trim()
+    const author = (link.uploader || '').trim()
+    music = cleanMusic({ title: trackTitle, artist: author || undefined })
+    plain = {
+      id: `${isSc ? 'sc' : 'clip'}:${hash12}:s01e01`,
+      title: (author && trackTitle && !trackTitle.startsWith(`${author} · `) ? `${author} · ${trackTitle}` : trackTitle) || parsed.title
+    }
+  } else {
+    plain = {
+      id: 'clip:' + createHash('sha256').update(link.kind === 'page' ? link.pageId : url).digest('hex').slice(0, 16),
+      title: (link.kind === 'page' ? link.name : parsed.title + se) || parsed.title
+    }
   }
   const { pageId: _p, ...shown } = link
   const list = candidates.map(c => ({ ...c, ...candidateEntry(c, parsed) }))
@@ -298,7 +345,11 @@ export async function identify (url, { cinemetaUrl = '', configDir = '', ubit = 
     parsed,
     candidates: list,
     match: list.find(c => strong(c, parsed))?.id || null,
-    plain
+    plain,
+    site: link.site || '',
+    audioOnly,
+    suggestedAudio: audioOnly,
+    ...(music ? { music } : {})
   }
 }
 

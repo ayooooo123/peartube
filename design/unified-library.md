@@ -85,9 +85,9 @@ The video player is not a place. It covers the page, or it stays as a small pict
 
 **Add to library.** The add box with its preview, `Import folder`, `Mirror a catalog`, `Copy a channel`, and the list of what is being added. A finished add stays in the list for six hours or until it is dismissed; a failed one stays until it is dismissed. An album that is saved from a search result shows its progress on the Search page, where the save started.
 
-**Search.** One field for everything: the top bar's field, or on a narrow screen the field at the top of Search. Typing narrows the library at once: `In your library`, in the groups `Albums`, `Tracks`, `Movies and series`, `Clips`. Enter, or `Ask your sources`, also looks outside: `From your sources`, in the groups `Soulseek`, `YouTube`, `On other relays`. Chips above those groups show which of them a search asks, and each can be turned off. The page never asks a source without that key press or that button. A pasted link offers `Add to library`.
+**Search.** One field for everything: the top bar's field, or on a narrow screen the field at the top of Search. Typing narrows the library at once: `In your library`, in the groups `Albums`, `Tracks`, `Movies and series`, `Clips`. Enter, or `Ask your sources`, also looks outside: `From your sources`, in the groups `Soulseek`, `YouTube`, `SoundCloud`, `Rumble`, `On other relays`. Chips above those groups show which of them a search asks, and each can be turned off. The page never asks a source without that key press or that button. A pasted link offers `Add to library`.
 
-**Discover.** One main action at the top: `Search your sources`, which puts the cursor in the top bar's field (on a narrow screen it opens Search). Then `Shelves you visited`: the Soulseek users whose shared files the person opened, the newest first, each with its number of folders and when it was opened. Then `More from artists you have`: a chip for each artist in the library. A press on a chip opens Search with that artist in the field and asks the sources there, so the answers and their `Save` buttons stand in one place; nothing asks a source before a press. One line at the end: `Planned: Rumble, SoundCloud.`
+**Discover.** One main action at the top: `Search your sources`, which puts the cursor in the top bar's field (on a narrow screen it opens Search). Then `Shelves you visited`: the Soulseek users whose shared files the person opened, the newest first, each with its number of folders and when it was opened. Then `More from artists you have`: a chip for each artist in the library. A press on a chip opens Search with that artist in the field and asks the sources there, so the answers and their `Save` buttons stand in one place; nothing asks a source before a press.
 
 **A shelf.** The user's shared albums as rows (album, artist, quality, files, size) with a filter field and `Save` on each. `Back` returns to the place the person came from: the search that offered the shelf, else Discover. An album that the library holds already says `In your library` and links to it.
 
@@ -114,10 +114,9 @@ The video player is not a place. It covers the page, or it stays as a small pict
 | Where a copy is | `Saved here`, `Partly saved`, `On the network` | Unchanged |
 | The search field | `Artist or album`, `Title or IMDb id`, `Search library`, `Search music` | One field: label `Search`, example `Blue Train` |
 | Search, nothing typed | (none) | `Search your library and your sources`, with a few artists as chips |
-| Result groups | `Find music`, `Search all relays` | `In your library`, `From your sources`; inside it `Soulseek`, `YouTube`, `On other relays` |
-| Saving from a source | `Mirror`, `Mirror track`, `Mirror folder` | `Save album`, `Save track`, `Save folder` |
+| Result groups | `Find music`, `Search all relays` | `In your library`, `From your sources`; inside it `Soulseek`, `YouTube`, `SoundCloud`, `Rumble`, `On other relays` |
+| Saving from a source | `Mirror`, `Mirror track`, `Mirror folder` | `Save album`, `Save track`, `Save folder`, `Save video` |
 | TVs | A `TV` page, `Cast` | The TV icon (label `TVs`), `Play on a TV`, `This browser`, `Pair a TV…`, `Code on the TV`, `Remote`, `Stop`, `Forget` |
-| Sources not built yet | (none) | `Planned: Rumble, SoundCloud.`, one line at the end of Discover |
 | The list of coming tracks | `Queue`, a button that reads `1 of 2` | `Up next`; inside the player `Playing from`, `Then`, `Clear` |
 | Adding to that list | (none) | `Play next`, `Play last` |
 | Music stopped by a video | (nothing) | `Paused for a video` |
@@ -185,8 +184,6 @@ The owner saw the sketch of these parts and gave his inputs on 2026-11-22. These
 5. **All of this work goes into one draft pull request.** Nothing merges before the v0.4.45 tag.
 
 **One clear place to search.** The top bar's field is the only field for a search. On a wide screen it stands in the bar on every page. On a narrow screen it takes the first row of Search, so the room's own page holds it at the top. Discover's one main action puts the cursor in that field, and a press on an artist chip opens Search with the name in it and asks the sources there. A person never meets two fields that mean the same thing.
-
-**The `Planned` line stays off the first screen.** `Planned: Rumble, SoundCloud.` is one quiet line at the foot of Discover, under the shelves and the artists. It names what is not there yet and asks for no action.
 
 **The owner's Soulseek question.** Search finds albums on Soulseek peers. A download starts only when the person presses `Save` on a result; a request to a peer, a place in its queue and a transfer that stalls are all shown on the save's card, with the peer's own state. Nothing downloads by itself, and a search alone transfers no file.
 

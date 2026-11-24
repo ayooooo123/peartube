@@ -7,6 +7,7 @@ import b4a from 'b4a'
 import { Readable } from 'streamx'
 import ByteStream from 'hypercore-byte-stream'
 import { downloadPage } from './identify.js'
+import { cleanMusic } from './protocol.js'
 import { checkUrlHost, guardedLookup, privateUrlsAllowed } from './ssrf.js'
 
 const TERMINAL_STATUS = new Set([400, 401, 403, 404, 410, 451])
@@ -196,7 +197,7 @@ export function createAcquirer (node, file, {
   async function copyExisting (job, controller) {
     const src = job.existing
     const { blockOffset: start, blockLength } = src.blob
-    const op = { type: 'announce', id: job.id, title: job.title, size: src.size, sha256: src.sha256, blobs: src.blobs, blob: src.blob }
+    const op = { type: 'announce', id: job.id, title: job.title, size: src.size, sha256: src.sha256, blobs: src.blobs, blob: src.blob, ...(job.music ? { music: job.music } : {}) }
     Object.assign(job, { status: 'copying', total: src.size, bytes: 0 })
     save()
     node.keepCopy(src.blobs)
@@ -273,6 +274,7 @@ export function createAcquirer (node, file, {
               ubit,
               stallTimeout,
               controller,
+              audio: Boolean(job.source.audio),
               onProgress ({ bytes, total }) {
                 job.bytes = bytes
                 if (total != null) job.total = total
@@ -282,7 +284,13 @@ export function createAcquirer (node, file, {
             if (closed) throw new Error('Closed')
             const total = dl.size ?? statSync(dl.path).size
             job.total = total
-            op = await node.put({ id: job.id, title: job.title, expectedSize: total, private: Boolean(job.private) }, createReadStream(dl.path), bytes => { job.bytes = bytes })
+            op = await node.put({
+              id: job.id,
+              title: job.title,
+              expectedSize: total,
+              private: Boolean(job.private),
+              ...(job.music ? { music: job.music } : {})
+            }, createReadStream(dl.path), bytes => { job.bytes = bytes })
           } finally {
             rmSync(tmpDir, { recursive: true, force: true })
           }
@@ -295,6 +303,7 @@ export function createAcquirer (node, file, {
             title: job.title,
             expectedSize: job.total,
             private: Boolean(job.private),
+            ...(job.music ? { music: job.music } : {}),
             store: job.store,
             hashState: job.hashState || null,
             hashBytes: job.hashBytes || 0,
@@ -384,9 +393,22 @@ export function createAcquirer (node, file, {
   // A 32-hex name per job: the Corestore key for that video is derived from it, so a restart reopens the same core.
   const newStore = () => `video:${randomUUID().replace(/-/g, '')}`
 
-  function add ({ id, title, source, channel = defaultChannel, private: isPrivate = false, plugin = 'http-acquire', existing = null }) {
+  function add ({ id, title, source, channel = defaultChannel, private: isPrivate = false, plugin = 'http-acquire', existing = null, music = null }) {
     if (typeof source?.url !== 'string' || !/^https?:\/\//.test(source.url)) throw new Error('source.url must be http(s)')
-    const job = { jobId: randomUUID(), id, title, plugin, channel: Boolean(channel), private: Boolean(isPrivate || source.private), status: 'queued', created: Date.now(), store: newStore(), source: { url: source.url, headers: source.headers || {}, page: Boolean(source.page) } }
+    const cleanedMusic = cleanMusic(music)
+    const job = {
+      jobId: randomUUID(),
+      id,
+      title,
+      plugin,
+      channel: Boolean(channel),
+      private: Boolean(isPrivate || source.private),
+      ...(cleanedMusic ? { music: cleanedMusic } : {}),
+      status: 'queued',
+      created: Date.now(),
+      store: newStore(),
+      source: { url: source.url, headers: source.headers || {}, page: Boolean(source.page), audio: Boolean(source.audio) }
+    }
     // Public copies only: a private job encrypts its own core.
     if (existing && !job.private) job.existing = { key: existing.key || null, size: existing.size, sha256: existing.sha256, blobs: existing.blobs, blob: existing.blob }
     // Private media is encrypted with a per-video key; a resumed core must be reopened with the same one.

@@ -132,7 +132,7 @@ test('YouTube source: unified search, audio-only save into a yt: album, partial 
   assert.equal((await plugin()).status, 'ready')
 
   // 1. Unified search: YouTube answers, the unconfigured peer source is one error, rows are marked.
-  const both = await call('POST', '/v1/search/sources', { query: 'blue train' })
+  const both = await call('POST', '/v1/search/sources', { query: 'blue train', sources: ['soulseek', 'youtube'] })
   assert.equal(both.status, 200, JSON.stringify(both.data))
   assert.deepEqual(both.data.bySource, { soulseek: 0, youtube: 2 })
   assert.equal(both.data.errors.length, 1)
@@ -169,7 +169,7 @@ test('YouTube source: unified search, audio-only save into a yt: album, partial 
   // 2. Streamed: each source's part is sent when that source finishes, not when the last one does. Here the peer
   // source fails at once (not set up) and YouTube takes 1.5 s, so the first event must arrive about 1.5 s before
   // the second; a reply held back until the end has them together.
-  const sse = await fetch(base + '/v1/search/sources', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ query: 'slow blue train', stream: true }) })
+  const sse = await fetch(base + '/v1/search/sources', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ query: 'slow blue train', sources: ['soulseek', 'youtube'], stream: true }) })
   assert.match(sse.headers.get('content-type'), /text\/event-stream/)
   const events = []
   const reader = sse.body.getReader()

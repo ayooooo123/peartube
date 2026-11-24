@@ -19,6 +19,8 @@ import { send } from './art.js'
 import { createSoulseekPlugin } from './providers/soulseek.js'
 import { ALBUM_PIN, MIRRORED_LIST, RELEASE_ID } from './providers/staging.js'
 import { createYoutubePlugin } from './providers/youtube.js'
+import { createSoundcloudPlugin } from './providers/soundcloud.js'
+import { createRumblePlugin } from './providers/rumble.js'
 
 // File names whose codec is lossy by definition. A `.flac` or `.wav` proves only a lossless container, and `.m4a`
 // and `.ogg` hold lossless codecs too (ALAC, FLAC), so those stay unknown (`null`), never `false`.
@@ -182,8 +184,10 @@ export async function createMirrorHost ({
   slskShare = false,
   slskShareMaxFiles = 2000,
   soulseekOpts = null,
-  // `{ info, download }`: the relay's `ubitInfo` and `downloadPage`. Without them the YouTube source is unavailable.
+  // `{ info, download }`: the relay's `ubitInfo` and `downloadPage`. Without them the page sources are unavailable.
   youtube = null,
+  soundcloud = null,
+  rumble = null,
   pluginsDir = join(storage, 'plugins'),
   pollIntervalMs = 60_000,
   // How long a provider's finished save waits for another import to finish before it gives up with nothing placed.
@@ -1116,11 +1120,18 @@ export async function createMirrorHost ({
   const slskStaging = watchDir && writableDir(watchDir) ? resolve(watchDir) : stagingDir
   const slskStagingLabel = slskStaging === stagingDir ? (watchDir ? 'storage (import folder is read-only)' : 'storage') : 'import folder'
   console.error(JSON.stringify({ msg: 'soulseek staging root', root: slskStaging, sweptAs: slskStaging === stagingDir ? 'staging:' : 'watch-dir' }))
+  const scanStaged = (place, ctx, opts) => placeAndScan(slskStaging, ctx, watchDir && resolve(watchDir) === resolve(slskStaging) ? '' : 'staging:', place, opts)
+  const fetchBytes = (url, opts = {}) => send(url, {
+    binary: true,
+    timeoutMs: opts.timeoutMs || 12_000,
+    maxBytes: opts.maxBytes || 4 * 1024 * 1024,
+    headers: opts.headers || {}
+  })
   const soulseekPlugin = register(createSoulseekPlugin({
     storage,
     stagingRoot: slskStaging,
     stagingLabel: slskStagingLabel,
-    placeAndScan: (place, ctx, opts) => placeAndScan(slskStaging, ctx, watchDir && resolve(watchDir) === resolve(slskStaging) ? '' : 'staging:', place, opts),
+    placeAndScan: scanStaged,
     slskUser,
     slskPass,
     slskServer,
@@ -1134,10 +1145,33 @@ export async function createMirrorHost ({
     storage,
     stagingRoot: slskStaging,
     stagingLabel: slskStagingLabel,
-    placeAndScan: (place, ctx, opts) => placeAndScan(slskStaging, ctx, watchDir && resolve(watchDir) === resolve(slskStaging) ? '' : 'staging:', place, opts),
+    placeAndScan: scanStaged,
     info: youtube?.info || null,
     download: youtube?.download || null,
     fetchBytes: url => send(url, { binary: true, timeoutMs: 8000, maxBytes: 512 * 1024 }),
+    onchange
+  }))
+  register(createSoundcloudPlugin({
+    storage,
+    stagingRoot: slskStaging,
+    stagingLabel: slskStagingLabel,
+    placeAndScan: scanStaged,
+    download: soundcloud?.download || youtube?.download || null,
+    fetchBytes: soundcloud?.fetchBytes || fetchBytes,
+    siteBase: soundcloud?.siteBase,
+    apiBase: soundcloud?.apiBase,
+    searchTracks: soundcloud?.searchTracks,
+    onchange
+  }))
+  register(createRumblePlugin({
+    storage,
+    stagingRoot: slskStaging,
+    stagingLabel: slskStagingLabel,
+    placeAndScan: scanStaged,
+    download: rumble?.download || youtube?.download || null,
+    fetchBytes: rumble?.fetchBytes || fetchBytes,
+    searchBase: rumble?.searchBase,
+    siteOrigin: rumble?.siteOrigin,
     onchange
   }))
 

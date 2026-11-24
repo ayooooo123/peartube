@@ -948,7 +948,6 @@ export const page = `<!doctype html>
     <div class="disc-top"><h2 class="page-title">Discover</h2><button class="btn primary" type="button" id="discAsk"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6.5"/><path d="M16 16l4.5 4.5"/></svg>Search your sources</button></div>
     <section aria-labelledby="discShelvesHead"><h2 id="discShelvesHead">Shelves you visited</h2><div class="people" id="discShelves"></div></section>
     <section aria-labelledby="discArtistsHead"><h2 id="discArtistsHead">More from artists you have</h2><div class="chips" id="discArtists" role="group" aria-labelledby="discArtistsHead"></div></section>
-    <p class="meta disc-planned">Planned: Rumble, SoundCloud.</p>
   </section>
 
   <!-- ==== A shelf: what one Soulseek user shares ==== -->
@@ -1331,15 +1330,17 @@ for (const evName of ['pointerup', 'pointercancel', 'blur']) {
 
 const S = { status: {}, sources: { sources: [], discovered: [], published: [] }, entries: [], jobs: [], plugins: [], cast: null, settings: null, identity: null }
 const plugin = name => S.plugins.find(p => p.name === name) || {}
-// The music sources this page can search, in the order their groups are drawn: the one that can hold the better
+// The sources this page can search, in the order their groups are drawn: the one that can hold the better
 // copy first. Display names only; the ids stay off screen.
-const SOURCES = [['soulseek', 'Soulseek'], ['youtube', 'YouTube']]
+const SOURCES = [['soulseek', 'Soulseek'], ['youtube', 'YouTube'], ['soundcloud', 'SoundCloud'], ['rumble', 'Rumble']]
 const SOURCE_NAMES = new Set(SOURCES.map(s => s[0]))
 const sourceLabel = name => (SOURCES.find(s => s[0] === name) || [name, 'This source'])[1]
-// A copy saved from YouTube is AAC at about 128 kbps whatever its header says, and its id says where it came from.
+// A copy saved from YouTube or SoundCloud is lossy at about 128 kbps, and its id says where it came from.
 const YT_CODEC = 'AAC 128 kbps'
 const YT_LABEL = 'YouTube · ' + YT_CODEC
+const SC_LABEL = 'SoundCloud · 128 kbps'
 const isYt = e => String((e && e.id) || '').startsWith('yt:')
+const isSc = e => String((e && e.id) || '').startsWith('sc:')
 const setting = key => S.settings && S.settings.settings[key]
 const sval = key => setting(key) ? setting(key).value : undefined
 
@@ -1709,7 +1710,7 @@ function noticeJobs (first) {
     if (first || was === j.status || (was && !MIRROR_ACTIVE.has(was))) continue
     const title = '“' + (j.title || 'the album') + '”'
     if (j.status === 'done') toast('Added ' + title + ' to your library')
-    else if (j.status === 'failed') toast((j.plugin === 'youtube' ? 'Could not save ' + title + ' from YouTube' : 'Could not mirror ' + title) + (j.error ? ': ' + j.error : ''))
+    else if (j.status === 'failed') toast((j.plugin === 'soulseek' ? 'Could not mirror ' + title : 'Could not save ' + title + ' from ' + sourceLabel(j.plugin)) + (j.error ? ': ' + j.error : ''))
   }
 }
 
@@ -1774,11 +1775,18 @@ function posterBox (src, title, cls) {
 function renderPreview (url, r) {
   const p = $('preview')
   const link = r.link
-  const facts = [link.site, link.uploader, duration(link.duration), r.parsed.resolution, size(link.size)].filter(Boolean)
+  const isPage = link.kind === 'page'
+  const facts = [link.site || r.site, link.uploader, duration(link.duration), r.parsed.resolution, size(link.size)].filter(Boolean)
+  let audioOnly = isPage && Boolean(r.audioOnly || r.suggestedAudio || link.audioOnly)
   const choices = [...r.candidates.map(c => ({ id: c.id, title: c.title, label: c.title, poster: c.poster, sub: c.type === 'series' ? 'Episode' : 'Movie' })),
-    { id: r.plain.id, title: r.plain.title, label: r.candidates.length ? 'None of these' : r.plain.title, sub: link.kind === 'page' ? 'Video' : 'Video file' }]
+    { id: r.plain.id, title: r.plain.title, label: r.candidates.length ? 'None of these' : r.plain.title, sub: audioOnly ? 'Audio track' : (isPage ? 'Video' : 'Video file') }]
   const chosen = r.match || r.plain.id
   const titleInput = h('input', { id: 'addTitle', type: 'text', value: (choices.find(c => c.id === chosen) || choices[0]).title, placeholder: 'Big Buck Bunny 2008', required: true })
+  const artistInput = isPage ? h('input', { id: 'addArtist', type: 'text', value: (r.music && r.music.artist) || link.uploader || '', placeholder: 'Artist' }) : null
+  const artistField = isPage ? h('div', { class: 'field', hidden: !audioOnly }, h('label', { for: 'addArtist' }, 'Artist'), artistInput) : null
+  const audioToggle = isPage ? h('label', { class: 'switch' },
+    h('input', { id: 'addAudioOnly', type: 'checkbox', role: 'switch', checked: audioOnly, onchange: ev => { audioOnly = ev.target.checked; artistField.hidden = !audioOnly } }),
+    h('span', null, 'Audio only')) : null
   let privOnly = false
   const privToggle = h('label', { class: 'switch' },
     h('input', { type: 'checkbox', role: 'switch', onchange: ev => { privOnly = ev.target.checked } }),
@@ -1793,6 +1801,8 @@ function renderPreview (url, r) {
       h('div', { class: 'grow' }, h('h3', null, link.name || r.parsed.title), h('div', { class: 'meta' }, facts.join(' · ')))),
     r.candidates.length ? h('fieldset', { class: 'cands' }, h('legend', null, 'Is this one of these?'), radios) : null,
     h('div', { class: 'field' }, h('label', { for: 'addTitle' }, 'Title in your library'), titleInput),
+    artistField,
+    audioToggle,
     privToggle,
     h('div', { class: 'row' },
       h('button', { class: 'btn primary', type: 'submit', id: 'confirmAdd' }, 'Add to library'),
@@ -1800,12 +1810,23 @@ function renderPreview (url, r) {
   p.onsubmit = async ev => {
     ev.preventDefault()
     const picked = p.querySelector('input[name=cand]:checked')
-    const id = picked ? picked.value : r.plain.id
+    let id = picked ? picked.value : r.plain.id
+    const rawTitle = titleInput.value.trim() || r.plain.title
+    let finalTitle = rawTitle
+    let music = null
+    if (isPage && audioOnly) {
+      const artist = artistInput ? artistInput.value.trim() : ((r.music && r.music.artist) || '')
+      const trackTitle = artist && rawTitle.startsWith(artist + ' · ') ? rawTitle.slice(artist.length + 3).trim() : rawTitle
+      music = { title: trackTitle || rawTitle, ...(artist ? { artist } : {}) }
+      if (artist && !rawTitle.startsWith(artist + ' · ')) finalTitle = artist + ' · ' + rawTitle
+      if (!id.startsWith('imdb:') && !/:s[0-9]{2}e[0-9]{2,3}$/i.test(id)) id = id + ':s01e01'
+    }
+    const source = { url, page: isPage, ...(isPage && audioOnly ? { audio: true } : {}) }
     await act($('confirmAdd'), async () => {
-      await api('/v1/acquire', { body: { id, title: titleInput.value.trim() || r.plain.title, private: privOnly, source: { url, page: link.kind === 'page' } } })
+      await api('/v1/acquire', { body: { id, title: finalTitle, private: privOnly, source, ...(music ? { music } : {}) } })
       p.hidden = true
       $('addInput').value = ''
-      say('addMsg', 'Adding “' + (titleInput.value.trim() || r.plain.title) + '”.')
+      say('addMsg', 'Adding “' + finalTitle + '”.')
       refresh()
     }, 'addMsg')
   }
@@ -2159,8 +2180,8 @@ function shortQuality (d) {
   if (!a) return ''
   return [a.codec, a.depth ? a.depth + '-bit' : '', a.rate ? (a.rate / 1000) + ' kHz' : ''].filter(Boolean).join(' ')
 }
-// What a copy is, for a card, an album's page and a track's line: a YouTube copy is named by where it came from.
-const copyQuality = (e, d) => isYt(e) ? YT_LABEL : shortQuality(d)
+// What a copy is, for a card, an album's page and a track's line: a YouTube or SoundCloud copy is named by where it came from.
+const copyQuality = (e, d) => isYt(e) ? YT_LABEL : isSc(e) ? SC_LABEL : shortQuality(d)
 // An album that holds a YouTube copy beside another one (rows playing it, or kept as a second copy of a row).
 const hasYt = t => t.items.some(i => isYt(i.e) || (i.alts || []).some(isYt))
 const allYt = t => t.items.every(i => isYt(i.e) && !(i.alts || []).some(a => !isYt(a)))
@@ -2670,6 +2691,8 @@ const slskLeaf = (path, n) => path.split('/').filter(s => s && !s.startsWith('@@
 const slskKey = (username, dir) => username + '\\n' + dir.toLowerCase()
 const slskStarted = new Map()
 const ytStarted = new Map()
+const scStarted = new Map()
+const rmbStarted = new Map()
 let slskView = null
 function slskRate (bitDepth, sampleRate, bitrate) {
   if (bitDepth && sampleRate) return bitDepth + '-bit/' + (sampleRate / 1000) + ' kHz'
@@ -2737,7 +2760,12 @@ function setSourceOff (name, off) {
   else set.delete(name)
   try { localStorage.setItem(SRC_OFF_KEY, JSON.stringify([...set])) } catch {}
 }
-const SRC_UNAVAILABLE = { soulseek: 'Soulseek needs a relay with its add-on.', youtube: 'YouTube search needs the relay, not this device.' }
+const SRC_UNAVAILABLE = {
+  soulseek: 'Soulseek needs a relay with its add-on.',
+  youtube: 'YouTube search needs the relay, not this device.',
+  soundcloud: 'SoundCloud search needs the relay, not this device.',
+  rumble: 'Rumble search needs the relay, not this device.'
+}
 // on | off | setup | unavailable, from /v1/plugins and the remembered off-set; null when the relay has no such source.
 function sourceState (name) {
   const p = plugin(name)
@@ -2790,12 +2818,15 @@ function renderSourceChips () {
   if (focused) { const again = box.querySelector('[data-src="' + focused + '"]'); if (again) again.focus({ preventScroll: true }) }
   const on = sourcesOn()
   const usable = here.filter(n => ['on', 'off'].includes(sourceState(n).state))
-  $('srcHint').textContent = on.length === 2 ? 'Finds albums on peers and tracks on YouTube.'
+  $('srcHint').textContent = on.length > 1
+    ? (on.length === 2 && on[0] === 'soulseek' && on[1] === 'youtube' ? 'Finds albums on peers and tracks on YouTube.' : 'Searches ' + on.map(sourceLabel).join(', ') + '.')
     : on[0] === 'soulseek' ? 'Finds albums on peers and mirrors them here.'
       : on[0] === 'youtube' ? 'Finds YouTube videos and saves their audio here.'
-        : relaysOn() ? 'Finds titles that other relays hold.'
-          : usable.length ? 'Pick a source to search.'
-            : here.some(n => sourceState(n).state === 'setup') ? 'Set up a source in Settings to search.' : 'No search source works on this device.'
+        : on[0] === 'soundcloud' ? 'Finds tracks on SoundCloud and saves their audio here.'
+          : on[0] === 'rumble' ? 'Finds videos on Rumble and saves them here.'
+            : relaysOn() ? 'Finds titles that other relays hold.'
+              : usable.length ? 'Pick a source to search.'
+                : here.some(n => sourceState(n).state === 'setup') ? 'Set up a source in Settings to search.' : 'No search source works on this device.'
   const notes = here.map(n => sourceState(n).note).filter(Boolean)
   $('srcNote').hidden = !notes.length
   $('srcNote').replaceChildren(...notes.map(t => h('div', null, t)))
@@ -2882,7 +2913,8 @@ function srcArrival (name, g) {
   const label = sourceLabel(name)
   if (g.error) return label + ' search failed.'
   if (!g.results.length) return label + ' found nothing.'
-  if (name === 'youtube') return label + ': ' + plural(g.results.length, 'video', 'videos') + '.'
+  if (name === 'youtube' || name === 'rumble') return label + ': ' + plural(g.results.length, 'video', 'videos') + '.'
+  if (name === 'soundcloud') return label + ': ' + plural(g.results.length, 'track', 'tracks') + '.'
   return label + ': ' + slskCount(g.results, ', ') + ' from ' + plural(new Set(g.results.map(r => r.username)).size, 'peer', 'peers') + '.'
 }
 // A folder where one file matched is a track, not an album, so the count names both.
@@ -2984,7 +3016,7 @@ function renderSrcSummary () {
       if (st === 'setup') return h('span', null, label + ' not set up: ', h('a', { href: '#settings', onclick: ev => { ev.preventDefault(); openSourceSetup() } }, 'set up in Settings'))
       return h('span', null, label + (st === 'unavailable' ? ' not on this device' : st === 'off' ? ' off' : ' not searched'))
     }
-    const what = g.state === 'pending' ? '…' : g.state === 'error' ? 'failed' : n === 'youtube' ? plural(g.results.length, 'video', 'videos') : slskCount(g.results, ', ')
+    const what = g.state === 'pending' ? '…' : g.state === 'error' ? 'failed' : (n === 'youtube' || n === 'rumble') ? plural(g.results.length, 'video', 'videos') : n === 'soundcloud' ? plural(g.results.length, 'track', 'tracks') : slskCount(g.results, ', ')
     return h('a', { href: '#srcGroup-' + n, onclick: ev => { ev.preventDefault(); focusSrcHead(n) } }, label + ' ' + what)
   })
   nav.replaceChildren(...parts.flatMap((p, i) => i ? [h('span', { class: 'sep', 'aria-hidden': 'true' }, '·'), p] : [p]))
@@ -3004,13 +3036,14 @@ function fillSrcGroup (name, sec) {
   const secs = Math.max(1, Math.round((g.ms || 0) / 1000)) + ' s'
   let count
   if (g.state === 'pending') {
-    count = [h('span', { class: 'slsk-spin', 'aria-hidden': 'true' }), name === 'youtube' ? 'Searching YouTube… ' : 'Searching peers… ', h('span', { 'data-secs': '', 'aria-hidden': 'true' }, Math.round((Date.now() - g.started) / 1000) + ' s')]
+    count = [h('span', { class: 'slsk-spin', 'aria-hidden': 'true' }), name === 'soulseek' ? 'Searching peers… ' : 'Searching ' + label + '… ', h('span', { 'data-secs': '', 'aria-hidden': 'true' }, Math.round((Date.now() - g.started) / 1000) + ' s')]
   } else if (g.state === 'done' && g.results.length) {
-    count = name === 'youtube' ? plural(g.results.length, 'video', 'videos') + ' · ' + secs
-      : [slskCount(g.results, ' · '), plural(new Set(g.results.map(r => r.username)).size, 'peer', 'peers'), secs].join(' · ')
+    count = (name === 'youtube' || name === 'rumble') ? plural(g.results.length, 'video', 'videos') + ' · ' + secs
+      : name === 'soundcloud' ? plural(g.results.length, 'track', 'tracks') + ' · ' + secs
+        : [slskCount(g.results, ' · '), plural(new Set(g.results.map(r => r.username)).size, 'peer', 'peers'), secs].join(' · ')
   }
   const head = h('div', { class: 'src-head' },
-    h('h3', { id: 'srcHead-' + name, tabindex: '-1' }, label, name === 'youtube' ? h('span', { class: 'tag' }, 'Lossy') : null),
+    h('h3', { id: 'srcHead-' + name, tabindex: '-1' }, label, (name === 'youtube' || name === 'soundcloud') ? h('span', { class: 'tag' }, 'Lossy') : null),
     count ? h('span', { class: 'count' }, count) : null)
   const again = h('button', { class: 'btn quiet', onclick: () => searchSources(srcRun.query, [name]) }, 'Try again')
   const kids = [head]
@@ -3024,12 +3057,23 @@ function fillSrcGroup (name, sec) {
   } else if (!g.results.length) {
     if (name === 'youtube') {
       kids.push(h('div', { class: 'msg' }, 'No videos found for “' + srcRun.query + '”.' + (sourceState('youtube').degraded ? ' YouTube search may be out of date.' : '')))
+    } else if (name === 'soundcloud') {
+      kids.push(h('div', { class: 'msg' }, 'No tracks found for “' + srcRun.query + '”.'))
+    } else if (name === 'rumble') {
+      kids.push(h('div', { class: 'msg' }, 'No videos found for “' + srcRun.query + '”.'))
     } else {
       kids.push(h('div', { class: 'msg' }, 'No matching albums found in ' + secs + '.'), h('div', { class: 'meta' }, 'Try fewer words, such as the album name.'))
     }
   } else if (name === 'youtube') {
     if (g.truncated) kids.push(h('div', { class: 'meta wrap' }, 'Showing the first ' + g.results.length + ' videos. Add a word to narrow it.'))
     kids.push(h('div', { class: 'list', id: 'ytResults' }, g.results.map(ytRow)))
+  } else if (name === 'soundcloud') {
+    if (g.truncated) kids.push(h('div', { class: 'meta wrap' }, 'Showing the first ' + g.results.length + ' tracks. Add a word to narrow it.'))
+    kids.push(h('div', { class: 'list', id: 'scResults' }, g.results.map(scRow)))
+    kids.push(scPickBar())
+  } else if (name === 'rumble') {
+    if (g.truncated) kids.push(h('div', { class: 'meta wrap' }, 'Showing the first ' + g.results.length + ' videos. Add a word to narrow it.'))
+    kids.push(h('div', { class: 'list', id: 'rmbResults' }, g.results.map(rmbRow)))
   } else {
     if (g.truncated) kids.push(h('div', { class: 'meta wrap' }, 'Showing the first results. Add a word to narrow it.'))
     kids.push(...renderSlskResults(g))
@@ -3155,20 +3199,107 @@ $('ytPickClear').onclick = () => {
   $('srcInput').focus()
 }
 
-// ---- Thumbnails: fetched from the relay with the token (never from YouTube's image host), lazily, four at a time,
-// kept as object URLs per video. Until one lands, or when there is none (204), the row shows a drawn placeholder.
-const ytThumbs = new Map() // videoId -> object URL, or null for none
+// ---- SoundCloud and Rumble rows: SoundCloud saves single tracks or selected albums via /v1/providers/soundcloud/mirror;
+// Rumble saves videos (or audio-only tracks) via /v1/providers/rumble/mirror. Both track live job progress.
+const scPicked = new Map() // trackId -> { row, query }
+async function scSaveTrack (r, btn) {
+  if (scStarted.has(r.trackId)) return
+  btn.textContent = 'Starting'
+  const artist = r.artist || r.channel || 'SoundCloud'
+  const res = await act(btn, () => api('/v1/providers/soundcloud/mirror', { body: { trackId: r.trackId, url: r.url, title: r.title, artist, album: r.title } }), 'srcMsg')
+  if (!res || !res.job) { btn.textContent = btn.dataset.label; return }
+  scStarted.set(r.trackId, { id: res.job.jobId, at: Date.now() })
+  if (!S.jobs.some(j => j.jobId === res.job.jobId)) S.jobs.unshift(res.job)
+  renderMirrors()
+  pollMirrors()
+  toast('Saving “' + r.title + '” from SoundCloud')
+}
+function scRow (r) {
+  const n = [...scPicked.keys()].indexOf(r.trackId) + 1
+  const saveTrack = h('button', { class: 'btn primary', 'data-src-key': 'c:' + r.trackId, 'data-label': 'Save track', 'aria-label': 'Save track “' + r.title + '” from SoundCloud', onclick: ev => scSaveTrack(r, ev.currentTarget) }, 'Save track')
+  const saveAlbum = h('button', { class: 'btn', 'aria-label': 'Save “' + r.title + '” as album', onclick: ev => openYtSave([r], ev.currentTarget, 'soundcloud') }, 'Save album')
+  srcSyncButton(saveTrack)
+  return h('div', { class: 'item src-row yt-item', 'data-scid': r.trackId },
+    h('label', { class: 'yt-pick-row' },
+      h('input', { type: 'checkbox', checked: n > 0, 'aria-label': 'Select “' + r.title + '”', onchange: ev => scPick(r, ev.target.checked) }),
+      ytThumbBox(r),
+      h('span', { class: 'info' },
+        h('span', { class: 'name' }, r.title),
+        h('span', { class: 'meta wrap' }, n ? [h('span', { class: 'tag' }, 'Track ' + n), ' '] : null,
+          h('span', { class: 'tag src-tag' }, 'SoundCloud'), ' 128 kbps · lossy'),
+        r.artist || r.channel ? h('span', { class: 'meta wrap' }, r.artist || r.channel) : null)),
+    h('div', { class: 'acts' }, saveAlbum, saveTrack))
+}
+function scPick (r, on) {
+  if (on) scPicked.set(r.trackId, { row: r, query: srcRun ? srcRun.query : '' })
+  else scPicked.delete(r.trackId)
+  say('srcMsg', plural(scPicked.size, 'track', 'tracks') + ' selected.')
+  renderScRows(r.trackId)
+}
+function scPickBar () {
+  const n = scPicked.size
+  return h('div', { class: 'yt-pick', id: 'scPick', role: 'region', 'aria-label': 'Selected SoundCloud tracks', hidden: !n },
+    h('span', { class: 'grow' }, n + ' selected'),
+    h('button', { class: 'btn primary', onclick: ev => openYtSave([...scPicked.values()].map(p => p.row), ev.currentTarget, 'soundcloud') }, n === 1 ? 'Save track' : 'Save ' + n + ' as album'),
+    h('button', { class: 'btn quiet', onclick: () => { scPicked.clear(); renderScRows() } }, 'Clear'))
+}
+function renderScRows (focusId) {
+  const list = $('scResults')
+  const g = srcRun && srcRun.groups.get('soundcloud')
+  if (!list || !g) return
+  ytThumbsLetGo(list)
+  list.replaceChildren(...g.results.map(scRow))
+  const oldBar = $('scPick')
+  if (oldBar) oldBar.replaceWith(scPickBar())
+  const box = focusId && list.querySelector('[data-scid="' + focusId + '"] input')
+  if (box) box.focus()
+}
+async function rmbSave (r, audio, btn) {
+  const key = (audio ? 'a:' : 'v:') + r.rumbleId
+  if (rmbStarted.has(key)) return
+  btn.textContent = 'Starting'
+  const body = audio
+    ? { title: r.title, url: r.url, rumbleId: r.rumbleId, audio: true, artist: r.channel || 'Rumble', album: r.title }
+    : { title: r.title, url: r.url, rumbleId: r.rumbleId, audio: false }
+  const res = await act(btn, () => api('/v1/providers/rumble/mirror', { body }), 'srcMsg')
+  if (!res || !res.job) { btn.textContent = btn.dataset.label; return }
+  rmbStarted.set(key, { id: res.job.jobId, at: Date.now() })
+  if (!S.jobs.some(j => j.jobId === res.job.jobId)) S.jobs.unshift(res.job)
+  renderMirrors()
+  pollMirrors()
+  toast('Saving “' + r.title + '” from Rumble')
+}
+function rmbRow (r) {
+  const saveVideo = h('button', { class: 'btn primary', 'data-src-key': 'r:v:' + r.rumbleId, 'data-label': 'Save video', 'aria-label': 'Save video “' + r.title + '” from Rumble', onclick: ev => rmbSave(r, false, ev.currentTarget) }, 'Save video')
+  const saveTrack = h('button', { class: 'btn', 'data-src-key': 'r:a:' + r.rumbleId, 'data-label': 'Save track', 'aria-label': 'Save audio of “' + r.title + '” from Rumble', onclick: ev => rmbSave(r, true, ev.currentTarget) }, 'Save track')
+  srcSyncButton(saveVideo)
+  srcSyncButton(saveTrack)
+  return h('div', { class: 'item src-row yt-item', 'data-rmbid': r.rumbleId },
+    h('div', { class: 'yt-pick-row' },
+      ytThumbBox(r),
+      h('span', { class: 'info' },
+        h('span', { class: 'name' }, r.title),
+        h('span', { class: 'meta wrap' }, h('span', { class: 'tag src-tag' }, 'Rumble'), ' Video'),
+        r.channel ? h('span', { class: 'meta wrap' }, r.channel) : null)),
+    h('div', { class: 'acts' }, saveTrack, saveVideo))
+}
+
+// ---- Thumbnails: fetched from the relay with the token (never from the source's image host), lazily, four at a time,
+// kept as object URLs per item. Until one lands, or when there is none (204), the row shows a drawn placeholder.
+const thumbKeyOf = r => r.videoId || (r.trackId ? 'sc-' + r.trackId : r.rumbleId ? 'rmb-' + r.rumbleId : '')
+const ytThumbs = new Map() // thumbKey -> object URL, or null for none
 const ytThumbWait = []
 let ytThumbBusy = 0
 const ytThumbIO = 'IntersectionObserver' in window ? new IntersectionObserver(entries => {
   for (const x of entries) if (x.isIntersecting) { ytThumbIO.unobserve(x.target); ytThumbAsk(x.target.dataset.thumb, x.target.dataset.vid) }
 }, { rootMargin: '300px' }) : null
 function ytThumbBox (r, small) {
-  const box = h('div', { class: 'poster thumb yt-thumb' + (small ? ' sm' : ''), 'aria-hidden': 'true', 'data-vid': r.videoId, 'data-thumb': r.thumbnail || '' },
+  const key = thumbKeyOf(r)
+  const box = h('div', { class: 'poster thumb yt-thumb' + (small ? ' sm' : ''), 'aria-hidden': 'true', 'data-vid': key, 'data-thumb': r.thumbnail || '' },
     h('span', { class: 'yt-ph' }), small ? null : h('span', { class: 'yt-dur' }, duration(r.length)))
-  const url = ytThumbs.get(r.videoId)
+  const url = ytThumbs.get(key)
   if (url) box.prepend(h('img', { class: 'sleeve-img', alt: '', src: url }))
-  else if (url === undefined && r.thumbnail) { if (ytThumbIO) ytThumbIO.observe(box); else ytThumbAsk(r.thumbnail, r.videoId) }
+  else if (url === undefined && r.thumbnail && key) { if (ytThumbIO) ytThumbIO.observe(box); else ytThumbAsk(r.thumbnail, key) }
   return box
 }
 // Rows about to be redrawn stop being watched, so the observer never holds boxes that left the page.
@@ -3194,11 +3325,11 @@ function ytThumbPump () {
       .finally(() => { ytThumbBusy--; ytThumbPump() })
   }
 }
-// A new search lets go of the last one's pictures, except those of picked videos, which the save dialog shows.
+// A new search lets go of the last one's pictures, except those of picked items, which the save dialog shows.
 function ytThumbsPrune () {
   ytThumbWait.length = 0
   for (const [vid, url] of ytThumbs) {
-    if (ytPicked.has(vid)) continue
+    if (ytPicked.has(vid) || (vid.startsWith('sc-') && scPicked.has(vid.slice(3)))) continue
     if (url) URL.revokeObjectURL(url)
     ytThumbs.delete(vid)
   }
@@ -3354,13 +3485,16 @@ function ytSuggest (rows, queries, pool) {
   }
   return { artist, album, year, titles, hint }
 }
-function openYtSave (rows, opener) {
+function openYtSave (rows, opener, provider = 'youtube') {
   if (!rows.length) return
-  const queries = [...new Set(rows.map(r => (ytPicked.get(r.videoId) || {}).query || (srcRun ? srcRun.query : '')).filter(Boolean))]
-  const s = ytSuggest(rows, queries, (srcRun && srcRun.groups.get('youtube') || {}).results)
-  ytSave = { tracks: rows.map((r, i) => ({ r, title: s.titles[i] })), opener, done: false }
-  $('ytArtist').value = s.artist
-  $('ytAlbum').value = s.album
+  const isSoundcloud = provider === 'soundcloud'
+  const queries = [...new Set(rows.map(r => (isSoundcloud ? (scPicked.get(r.trackId) || {}).query : (ytPicked.get(r.videoId) || {}).query) || (srcRun ? srcRun.query : '')).filter(Boolean))]
+  const s = ytSuggest(rows, queries, (srcRun && srcRun.groups.get(provider) || {}).results)
+  const fallbackArtist = isSoundcloud ? (rows.map(r => r.artist || r.channel).find(Boolean) || '') : ''
+  ytSave = { provider, tracks: rows.map((r, i) => ({ r, title: s.titles[i] || r.title })), opener, done: false }
+  $('ytSaveTitle').textContent = isSoundcloud ? 'Save from SoundCloud' : 'Save from YouTube'
+  $('ytArtist').value = s.artist || fallbackArtist
+  $('ytAlbum').value = s.album || (rows.length === 1 ? rows[0].title : '')
   $('ytYear').value = s.year
   $('ytSaveHint').hidden = !s.hint
   $('ytSaveHint').textContent = s.hint
@@ -3388,10 +3522,11 @@ function ytPlan () {
   const disc = has.items.filter(i => i.season == null || i.season <= 1)
   nums = list.map(() => 0)
   const used = new Set()
+  const isSameSrc = ytSave.provider === 'soundcloud' ? isSc : isYt
   list.forEach((t, k) => {
     const f = fold(t.title.trim() || ytCleanTitle(t.r.title))
     const named = x => [x.e, ...x.alts].some(e => fold(trackName(e)) === f)
-    dups[k] = has.items.some(x => named(x) && [x.e, ...x.alts].some(isYt))
+    dups[k] = has.items.some(x => named(x) && [x.e, ...x.alts].some(isSameSrc))
     const i = disc.find(named)
     if (i && i.episode >= 1 && i.episode <= 999 && !used.has(i.episode)) { twins[k] = i; nums[k] = i.episode; used.add(i.episode) }
   })
@@ -3419,7 +3554,8 @@ function ytNumber (plan) {
 function renderYtSaveTracks (focus) {
   const list = ytSave.tracks
   const n = list.length
-  $('ytSaveSub').textContent = plural(n, 'track', 'tracks') + ' · lossy ' + YT_CODEC
+  const isScSave = ytSave.provider === 'soundcloud'
+  $('ytSaveSub').textContent = plural(n, 'track', 'tracks') + (isScSave ? ' · lossy 128 kbps' : ' · lossy ' + YT_CODEC)
   $('ytTracksLegend').textContent = n === 1 ? 'Track' : 'Tracks'
   const icon = (kind, i, text, label, off, fn) => h('button', { class: 'ic-btn', 'data-mv': kind + '-' + i, 'aria-label': label, 'aria-disabled': off ? 'true' : null, onclick: () => { if (!off) fn() } }, text)
   $('ytTracks').replaceChildren(...list.map((t, i) => {
@@ -3436,7 +3572,7 @@ function renderYtSaveTracks (focus) {
         icon('rm', i, '✕', 'Remove ' + name, false, () => ytRemove(i))) : null,
       // Shown by the plan when the album already has this song from YouTube; the tick is the owner's override.
       h('div', { class: 'yt-dup', hidden: true },
-        h('span', null, 'Already saved from YouTube; left out.'),
+        h('span', null, 'Already saved from ' + sourceLabel(ytSave.provider || 'youtube') + '; left out.'),
         h('label', null, h('input', { type: 'checkbox', checked: Boolean(t.again), 'aria-label': 'Save ' + name + ' again', onchange: ev => { t.again = ev.target.checked; ytSaveNotes() } }), ' Save again')))
   }))
   ytNumber(ytPlan())
@@ -3460,7 +3596,7 @@ const libraryHas = (artist, album) => libraryTiles().find(t => t.kind === 'album
 // What the save will do to the library, said before it happens: a song already there, where a new one goes.
 function ytSaveNotes () {
   const lines = []
-  if (plugin('youtube').canSave === false) lines.push('YouTube is refusing saves from this network right now.')
+  if ((ytSave.provider || 'youtube') === 'youtube' && plugin('youtube').canSave === false) lines.push('YouTube is refusing saves from this network right now.')
   const plan = ytPlan()
   ytNumber(plan)
   if (plan.has) {
@@ -3502,7 +3638,8 @@ $('ytSaveForm').onsubmit = async ev => {
   if (empty !== -1) return fail('ytTrack-' + empty, 'Every track needs a title.')
   const plan = ytPlan()
   if (!plan.send.length) {
-    say('ytSaveMsg', ytSave.tracks.length === 1 ? 'This song is already saved from YouTube. Tick Save again to add another copy.' : 'Every song is already saved from YouTube. Tick Save again on one to add it.', true)
+    const provLabel = sourceLabel(ytSave.provider || 'youtube')
+    say('ytSaveMsg', ytSave.tracks.length === 1 ? 'This song is already saved from ' + provLabel + '. Tick Save again to add another copy.' : 'Every song is already saved from ' + provLabel + '. Tick Save again on one to add it.', true)
     return $('ytTracks').querySelector('.yt-dup input').focus()
   }
   say('ytSaveMsg', '')
@@ -3512,24 +3649,33 @@ $('ytSaveForm').onsubmit = async ev => {
   // The dialog this save belongs to: Cancel, Close and Esc still work while the relay answers, so by then
   // another save may be on screen, and its selection and form are not this one's to touch.
   const mine = ytSave
-  const body = { artist, album, ...(year ? { year } : {}), tracks: plan.send.map(t => ({ videoId: t.r.videoId, title: t.title.trim(), track: plan.nums[mine.tracks.indexOf(t)] })) }
+  const isScSave = mine.provider === 'soundcloud'
+  const body = isScSave
+    ? { artist, album, ...(year ? { year } : {}), tracks: plan.send.map(t => ({ trackId: t.r.trackId, url: t.r.url, title: t.title.trim(), track: plan.nums[mine.tracks.indexOf(t)] })) }
+    : { artist, album, ...(year ? { year } : {}), tracks: plan.send.map(t => ({ videoId: t.r.videoId, title: t.title.trim(), track: plan.nums[mine.tracks.indexOf(t)] })) }
+  const endpoint = isScSave ? '/v1/providers/soundcloud/mirror' : '/v1/providers/youtube/mirror'
   // A refusal the owner can act on (the album folder holds other files) leads; the relay's words stay as detail.
   let r = null
   btn.disabled = true
   btn.title = 'Saving this album.'
-  try { r = await api('/v1/providers/youtube/mirror', { body }) } catch (err) { if (ytSave === mine) ytSayFail('ytSaveMsg', err.message); else toast('Could not save “' + album + '”: ' + err.message) } finally { btn.disabled = false }
+  try { r = await api(endpoint, { body }) } catch (err) { if (ytSave === mine) ytSayFail('ytSaveMsg', err.message); else toast('Could not save “' + album + '”: ' + err.message) } finally { btn.disabled = false }
   if (ytSave === mine) btn.textContent = label
   if (!r || !r.job) return
-  for (const t of mine.tracks) ytPicked.delete(t.r.videoId)
-  for (const t of plan.send) ytStarted.set(t.r.videoId, { id: r.job.jobId, at: Date.now() })
+  if (isScSave) {
+    for (const t of mine.tracks) scPicked.delete(t.r.trackId)
+    for (const t of plan.send) scStarted.set(t.r.trackId, { id: r.job.jobId, at: Date.now() })
+  } else {
+    for (const t of mine.tracks) ytPicked.delete(t.r.videoId)
+    for (const t of plan.send) ytStarted.set(t.r.videoId, { id: r.job.jobId, at: Date.now() })
+  }
   mine.done = true
   if (ytSave === mine) closeYtSave()
   if (!S.jobs.some(j => j.jobId === r.job.jobId)) S.jobs.unshift(r.job)
   renderMirrors()
-  renderYtRows()
-  renderYtPick()
+  if (isScSave) renderScRows()
+  else { renderYtRows(); renderYtPick() }
   pollMirrors()
-  toast('Saving “' + (body.tracks.length === 1 ? body.tracks[0].title : album) + '” from YouTube')
+  toast('Saving “' + (body.tracks.length === 1 ? body.tracks[0].title : album) + '” from ' + (isScSave ? 'SoundCloud' : 'YouTube'))
   const name = document.querySelector('[data-job="' + r.job.jobId + '"] .name')
   if (name) name.focus()
 }
@@ -3714,17 +3860,22 @@ $('discAsk').onclick = () => {
 function srcActive (j) { return SOURCE_NAMES.has(j.plugin) && MIRROR_ACTIVE.has(j.status) }
 const slskFor = ms => ms < 90_000 ? Math.round(ms / 1000) + ' s' : Math.round(ms / 60_000) + ' min'
 const slskPct = j => j.total ? Math.min(j.status === 'done' ? 100 : 99, Math.floor((j.bytes || 0) / j.total * 100)) : null
+const isPageSource = j => j.plugin === 'youtube' || j.plugin === 'soundcloud' || j.plugin === 'rumble'
 // What a job is doing: a sentence for its card and a word or two for the button that started it.
-const jobState = j => j.plugin === 'youtube' ? ytJobState(j) : slskJobState(j)
+const jobState = j => isPageSource(j) ? ytJobState(j) : slskJobState(j)
 function ytJobState (j) {
   const n = j.fileCount || 1
   const skipped = (j.skipped || []).length
-  if (j.status === 'done' && skipped) return { tone: 'warn', text: 'Saved ' + (n - skipped) + ' of ' + plural(n, 'track', 'tracks'), short: 'Saved ' + (n - skipped) + ' of ' + n }
-  if (j.status === 'done') return { tone: 'ok', text: 'Saved · ' + plural(n, 'track', 'tracks') + ' · ' + size(j.size || j.bytes || 0), what: YT_LABEL, short: 'Saved' }
+  const label = sourceLabel(j.plugin)
+  const isVideo = j.plugin === 'rumble' && !j.audio
+  const unit = isVideo ? ['video', 'videos'] : ['track', 'tracks']
+  const what = j.plugin === 'youtube' ? YT_LABEL : j.plugin === 'soundcloud' ? SC_LABEL : ''
+  if (j.status === 'done' && skipped) return { tone: 'warn', text: 'Saved ' + (n - skipped) + ' of ' + plural(n, unit[0], unit[1]), short: 'Saved ' + (n - skipped) + ' of ' + n }
+  if (j.status === 'done') return { tone: 'ok', text: 'Saved · ' + plural(n, unit[0], unit[1]) + ' · ' + size(j.size || j.bytes || 0), ...(what ? { what } : {}), short: 'Saved' }
   if (j.status === 'failed') return { tone: 'bad', text: 'Failed', short: 'Failed' }
   if (j.status === 'cancelled') return { tone: '', text: 'Cancelled', short: 'Cancelled' }
   if (j.status === 'announcing') return j.phase === 'waiting' ? { tone: '', text: 'Waiting for another import to finish', short: 'Waiting' } : { tone: '', text: 'Adding to your library', short: 'Adding' }
-  if (j.status === 'transferring') return n > 1 ? { tone: '', text: 'Downloading track ' + j.fileIndex + ' of ' + n + ' from YouTube', short: 'Track ' + j.fileIndex + ' of ' + n } : { tone: '', text: 'Downloading from YouTube', short: 'Saving' }
+  if (j.status === 'transferring') return n > 1 ? { tone: '', text: 'Downloading ' + unit[0] + ' ' + j.fileIndex + ' of ' + n + ' from ' + label, short: 'Track ' + j.fileIndex + ' of ' + n } : { tone: '', text: 'Downloading from ' + label, short: 'Saving' }
   return { tone: '', text: 'Waiting to start', short: 'Waiting' }
 }
 function slskJobState (j) {
@@ -3750,14 +3901,14 @@ function slskAmount (j) {
   return [got, note].filter(Boolean).join(' · ')
 }
 const slskPortFix = n => ['Publish port ' + n + ' (', h('code', null, '-p ' + n + ':' + n), ') and forward it on your router.']
-// The album a finished job added: by the files it saved, else (YouTube) by the release it was pinned to.
+// The album or video a finished job added: by the files it saved, else by the release or entry id.
 const jobAlbumEntry = j => (j.sha256s && j.sha256s.length ? S.entries.find(e => j.sha256s.includes(e.sha256)) : null) ||
-  (j.plugin === 'youtube' && j.id ? S.entries.find(e => e.seriesKey === j.id) : null) || null
-// Progress a reader can trust: bytes of a known total (Soulseek), else tracks done of tracks asked (YouTube).
+  (isPageSource(j) && j.id ? S.entries.find(e => e.seriesKey === j.id || e.id === j.id) : null) || null
+// Progress a reader can trust: bytes of a known total (Soulseek), else tracks done of tracks asked (page sources).
 function jobProgress (j) {
   // Waiting for another import: everything is downloaded but nothing is in the library yet, so no amount is shown.
   if (j.status === 'announcing' && j.phase === 'waiting') return h('div', { class: 'bar-track indef wait', role: 'progressbar', 'aria-valuetext': 'Waiting' }, h('div'))
-  if (j.plugin !== 'youtube') {
+  if (!isPageSource(j)) {
     return h('div', { class: 'bar-track' + (j.status === 'transferring' || j.status === 'announcing' ? '' : ' wait') }, h('div', { style: 'width:' + (j.status === 'announcing' ? 100 : slskPct(j) || 0) + '%' }))
   }
   const n = j.fileCount || 1
@@ -3793,23 +3944,24 @@ function ytSayFail (id, error) {
 }
 // The song a one-track save is of, from its file name ("04 - Revenga.m4a"): such a card names the song, not just
 // the album it went into.
-const ytJobSong = j => j.plugin === 'youtube' && j.fileCount === 1 && j.file ? j.file.replace(/^[0-9]+ - /, '').replace(/[.][a-z0-9]{2,4}$/i, '') : ''
+const ytJobSong = j => (j.plugin === 'youtube' || j.plugin === 'soundcloud' || (j.plugin === 'rumble' && j.audio)) && j.fileCount === 1 && j.file ? j.file.replace(/^[0-9]+ - /, '').replace(/[.][a-z0-9]{2,4}$/i, '') : ''
 function srcJobItem (j) {
-  const yt = j.plugin === 'youtube'
+  const yt = isPageSource(j)
   const st = jobState(j)
   const active = MIRROR_ACTIVE.has(j.status)
   const p = plugin('soulseek')
   const unreachable = !yt && p.inboundFailures > 0 && p.transfersOk === 0
   const album = j.status === 'done' ? jobAlbumEntry(j) : null
+  const openLabel = j.plugin === 'rumble' && !j.audio ? 'Open video' : 'Open album'
   const song = ytJobSong(j)
   const track = yt ? (song ? '' : j.file || '') : [j.fileCount > 1 ? 'Track ' + j.fileIndex + ' of ' + j.fileCount : '', j.file].filter(Boolean).join(' · ')
   const skipped = yt && j.status === 'done' ? j.skipped || [] : []
   const hinted = skipped.filter(s => ytFailHint(s.error))
   const failHint = j.status === 'failed' && yt ? ytFailHint(j.error) : ''
-  const btn = (label, fn) => h('button', { class: 'btn' + (label === 'Open album' ? '' : ' quiet'), 'data-fk': j.jobId + ':' + label, onclick: fn }, label)
+  const btn = (label, fn) => h('button', { class: 'btn' + (label === openLabel ? '' : ' quiet'), 'data-fk': j.jobId + ':' + label, onclick: fn }, label)
   return h('div', { class: 'item job src-job', 'data-job': j.jobId, 'data-status': j.status },
     h('div', { class: 'info' },
-      h('div', { class: 'name', tabindex: '-1' }, song ? song + ' — ' + j.title : j.title || 'Album'),
+      h('div', { class: 'name', tabindex: '-1' }, song && song !== j.title ? song + ' — ' + j.title : j.title || 'Album'),
       h('div', { class: 'slsk-state' + (st.tone ? ' ' + st.tone : '') }, st.text, st.what ? h('span', { class: 'what' }, ' · ' + st.what) : null),
       active && track ? h('div', { class: 'meta wrap' }, track) : null,
       active && slskAmount(j) ? h('div', { class: 'meta slsk-amount' }, slskAmount(j)) : null,
@@ -3821,15 +3973,15 @@ function srcJobItem (j) {
       failHint ? ytWhy([j.error], j.jobId + ':why') : null,
       j.status === 'failed' && unreachable ? h('div', { class: 'meta wrap slsk-fix' }, ...slskPortFix(p.listenPort || p.listenPortSetting || j.listenPort)) : null),
     h('div', { class: 'acts' },
-      album ? btn('Open album', () => { const t = tileOf(album); if (t) openDetail(t.key) }) : null,
+      album ? btn(openLabel, () => { const t = tileOf(album); if (t) openDetail(t.key) }) : null,
       // Once a job's own import runs there is nothing left to cancel, so no button offers it.
       active && j.status === 'announcing' && j.phase !== 'waiting' ? null : btn(active ? 'Cancel' : 'Dismiss', e => act(e.currentTarget, async () => { await api('/v1/jobs/' + j.jobId, { method: 'DELETE' }); refresh() }))))
 }
-// A button that started a job follows it; "s:" keys are Soulseek folders, "y:" keys YouTube videos. A job that
+// A button that started a job follows it; "s:" Soulseek, "y:" YouTube, "c:" SoundCloud, "r:" Rumble. A job that
 // failed, was cancelled, or left the list (dismissed, or trimmed by the relay) gives the button back.
 function srcSyncButton (b) {
   const key = b.dataset.srcKey
-  const started = key.startsWith('y:') ? ytStarted : slskStarted
+  const started = key.startsWith('y:') ? ytStarted : key.startsWith('c:') ? scStarted : key.startsWith('r:') ? rmbStarted : slskStarted
   const was = started.get(key.slice(2))
   if (!was) return
   const j = S.jobs.find(x => x.jobId === was.id)
@@ -3840,7 +3992,7 @@ function srcSyncButton (b) {
     b.title = b.disabled ? 'Nothing selected in this folder.' : ''
     return
   }
-  b.textContent = j ? jobState(j).short : key.startsWith('y:') ? 'Waiting' : 'Saving'
+  b.textContent = j ? jobState(j).short : key.startsWith('s:') ? 'Saving' : 'Waiting'
   b.disabled = true
   b.title = 'This save is shown above while it runs.'
 }
@@ -4081,6 +4233,7 @@ const trackNo = e => e.season != null && e.episode != null
 // cached; until it arrives the cell is empty rather than a guess.
 function qualityOf (e, d) {
   if (isYt(e)) return YT_LABEL + ' · lossy copy'
+  if (isSc(e)) return SC_LABEL + ' · lossy copy'
   if (!d || !d.media) return ''
   const secs = d.media.duration
   const a = (d.media.audio || [])[0]

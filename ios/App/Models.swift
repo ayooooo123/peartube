@@ -24,6 +24,92 @@ func jsonText(_ value: Any) -> String {
     return text
 }
 
+enum Room: String, Codable, CaseIterable, Hashable {
+    case home, listen, watch, discover, search
+
+    var label: String {
+        switch self {
+        case .home: return "Home"
+        case .listen: return "Listen"
+        case .watch: return "Watch"
+        case .discover: return "Discover"
+        case .search: return "Search"
+        }
+    }
+
+    var icon: String {
+        switch self {
+        case .home: return "house"
+        case .listen: return "music.note.list"
+        case .watch: return "film"
+        case .discover: return "safari"
+        case .search: return "magnifyingglass"
+        }
+    }
+
+    var activeIcon: String {
+        switch self {
+        case .home: return "house.fill"
+        case .listen: return "music.note.list"
+        case .watch: return "film.fill"
+        case .discover: return "safari.fill"
+        case .search: return "magnifyingglass"
+        }
+    }
+}
+
+enum RepeatMode: String, Codable, CaseIterable, Hashable {
+    case off, all, one
+
+    var next: RepeatMode {
+        switch self {
+        case .off: return .all
+        case .all: return .one
+        case .one: return .off
+        }
+    }
+
+    var label: String {
+        switch self {
+        case .off: return "Repeat off"
+        case .all: return "Repeat list"
+        case .one: return "Repeat track"
+        }
+    }
+
+    var icon: String {
+        switch self {
+        case .off, .all: return "repeat"
+        case .one: return "repeat.1"
+        }
+    }
+}
+
+struct UIPreferences: Codable {
+    var lastRoom: Room = .home
+}
+
+struct MusicMeta: Hashable, Codable {
+    var title: String?
+    var artist: String?
+
+    init(title: String? = nil, artist: String? = nil) {
+        self.title = title
+        self.artist = artist
+    }
+
+    init?(_ json: [String: Any]?) {
+        guard let json else { return nil }
+        let rawTitle = (json["title"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let rawArtist = (json["artist"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let t = (rawTitle?.isEmpty == false) ? rawTitle : nil
+        let a = (rawArtist?.isEmpty == false) ? rawArtist : nil
+        guard t != nil || a != nil else { return nil }
+        self.title = t
+        self.artist = a
+    }
+}
+
 struct SourceSpec: Codable, Hashable {
     var key: String
     var kind = "channel"
@@ -86,7 +172,51 @@ struct MediaEntry: Identifiable, Hashable {
     var seriesKey: String
     var baseTitle: String
     var year: String?
+    var music: MusicMeta?
     var id: String { key }
+
+    init(
+        key: String,
+        mediaID: String,
+        title: String,
+        size: Double = 0,
+        sha256: String = "",
+        local: Bool = false,
+        cachedBytes: Double = 0,
+        isPrivate: Bool = false,
+        locked: Bool = false,
+        streamURL: String = "",
+        downloadURL: String = "",
+        magnetURL: String = "",
+        source: String = "",
+        seasonNumber: Int? = nil,
+        episodeNumber: Int? = nil,
+        seriesKey: String = "",
+        baseTitle: String? = nil,
+        year: String? = nil,
+        music: MusicMeta? = nil
+    ) {
+        self.key = key
+        self.mediaID = mediaID
+        self.title = title
+        self.size = size
+        self.sha256 = sha256
+        self.local = local
+        self.cachedBytes = cachedBytes
+        self.isPrivate = isPrivate
+        self.locked = locked
+        self.streamURL = streamURL
+        self.downloadURL = downloadURL
+        self.magnetURL = magnetURL
+        self.source = source
+        self.seasonNumber = seasonNumber
+        self.episodeNumber = episodeNumber
+        self.seriesKey = seriesKey
+        self.baseTitle = (baseTitle?.isEmpty == false) ? baseTitle! : title
+        self.year = year
+        self.music = music
+    }
+
     init(_ j: [String: Any]) {
         key = j.string("key"); mediaID = j.string("id"); title = j.string("title"); size = j.number("size"); sha256 = j.string("sha256")
         local = j.flag("local"); cachedBytes = j.number("cachedBytes"); isPrivate = j.flag("private"); locked = j.flag("locked")
@@ -96,7 +226,9 @@ struct MediaEntry: Identifiable, Hashable {
         seriesKey = j.string("seriesKey")
         baseTitle = j.string("baseTitle").isEmpty ? title : j.string("baseTitle")
         year = j["year"] as? String
+        music = MusicMeta(j["music"] as? [String: Any])
     }
+
     var episode: String? {
         guard let s = seasonNumber, let e = episodeNumber else { return nil }
         return String(format: "S%02dE%02d", s, e)
@@ -109,12 +241,18 @@ struct MediaEntry: Identifiable, Hashable {
     var seriesTitle: String { baseTitle }
     var groupKey: String { seasonNumber != nil ? seriesKey : "movie:\(mediaID)" }
     var saved: Bool { local || (size > 0 && cachedBytes >= size) }
+    var playable: Bool { !streamURL.isEmpty && !locked }
+    var isYouTube: Bool { mediaID.hasPrefix("yt:") }
+    var isAlbumTrack: Bool { !mediaID.hasPrefix("imdb:") && seasonNumber != nil }
+    var canQueueAsTrack: Bool { playable && isAlbumTrack && episodeNumber != nil }
     var evidence: [String: Any] { ["key": key, "id": mediaID, "title": title, "size": size, "local": local, "cachedBytes": cachedBytes, "source": source] }
 }
 
 struct WatchProgress: Codable {
     var positionMs: Double; var durationMs: Double; var updatedAt: Double
     var partial: Bool { positionMs > 0 && (durationMs <= 0 || positionMs < durationMs - 10000) }
+    var fraction: Double { durationMs > 0 ? min(1, max(0, positionMs / durationMs)) : 0 }
+    var remainingSeconds: Double { max(0, (durationMs - positionMs) / 1000.0) }
 }
 struct PlayerTrack: Identifiable {
     let stream: Int; let kind: String; let codec: String; let language: String; let title: String
@@ -136,6 +274,8 @@ struct CastReceiver: Identifiable {
     let json: [String: Any]
     var id: String { json.string("id") }; var name: String { json.string("name") }
     var paired: Bool { json.flag("paired") }; var online: Bool { json.flag("online") }
+    var current: Bool { json.flag("current") }
+    var openAuth: Bool { json.string("auth") == "none" }
 }
 
 struct AppStorage {

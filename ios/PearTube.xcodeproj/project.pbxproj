@@ -7,20 +7,29 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		08ADDC35BD0D705A6822F5D0 /* Sleeves.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4230C4A66C096F26968EB031 /* Sleeves.swift */; };
 		0B522A22E564B3F24E58EDC9 /* NativePlayer.swift in Sources */ = {isa = PBXBuildFile; fileRef = EE630C60C7D0BE89C70C3CA9 /* NativePlayer.swift */; };
+		115FEB8698846BA92448B264 /* WatchScreens.swift in Sources */ = {isa = PBXBuildFile; fileRef = CBC59533A2A5D6726006E433 /* WatchScreens.swift */; };
 		27074CB4A400D78EA7EAB627 /* AppModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = D4A17A54BEF06AD8A74C2193 /* AppModel.swift */; };
 		34FCEA318F6D31C54AF09B14 /* Worker.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6B785159FD2F01F89A06C325 /* Worker.swift */; };
 		43040C3CD1696E0E04CDB374 /* Models.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2819498E04189DE028CFDEBA /* Models.swift */; };
+		490B9468C45895C9D05498AE /* Theme.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8DA9B39804AFBFA374A5CAAD /* Theme.swift */; };
+		4B1772D3984DD0504D0DCF73 /* MusicPlayerScreens.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5F17B5436D54D5CE7C41CAD5 /* MusicPlayerScreens.swift */; };
 		514D8502803EDC5BF84BBE70 /* PlayerScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = D169D9DC7C20208A72DEC729 /* PlayerScreen.swift */; };
+		5B2F94A21C2C090E540D19C0 /* ListenScreens.swift in Sources */ = {isa = PBXBuildFile; fileRef = EE3F2D785975DAB347F6D6B6 /* ListenScreens.swift */; };
 		5FF876E637774FB382C04A04 /* CastScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4857A864DAC2831EC6814560 /* CastScreen.swift */; };
 		6307F6EB476C9997D3D69F28 /* SettingsScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = 12739CFFE5A96DF56DD4CABA /* SettingsScreen.swift */; };
+		6576EF51BDEE924A5888A006 /* MusicPlayer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7464498E918A9C39F8E01F4C /* MusicPlayer.swift */; };
 		7697EF2095410E4EF09D22F5 /* LibraryScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4B9A628BC8CD14A5C6927275 /* LibraryScreen.swift */; };
 		78C1EB0B2C42A71745635785 /* IPC.swift in Sources */ = {isa = PBXBuildFile; fileRef = AF6B7542A184D795B5C17274 /* IPC.swift */; };
 		7EEB25C38B66467FCFED418D /* Worklet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5FA6CE8EB5341FC9958CDC55 /* Worklet.swift */; };
 		821C4A891261A36BE749F134 /* PearTubeApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 94E6D71617B610AF449664AC /* PearTubeApp.swift */; };
+		94A9B43D6D13F3EB75470903 /* HomeScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = 782468D6A3294EC368F8D645 /* HomeScreen.swift */; };
 		96E31373BBFD672AD23B5513 /* ParityTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1229757358D33156CBE95036 /* ParityTests.swift */; };
 		A96DCCB47FE96CA902AD0C41 /* QRCode.swift in Sources */ = {isa = PBXBuildFile; fileRef = CA794DF05DA630E07BD6E746 /* QRCode.swift */; };
+		BB48DADD89A58ED73F6EBAD5 /* DiscoverSearchScreens.swift in Sources */ = {isa = PBXBuildFile; fileRef = BE916CEDD6C04113BF7A9AD5 /* DiscoverSearchScreens.swift */; };
 		C0E96F8AD43935E19A78AFFA /* fixture.json in Resources */ = {isa = PBXBuildFile; fileRef = 8279B03476355072A7231F11 /* fixture.json */; };
+		C5ED418364CD8EC70A2A40DF /* LibraryCatalog.swift in Sources */ = {isa = PBXBuildFile; fileRef = AC1B8B5614C68379B8548F6C /* LibraryCatalog.swift */; };
 		F310B67A309312AF626D7E76 /* Bonjour.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1CADB987189272EBD0B66D6B /* Bonjour.swift */; };
 /* End PBXBuildFile section */
 
@@ -40,18 +49,27 @@
 		1CADB987189272EBD0B66D6B /* Bonjour.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Bonjour.swift; sourceTree = "<group>"; };
 		2819498E04189DE028CFDEBA /* Models.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Models.swift; sourceTree = "<group>"; };
 		3716ED4FBC67F1A0D2FFC3B9 /* PearTube-Bridging-Header.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = "PearTube-Bridging-Header.h"; sourceTree = "<group>"; };
+		4230C4A66C096F26968EB031 /* Sleeves.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sleeves.swift; sourceTree = "<group>"; };
 		4857A864DAC2831EC6814560 /* CastScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CastScreen.swift; sourceTree = "<group>"; };
 		4B9A628BC8CD14A5C6927275 /* LibraryScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LibraryScreen.swift; sourceTree = "<group>"; };
+		5F17B5436D54D5CE7C41CAD5 /* MusicPlayerScreens.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MusicPlayerScreens.swift; sourceTree = "<group>"; };
 		5FA6CE8EB5341FC9958CDC55 /* Worklet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Worklet.swift; sourceTree = "<group>"; };
 		6B785159FD2F01F89A06C325 /* Worker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Worker.swift; sourceTree = "<group>"; };
+		7464498E918A9C39F8E01F4C /* MusicPlayer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MusicPlayer.swift; sourceTree = "<group>"; };
+		782468D6A3294EC368F8D645 /* HomeScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HomeScreen.swift; sourceTree = "<group>"; };
 		8279B03476355072A7231F11 /* fixture.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = fixture.json; sourceTree = "<group>"; };
+		8DA9B39804AFBFA374A5CAAD /* Theme.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Theme.swift; sourceTree = "<group>"; };
 		94E6D71617B610AF449664AC /* PearTubeApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PearTubeApp.swift; sourceTree = "<group>"; };
 		9DB09FF22D2272D8328B6694 /* PearTubeUITests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = PearTubeUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		A8B51B81E7C4A61511DDCF7C /* PearTube.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = PearTube.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		AC1B8B5614C68379B8548F6C /* LibraryCatalog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LibraryCatalog.swift; sourceTree = "<group>"; };
 		AF6B7542A184D795B5C17274 /* IPC.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IPC.swift; sourceTree = "<group>"; };
+		BE916CEDD6C04113BF7A9AD5 /* DiscoverSearchScreens.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DiscoverSearchScreens.swift; sourceTree = "<group>"; };
 		CA794DF05DA630E07BD6E746 /* QRCode.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QRCode.swift; sourceTree = "<group>"; };
+		CBC59533A2A5D6726006E433 /* WatchScreens.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WatchScreens.swift; sourceTree = "<group>"; };
 		D169D9DC7C20208A72DEC729 /* PlayerScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlayerScreen.swift; sourceTree = "<group>"; };
 		D4A17A54BEF06AD8A74C2193 /* AppModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppModel.swift; sourceTree = "<group>"; };
+		EE3F2D785975DAB347F6D6B6 /* ListenScreens.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ListenScreens.swift; sourceTree = "<group>"; };
 		EE630C60C7D0BE89C70C3CA9 /* NativePlayer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativePlayer.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
@@ -72,13 +90,22 @@
 			children = (
 				D4A17A54BEF06AD8A74C2193 /* AppModel.swift */,
 				4857A864DAC2831EC6814560 /* CastScreen.swift */,
+				BE916CEDD6C04113BF7A9AD5 /* DiscoverSearchScreens.swift */,
+				782468D6A3294EC368F8D645 /* HomeScreen.swift */,
+				AC1B8B5614C68379B8548F6C /* LibraryCatalog.swift */,
 				4B9A628BC8CD14A5C6927275 /* LibraryScreen.swift */,
+				EE3F2D785975DAB347F6D6B6 /* ListenScreens.swift */,
 				2819498E04189DE028CFDEBA /* Models.swift */,
+				7464498E918A9C39F8E01F4C /* MusicPlayer.swift */,
+				5F17B5436D54D5CE7C41CAD5 /* MusicPlayerScreens.swift */,
 				EE630C60C7D0BE89C70C3CA9 /* NativePlayer.swift */,
 				94E6D71617B610AF449664AC /* PearTubeApp.swift */,
 				D169D9DC7C20208A72DEC729 /* PlayerScreen.swift */,
 				CA794DF05DA630E07BD6E746 /* QRCode.swift */,
 				12739CFFE5A96DF56DD4CABA /* SettingsScreen.swift */,
+				4230C4A66C096F26968EB031 /* Sleeves.swift */,
+				8DA9B39804AFBFA374A5CAAD /* Theme.swift */,
+				CBC59533A2A5D6726006E433 /* WatchScreens.swift */,
 			);
 			path = App;
 			sourceTree = "<group>";
@@ -276,14 +303,23 @@
 				27074CB4A400D78EA7EAB627 /* AppModel.swift in Sources */,
 				F310B67A309312AF626D7E76 /* Bonjour.swift in Sources */,
 				5FF876E637774FB382C04A04 /* CastScreen.swift in Sources */,
+				BB48DADD89A58ED73F6EBAD5 /* DiscoverSearchScreens.swift in Sources */,
+				94A9B43D6D13F3EB75470903 /* HomeScreen.swift in Sources */,
 				78C1EB0B2C42A71745635785 /* IPC.swift in Sources */,
+				C5ED418364CD8EC70A2A40DF /* LibraryCatalog.swift in Sources */,
 				7697EF2095410E4EF09D22F5 /* LibraryScreen.swift in Sources */,
+				5B2F94A21C2C090E540D19C0 /* ListenScreens.swift in Sources */,
 				43040C3CD1696E0E04CDB374 /* Models.swift in Sources */,
+				6576EF51BDEE924A5888A006 /* MusicPlayer.swift in Sources */,
+				4B1772D3984DD0504D0DCF73 /* MusicPlayerScreens.swift in Sources */,
 				0B522A22E564B3F24E58EDC9 /* NativePlayer.swift in Sources */,
 				821C4A891261A36BE749F134 /* PearTubeApp.swift in Sources */,
 				514D8502803EDC5BF84BBE70 /* PlayerScreen.swift in Sources */,
 				A96DCCB47FE96CA902AD0C41 /* QRCode.swift in Sources */,
 				6307F6EB476C9997D3D69F28 /* SettingsScreen.swift in Sources */,
+				08ADDC35BD0D705A6822F5D0 /* Sleeves.swift in Sources */,
+				490B9468C45895C9D05498AE /* Theme.swift in Sources */,
+				115FEB8698846BA92448B264 /* WatchScreens.swift in Sources */,
 				34FCEA318F6D31C54AF09B14 /* Worker.swift in Sources */,
 				7EEB25C38B66467FCFED418D /* Worklet.swift in Sources */,
 			);
@@ -335,7 +371,7 @@
 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
 				CODE_SIGN_STYLE = Automatic;
 				COPY_PHASE_STRIP = NO;
-				CURRENT_PROJECT_VERSION = 0.4.43;
+				CURRENT_PROJECT_VERSION = 0.4.45;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
 				ENABLE_NS_ASSERTIONS = NO;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
@@ -349,7 +385,7 @@
 				GCC_WARN_UNUSED_FUNCTION = YES;
 				GCC_WARN_UNUSED_VARIABLE = YES;
 				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
-				MARKETING_VERSION = 0.4.43;
+				MARKETING_VERSION = 0.4.45;
 				MTL_ENABLE_DEBUG_INFO = NO;
 				MTL_FAST_MATH = YES;
 				PRODUCT_BUNDLE_IDENTIFIER = com.peartube.app.dev;
@@ -521,7 +557,7 @@
 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
 				CODE_SIGN_STYLE = Automatic;
 				COPY_PHASE_STRIP = NO;
-				CURRENT_PROJECT_VERSION = 0.4.43;
+				CURRENT_PROJECT_VERSION = 0.4.45;
 				DEBUG_INFORMATION_FORMAT = dwarf;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
 				ENABLE_TESTABILITY = YES;
@@ -541,7 +577,7 @@
 				GCC_WARN_UNUSED_FUNCTION = YES;
 				GCC_WARN_UNUSED_VARIABLE = YES;
 				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
-				MARKETING_VERSION = 0.4.43;
+				MARKETING_VERSION = 0.4.45;
 				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
 				MTL_FAST_MATH = YES;
 				ONLY_ACTIVE_ARCH = YES;

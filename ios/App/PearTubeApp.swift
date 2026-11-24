@@ -10,7 +10,7 @@ struct PearTubeApp: App {
         WindowGroup {
             RootView(model: model)
                 .preferredColorScheme(.dark)
-                .tint(.mint)
+                .tint(PTColor.brand)
                 .onOpenURL { url in Task { await model.openURI(url.absoluteString) } }
                 .onChange(of: scenePhase) { _, phase in model.sceneChanged(phase) }
         }
@@ -25,16 +25,22 @@ final class PearTubeDelegate: NSObject, UIApplicationDelegate {
 struct RootView: View {
     @ObservedObject var model: AppModel
     @ObservedObject var player: NativePlayer
-    init(model: AppModel) { self.model = model; player = model.player }
+    @ObservedObject var music: MusicController
+    init(model: AppModel) {
+        self.model = model
+        self.player = model.player
+        self.music = model.music
+    }
     var body: some View {
         ZStack {
-            Color(red: 0.035, green: 0.045, blue: 0.065).ignoresSafeArea()
+            PTColor.bg.ignoresSafeArea()
             if player.entry != nil { PlayerScreen(model: model, player: player) }
-            else { LibraryScreen(model: model) }
+            else { MainShellView(model: model, music: music) }
         }
-        .safeAreaInset(edge: .bottom, spacing: 0) {
-            if !model.session.isEmpty && player.entry == nil { RemoteBar(model: model) }
+        .fullScreenCover(isPresented: $model.showMusicPlayer) {
+            MusicPlayerScreen(model: model, music: music)
         }
+        .sheet(isPresented: $model.showAdd) { AddToLibrarySheet(model: model) }
         .sheet(isPresented: $model.showSettings) { SettingsScreen(model: model) }
         .sheet(isPresented: $model.showDiagnostics) { DiagnosticsScreen(model: model) }
         .sheet(isPresented: $model.showCast, onDismiss: { model.pendingCast = nil }) { CastScreen(model: model) }
@@ -56,8 +62,15 @@ struct RootView: View {
         } message: { Text(model.error ?? "") }
         .overlay(alignment: .top) {
             if let notice = model.notice {
-                Text(notice).font(.callout).padding().background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 14))
-                    .padding().onTapGesture { model.notice = nil }
+                Text(notice)
+                    .font(.callout)
+                    .foregroundStyle(PTColor.ink)
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 12)
+                    .background(PTColor.raised, in: RoundedRectangle(cornerRadius: PTRadius.card))
+                    .overlay(RoundedRectangle(cornerRadius: PTRadius.card).strokeBorder(PTColor.line, lineWidth: 1))
+                    .padding()
+                    .onTapGesture { model.notice = nil }
                     .task(id: notice) { try? await Task.sleep(for: .seconds(5)); if model.notice == notice { model.notice = nil } }
             }
         }

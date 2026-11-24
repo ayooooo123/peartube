@@ -49,8 +49,12 @@ struct RootView: View {
             QRScanner { value in
                 model.showScanner = false
                 Task {
-                    if value.lowercased().hasPrefix("peartube:") || (value.count == 64 && value.allSatisfy(\.isHexDigit)) { await model.openURI(value) }
-                    else { await model.pairURI(value) }
+                    let lower = value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+                    if lower.hasPrefix("peartube:") || lower.hasPrefix("http://") || lower.hasPrefix("https://") || (value.count == 64 && value.allSatisfy(\.isHexDigit)) {
+                        await model.openURI(value)
+                    } else {
+                        await model.pairURI(value)
+                    }
                 }
             }
         }

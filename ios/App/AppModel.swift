@@ -37,6 +37,24 @@ final class AppModel: ObservableObject {
     }
     @Published var focusSearchTrigger = 0
     @Published var showAdd = false
+    @Published var pendingAddURL: String?
+    @Published var identifyURLString = ""
+    @Published var identifyBusy = false
+    @Published var identifyResult: IdentifyResult?
+    @Published var identifyError: String?
+    @Published var jobs: [AcquireJob] = []
+    private var previousActiveJobIDs: Set<String> = []
+    @Published var enabledSources: Set<MediaSourceKind> = Set(MediaSourceKind.allCases)
+    @Published var sourceSearchQuery = ""
+    @Published var sourceSearchResponse: SourceSearchResponse?
+    @Published var sourceSearchBusy = false
+    @Published var sourceSearchError: String?
+    @Published var saveStates: [String: InlineSaveState] = [:]
+    @Published var visitedShelves: [VisitedShelf] = []
+    @Published var soulseekSettings = SoulseekSettings()
+    @Published var soulseekSettingsBusy = false
+    @Published var soulseekSettingsMessage: String?
+    @Published var soulseekSettingsError: String?
     @Published var showMusicPlayer = false
     @Published var showSettings = false
     @Published var showDiagnostics = false
@@ -84,6 +102,7 @@ final class AppModel: ObservableObject {
             room = prefs.lastRoom
             let musicState = storage.load("music-state.json", fallback: PersistedMusicState())
             music.loadPersisted(musicState)
+            visitedShelves = storage.load("visited-shelves.json", fallback: [VisitedShelf]())
             soundfontPresent = FileManager.default.fileExists(atPath: storage.soundfont.path)
 
             music.onBeforeStartMusic = { [weak self] in self?.closePlaybackForMusic() }
@@ -116,7 +135,12 @@ final class AppModel: ObservableObject {
                     if self.background { continue }
                     self.player.poll(); self.tickCount += 1
                     self.recordProgress()
-                    if self.tickCount % 8 == 0 { await self.refresh() }
+                    if self.tickCount % 8 == 0 {
+                        await self.refresh()
+                        if self.hasActiveJobs || self.showAdd {
+                            await self.refreshJobs(silent: true)
+                        }
+                    }
                     self.writeEvidence()
                 }
             }
@@ -171,6 +195,8 @@ final class AppModel: ObservableObject {
             node = .running
             await refreshCast()
             await refresh()
+            await refreshJobs(silent: true)
+            await loadSoulseekSettings()
         } catch { node = .idle; self.error = error.localizedDescription }
     }
     func save(_ next: Settings) async {
@@ -222,6 +248,9 @@ final class AppModel: ObservableObject {
         let raw = status.string("apiUrl")
         return raw.isEmpty ? nil : URL(string: raw)
     }
+    var loopback: LoopbackApi? { apiBaseURL.map { LoopbackApi(baseURL: $0) } }
+    var activeJobs: [AcquireJob] { jobs.filter(\.isActive) }
+    var hasActiveJobs: Bool { jobs.contains(where: \.isActive) }
     func posterURL(imdb: String?) -> URL? {
         guard let imdb, !imdb.isEmpty, let apiBaseURL else { return nil }
         return apiBaseURL.appendingPathComponent("v1/poster/\(imdb)")
@@ -235,7 +264,12 @@ final class AppModel: ObservableObject {
     var receivers: [CastReceiver] { cast.objects("receivers").map { CastReceiver(json: $0) } }
     var session: [String: Any] { cast.object("session") }
     var remoteState: PlaybackState { PlaybackState(json: session.object("state")) }
-    var contextualQuery: Bool { (query.count == 64 && query.allSatisfy(\.isHexDigit)) || query.lowercased().hasPrefix("peartube:") }
+    var contextualQuery: Bool {
+        let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        return (trimmed.count == 64 && trimmed.allSatisfy(\.isHexDigit))
+            || trimmed.lowercased().hasPrefix("peartube:")
+            || isHTTPURL(trimmed)
+    }
     var visibleEntries: [MediaEntry] {
         entries.filter { entry in
             (contextualQuery || query.isEmpty || "\(entry.title) \(entry.mediaID)".localizedCaseInsensitiveContains(query)) &&
@@ -272,7 +306,7 @@ final class AppModel: ObservableObject {
         if let text {
             query = text
             if askRelays {
-                Task { await searchGlobal(text) }
+                Task { await searchAll(text) }
             }
         } else {
             focusSearchTrigger += 1
@@ -349,8 +383,27 @@ final class AppModel: ObservableObject {
     }
     func clearHistory() { history = [:]; do { try storage?.save(history, name: "watch-history.json") } catch { self.error = error.localizedDescription } }
     func openURI(_ raw: String) async {
-        let input = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !input.isEmpty else { return }
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+
+        // Handle `peartube://add?url=<encoded>` deep links (from Share Extension or external links).
+        if let deepTarget = extractAddDeepLinkTarget(from: trimmed) {
+            if isHTTPURL(deepTarget) {
+                openAddSheet(with: deepTarget)
+                return
+            }
+            // Fall through to open non-HTTP targets (peartube://channel/... or 64-hex key).
+            await openURI(deepTarget)
+            return
+        }
+
+        // Direct web/media URLs (SoundCloud, YouTube, Rumble, direct files) open Add to Library + ubit identify.
+        if isHTTPURL(trimmed) {
+            openAddSheet(with: trimmed)
+            return
+        }
+
+        let input = trimmed
         do {
             guard let worker else { throw AppFailure("The embedded worker is unavailable.") }
             if !running { await start() }
@@ -373,6 +426,328 @@ final class AppModel: ObservableObject {
             }
             query = ""; await refresh()
         } catch { self.error = error.localizedDescription }
+    }
+
+    func openAddSheet(with url: String) {
+        let target = extractSharedURL(from: url) ?? url.trimmingCharacters(in: .whitespacesAndNewlines)
+        pendingAddURL = target
+        identifyResult = nil
+        identifyError = nil
+        showAdd = true
+        if isHTTPURL(target) {
+            Task { await identifyURL(target) }
+        }
+        Task { await refreshJobs(silent: true) }
+    }
+
+    func resetIdentify() {
+        identifyURLString = ""
+        identifyResult = nil
+        identifyError = nil
+        identifyBusy = false
+    }
+
+    private func ensureLoopback() async throws -> LoopbackApi {
+        if !running { await start() }
+        if let api = loopback { return api }
+        if running { await refresh() }
+        guard let api = loopback else {
+            throw AppFailure("The local peer engine is not ready yet.")
+        }
+        return api
+    }
+
+    func identifyURL(_ raw: String) async {
+        guard let extracted = extractSharedURL(from: raw), isHTTPURL(extracted) else { return }
+        identifyURLString = extracted
+        identifyBusy = true
+        identifyError = nil
+        identifyResult = nil
+        defer { if identifyURLString == extracted { identifyBusy = false } }
+        do {
+            let api = try await ensureLoopback()
+            let result = try await api.identify(url: extracted)
+            if identifyURLString == extracted {
+                identifyResult = result
+            }
+        } catch {
+            if identifyURLString == extracted {
+                identifyError = error.localizedDescription
+            }
+        }
+    }
+
+    func acquireURL(
+        url: String,
+        id: String,
+        title: String,
+        page: Bool,
+        audioOnly: Bool,
+        artist: String
+    ) async -> Bool {
+        let cleanURL = extractSharedURL(from: url) ?? url.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard isHTTPURL(cleanURL) else {
+            identifyError = "Enter an http(s) link."
+            return false
+        }
+        let cleanTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        let finalTitle = cleanTitle.isEmpty ? "Untitled" : cleanTitle
+        let cleanArtist = artist.trimmingCharacters(in: .whitespacesAndNewlines)
+        let cleanId = id.trimmingCharacters(in: .whitespacesAndNewlines)
+        let finalId = cleanId.isEmpty
+            ? "clip:\(UUID().uuidString.replacingOccurrences(of: "-", with: "").prefix(16).lowercased())"
+            : cleanId
+        let music: MusicMeta? = (audioOnly || !cleanArtist.isEmpty)
+            ? MusicMeta(title: finalTitle, artist: cleanArtist.isEmpty ? nil : cleanArtist)
+            : nil
+        do {
+            let api = try await ensureLoopback()
+            let job = try await api.acquire(
+                id: finalId,
+                title: finalTitle,
+                url: cleanURL,
+                page: page,
+                audio: audioOnly,
+                music: music
+            )
+            upsertJob(job)
+            await refreshJobs(silent: true)
+            notice = "Added to library queue: \(finalTitle)"
+            return true
+        } catch {
+            identifyError = error.localizedDescription
+            return false
+        }
+    }
+
+    private func upsertJob(_ job: AcquireJob) {
+        jobs.removeAll { $0.jobId == job.jobId }
+        jobs.insert(job, at: 0)
+        reconcileBackground()
+    }
+
+    func refreshJobs(silent: Bool = false) async {
+        guard running, let api = loopback else { return }
+        do {
+            let next = try await api.listJobs()
+            let nowActive = Set(next.filter(\.isActive).map(\.jobId))
+            let completedNow = previousActiveJobIDs.contains { id in
+                next.first(where: { $0.jobId == id })?.isDone == true
+            }
+            previousActiveJobIDs = nowActive
+            jobs = next.sorted { lhs, rhs in
+                if lhs.isActive != rhs.isActive { return lhs.isActive }
+                return lhs.created > rhs.created
+            }
+            reconcileBackground()
+            if completedNow {
+                await refresh()
+            }
+        } catch {
+            if !silent { self.error = error.localizedDescription }
+        }
+    }
+
+    func cancelOrDismissJob(_ jobId: String) async {
+        do {
+            let api = try await ensureLoopback()
+            try await api.cancelJob(jobId: jobId)
+            jobs.removeAll { $0.jobId == jobId && !$0.isActive }
+            await refreshJobs(silent: true)
+        } catch {
+            self.error = error.localizedDescription
+        }
+    }
+
+    func toggleSource(_ source: MediaSourceKind) {
+        if enabledSources.contains(source) {
+            enabledSources.remove(source)
+        } else {
+            enabledSources.insert(source)
+        }
+    }
+
+    func searchAll(_ raw: String) async {
+        let q = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard q.count >= 2 else { return }
+        async let globalTask: Void = searchGlobal(q)
+        async let sourceTask: Void = searchSources(q)
+        _ = await (globalTask, sourceTask)
+    }
+
+    func searchSources(_ raw: String) async {
+        let q = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard q.count >= 2 else { return }
+        let selected = MediaSourceKind.allCases.filter { enabledSources.contains($0) }
+        sourceSearchQuery = q
+        sourceSearchError = nil
+        if selected.isEmpty {
+            sourceSearchResponse = SourceSearchResponse(query: q)
+            sourceSearchError = "Select at least one source above to search."
+            return
+        }
+        sourceSearchBusy = true
+        defer { if sourceSearchQuery == q { sourceSearchBusy = false } }
+        do {
+            let api = try await ensureLoopback()
+            let response = try await api.searchSources(query: q, sources: selected)
+            if sourceSearchQuery == q {
+                sourceSearchResponse = response
+            }
+        } catch {
+            if sourceSearchQuery == q {
+                sourceSearchError = error.localizedDescription
+            }
+        }
+    }
+
+    func mirrorSoulseekAlbum(stateKey: String, peer: String, files: [[String: Any]], title: String) async {
+        saveStates[stateKey] = .saving
+        do {
+            let api = try await ensureLoopback()
+            let job = try await api.mirrorSoulseek(peer: peer, files: files, title: title)
+            upsertJob(job)
+            saveStates[stateKey] = .saved("Queued")
+            await refreshJobs(silent: true)
+            notice = "Saving \(title) from \(peer)"
+        } catch {
+            saveStates[stateKey] = .failed(error.localizedDescription)
+        }
+    }
+
+    func mirrorYouTubeTrack(_ candidate: SourceCandidate) async {
+        guard let videoId = candidate.videoId, !videoId.isEmpty else {
+            saveStates[candidate.id] = .failed("Missing video ID.")
+            return
+        }
+        saveStates[candidate.id] = .saving
+        let (artist, trackTitle) = splitArtistAndTitle(candidate.title, fallbackAuthor: candidate.displayAuthor, defaultArtist: "YouTube")
+        let album = (candidate.album?.isEmpty == false ? candidate.album! : trackTitle)
+        do {
+            let api = try await ensureLoopback()
+            let job = try await api.mirrorYouTube(
+                artist: artist,
+                album: album,
+                tracks: [["videoId": videoId, "title": trackTitle, "track": 1, "disc": 1]]
+            )
+            upsertJob(job)
+            saveStates[candidate.id] = .saved("Queued")
+            await refreshJobs(silent: true)
+            notice = "Saving track: \(trackTitle)"
+        } catch {
+            saveStates[candidate.id] = .failed(error.localizedDescription)
+        }
+    }
+
+    func mirrorSoundCloudTrack(_ candidate: SourceCandidate) async {
+        saveStates[candidate.id] = .saving
+        let (artist, trackTitle) = splitArtistAndTitle(candidate.title, fallbackAuthor: candidate.displayAuthor, defaultArtist: "SoundCloud")
+        let album = (candidate.album?.isEmpty == false ? candidate.album! : trackTitle)
+        var track: [String: Any] = ["title": trackTitle, "track": 1, "disc": 1]
+        if let tid = candidate.trackId, !tid.isEmpty { track["trackId"] = tid }
+        if let u = candidate.url, !u.isEmpty { track["url"] = u }
+        do {
+            let api = try await ensureLoopback()
+            let job = try await api.mirrorSoundCloud(artist: artist, album: album, tracks: [track])
+            upsertJob(job)
+            saveStates[candidate.id] = .saved("Queued")
+            await refreshJobs(silent: true)
+            notice = "Saving track: \(trackTitle)"
+        } catch {
+            saveStates[candidate.id] = .failed(error.localizedDescription)
+        }
+    }
+
+    func mirrorRumbleItem(_ candidate: SourceCandidate, audio: Bool) async {
+        let stateKey = "\(candidate.id):\(audio ? "audio" : "video")"
+        guard let url = candidate.url, !url.isEmpty else {
+            saveStates[stateKey] = .failed("Missing Rumble URL.")
+            return
+        }
+        saveStates[stateKey] = .saving
+        do {
+            let api = try await ensureLoopback()
+            let job = try await api.mirrorRumble(title: candidate.title, url: url, rumbleId: candidate.rumbleId, audio: audio)
+            upsertJob(job)
+            saveStates[stateKey] = .saved(audio ? "Audio queued" : "Video queued")
+            await refreshJobs(silent: true)
+            notice = "Saving \(audio ? "audio" : "video"): \(candidate.title)"
+        } catch {
+            saveStates[stateKey] = .failed(error.localizedDescription)
+        }
+    }
+
+    private func splitArtistAndTitle(_ rawTitle: String, fallbackAuthor: String, defaultArtist: String) -> (String, String) {
+        let cleanAuthor = fallbackAuthor.trimmingCharacters(in: .whitespacesAndNewlines)
+        let cleanTitle = rawTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !cleanAuthor.isEmpty {
+            return (cleanAuthor, cleanTitle.isEmpty ? "Untitled" : cleanTitle)
+        }
+        for sep in [" - ", " – ", " — "] {
+            if let range = cleanTitle.range(of: sep) {
+                let left = String(cleanTitle[..<range.lowerBound]).trimmingCharacters(in: .whitespacesAndNewlines)
+                let right = String(cleanTitle[range.upperBound...]).trimmingCharacters(in: .whitespacesAndNewlines)
+                if !left.isEmpty && !right.isEmpty { return (left, right) }
+            }
+        }
+        return (defaultArtist, cleanTitle.isEmpty ? "Untitled" : cleanTitle)
+    }
+
+    func browseSoulseekShelf(peer: String, refresh: Bool = false) async throws -> SoulseekShelf {
+        recordVisitedShelf(peer: peer)
+        let api = try await ensureLoopback()
+        let shelf = try await api.browseSoulseek(peer: peer, refresh: refresh)
+        recordVisitedShelf(peer: shelf.peer.isEmpty ? peer : shelf.peer, trackCount: shelf.tracks, folderCount: shelf.folders.count)
+        return shelf
+    }
+
+    func recordVisitedShelf(peer: String, trackCount: Int? = nil, folderCount: Int? = nil) {
+        let clean = peer.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !clean.isEmpty else { return }
+        let existing = visitedShelves.first { $0.peer.caseInsensitiveCompare(clean) == .orderedSame }
+        visitedShelves.removeAll { $0.peer.caseInsensitiveCompare(clean) == .orderedSame }
+        let entry = VisitedShelf(
+            peer: clean,
+            visitedAt: Date().timeIntervalSince1970 * 1000,
+            trackCount: trackCount ?? existing?.trackCount,
+            folderCount: folderCount ?? existing?.folderCount
+        )
+        visitedShelves.insert(entry, at: 0)
+        if visitedShelves.count > 30 {
+            visitedShelves = Array(visitedShelves.prefix(30))
+        }
+        try? storage?.save(visitedShelves, name: "visited-shelves.json")
+    }
+
+    func removeVisitedShelf(peer: String) {
+        visitedShelves.removeAll { $0.peer.caseInsensitiveCompare(peer) == .orderedSame }
+        try? storage?.save(visitedShelves, name: "visited-shelves.json")
+    }
+
+    func loadSoulseekSettings() async {
+        guard let api = loopback else { return }
+        if let loaded = try? await api.getSettings() {
+            soulseekSettings = loaded
+        }
+    }
+
+    func saveSoulseekSettings(user: String, password: String, share: Bool) async {
+        soulseekSettingsBusy = true
+        soulseekSettingsMessage = nil
+        soulseekSettingsError = nil
+        defer { soulseekSettingsBusy = false }
+        do {
+            let api = try await ensureLoopback()
+            let updated = try await api.updateSoulseekSettings(
+                user: user.trimmingCharacters(in: .whitespacesAndNewlines),
+                password: password.isEmpty ? nil : password,
+                share: share
+            )
+            soulseekSettings = updated
+            soulseekSettingsMessage = "Soulseek settings saved."
+        } catch {
+            soulseekSettingsError = error.localizedDescription
+        }
     }
     /// Asks relays the app does not follow for `raw`. Later answers come back with the next minute's updates.
     func searchGlobal(_ raw: String) async {
@@ -529,7 +904,7 @@ final class AppModel: ObservableObject {
         }
     }
     private func reconcileBackground() {
-        let keepAwake = !session.isEmpty || !downloads.isEmpty || music.isPlaying
+        let keepAwake = !session.isEmpty || !downloads.isEmpty || hasActiveJobs || music.isPlaying
         if background && !keepAwake { worker?.suspend() } else { worker?.resume() }
     }
     func download(_ entry: MediaEntry) {

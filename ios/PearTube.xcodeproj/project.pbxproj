@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		022914D6C31A4F8265BC7723 /* PearTubeShare.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = 4B490916BF6B0001DCB06865 /* PearTubeShare.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		08ADDC35BD0D705A6822F5D0 /* Sleeves.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4230C4A66C096F26968EB031 /* Sleeves.swift */; };
 		0B522A22E564B3F24E58EDC9 /* NativePlayer.swift in Sources */ = {isa = PBXBuildFile; fileRef = EE630C60C7D0BE89C70C3CA9 /* NativePlayer.swift */; };
 		115FEB8698846BA92448B264 /* WatchScreens.swift in Sources */ = {isa = PBXBuildFile; fileRef = CBC59533A2A5D6726006E433 /* WatchScreens.swift */; };
@@ -30,10 +31,19 @@
 		BB48DADD89A58ED73F6EBAD5 /* DiscoverSearchScreens.swift in Sources */ = {isa = PBXBuildFile; fileRef = BE916CEDD6C04113BF7A9AD5 /* DiscoverSearchScreens.swift */; };
 		C0E96F8AD43935E19A78AFFA /* fixture.json in Resources */ = {isa = PBXBuildFile; fileRef = 8279B03476355072A7231F11 /* fixture.json */; };
 		C5ED418364CD8EC70A2A40DF /* LibraryCatalog.swift in Sources */ = {isa = PBXBuildFile; fileRef = AC1B8B5614C68379B8548F6C /* LibraryCatalog.swift */; };
+		EBBE18BE64095B9B51DBA905 /* ShareViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = D20564F2F04FAA4534275F6F /* ShareViewController.swift */; };
+		F0A7E2AD92A991E21D5FC85B /* LoopbackApi.swift in Sources */ = {isa = PBXBuildFile; fileRef = B0906D5F89734AF206B8A836 /* LoopbackApi.swift */; };
 		F310B67A309312AF626D7E76 /* Bonjour.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1CADB987189272EBD0B66D6B /* Bonjour.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
+		A535D03A486328D4D16DE870 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 8F776531134BC2EADBA794C1 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 7D9F9E53E2AD8BC589FDEC2B;
+			remoteInfo = PearTubeShare;
+		};
 		EF4826C14C5905458B0B6F42 /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
 			containerPortal = 8F776531134BC2EADBA794C1 /* Project object */;
@@ -43,6 +53,20 @@
 		};
 /* End PBXContainerItemProxy section */
 
+/* Begin PBXCopyFilesBuildPhase section */
+		F862A8FBE61F98294A2F342A /* Embed Foundation Extensions */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "";
+			dstSubfolderSpec = 13;
+			files = (
+				022914D6C31A4F8265BC7723 /* PearTubeShare.appex in Embed Foundation Extensions */,
+			);
+			name = "Embed Foundation Extensions";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXCopyFilesBuildPhase section */
+
 /* Begin PBXFileReference section */
 		1229757358D33156CBE95036 /* ParityTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ParityTests.swift; sourceTree = "<group>"; };
 		12739CFFE5A96DF56DD4CABA /* SettingsScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsScreen.swift; sourceTree = "<group>"; };
@@ -51,6 +75,7 @@
 		3716ED4FBC67F1A0D2FFC3B9 /* PearTube-Bridging-Header.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = "PearTube-Bridging-Header.h"; sourceTree = "<group>"; };
 		4230C4A66C096F26968EB031 /* Sleeves.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sleeves.swift; sourceTree = "<group>"; };
 		4857A864DAC2831EC6814560 /* CastScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CastScreen.swift; sourceTree = "<group>"; };
+		4B490916BF6B0001DCB06865 /* PearTubeShare.appex */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = "wrapper.app-extension"; path = PearTubeShare.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 		4B9A628BC8CD14A5C6927275 /* LibraryScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LibraryScreen.swift; sourceTree = "<group>"; };
 		5F17B5436D54D5CE7C41CAD5 /* MusicPlayerScreens.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MusicPlayerScreens.swift; sourceTree = "<group>"; };
 		5FA6CE8EB5341FC9958CDC55 /* Worklet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Worklet.swift; sourceTree = "<group>"; };
@@ -64,16 +89,26 @@
 		A8B51B81E7C4A61511DDCF7C /* PearTube.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = PearTube.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		AC1B8B5614C68379B8548F6C /* LibraryCatalog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LibraryCatalog.swift; sourceTree = "<group>"; };
 		AF6B7542A184D795B5C17274 /* IPC.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IPC.swift; sourceTree = "<group>"; };
+		B0906D5F89734AF206B8A836 /* LoopbackApi.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LoopbackApi.swift; sourceTree = "<group>"; };
 		BE916CEDD6C04113BF7A9AD5 /* DiscoverSearchScreens.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DiscoverSearchScreens.swift; sourceTree = "<group>"; };
 		CA794DF05DA630E07BD6E746 /* QRCode.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QRCode.swift; sourceTree = "<group>"; };
 		CBC59533A2A5D6726006E433 /* WatchScreens.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WatchScreens.swift; sourceTree = "<group>"; };
 		D169D9DC7C20208A72DEC729 /* PlayerScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlayerScreen.swift; sourceTree = "<group>"; };
+		D20564F2F04FAA4534275F6F /* ShareViewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShareViewController.swift; sourceTree = "<group>"; };
 		D4A17A54BEF06AD8A74C2193 /* AppModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppModel.swift; sourceTree = "<group>"; };
 		EE3F2D785975DAB347F6D6B6 /* ListenScreens.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ListenScreens.swift; sourceTree = "<group>"; };
 		EE630C60C7D0BE89C70C3CA9 /* NativePlayer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativePlayer.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXGroup section */
+		0A8438C6EDCB0D9DCE51A810 /* ShareExtension */ = {
+			isa = PBXGroup;
+			children = (
+				D20564F2F04FAA4534275F6F /* ShareViewController.swift */,
+			);
+			path = ShareExtension;
+			sourceTree = "<group>";
+		};
 		12547AA51447B2FBE1604210 /* Runtime */ = {
 			isa = PBXGroup;
 			children = (
@@ -95,6 +130,7 @@
 				AC1B8B5614C68379B8548F6C /* LibraryCatalog.swift */,
 				4B9A628BC8CD14A5C6927275 /* LibraryScreen.swift */,
 				EE3F2D785975DAB347F6D6B6 /* ListenScreens.swift */,
+				B0906D5F89734AF206B8A836 /* LoopbackApi.swift */,
 				2819498E04189DE028CFDEBA /* Models.swift */,
 				7464498E918A9C39F8E01F4C /* MusicPlayer.swift */,
 				5F17B5436D54D5CE7C41CAD5 /* MusicPlayerScreens.swift */,
@@ -114,6 +150,7 @@
 			isa = PBXGroup;
 			children = (
 				A8B51B81E7C4A61511DDCF7C /* PearTube.app */,
+				4B490916BF6B0001DCB06865 /* PearTubeShare.appex */,
 				9DB09FF22D2272D8328B6694 /* PearTubeUITests.xctest */,
 			);
 			name = Products;
@@ -151,6 +188,7 @@
 				1BC790C69E73276D17D957BD /* App */,
 				854FF30EC412B01A78307593 /* private-e2e */,
 				12547AA51447B2FBE1604210 /* Runtime */,
+				0A8438C6EDCB0D9DCE51A810 /* ShareExtension */,
 				4711163FE2FBA3DF32F032C4 /* UITests */,
 				339D7E5F165F545289057D49 /* Products */,
 			);
@@ -178,17 +216,36 @@
 			productReference = 9DB09FF22D2272D8328B6694 /* PearTubeUITests.xctest */;
 			productType = "com.apple.product-type.bundle.ui-testing";
 		};
+		7D9F9E53E2AD8BC589FDEC2B /* PearTubeShare */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = CBCFA1C06D762F67CF41BCD6 /* Build configuration list for PBXNativeTarget "PearTubeShare" */;
+			buildPhases = (
+				AEEE364DF9587D44CA246318 /* Sources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = PearTubeShare;
+			packageProductDependencies = (
+			);
+			productName = PearTubeShare;
+			productReference = 4B490916BF6B0001DCB06865 /* PearTubeShare.appex */;
+			productType = "com.apple.product-type.app-extension";
+		};
 		D56D825CA68635ACD5C16ADD /* PearTube */ = {
 			isa = PBXNativeTarget;
 			buildConfigurationList = CF8D176A240D076364BA82C7 /* Build configuration list for PBXNativeTarget "PearTube" */;
 			buildPhases = (
 				A67644388DACB87916E9A8F3 /* Prepare shared P2P runtime and Rust player */,
 				CA0668709C47D5B9BE582C4C /* Sources */,
+				F862A8FBE61F98294A2F342A /* Embed Foundation Extensions */,
 				4DEF0C480BE83039AA1D2DC5 /* Embed worklet and native addons */,
 			);
 			buildRules = (
 			);
 			dependencies = (
+				C9D2A70C6108ADD45B4C6C06 /* PBXTargetDependency */,
 			);
 			name = PearTube;
 			packageProductDependencies = (
@@ -210,6 +267,9 @@
 						ProvisioningStyle = Automatic;
 						TestTargetID = D56D825CA68635ACD5C16ADD;
 					};
+					7D9F9E53E2AD8BC589FDEC2B = {
+						ProvisioningStyle = Automatic;
+					};
 					D56D825CA68635ACD5C16ADD = {
 						ProvisioningStyle = Automatic;
 					};
@@ -230,6 +290,7 @@
 			projectRoot = "";
 			targets = (
 				D56D825CA68635ACD5C16ADD /* PearTube */,
+				7D9F9E53E2AD8BC589FDEC2B /* PearTubeShare */,
 				3880DF3DF2171E208785922F /* PearTubeUITests */,
 			);
 		};
@@ -296,6 +357,14 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		AEEE364DF9587D44CA246318 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				EBBE18BE64095B9B51DBA905 /* ShareViewController.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		CA0668709C47D5B9BE582C4C /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
@@ -309,6 +378,7 @@
 				C5ED418364CD8EC70A2A40DF /* LibraryCatalog.swift in Sources */,
 				7697EF2095410E4EF09D22F5 /* LibraryScreen.swift in Sources */,
 				5B2F94A21C2C090E540D19C0 /* ListenScreens.swift in Sources */,
+				F0A7E2AD92A991E21D5FC85B /* LoopbackApi.swift in Sources */,
 				43040C3CD1696E0E04CDB374 /* Models.swift in Sources */,
 				6576EF51BDEE924A5888A006 /* MusicPlayer.swift in Sources */,
 				4B1772D3984DD0504D0DCF73 /* MusicPlayerScreens.swift in Sources */,
@@ -328,6 +398,11 @@
 /* End PBXSourcesBuildPhase section */
 
 /* Begin PBXTargetDependency section */
+		C9D2A70C6108ADD45B4C6C06 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 7D9F9E53E2AD8BC589FDEC2B /* PearTubeShare */;
+			targetProxy = A535D03A486328D4D16DE870 /* PBXContainerItemProxy */;
+		};
 		E3A6BF86BB979920DC44338A /* PBXTargetDependency */ = {
 			isa = PBXTargetDependency;
 			target = D56D825CA68635ACD5C16ADD /* PearTube */;
@@ -478,6 +553,23 @@
 			};
 			name = Release;
 		};
+		95A453925401053ED94A2618 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				APPLICATION_EXTENSION_API_ONLY = YES;
+				INFOPLIST_FILE = build/ShareInfo.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.peartube.app.dev.share;
+				SDKROOT = iphoneos;
+				SKIP_INSTALL = YES;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
 		B8BD98FA18F8C37E593FC7F3 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
@@ -518,6 +610,23 @@
 				);
 				SDKROOT = iphoneos;
 				SWIFT_OBJC_BRIDGING_HEADER = "Runtime/PearTube-Bridging-Header.h";
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		C407E7F922BB28F5DFD31928 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				APPLICATION_EXTENSION_API_ONLY = YES;
+				INFOPLIST_FILE = build/ShareInfo.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.peartube.app.dev.share;
+				SDKROOT = iphoneos;
+				SKIP_INSTALL = YES;
 				TARGETED_DEVICE_FAMILY = "1,2";
 			};
 			name = Debug;
@@ -601,6 +710,15 @@
 			buildConfigurations = (
 				6EC92F04862175AB38A52ABB /* Debug */,
 				761216D8199CCAAC0199325D /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		CBCFA1C06D762F67CF41BCD6 /* Build configuration list for PBXNativeTarget "PearTubeShare" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				C407E7F922BB28F5DFD31928 /* Debug */,
+				95A453925401053ED94A2618 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Debug;

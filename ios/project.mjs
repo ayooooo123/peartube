@@ -22,6 +22,7 @@ const config = {
   targets: {
     PearTube: {
       type: 'application', platform: 'iOS', sources: ['App', 'Runtime'],
+      dependencies: [{ target: 'PearTubeShare', embed: true }],
       settings: { base: {
         FRAMEWORK_SEARCH_PATHS: ['$(inherited)', '$(SRCROOT)/build/$(PLATFORM_NAME)/Frameworks'],
         LIBRARY_SEARCH_PATHS: ['$(inherited)', '$(SRCROOT)/build/$(PLATFORM_NAME)'],
@@ -42,6 +43,27 @@ const config = {
       } },
       preBuildScripts: [{ name: 'Prepare shared P2P runtime and Rust player', script: 'set -eu\nexport PATH="/opt/homebrew/bin:/usr/local/bin:$HOME/.cargo/bin:$PATH"\nnode "$SRCROOT/prepare.mjs" "$PLATFORM_NAME"', basedOnDependencyAnalysis: false }],
       postBuildScripts: [{ name: 'Embed worklet and native addons', script: 'set -eu\nsh "$SRCROOT/embed.sh"', basedOnDependencyAnalysis: false }]
+    },
+    PearTubeShare: {
+      type: 'app-extension', platform: 'iOS', sources: ['ShareExtension'],
+      settings: { base: {
+        PRODUCT_BUNDLE_IDENTIFIER: 'com.peartube.app.dev.share',
+        SKIP_INSTALL: 'YES',
+        APPLICATION_EXTENSION_API_ONLY: 'YES'
+      } },
+      info: { path: 'build/ShareInfo.plist', properties: {
+        CFBundleDisplayName: 'PearTube', CFBundleVersion: '$(CURRENT_PROJECT_VERSION)', CFBundleShortVersionString: '$(MARKETING_VERSION)',
+        NSExtension: {
+          NSExtensionPointIdentifier: 'com.apple.share-services',
+          NSExtensionPrincipalClass: '$(PRODUCT_MODULE_NAME).ShareViewController',
+          NSExtensionAttributes: {
+            NSExtensionActivationRule: {
+              NSExtensionActivationSupportsWebURLWithMaxCount: 1,
+              NSExtensionActivationSupportsText: true
+            }
+          }
+        }
+      } }
     },
     PearTubeUITests: {
       type: 'bundle.ui-testing', platform: 'iOS', sources: ['UITests', { path: process.env.PEARTUBE_E2E_FIXTURE || 'build/private-e2e/fixture.json', type: 'file', buildPhase: 'resources', optional: true, createIntermediateGroups: false }],

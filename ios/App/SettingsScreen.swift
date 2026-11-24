@@ -13,6 +13,9 @@ struct SettingsScreen: View {
     @State private var bootstrap: String
     @State private var lan: Bool
     @State private var privateRouting: Bool
+    @State private var slskUser: String
+    @State private var slskPassword = ""
+    @State private var slskShare: Bool
     @State private var importer = false
     @State private var scanner = false
     @State private var link = ""
@@ -26,6 +29,8 @@ struct SettingsScreen: View {
         _bootstrap = State(initialValue: model.settings.bootstrap.joined(separator: "\n"))
         _lan = State(initialValue: model.settings.lanDiscovery)
         _privateRouting = State(initialValue: model.settings.privateRouting)
+        _slskUser = State(initialValue: model.soulseekSettings.user)
+        _slskShare = State(initialValue: model.soulseekSettings.share)
     }
     var body: some View {
         NavigationStack {
@@ -74,6 +79,39 @@ struct SettingsScreen: View {
                     Toggle("LAN Discovery", isOn: $lan).accessibilityIdentifier("settings.lan")
                     Toggle("Private Routing", isOn: $privateRouting).accessibilityIdentifier("settings.private")
                 } header: { Text("Network") } footer: { Text("Empty relay and bootstrap lists use the normal network defaults. Private routing uses the core's private path; route-by-route traffic is shown under Under the Hood.") }
+                Section {
+                    TextField("Username", text: $slskUser)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                        .accessibilityIdentifier("settings.soulseek.user")
+                    SecureField(model.soulseekSettings.passwordSet ? "Password (saved)" : "Password", text: $slskPassword)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                        .accessibilityIdentifier("settings.soulseek.password")
+                    Toggle("Share public music", isOn: $slskShare)
+                        .accessibilityIdentifier("settings.soulseek.share")
+                    Button {
+                        Task {
+                            await model.saveSoulseekSettings(user: slskUser, password: slskPassword, share: slskShare)
+                            if model.soulseekSettingsError == nil {
+                                slskPassword = ""
+                            }
+                        }
+                    } label: {
+                        HStack {
+                            if model.soulseekSettingsBusy { ProgressView().controlSize(.small) }
+                            Text("Save Soulseek settings")
+                        }
+                    }
+                    .disabled(model.soulseekSettingsBusy)
+                    .accessibilityIdentifier("settings.soulseek.save")
+                    if let message = model.soulseekSettingsMessage {
+                        Text(message).font(.caption).foregroundStyle(PTColor.ok)
+                    }
+                    if let err = model.soulseekSettingsError {
+                        Text(err).font(.caption).foregroundStyle(PTColor.bad)
+                    }
+                } header: { Text("Soulseek") } footer: { Text("Connect this device as its own Soulseek peer to search and browse music shelves directly. Credentials stay private on this device.") }
                 Section("MIDI SoundFont") {
                     Text(model.soundfontPresent ? "A local SoundFont 2 bank is selected." : "No bank selected. MIDI playback requires your own SoundFont.").foregroundStyle(.secondary)
                     Button(model.soundfontBusy ? "Importing…" : "Import SoundFont (.sf2)") { importer = true }.disabled(model.soundfontBusy).accessibilityIdentifier("settings.soundfont.import")
@@ -111,6 +149,13 @@ struct SettingsScreen: View {
             }
             .navigationTitle("Settings")
             .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() }.accessibilityIdentifier("settings.close") } }
+            .task {
+                model.soulseekSettingsMessage = nil
+                model.soulseekSettingsError = nil
+                await model.loadSoulseekSettings()
+                slskUser = model.soulseekSettings.user
+                slskShare = model.soulseekSettings.share
+            }
         }
         .fileImporter(isPresented: $importer, allowedContentTypes: [UTType(filenameExtension: "sf2") ?? .data], allowsMultipleSelection: false) { result in
             switch result { case .success(let urls): if let url = urls.first { Task { await model.importSoundfont(url) } }; case .failure(let error): model.error = error.localizedDescription }

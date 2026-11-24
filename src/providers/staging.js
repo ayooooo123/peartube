@@ -8,9 +8,9 @@ import { basename, extname, join } from 'node:path'
 // rewritten, so a mirrored file's sha256 is the hash of exactly what the source served. `{ release, title?, artist? }`:
 // `artist` names the album's artist for files that carry no tags the importer reads (M4A).
 export const ALBUM_PIN = '.peartube-album.json'
-// `yt:` is the YouTube provider's namespace: an album saved from there never answers for an `mb:`/`discogs:`/`album:`
-// release, so nobody asking for a release is handed a lossy copy.
-export const RELEASE_ID = /^(mb:[0-9a-f]{32}|discogs:r\d{1,12}|album:[0-9a-f]{20}|yt:[0-9a-f]{20})$/
+// `yt:`, `sc:`, and `rmb:` are source-provider namespaces: an album saved from them never answers for an
+// `mb:`/`discogs:`/`album:` release, so nobody asking for a release is handed a lossy copy.
+export const RELEASE_ID = /^(mb:[0-9a-f]{32}|discogs:r\d{1,12}|album:[0-9a-f]{20}|yt:[0-9a-f]{20}|sc:[0-9a-f]{20}|rmb:[0-9a-f]{20})$/
 // The files this relay mirrored into an album folder, by name, in this dot file. Deleting an entry deletes its file
 // only when the file is listed here (or sits in `<storage>/staging`, where nothing else writes): a file the owner put
 // in the import folder is theirs, and only its announce goes.

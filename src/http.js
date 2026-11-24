@@ -384,8 +384,8 @@ export function createApi (state) {
     }
     if (req.method === 'POST' && path === '/v1/acquire') {
       if (!acquirer) throw Object.assign(new Error('Acquire unavailable on read-only peer'), { status: 404 })
-      const { id, title, source, channel, private: isPrivate = false } = await body(req)
-      return acquirer.add({ id, title, source, channel, private: isPrivate })
+      const { id, title, source, channel, private: isPrivate = false, music = null } = await body(req)
+      return acquirer.add({ id, title, source, channel, private: isPrivate, music })
     }
     if (req.method === 'GET' && path === '/v1/jobs') {
       const base = acquirer ? acquirer.list() : (state.fallbackJobs?.() || [])

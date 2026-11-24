@@ -5,16 +5,18 @@
 
 use gpui_kit::assets::IconName as Lucide;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
-use gpui_kit::component::input::{Input, InputState};
+use gpui_kit::component::checkbox::Checkbox;
+use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::component::scroll::ScrollableElement as _;
-use gpui_kit::component::{Icon, IconName, Sizable as _, h_flex, v_flex};
+use gpui_kit::component::{Disableable as _, Icon, IconName, Sizable as _, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use peartube::worker::{Entry, Status};
 
+use crate::api::{AcquireJob, IdentifyResult, extract_shared_url, format_duration, is_web_url};
 use crate::app::{DetailView, ListenTab, PearTube, Room, WatchKind};
 use crate::qr::qr_card;
-use crate::theme::{ACCENT, BG, BRAND, CARD, DANGER, DIM, INK, LINE};
+use crate::theme::{ACCENT, BG, BRAND, CARD, CARD_ELEVATED, DANGER, DIM, INK, LINE};
 
 pub fn format_bytes(bytes: u64) -> String {
     const KB: u64 = 1024;
@@ -89,16 +91,62 @@ pub fn column() -> Div {
 
 pub struct AddModalForm {
     pub input: Entity<InputState>,
+    pub identified_url: Option<String>,
+    pub identifying: bool,
+    pub identified: Option<IdentifyResult>,
+    pub audio_only: bool,
+    pub acquiring: bool,
     pub error: Option<SharedString>,
+    _input_sub: Subscription,
 }
 
 impl AddModalForm {
     pub fn new(window: &mut Window, cx: &mut Context<PearTube>) -> Self {
         let input = cx.new(|cx| {
             InputState::new(window, cx)
-                .placeholder("peartube://channel/… or 64-character channel key")
+                .placeholder("Paste a YouTube, SoundCloud, Rumble, Bandcamp, media, or peartube:// link")
         });
-        AddModalForm { input, error: None }
+        let input_sub = cx.subscribe_in(&input, window, |this, state, event: &InputEvent, _window, cx| match event {
+            InputEvent::Change => {
+                let raw = state.read(cx).value().to_string();
+                match extract_shared_url(&raw) {
+                    Some(url) if is_web_url(&url) => {
+                        let already = this
+                            .add_modal
+                            .as_ref()
+                            .is_some_and(|f| f.identified_url.as_deref() == Some(url.as_str()));
+                        if !already {
+                            this.identify_add_url(url, cx);
+                        }
+                    }
+                    _ => {
+                        if let Some(f) = &mut this.add_modal {
+                            if f.identified.is_some() || f.identifying || f.identified_url.is_some() {
+                                f.identified = None;
+                                f.identified_url = None;
+                                f.identifying = false;
+                                f.error = None;
+                                cx.notify();
+                            }
+                        }
+                    }
+                }
+            }
+            InputEvent::PressEnter { .. } => {
+                this.submit_add_modal(cx);
+            }
+            _ => {}
+        });
+        AddModalForm {
+            input,
+            identified_url: None,
+            identifying: false,
+            identified: None,
+            audio_only: false,
+            acquiring: false,
+            error: None,
+            _input_sub: input_sub,
+        }
     }
 }
 
@@ -107,6 +155,7 @@ impl PearTube {
     pub fn render_list(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let active_nav = self.active_nav_room();
         let casting = self.cast.session.is_some();
+        let active_jobs = self.active_job_count();
 
         let nav_tab = |id: &'static str, text: &'static str, is_active: bool, target: Room, cx: &mut Context<Self>| {
             div()
@@ -130,6 +179,7 @@ impl PearTube {
             Some(DetailView::Album(key)) => self.render_album_detail(key, cx).into_any_element(),
             Some(DetailView::Artist(key)) => self.render_artist_detail(key, cx).into_any_element(),
             Some(DetailView::Title(key)) => self.render_title_detail(key, cx).into_any_element(),
+            Some(DetailView::Shelf(peer)) => self.render_shelf_detail(peer, cx).into_any_element(),
             Some(DetailView::Playing) => self.render_playing_view(cx).into_any_element(),
             None => match &self.room {
                 Room::Home => self.render_home(cx).into_any_element(),
@@ -217,11 +267,40 @@ impl PearTube {
                                     .cleanable(true),
                             ),
                         )
-                        // Right: Add (+), TVs (green dot when casting), Settings
+                        // Right: Adding… pill (when active), Add (+), TVs (green dot when casting), Settings
                         .child(
                             h_flex()
                                 .items_center()
-                                .gap_1()
+                                .gap_1p5()
+                                .when(active_jobs > 0, |row| {
+                                    let pill_text = if active_jobs == 1 {
+                                        "Adding…".to_string()
+                                    } else {
+                                        format!("Adding ({active_jobs})…")
+                                    };
+                                    row.child(
+                                        h_flex()
+                                            .id("top-adding-pill")
+                                            .items_center()
+                                            .gap_1p5()
+                                            .px_2p5()
+                                            .py_1()
+                                            .rounded(px(99.))
+                                            .bg(rgb(CARD_ELEVATED))
+                                            .border_1()
+                                            .border_color(rgb(LINE))
+                                            .text_xs()
+                                            .font_weight(FontWeight::MEDIUM)
+                                            .text_color(rgb(INK))
+                                            .cursor_pointer()
+                                            .hover(|s| s.border_color(rgb(BRAND)))
+                                            .on_click(cx.listener(|this, _, window, cx| {
+                                                this.open_add_modal(window, cx);
+                                            }))
+                                            .child(div().size(px(6.)).rounded(px(99.)).bg(rgb(BRAND)))
+                                            .child(pill_text),
+                                    )
+                                })
                                 .child(
                                     Button::new("top-add")
                                         .ghost()
@@ -276,8 +355,20 @@ impl PearTube {
             )
     }
 
-    /// `Add to library` dialog (Rule 11 & Rule 18).
+    /// `Add to library` dialog (Rule 11 & Rule 18) with auto-identification (`ubit`) and live `Adding` jobs list.
     pub fn render_add_modal(&self, form: &AddModalForm, cx: &mut Context<Self>) -> impl IntoElement {
+        let preview = form.identified.clone();
+        let identified_url = form.identified_url.clone().unwrap_or_default();
+        let has_preview = preview.is_some();
+        let active_jobs = self.active_job_count();
+        let job_rows: Vec<AnyElement> = self
+            .jobs
+            .iter()
+            .cloned()
+            .map(|job| self.render_job_row(job, cx).into_any_element())
+            .collect();
+        let has_jobs = !job_rows.is_empty();
+
         div()
             .id("add-modal-backdrop")
             .absolute()
@@ -292,8 +383,9 @@ impl PearTube {
             .child(
                 v_flex()
                     .id("add-modal-card")
-                    .w(px(500.))
+                    .w(px(560.))
                     .max_w_full()
+                    .max_h(px(620.))
                     .rounded(px(18.))
                     .bg(rgb(CARD))
                     .border_1()
@@ -320,55 +412,299 @@ impl PearTube {
                             ),
                     )
                     .child(
-                        v_flex()
-                            .p_5()
-                            .gap_4()
-                            .when_some(form.error.clone(), |d, err| {
-                                d.child(div().text_sm().text_color(rgb(DANGER)).child(err))
-                            })
+                        div()
+                            .id("add-modal-scroll")
+                            .flex_1()
+                            .min_h_0()
+                            .overflow_y_scrollbar()
                             .child(
                                 v_flex()
-                                    .gap_1p5()
-                                    .child(div().text_xs().text_color(rgb(DIM)).child("Channel link, watch link, subscriber pass, or 64-character key"))
-                                    .child(Input::new(&form.input).cleanable(true)),
-                            )
-                            .child(
-                                h_flex()
-                                    .justify_between()
-                                    .items_center()
+                                    .p_5()
+                                    .gap_4()
+                                    .when_some(form.error.clone(), |d, err| {
+                                        d.child(div().text_sm().text_color(rgb(DANGER)).child(err))
+                                    })
                                     .child(
-                                        Button::new("add-open-settings")
-                                            .ghost()
-                                            .small()
-                                            .label("Channel settings")
-                                            .on_click(cx.listener(|this, _, window, cx| {
-                                                this.close_add_modal(cx);
-                                                this.open_settings(window, cx);
-                                            })),
+                                        v_flex()
+                                            .gap_1p5()
+                                            .child(
+                                                div()
+                                                    .text_xs()
+                                                    .text_color(rgb(DIM))
+                                                    .child("SoundCloud, YouTube, Rumble, Bandcamp, direct media, peartube:// link, or 64-character key"),
+                                            )
+                                            .child(Input::new(&form.input).cleanable(true)),
                                     )
+                                    .when(form.identifying, |d| {
+                                        d.child(
+                                            h_flex()
+                                                .items_center()
+                                                .gap_2()
+                                                .p_3p5()
+                                                .rounded(px(12.))
+                                                .bg(rgb(BG))
+                                                .border_1()
+                                                .border_color(rgb(LINE))
+                                                .child(div().size(px(8.)).rounded(px(99.)).bg(rgb(BRAND)))
+                                                .child(div().text_sm().text_color(rgb(DIM)).child("Identifying link…")),
+                                        )
+                                    })
+                                    .when_some(preview, |d, info| {
+                                        let site = info.effective_site(&identified_url);
+                                        let title = info.effective_title(&identified_url);
+                                        let author = info.effective_author();
+                                        let duration = info.effective_duration_secs().map(format_duration);
+                                        d.child(
+                                            v_flex()
+                                                .gap_3()
+                                                .p_4()
+                                                .rounded(px(14.))
+                                                .bg(rgb(BG))
+                                                .border_1()
+                                                .border_color(rgb(LINE))
+                                                .child(
+                                                    h_flex()
+                                                        .items_center()
+                                                        .gap_2()
+                                                        .flex_wrap()
+                                                        .child(
+                                                            div()
+                                                                .px_2()
+                                                                .py_0p5()
+                                                                .rounded(px(99.))
+                                                                .bg(rgb(CARD_ELEVATED))
+                                                                .border_1()
+                                                                .border_color(rgb(LINE))
+                                                                .text_xs()
+                                                                .font_weight(FontWeight::SEMIBOLD)
+                                                                .text_color(rgb(BRAND))
+                                                                .child(site),
+                                                        )
+                                                        .when_some(duration, |row, dur| {
+                                                            row.child(div().text_xs().text_color(rgb(DIM)).child(dur))
+                                                        }),
+                                                )
+                                                .child(
+                                                    v_flex()
+                                                        .gap_0p5()
+                                                        .child(div().text_sm().font_weight(FontWeight::SEMIBOLD).child(title))
+                                                        .when_some(author, |col, a| {
+                                                            col.child(div().text_xs().text_color(rgb(DIM)).child(a))
+                                                        }),
+                                                )
+                                                .child(
+                                                    h_flex()
+                                                        .justify_between()
+                                                        .items_center()
+                                                        .gap_3()
+                                                        .pt_1()
+                                                        .child(
+                                                            Checkbox::new("add-audio-only")
+                                                                .checked(form.audio_only)
+                                                                .label("Audio only")
+                                                                .on_click(cx.listener(|this, checked: &bool, _, cx| {
+                                                                    this.toggle_add_audio_only(*checked, cx);
+                                                                })),
+                                                        )
+                                                        .child(
+                                                            Button::new("add-save-library")
+                                                                .primary()
+                                                                .small()
+                                                                .disabled(form.acquiring)
+                                                                .label(if form.acquiring { "Saving…" } else { "Save to library" })
+                                                                .on_click(cx.listener(|this, _, _, cx| {
+                                                                    this.acquire_identified_url(cx);
+                                                                })),
+                                                        ),
+                                                ),
+                                        )
+                                    })
                                     .child(
                                         h_flex()
-                                            .gap_2()
+                                            .justify_between()
+                                            .items_center()
                                             .child(
-                                                Button::new("add-cancel")
+                                                Button::new("add-open-settings")
                                                     .ghost()
                                                     .small()
-                                                    .label("Cancel")
-                                                    .on_click(cx.listener(|this, _, _, cx| this.close_add_modal(cx))),
+                                                    .label("Channel settings")
+                                                    .on_click(cx.listener(|this, _, window, cx| {
+                                                        this.close_add_modal(cx);
+                                                        this.open_settings(window, cx);
+                                                    })),
                                             )
                                             .child(
-                                                Button::new("add-submit")
-                                                    .primary()
-                                                    .small()
-                                                    .label("Add")
-                                                    .on_click(cx.listener(|this, _, _, cx| {
-                                                        this.submit_add_modal(cx);
-                                                    })),
+                                                h_flex()
+                                                    .gap_2()
+                                                    .child(
+                                                        Button::new("add-cancel")
+                                                            .ghost()
+                                                            .small()
+                                                            .label("Close")
+                                                            .on_click(cx.listener(|this, _, _, cx| this.close_add_modal(cx))),
+                                                    )
+                                                    .when(!has_preview, |row| {
+                                                        row.child(
+                                                            Button::new("add-submit")
+                                                                .primary()
+                                                                .small()
+                                                                .disabled(form.identifying)
+                                                                .label(if form.identifying { "Identifying…" } else { "Add" })
+                                                                .on_click(cx.listener(|this, _, _, cx| {
+                                                                    this.submit_add_modal(cx);
+                                                                })),
+                                                        )
+                                                    }),
                                             ),
-                                    ),
+                                    )
+                                    .when(has_jobs, |d| {
+                                        d.child(
+                                            v_flex()
+                                                .gap_2p5()
+                                                .pt_3()
+                                                .border_t_1()
+                                                .border_color(rgb(LINE))
+                                                .child(
+                                                    h_flex()
+                                                        .justify_between()
+                                                        .items_center()
+                                                        .child(
+                                                            div()
+                                                                .text_sm()
+                                                                .font_weight(FontWeight::SEMIBOLD)
+                                                                .child(if active_jobs > 0 {
+                                                                    format!("Adding ({active_jobs} active)")
+                                                                } else {
+                                                                    "Adding".to_string()
+                                                                }),
+                                                        )
+                                                        .child(
+                                                            Button::new("add-jobs-refresh")
+                                                                .ghost()
+                                                                .small()
+                                                                .label("Refresh")
+                                                                .on_click(cx.listener(|this, _, _, cx| {
+                                                                    this.refresh_jobs(cx);
+                                                                })),
+                                                        ),
+                                                )
+                                                .children(job_rows),
+                                        )
+                                    }),
                             ),
                     ),
             )
+    }
+
+    fn render_job_row(&self, job: AcquireJob, cx: &mut Context<Self>) -> impl IntoElement {
+        let active = job.is_active();
+        let failed = job.is_failed();
+        let done = job.is_done();
+        let pct = job.progress_fraction();
+        let status_text = job.status_label();
+        let job_id = job.job_id.clone();
+
+        let mut meta_parts: Vec<String> = Vec::new();
+        if !job.plugin.is_empty() && job.plugin != "http-acquire" {
+            meta_parts.push(job.plugin.clone());
+        }
+        if let Some(peer) = &job.peer {
+            meta_parts.push(peer.clone());
+        }
+        if job.bytes > 0 {
+            if let Some(total) = job.total.filter(|&t| t > 0) {
+                meta_parts.push(format!("{} / {}", format_bytes(job.bytes), format_bytes(total)));
+            } else {
+                meta_parts.push(format_bytes(job.bytes));
+            }
+        }
+        if let Some(speed) = job.speed.filter(|&s| s > 0 && active) {
+            meta_parts.push(format!("{}/s", format_bytes(speed)));
+        }
+        let meta_line = if meta_parts.is_empty() {
+            job.file.clone().unwrap_or_default()
+        } else {
+            meta_parts.join(" · ")
+        };
+
+        let status_color = if failed {
+            rgb(DANGER)
+        } else if done {
+            rgb(ACCENT)
+        } else if active {
+            rgb(BRAND)
+        } else {
+            rgb(DIM)
+        };
+
+        v_flex()
+            .id(SharedString::from(format!("add-job-{}", job.job_id)))
+            .gap_1p5()
+            .p_3()
+            .rounded(px(12.))
+            .bg(rgb(BG))
+            .border_1()
+            .border_color(rgb(LINE))
+            .child(
+                h_flex()
+                    .justify_between()
+                    .items_center()
+                    .gap_2()
+                    .child(
+                        v_flex()
+                            .flex_1()
+                            .min_w_0()
+                            .gap_0p5()
+                            .child(
+                                div()
+                                    .text_sm()
+                                    .font_weight(FontWeight::MEDIUM)
+                                    .truncate()
+                                    .child(if job.title.is_empty() { "Untitled".to_string() } else { job.title.clone() }),
+                            )
+                            .child(
+                                h_flex()
+                                    .gap_2()
+                                    .items_center()
+                                    .child(div().text_xs().font_weight(FontWeight::MEDIUM).text_color(status_color).child(status_text))
+                                    .when(!meta_line.is_empty(), |row| {
+                                        row.child(div().text_xs().text_color(rgb(DIM)).truncate().child(meta_line))
+                                    }),
+                            ),
+                    )
+                    .child(
+                        Button::new(SharedString::from(format!("job-cancel-{}", job.job_id)))
+                            .ghost()
+                            .small()
+                            .label(if active { "Cancel" } else { "Dismiss" })
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.cancel_or_dismiss_job(job_id.clone(), cx);
+                            })),
+                    ),
+            )
+            .when_some(pct.filter(|_| active), |card, frac| {
+                card.child(
+                    div()
+                        .w_full()
+                        .h(px(4.))
+                        .rounded(px(99.))
+                        .bg(rgb(LINE))
+                        .overflow_hidden()
+                        .child(
+                            div()
+                                .h_full()
+                                .w(relative(frac))
+                                .rounded(px(99.))
+                                .bg(rgb(BRAND)),
+                        ),
+                )
+            })
+            .when_some(job.error.clone(), |card, err| {
+                card.child(div().text_xs().text_color(rgb(DANGER)).child(err))
+            })
+            .when_some(job.note.clone().filter(|_| job.error.is_none()), |card, note| {
+                card.child(div().text_xs().text_color(rgb(DIM)).child(note))
+            })
     }
 
     fn render_under_the_hood(&self, cx: &mut Context<Self>) -> impl IntoElement {

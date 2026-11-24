@@ -2,28 +2,38 @@ package com.peartube.app.ui
 
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Switch
+import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -32,14 +42,19 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardCapitalization
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.peartube.app.AcquireJob
 import com.peartube.app.AppModel
 import com.peartube.app.p2pSummary
+import com.peartube.app.parsePeartubeAddUrl
 import com.peartube.shared.QrCodeView
+import com.peartube.shared.clock
 import com.peartube.shared.formatBytes
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -193,20 +208,41 @@ fun AddToLibrarySheet(
     onClose: () -> Unit,
     onOpenSettings: () -> Unit,
 ) {
-    var raw by remember { mutableStateOf("") }
+    val sheet by model.addSheet.collectAsState()
+    val jobs by model.acquireJobs.collectAsState()
     var scanner by remember { mutableStateOf(false) }
     var discardPrompt by remember { mutableStateOf(false) }
 
+    LaunchedEffect(Unit) {
+        model.refreshAcquireJobs()
+    }
+
+    val trimmed = sheet.rawInput.trim()
+    val unwrappedHttp = parsePeartubeAddUrl(trimmed)
+        ?: trimmed.takeIf { it.startsWith("http://", ignoreCase = true) || it.startsWith("https://", ignoreCase = true) }
+    val isWebUrl = unwrappedHttp != null
+
     fun requestClose() {
-        if (raw.isNotBlank()) discardPrompt = true else onClose()
+        if (sheet.rawInput.isNotBlank() && !sheet.submitting) {
+            discardPrompt = true
+        } else {
+            onClose()
+        }
     }
 
     fun submit() {
-        val trimmed = raw.trim()
         if (trimmed.isEmpty()) return
-        model.openUriOrKey(trimmed)
-        raw = ""
-        onClose()
+        val targetUrl = unwrappedHttp
+        if (targetUrl != null) {
+            if (sheet.identified != null) {
+                model.submitAcquireFromSheet()
+            } else {
+                model.identifyUrl(targetUrl)
+            }
+        } else {
+            model.openUriOrKey(trimmed)
+            model.closeAddSheet(clearInput = true)
+        }
     }
 
     ModalBottomSheet(
@@ -218,8 +254,15 @@ fun AddToLibrarySheet(
             QrScannerView(
                 onScanned = {
                     scanner = false
-                    if (it.startsWith("peartube:", true)) model.openUriOrKey(it) else model.pairCastByUriOrHost(it)
-                    onClose()
+                    if (it.startsWith("peartube:", true) || it.startsWith("http://", true) || it.startsWith("https://", true)) {
+                        model.handleSharedText(it)
+                        if (!it.startsWith("http", true) && parsePeartubeAddUrl(it) == null) {
+                            model.closeAddSheet(clearInput = true)
+                        }
+                    } else {
+                        model.pairCastByUriOrHost(it)
+                        model.closeAddSheet(clearInput = true)
+                    }
                 },
                 onClose = { scanner = false },
             )
@@ -227,6 +270,7 @@ fun AddToLibrarySheet(
             Column(
                 Modifier
                     .fillMaxWidth()
+                    .verticalScroll(rememberScrollState())
                     .navigationBarsPadding()
                     .padding(horizontal = 20.dp)
                     .padding(bottom = 24.dp),
@@ -236,12 +280,12 @@ fun AddToLibrarySheet(
                     Text("Add to library", color = Ink, fontSize = 20.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
                     CinemaIcon(CloseIcon, "Close", Ink, onClick = ::requestClose)
                 }
-                Text("Link or channel key", color = Dim, fontSize = 13.sp)
+                Text("Paste a SoundCloud, YouTube, Rumble, media URL, or peartube:// link", color = Dim, fontSize = 13.sp)
                 OutlinedTextField(
-                    value = raw,
-                    onValueChange = { raw = it },
+                    value = sheet.rawInput,
+                    onValueChange = model::updateAddInput,
                     singleLine = true,
-                    placeholder = { Text("peartube://channel/… or 64-character key", fontSize = 14.sp) },
+                    placeholder = { Text("https://… or peartube://channel/…", fontSize = 14.sp) },
                     keyboardOptions = KeyboardOptions(
                         capitalization = KeyboardCapitalization.None,
                         autoCorrectEnabled = false,
@@ -254,9 +298,15 @@ fun AddToLibrarySheet(
                 )
                 Row(horizontalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.fillMaxWidth()) {
                     PrimaryLightButton(
-                        text = "Add",
+                        text = when {
+                            isWebUrl && sheet.identifying -> "Identifying…"
+                            isWebUrl && sheet.identified == null -> "Identify"
+                            isWebUrl && sheet.submitting -> "Saving…"
+                            isWebUrl -> "Save to library"
+                            else -> "Add"
+                        },
                         onClick = ::submit,
-                        enabled = raw.isNotBlank(),
+                        enabled = trimmed.isNotBlank() && !sheet.identifying && !sheet.submitting,
                         modifier = Modifier.weight(1f),
                     )
                     QuietActionButton(
@@ -265,6 +315,165 @@ fun AddToLibrarySheet(
                         onClick = { scanner = true },
                     )
                 }
+
+                if (sheet.identifying) {
+                    Row(
+                        Modifier
+                            .fillMaxWidth()
+                            .clip(CardShape)
+                            .background(CardElevated)
+                            .border(1.dp, Line, CardShape)
+                            .padding(14.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    ) {
+                        CircularProgressIndicator(
+                            color = Brand,
+                            strokeWidth = 2.dp,
+                            modifier = Modifier.size(18.dp),
+                        )
+                        Text("Inspecting link with ubit…", color = Dim, fontSize = 13.sp)
+                    }
+                }
+
+                sheet.identifyError?.let { errMsg ->
+                    Column(
+                        Modifier
+                            .fillMaxWidth()
+                            .clip(CardShape)
+                            .background(Danger.copy(alpha = 0.12f))
+                            .border(1.dp, Danger.copy(alpha = 0.45f), CardShape)
+                            .padding(12.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        Text(errMsg, color = Ink, fontSize = 13.sp)
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            QuietActionButton(
+                                text = "Retry",
+                                onClick = { if (unwrappedHttp != null) model.identifyUrl(unwrappedHttp) },
+                            )
+                        }
+                    }
+                }
+
+                sheet.identified?.let { info ->
+                    Column(
+                        Modifier
+                            .fillMaxWidth()
+                            .clip(CardShape)
+                            .background(CardElevated)
+                            .border(1.dp, Line, CardShape)
+                            .padding(14.dp),
+                        verticalArrangement = Arrangement.spacedBy(10.dp),
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            val badge = info.site.ifBlank { if (info.isPage) "Web page" else "Direct file" }
+                            Box(
+                                Modifier
+                                    .clip(PillShape)
+                                    .background(Brand.copy(alpha = 0.2f))
+                                    .padding(horizontal = 10.dp, vertical = 3.dp),
+                            ) {
+                                Text(badge, color = BrandRing, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
+                            }
+                            val facts = buildList {
+                                info.durationSec?.let { add(clock(it * 1000L)) }
+                                if (info.resolution.isNotBlank()) add(info.resolution)
+                                info.size?.let { add(formatBytes(it)) }
+                            }.joinToString(" · ")
+                            if (facts.isNotBlank()) {
+                                Text(facts, color = Dim, fontSize = 12.sp)
+                            }
+                        }
+
+                        if (info.author.isNotBlank()) {
+                            Text("By ${info.author}", color = Dim, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        }
+
+                        info.match?.let { m ->
+                            Text("Matched: ${m.title} (${m.id})", color = Accent, fontSize = 12.sp)
+                        }
+
+                        OutlinedTextField(
+                            value = sheet.titleInput,
+                            onValueChange = model::updateAddTitle,
+                            singleLine = true,
+                            label = { Text("Title") },
+                            shape = ControlShape,
+                            colors = fieldColors(),
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+
+                        OutlinedTextField(
+                            value = sheet.artistInput,
+                            onValueChange = model::updateAddArtist,
+                            singleLine = true,
+                            label = { Text("Artist or channel") },
+                            shape = ControlShape,
+                            colors = fieldColors(),
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+
+                        Row(
+                            Modifier
+                                .fillMaxWidth()
+                                .toggleable(
+                                    value = sheet.audioOnly,
+                                    role = Role.Switch,
+                                    onValueChange = model::updateAddAudioOnly,
+                                )
+                                .padding(vertical = 2.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Column(Modifier.weight(1f)) {
+                                Text("Audio only", color = Ink, fontSize = 14.sp, fontWeight = FontWeight.Medium)
+                                Text(
+                                    if (sheet.audioOnly) "Saves into Listen as audio" else "Saves video into Watch",
+                                    color = Dim,
+                                    fontSize = 12.sp,
+                                )
+                            }
+                            Switch(
+                                checked = sheet.audioOnly,
+                                onCheckedChange = null,
+                                colors = SwitchDefaults.colors(checkedTrackColor = Brand),
+                            )
+                        }
+
+                        sheet.submitError?.let { err ->
+                            Text(err, color = Danger, fontSize = 12.sp)
+                        }
+
+                        PrimaryLightButton(
+                            text = if (sheet.submitting) "Starting download…" else "Save to library",
+                            icon = DownloadIcon,
+                            enabled = !sheet.submitting,
+                            onClick = model::submitAcquireFromSheet,
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                    }
+                }
+
+                if (jobs.isNotEmpty()) {
+                    HorizontalDivider(color = Line)
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text("Adding", color = Ink, fontSize = 16.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
+                        val active = jobs.count { it.isActive }
+                        if (active > 0) {
+                            Text("$active running", color = BrandRing, fontSize = 12.sp)
+                        }
+                    }
+                    jobs.forEach { job ->
+                        AcquireJobCard(
+                            job = job,
+                            onAction = { model.cancelOrDismissJob(job.jobId) },
+                        )
+                    }
+                }
+
                 HorizontalDivider(color = Line)
                 Row(
                     Modifier
@@ -272,8 +481,7 @@ fun AddToLibrarySheet(
                         .clip(CardShape)
                         .background(CardElevated)
                         .clickable {
-                            raw = ""
-                            onClose()
+                            model.closeAddSheet(clearInput = true)
                             onOpenSettings()
                         }
                         .padding(horizontal = 16.dp, vertical = 14.dp),
@@ -286,8 +494,8 @@ fun AddToLibrarySheet(
                     Icon(ChevronRightIcon, null, tint = Dim, modifier = Modifier.size(20.dp))
                 }
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-                    TextButton(onClick = { raw = ""; onClose() }) {
-                        Text("Cancel", color = Dim)
+                    TextButton(onClick = { model.closeAddSheet(clearInput = true) }) {
+                        Text("Close", color = Dim)
                     }
                 }
             }
@@ -300,7 +508,7 @@ fun AddToLibrarySheet(
             containerColor = CardElevated,
             title = { Text("Discard what you typed?", color = Ink) },
             confirmButton = {
-                TextButton(onClick = { discardPrompt = false; raw = ""; onClose() }) {
+                TextButton(onClick = { discardPrompt = false; model.closeAddSheet(clearInput = true) }) {
                     Text("Discard", color = Danger)
                 }
             },
@@ -310,5 +518,70 @@ fun AddToLibrarySheet(
                 }
             },
         )
+    }
+}
+
+@Composable
+private fun AcquireJobCard(
+    job: AcquireJob,
+    onAction: () -> Unit,
+) {
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .clip(CardShape)
+            .background(CardElevated)
+            .border(1.dp, Line, CardShape)
+            .padding(horizontal = 14.dp, vertical = 10.dp),
+        verticalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Text(
+                    text = job.title.ifBlank { job.id.ifBlank { "Item" } },
+                    color = Ink,
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.Medium,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                val statusColor = when {
+                    job.isFailed -> Danger
+                    job.isDone -> Accent
+                    job.isActive -> BrandRing
+                    else -> Dim
+                }
+                val meta = listOfNotNull(
+                    job.plugin.takeIf { it.isNotBlank() }?.replaceFirstChar { it.uppercase() },
+                    job.peer?.takeIf { it.isNotBlank() },
+                    job.statusLabel(),
+                ).joinToString(" · ")
+                Text(meta, color = statusColor, fontSize = 12.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
+            }
+            TextButton(onClick = onAction) {
+                Text(
+                    text = if (job.isActive) "Cancel" else "Dismiss",
+                    color = if (job.isActive) Danger else Dim,
+                    fontSize = 13.sp,
+                )
+            }
+        }
+        if (job.isActive) {
+            val frac = job.progressFraction
+            if (frac != null) {
+                LinearProgressIndicator(
+                    progress = { frac },
+                    color = Brand,
+                    trackColor = Line,
+                    modifier = Modifier.fillMaxWidth().height(3.dp),
+                )
+            } else {
+                LinearProgressIndicator(
+                    color = Brand,
+                    trackColor = Line,
+                    modifier = Modifier.fillMaxWidth().height(3.dp),
+                )
+            }
+        }
     }
 }

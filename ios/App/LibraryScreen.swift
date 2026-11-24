@@ -4,6 +4,7 @@ enum AppRoute: Hashable {
     case album(String)
     case artist(String)
     case title(String)
+    case shelf(String)
 }
 
 extension Dictionary where Key == String, Value == Any {
@@ -34,6 +35,8 @@ struct MainShellView: View {
                     ArtistScreen(artistName: name, model: model, music: music) { path.append($0) }
                 case .title(let key):
                     TitleScreen(tileKey: key, model: model)
+                case .shelf(let peer):
+                    ShelfScreen(peer: peer, model: model)
                 }
             }
         }
@@ -80,6 +83,28 @@ struct MainShellView: View {
 
             Spacer()
 
+            if model.hasActiveJobs {
+                Button {
+                    model.showAdd = true
+                } label: {
+                    HStack(spacing: 6) {
+                        ProgressView()
+                            .controlSize(.mini)
+                            .tint(PTColor.brandRing)
+                        Text(model.activeJobs.count > 1 ? "Adding \(model.activeJobs.count)…" : "Adding…")
+                            .font(.caption.weight(.medium))
+                            .foregroundStyle(PTColor.ink)
+                    }
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 5)
+                    .background(PTColor.surface, in: Capsule())
+                    .overlay(Capsule().strokeBorder(PTColor.brand.opacity(0.6), lineWidth: 1))
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Adding to library")
+                .accessibilityIdentifier("library.adding")
+            }
+
             IconButton(title: "Add to library", icon: "plus", identifier: "library.add") {
                 model.showAdd = true
             }
@@ -122,7 +147,7 @@ struct MainShellView: View {
         case .watch:
             WatchScreen(model: model) { path.append($0) }
         case .discover:
-            DiscoverScreen(model: model)
+            DiscoverScreen(model: model) { path.append($0) }
         case .search:
             SearchScreen(model: model, music: music) { path.append($0) }
         }

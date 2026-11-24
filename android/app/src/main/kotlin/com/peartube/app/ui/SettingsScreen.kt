@@ -25,6 +25,7 @@ import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -37,15 +38,17 @@ import org.json.JSONObject
 import com.peartube.shared.formatBytes
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardCapitalization
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.peartube.app.AppModel
-import com.peartube.app.Screen
-import com.peartube.app.Settings
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.animation.AnimatedVisibility
@@ -71,6 +74,27 @@ fun SettingsScreen(model: AppModel) {
     val bankSelected by model.soundFontSelected.collectAsState()
     val bankBusy by model.soundFontBusy.collectAsState()
     val bankError by model.soundFontError.collectAsState()
+    val soulseek by model.soulseekSettings.collectAsState()
+    val soulseekBusy by model.soulseekBusy.collectAsState()
+    val soulseekError by model.soulseekError.collectAsState()
+    val soulseekMessage by model.soulseekMessage.collectAsState()
+    val plugins by model.plugins.collectAsState()
+    var slskUser by rememberSaveable { mutableStateOf(soulseek.username) }
+    var slskPass by rememberSaveable { mutableStateOf("") }
+    var slskShare by rememberSaveable { mutableStateOf(soulseek.sharePublicMusic) }
+    var slskInitialized by remember { mutableStateOf(false) }
+
+    LaunchedEffect(Unit) {
+        model.refreshSoulseekSettings()
+    }
+    LaunchedEffect(soulseek) {
+        if (!slskInitialized || (slskUser.isEmpty() && soulseek.username.isNotEmpty())) {
+            slskUser = soulseek.username
+            slskShare = soulseek.sharePublicMusic
+            slskInitialized = true
+        }
+    }
+    val slskPlugin = remember(plugins) { plugins.firstOrNull { it.name.equals("soulseek", ignoreCase = true) } }
     // Providers often label SF2 as application/octet-stream, so any type; the import checks the file.
     val pickBank = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         uri?.let(model::importSoundFont)
@@ -100,6 +124,85 @@ fun SettingsScreen(model: AppModel) {
             }
             Field("12-word recovery phrase (link account)", "Optional: paste your 12-word recovery phrase to link this phone as an owner device on your channel.") {
                 KeyField(mnemonic, singleLine = false) { mnemonic = it }
+            }
+            HorizontalDivider(color = Line)
+            Column(
+                Modifier
+                    .fillMaxWidth()
+                    .clip(CardShape)
+                    .background(CardBg)
+                    .border(1.dp, Line, CardShape)
+                    .padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                Text("Soulseek", color = Ink, fontSize = 20.sp, fontWeight = FontWeight.SemiBold)
+                val connectedUser = slskPlugin?.user?.takeIf { it.isNotBlank() } ?: soulseek.username
+                val statusLine = when {
+                    slskPlugin?.connected == true && connectedUser.isNotBlank() -> "Connected as $connectedUser"
+                    soulseek.isConfigured && connectedUser.isNotBlank() -> "Connected as $connectedUser"
+                    else -> "Sign in to search Soulseek peers directly from this phone"
+                }
+                Text(
+                    text = statusLine,
+                    color = if (soulseek.isConfigured || slskPlugin?.connected == true) Accent else Dim,
+                    fontSize = 13.sp,
+                )
+                OutlinedTextField(
+                    value = slskUser,
+                    onValueChange = { slskUser = it },
+                    singleLine = true,
+                    label = { Text("Username") },
+                    keyboardOptions = KeyboardOptions(
+                        capitalization = KeyboardCapitalization.None,
+                        autoCorrectEnabled = false,
+                    ),
+                    shape = ControlShape,
+                    colors = fieldColors(),
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                OutlinedTextField(
+                    value = slskPass,
+                    onValueChange = { slskPass = it },
+                    singleLine = true,
+                    label = { Text("Password") },
+                    placeholder = { Text(if (soulseek.passwordSet) "Saved on this device" else "Enter password") },
+                    visualTransformation = PasswordVisualTransformation(),
+                    keyboardOptions = KeyboardOptions(
+                        capitalization = KeyboardCapitalization.None,
+                        autoCorrectEnabled = false,
+                        keyboardType = KeyboardType.Password,
+                    ),
+                    shape = ControlShape,
+                    colors = fieldColors(),
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .toggleable(value = slskShare, role = Role.Switch, onValueChange = { slskShare = it }),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(Modifier.weight(1f)) {
+                        Text("Share public music", color = Ink, fontSize = 15.sp, fontWeight = FontWeight.Medium)
+                        Hint("Offer public albums in your library to Soulseek peers.")
+                    }
+                    Switch(checked = slskShare, onCheckedChange = null, colors = SwitchDefaults.colors(checkedTrackColor = Brand))
+                }
+                soulseekError?.let { Text(it, color = Danger, fontSize = 13.sp) }
+                soulseekMessage?.let { Text(it, color = Accent, fontSize = 13.sp) }
+                PrimaryLightButton(
+                    text = if (soulseekBusy) "Saving…" else "Save Soulseek settings",
+                    enabled = !soulseekBusy,
+                    onClick = {
+                        model.saveSoulseekSettings(
+                            username = slskUser,
+                            password = slskPass.takeIf { it.isNotEmpty() },
+                            sharePublicMusic = slskShare,
+                        )
+                        slskPass = ""
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                )
             }
             HorizontalDivider(color = Line)
             Text("Playback & MIDI", color = Ink, fontSize = 20.sp, fontWeight = FontWeight.SemiBold)

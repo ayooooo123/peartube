@@ -59,6 +59,34 @@ jobs:
       - run: npm ci
       - run: npm run lint
 
+  # The browsing design of the relay page (the "one library" test in test/ui.e2e.js): every room and page at
+  # 1440 and 390, light and dark, with the interaction checks that fail on the old page. Writes its result and
+  # screenshots as the run's artifact.
+  ui-browser:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.x
+          cache: npm
+      - id: chrome
+        uses: browser-actions/setup-chrome@v1
+      - run: npm ci
+      - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg
+      - run: node --test --test-name-pattern='one library' test/ui.e2e.js
+        env:
+          PUPPETEER_EXECUTABLE_PATH: ${{ steps.chrome.outputs.chrome-path }}
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ui-design
+          path: |
+            desktop/target/e2e/ui-design-result.json
+            desktop/target/e2e/ui-audit/design
+          if-no-files-found: ignore
+
   # Lists contract files changed since native.lock's jsRef: needs history, not file contents, so a blobless clone.
   contract:
     runs-on: ubuntu-latest

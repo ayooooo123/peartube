@@ -1,6 +1,6 @@
 # One library for music and video: "Listen and Watch"
 
-Status: decision, 2026-11-22. This document is the contract for the relay's web page (`src/ui.js`), which is built first. The Android and iPhone apps follow in a later step. The Mac app and the TV receiver are not part of this design.
+Status: decision, 2026-11-22, with a second part from the same day: Discover, one Search, TVs without a TV page, the top bar's widths, the Tracks table, and what a row and Shuffle play. This document is the contract for the relay's web page (`src/ui.js`), which is built first. The Android and iPhone apps follow in a later step. The Mac app and the TV receiver are not part of this design.
 
 ## 0. Decision
 
@@ -23,11 +23,17 @@ The page before this change had a Library tab (video only, with the tools to add
 5. **Artwork.** Use an embedded cover from a public file that the relay holds. Otherwise draw a sleeve from the album's name. Do not open private or remote files to fill a shelf. Do not contact a public image host for an album cover. A film's poster still comes through the relay (`/v1/poster/<id>`).
 6. **No artist photos.** There are none in the system. An artist's picture is a stack of that artist's sleeves.
 7. **Where a return visit starts.** The first visit opens Home. A later visit with no link opens the room that the person used last.
-8. **Old links keep working.** `#music` opens Listen and `#library` opens Home.
+8. **Old links keep working.** `#music` opens Listen, `#library` opens Home, `#find` opens Search, and `#tv` opens the TVs dialog.
 9. **Recently added needs a real date.** The library does not record when it first saw a title. Until it does, shelves are sorted by title and no shelf is called "new".
 10. **Network figures are not part of browsing.** Peer counts and transfer rates are on the Sharing page. The top bar keeps only the states that need an action: the relay cannot be reached, something is being added, a restart is needed, the person is not signed in.
 11. **The tools to add things are behind `Add to library`.** They do not stand above the shelves.
 12. **Unknown stays unknown.** A length, a year or a format that the page does not know is left out. It is not guessed.
+13. **A row plays the list that it is in.** A track row in Tracks, in an artist's tracks or in search results plays that list, in the order shown, from that row. A row on an album page plays the album from that row. `Up next` then holds the rest of that list.
+14. **Shuffle is a switch.** `Shuffle` in the player turns shuffle on or off and shows its state. On: the tracks after the one that plays come mixed. Off: the list order comes back after this track. The page remembers the switch, as it remembers `Repeat`. `Shuffle` on an album or an artist starts that list with the switch on.
+15. **No control is dimmed without a reason that a person can read.** With one track the player says `1 of 1`, and `Shuffle` and `Next` stay where they are.
+16. **One place to search.** The top bar's field searches the library at once, and Enter also asks the sources. Discover has no field of its own.
+17. **A film goes to a TV from where it plays.** The video player, a title page and a file row offer `Play on a TV`. There is no TV page: one TV icon in the top bar opens the list of TVs.
+18. **Every overlay closes four ways:** a click or tap outside it, Escape, Back, and a visible close control. Back closes the overlay and leaves the page where it was. When the overlay holds typed text, each of those asks `Discard what you typed?` (`Keep editing`, `Discard`); `Cancel` discards without a question.
 
 Look: the pictures do the work and the chrome is quiet. No card around every block; space and one-pixel lines separate things. Violet marks state only (what plays, progress, focus). The main action is the light button. No gradient, glow or blur on the page's own chrome.
 
@@ -41,22 +47,35 @@ Look: the pictures do the work and the chrome is quiet. No card around every blo
 | An artist | `#artist/<name>` | The artist's albums and tracks |
 | Watch | `#watch`, `#watch/movies`, `#watch/series`, `#watch/clips` | `Keep watching`, posters, wide clips |
 | A title | `#title/<key>` | A movie with its versions, a series with its seasons and episodes, or a clip |
-| Find | `#find`, `#find/<words>` | `In your library`, then `Not in your library` |
+| Discover | `#discover` | `Search your sources`, the shelves that a person visited, more from the artists in the library |
+| A shelf | `#shelf/<user>` | What one Soulseek user shares, with a filter |
+| Search | `#search`, `#search/<words>` (also `#find`, `#find/<words>`) | `In your library`, then `From your sources` |
 | Add to library | `#add` | A link, a folder, a catalog, a channel; what is being added now |
 | The music player | `#playing` | The cover, the controls and `Up next` |
-| Owner pages | `#channels`, `#sharing`, `#tv`, `#settings` | Unchanged |
+| TVs | A dialog from the TV icon (also `#tv`) | The TV that plays now, the paired TVs, and a field for a TV's code |
+| Owner pages | `#channels`, `#sharing`, `#settings` | Unchanged |
 
 The video player is not a place. It covers the page, or it stays as a small picture while the person browses, as before.
 
-**Top bar, wide screen:** `PearTube`, then `Home`, `Listen`, `Watch`; at the right the Find field, `Add to library` (a plus), then `Channels`, `Sharing`, `TV`, `Settings`. The room that is open has a line under its word. An album, an artist, the track list and the music player belong to Listen; a title belongs to Watch.
+**Top bar, wide screen:** `PearTube`, then `Home`, `Listen`, `Watch`, `Discover`; the search field; at the right the state pills, `Add` (a plus), the TV icon, then `Channels`, `Sharing`, `Settings` and the theme. The room that is open has a line under its word. An album, an artist, the track list and the music player belong to Listen; a title belongs to Watch; a shelf belongs to Discover.
 
-**Narrow screen (640 px and less):** a top bar with the room's name, `Add to library` and `More` (the owner pages and the theme). At the bottom: `Home`, `Listen`, `Watch`, `Find`. The small player sits above that row. The music player covers the whole screen.
+**Widths.** The bar never makes the page wider than the window. Each range gives up one more thing:
+
+| Width | What changes |
+|---|---|
+| 1400 px and more | Everything is in one row |
+| 1100 to 1399 | `Channels`, `Sharing`, `Settings` and the theme go into `More` |
+| 821 to 1099 | `Add` and `PearTube` lose their words; their icons stay |
+| 701 to 820 | The search field becomes a search button that opens Search |
+| 700 and less | The narrow layout below |
+
+**Narrow screen (700 px and less):** a top bar with the logo, the state pills, `Add`, the TV icon and `More` (the owner pages and the theme). At the bottom five items: `Home`, `Listen`, `Watch`, `Discover`, `Search`. The small player sits above that row. The music player covers the whole screen.
 
 ## 3. Screens
 
 **Home.** `Keep playing` mixes what is not finished: videos with their time left, and the album of the saved music list. The newest of them is large; the others are rows beside it (under it on a narrow screen). Under that: `Albums` with the link `All albums`, and `Movies and series` with the link `All video`. A library with clips and no movie or series shows `Clips` with the link `All clips` in that place, so Home is not bare. With nothing unfinished, `Keep playing` is absent. With an empty library, Home says `Nothing in your library yet.` and offers `Add to library`.
 
-**Listen.** One control with `Albums`, `Artists`, `Tracks`; the count (`20 albums`); a `Saved here` switch. Albums are a grid of square covers with the album and the artist under each. Artists are a grid of sleeve stacks with the name and `3 albums`. Tracks is one list (title, artist, album) with a filter field.
+**Listen.** One control with `Albums`, `Artists`, `Tracks`; the count (`20 albums`); a `Saved here` switch. Albums are a grid of square covers with the album and the artist under each. Artists are a grid of sleeve stacks with the name and `3 albums`. Tracks is one table with a filter field: number, title, artist, album, quality, size and length. A press on a column head sorts by it and a second press turns the order; the head says how the list is sorted, for a screen reader too. Numbers are right-aligned. A cell that the page does not know stays empty, and such rows sort last. On a narrow screen the table keeps title, artist and length, and a `Sort` menu replaces the heads.
 
 **An album.** The cover at the left stays in view. Beside it: the word `Album`, the title, the artist (a link), a facts line (`5 tracks · 42 min`), a quieter line (`FLAC 24-bit 96 kHz · 1.6 GB · Saved here`), then `Play`, `Shuffle` and `More`. Then the tracks: number, name, length. The track that plays is marked. Under the tracks: `More by <artist>`. An album from YouTube says `YouTube · AAC 128 kbps` and has the tag `Lossy`.
 
@@ -64,9 +83,17 @@ The video player is not a place. It covers the page, or it stays as a small pict
 
 **Watch.** Chips `All`, `Movies`, `Series`, `Clips` with their counts, and `Saved here`. With `All`: `Keep watching` (wide pictures with progress), `Movies and series` (tall posters), `Clips` (wide tiles). With one kind chosen: only that grid.
 
-**Add to library.** The add box with its preview, `Import folder`, `Mirror a catalog`, `Copy a channel`, and the list of what is being added. A finished add stays in the list for six hours or until it is dismissed; a failed one stays until it is dismissed. An album that is saved from a search result shows its progress on the Find page, where the save started.
+**Add to library.** The add box with its preview, `Import folder`, `Mirror a catalog`, `Copy a channel`, and the list of what is being added. A finished add stays in the list for six hours or until it is dismissed; a failed one stays until it is dismissed. An album that is saved from a search result shows its progress on the Search page, where the save started.
 
-**Find.** One field for everything. Typing narrows the library at once: `In your library`, in the groups `Albums`, `Tracks`, `Movies and series`, `Clips`. Enter also looks outside: `Not in your library`, in the groups `Soulseek`, `YouTube`, `On other relays`. Chips above those groups show which of them a search asks, and each can be turned off. The page never searches outside the library without that key press. A pasted link offers `Add to library`.
+**Search.** One field for everything: the top bar's field, or on a narrow screen the field at the top of Search. Typing narrows the library at once: `In your library`, in the groups `Albums`, `Tracks`, `Movies and series`, `Clips`. Enter, or `Ask your sources`, also looks outside: `From your sources`, in the groups `Soulseek`, `YouTube`, `On other relays`. Chips above those groups show which of them a search asks, and each can be turned off. The page never asks a source without that key press or that button. A pasted link offers `Add to library`.
+
+**Discover.** One main action at the top: `Search your sources`, which puts the cursor in the top bar's field (on a narrow screen it opens Search). Then `Shelves you visited`: the Soulseek users whose shared files the person opened, the newest first, each with its number of folders and when it was opened. Then `More from artists you have`: a chip for each artist in the library. A press on a chip opens Search with that artist in the field and asks the sources there, so the answers and their `Save` buttons stand in one place; nothing asks a source before a press. One line at the end: `Planned: Rumble, SoundCloud.`
+
+**A shelf.** The user's shared albums as rows (album, artist, quality, files, size) with a filter field and `Save` on each. `Back` returns to the place the person came from: the search that offered the shelf, else Discover. An album that the library holds already says `In your library` and links to it.
+
+**TVs.** The TV icon in the top bar opens a dialog: the TV that plays now, with its remote (back, ten seconds either way, play or pause, stop) and `Stop`; the paired TVs, each with one state that a person can act on: `Ready`, `Playing`, `Needs its code`, or `Needs an update`, and `Forget`, which asks first, because pairing again needs the TV's code; then `Pair a TV…` with the field `Code on the TV` (example `K7M2QX`). A TV's network address is never shown. While a TV plays, the icon has a green dot. A TV that does not answer is named in the message after a play fails; the list does not guess that a TV is away.
+
+**Play on a TV.** A menu: `This browser`, then each TV with its state and, when it cannot play, the reason beside it, then `Pair a TV…`. Choosing a TV starts the film there, and the page becomes its remote.
 
 **The small player (the dock).** It shows only when there is a music list. Its top edge is the progress line, which is also the seek control. Left: cover, track, `artist · album` (links). Centre: `Previous`, `Play` or `Pause`, `Next`, the times. Right: `Shuffle`, `Repeat`, `Up next`, `Volume`, `Open player`. On a narrow screen it is one row: cover, two lines, `Play` or `Pause`, `Next`.
 
@@ -80,15 +107,17 @@ The video player is not a place. It covers the page, or it stays as a small pict
 
 | Where | Before | Now |
 |---|---|---|
-| Rooms | `Library`, `Music` | `Home`, `Listen`, `Watch`, `Find` |
+| Rooms | `Library`, `Music`, `Find` | `Home`, `Listen`, `Watch`, `Discover`, `Search` |
 | Unfinished things | `Continue watching` | `Keep playing` (Home), `Keep watching` (Watch) |
 | Adding | `Add a video or channel` | `Add to library` |
 | Kinds of video | `Shows`, `Videos` | `Series`, `Clips` |
 | Where a copy is | `Saved here`, `Partly saved`, `On the network` | Unchanged |
-| The search field | `Artist or album`, `Title or IMDb id`, `Search library`, `Search music` | One field: label `Find`, example `Blue Train` |
-| Find, nothing typed | (none) | `Type a title or artist, or paste a link.` |
-| Result groups | `Find music`, `Search all relays` | `In your library`, `Not in your library`; inside it `On other relays`, `Soulseek`, `YouTube` |
+| The search field | `Artist or album`, `Title or IMDb id`, `Search library`, `Search music` | One field: label `Search`, example `Blue Train` |
+| Search, nothing typed | (none) | `Search your library and your sources`, with a few artists as chips |
+| Result groups | `Find music`, `Search all relays` | `In your library`, `From your sources`; inside it `Soulseek`, `YouTube`, `On other relays` |
 | Saving from a source | `Mirror`, `Mirror track`, `Mirror folder` | `Save album`, `Save track`, `Save folder` |
+| TVs | A `TV` page, `Cast` | The TV icon (label `TVs`), `Play on a TV`, `This browser`, `Pair a TV…`, `Code on the TV`, `Remote`, `Stop`, `Forget` |
+| Sources not built yet | (none) | `Planned: Rumble, SoundCloud.`, one line at the end of Discover |
 | The list of coming tracks | `Queue`, a button that reads `1 of 2` | `Up next`; inside the player `Playing from`, `Then`, `Clear` |
 | Adding to that list | (none) | `Play next`, `Play last` |
 | Music stopped by a video | (nothing) | `Paused for a video` |
@@ -101,7 +130,7 @@ Rules for every string: sentence case; no word of the plumbing (ports, peer name
 
 ## 5. Data: what the screens use, and what is missing
 
-This change adds nothing to the HTTP API. The page uses what it used before: `/v1/entries`, `/v1/entries/info`, `/v1/poster/<id>`, `/v1/backdrop/<id>`, the stream links, and two keys in the browser's own storage (the position in each video, and the music list with its position).
+This change adds nothing to the HTTP API. The page uses what it used before: `/v1/entries`, `/v1/entries/info`, `/v1/poster/<id>`, `/v1/backdrop/<id>`, the stream links, the source search (`POST /v1/search/sources`, `POST /v1/search/global`), Soulseek's browse route, the cast routes (`/v1/cast/status`, `pair`, `play`, `control`, `stop`, `receivers/<id>`), and keys in the browser's own storage: the position in each video, the music list with its position, the shuffle and repeat switches, and the shelves that a person visited.
 
 | Data a person might expect | What exists | What the page shows |
 |---|---|---|
@@ -126,10 +155,10 @@ For this change the parity row is **shared page, no native port**. Both relays s
 
 ## 7. Kept on purpose
 
-- The links `#music`, `#library`, `#channels`, `#sharing`, `#tv`, `#settings`.
+- The links `#music`, `#library`, `#find` (it opens Search), `#tv` (it opens the TVs dialog), `#channels`, `#sharing`, `#settings`.
 - The saved music list and the saved video positions of a browser that used the page before.
 - The controls that other tools and tests address by name: the small player `#np` with `#npSeek`, `#npPlay`, `#npNext`; the video player's controls; `#detail` with `[data-album]`, `[data-play]` and `[data-download]`.
-- The source search (its chips, its streamed groups, the save dialog for YouTube, the progress of a save). It moves under Find; it does not change.
+- The source search (its chips, its streamed groups, the save dialog for YouTube, the progress of a save). It stays under Search; it does not change.
 - Light and dark themes, and both widths that the page is checked at: 1440 × 900 and 390 × 844.
 
 ## 8. Not built
@@ -141,3 +170,24 @@ For this change the parity row is **shared page, no native port**. Both relays s
 - A queue for video.
 - The same position on two devices.
 - Saving a whole video from YouTube. The existing action saves the sound and says so.
+- The network pill, the Network page and a seek bar coloured by route (a later step).
+- Editing the details of an entry. The owner may correct a title on the page, and the change goes to the channel, not into the file's tags. The build needs one owner-only route on the relay and one method on the node, which is a contract change for the Rust port; it is not built yet.
+- A quality that is stored when a file is added. Until then, Tracks shows a quality only for a file whose header the relay has read.
+
+## 9. Answers to the owner's questions, and the inputs taken
+
+The owner saw the sketch of these parts and gave his inputs on 2026-11-22. These are the answers, and what the build does with each.
+
+1. **Discover is a fourth room.** It stands in the bar next to Home, Listen and Watch, with the same weight. It is not a view inside Listen, because a shelf is a place a person returns to, and a room keeps its own address and its own place in history. It holds the shelves a person visited and the artists of the library; it has no field of its own.
+2. **The phone bar has five items:** `Home`, `Listen`, `Watch`, `Discover`, `Search`. Five items fit a 390 px row at 56 px each with no sideways scroll; the words are short, and each item carries an icon above its word.
+3. **The TV entry is an icon in the top bar.** The TV page is gone. The icon opens a dialog with the paired TVs, the remote of the one that plays, and the field for a TV's code. The video player, a title page and a file row offer `Play on a TV` where the film plays.
+4. **The parts that need no relay work come first.** Discover, the one Search, the TVs dialog, the top bar's widths, the Tracks table, the albums' Play and Shuffle, and the metadata edit all read what the relay already serves. Nothing in this change asks the relay for a new route or a new field, so the Rust relay serves the same page with no change of its own.
+5. **All of this work goes into one draft pull request.** Nothing merges before the v0.4.45 tag.
+
+**One clear place to search.** The top bar's field is the only field for a search. On a wide screen it stands in the bar on every page. On a narrow screen it takes the first row of Search, so the room's own page holds it at the top. Discover's one main action puts the cursor in that field, and a press on an artist chip opens Search with the name in it and asks the sources there. A person never meets two fields that mean the same thing.
+
+**The `Planned` line stays off the first screen.** `Planned: Rumble, SoundCloud.` is one quiet line at the foot of Discover, under the shelves and the artists. It names what is not there yet and asks for no action.
+
+**The owner's Soulseek question.** Search finds albums on Soulseek peers. A download starts only when the person presses `Save` on a result; a request to a peer, a place in its queue and a transfer that stalls are all shown on the save's card, with the peer's own state. Nothing downloads by itself, and a search alone transfers no file.
+
+**The metadata edit needs relay work, so it stopped at the design.** A corrected title must change the channel for every follower, which needs a new owner-only write on the relay and on the node, and that is a contract change for the Rust port. The sketch shows the edit; the page does not offer it yet. The build resumes when the owner decides that route.

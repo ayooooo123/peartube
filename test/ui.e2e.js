@@ -7,7 +7,7 @@
 //   3. Content identification against a stubbed Cinemeta and a stub `ubit` (`UBIT_BIN`): an exact match is
 //      published as `imdb:tt…` (the id MediaStorm searches by), an unknown file as a plain clip, a page link
 //      through ubit's metadata and NDJSON downloader.
-//   4. Music sources on Find against the stub `ubit`: source chips and their memory, a streamed two-source search,
+//   4. Music sources on Search against the stub `ubit`: source chips and their memory, a streamed two-source search,
 //      YouTube rows with relay-fetched thumbnails and the fixed lossy label, rows that stay put when the slower group
 //      lands above them (and no redraw mid-press), suggestions from messy titles, failure hints, a failing source on
 //      its own, the save dialog (suggestions, reorder, single track filed into the album that has it, Escape), job
@@ -242,7 +242,9 @@ async function launchBrowser () {
   // `--disable-gpu` alone leaves WebGL to the platform: Chromium on a Linux machine with no GPU falls back to
   // software GL and writes a deprecation warning into the page's console, and on macOS the page gets no WebGL.
   // `--enable-unsafe-swiftshader` asks for software GL by name, so the player takes one path on every machine.
-  const proc = spawn(exe, ['--headless=new', '--remote-debugging-port=0', '--user-data-dir=' + dir, '--no-first-run', '--no-default-browser-check', '--disable-gpu', '--enable-unsafe-swiftshader', '--disable-extensions', '--use-mock-keychain', '--password-store=basic', '--disable-sync', '--disable-features=BraveWallet,BraveRewards,BraveNews', 'about:blank'], { stdio: 'ignore' })
+  // `--no-sandbox` and `--disable-dev-shm-usage`: the CI's Chromium starts under the runner's user without a
+  // usable sandbox and with a small `/dev/shm`; with either missing it exits before it writes `DevToolsActivePort`.
+  const proc = spawn(exe, ['--headless=new', '--remote-debugging-port=0', '--user-data-dir=' + dir, '--no-first-run', '--no-default-browser-check', '--disable-gpu', '--enable-unsafe-swiftshader', '--disable-extensions', '--use-mock-keychain', '--password-store=basic', '--disable-sync', '--disable-features=BraveWallet,BraveRewards,BraveNews', '--no-sandbox', '--disable-dev-shm-usage', 'about:blank'], { stdio: 'ignore' })
   const portFile = join(dir, 'DevToolsActivePort')
   const connect = async () => {
     for (let i = 0; i < 200 && !existsSync(portFile); i++) await sleep(100)
@@ -292,7 +294,8 @@ async function launchBrowser () {
     }
     if (m.method === 'Runtime.consoleAPICalled' && (m.params.type === 'error' || m.params.type === 'warning')) issues.push(m.params.type + ': ' + m.params.args.map(a => a.value ?? a.description).join(' '))
     if (m.method === 'Runtime.exceptionThrown') issues.push('exception: ' + (m.params.exceptionDetails.exception?.description || m.params.exceptionDetails.text))
-    if (m.method === 'Log.entryAdded' && (m.params.entry.level === 'error' || m.params.entry.level === 'warning')) issues.push(m.params.entry.level + ': ' + m.params.entry.text + ' ' + (m.params.entry.url || ''))
+    // A GPU driver's own hint is not the page: SwiftShader in the CI writes "GPU stall due to ReadPixels" there.
+    if (m.method === 'Log.entryAdded' && (m.params.entry.level === 'error' || m.params.entry.level === 'warning') && !/^\[\.WebGL-[^\]]*\]GL Driver Message/.test(m.params.entry.text)) issues.push(m.params.entry.level + ': ' + m.params.entry.text + ' ' + (m.params.entry.url || ''))
     if (m.method === 'Network.requestWillBeSent') {
       requests.push(m.params.request.url)
       // A redirect reuses the id: the hop that follows starts its own life.
@@ -473,7 +476,13 @@ function drive (browser, base, result, shots) {
     await waitFor(`document.readyState === 'complete' && S.loaded === true`, 'page load')
     await sleep(400)
   }
-  const goTab = async name => { await clickText(name, '.tabs'); await sleep(300) }
+  // The bar's rooms; the relay's own pages are links in the bar, or in its More menu below 1400 px.
+  const goTab = async name => {
+    if (['Home', 'Listen', 'Watch', 'Discover', 'Search'].includes(name)) return void (await clickText(name, '.rooms'), await sleep(300))
+    if (await evaluate(`(() => { const a = document.querySelector('.owner a[data-tab="' + ${JSON.stringify(name.toLowerCase())} + '"]'); return !!a && a.offsetParent !== null })()`)) await clickText(name, '#ownerNav')
+    else { await clickName('More', '.top'); await clickText(name, '.menu') }
+    await sleep(300)
+  }
   async function shot (name, viewportOnly = false, dir = shots) {
     const file = join(dir, name + '.png')
     writeFileSync(file, Buffer.from((await send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: !viewportOnly })).data, 'base64'))
@@ -705,7 +714,8 @@ test('relay web UI: settings, plugins as intents, identification, music sources,
     await evaluate(`(() => { window.__modalCopied = ''; document.addEventListener('copy', ev => { window.__modalCopied = ev.clipboardData?.getData('text/plain') || '' }, false); return true })()`)
     // A page keeps its less-used actions behind More: open it, then copy.
     await clickName('More', '#detail', false)
-    await clickText('Copy link', '#detail')
+    await waitFor(`!!document.querySelector('dialog.menu[open]')`, 'the More menu', 4000)
+    await clickText('Copy link', 'dialog.menu')
     const modalCopied = await evaluate(`window.__modalCopied`)
     assert.match(modalCopied, /^peartube:\/\/watch\//, 'Copy link on a title page must populate clipboardData over plain HTTP')
     // A watch link names its public channel, so whoever opens it joins that channel's swarm and finds the peers
@@ -879,10 +889,10 @@ test('relay web UI: settings, plugins as intents, identification, music sources,
     result.checks.musicBar = bar
     mark('musicBar')
 
-    // 4. Music sources, on Find. Soulseek has no account here, so it offers setup; YouTube runs on the stub `ubit`.
+    // 4. Music sources, on Search. Soulseek has no account here, so it offers setup; YouTube runs on the stub `ubit`.
     const issuesBefore = browser.issues.length
     const chip = name => `document.querySelector('#srcChips [data-src="${name}"]')`
-    // Typing in the Find field opens Find. The page stays loaded, so the bar keeps the album it holds.
+    // Typing in the Search field opens Search. The page stays loaded, so the bar keeps the album it holds.
     await type('#srcInput', 'test band')
     await waitFor(`!!${chip('youtube')}`, 'source chips')
     assert.deepEqual(await evaluate(`[${chip('youtube')}.textContent, ${chip('youtube')}.getAttribute('aria-pressed')]`), ['✓ YouTube', 'true'], 'YouTube is on by default')
@@ -896,7 +906,7 @@ test('relay web UI: settings, plugins as intents, identification, music sources,
     assert.equal(await evaluate(`${chip('youtube')}.getAttribute('aria-pressed')`), 'false', 'Space toggles a focused chip')
     assert.equal(await evaluate(`audioEl.paused`), pausedBefore, 'Space on a chip leaves the music alone')
     // The choice survives a reload.
-    await open('#find')
+    await open('#search')
     await waitFor(`!!${chip('youtube')}`, 'source chips after reload')
     assert.equal(await evaluate(`${chip('youtube')}.getAttribute('aria-pressed')`), 'false', 'a source turned off stays off')
     assert.equal(await evaluate(`localStorage.getItem('peartube.sourcesOff')`), '["youtube"]')
@@ -909,7 +919,7 @@ test('relay web UI: settings, plugins as intents, identification, music sources,
     // with a stubbed two-source stream.
     const ytSearch = async query => {
       await type('#srcInput', query)
-      await waitFor(`!$('tab-find').hidden && location.hash === '#find/' + encodeURIComponent(${JSON.stringify(query)})`, 'Find with the typed words', 5000)
+      await waitFor(`!$('tab-search').hidden && location.hash === '#search/' + encodeURIComponent(${JSON.stringify(query)})`, 'Search with the typed words', 5000)
       await click('#srcBtn')
     }
     await ytSearch('test band')
@@ -1244,7 +1254,7 @@ test('relay web UI: settings, plugins as intents, identification, music sources,
     await click('#ytSaveCancel')
     await waitFor(`!$('ytSave').open`, 'duplicate dialog closed')
     result.checks.duplicateSave = 'left out on its row; Save sends nothing until Save again is ticked'
-    // The searches above left the page on Find: the shelf is in Listen.
+    // The searches above left the page on Search: the shelf is in Listen.
     await goTab('Listen')
     await waitFor(`!$('tab-listen').hidden`, 'back on Listen', 5000)
     await evaluate(`${card('First Light')}.querySelector('.album-open').setAttribute('data-e2e', 'merged'); true`)
@@ -1266,9 +1276,9 @@ test('relay web UI: settings, plugins as intents, identification, music sources,
     await click('#detailClose')
     await waitFor(`!!${card('First Light')}`, 'the album is back on the shelf')
     result.checks.mergedAlbum = 'FLAC 16-bit 44.1 kHz, also from YouTube, then the YouTube copy removed on its own'
-    // Words that match nothing in the library say so on Find, and Search asks outside with the same words.
+    // Words that match nothing in the library say so on Search, and Search asks outside with the same words.
     await type('#srcInput', 'zzqx')
-    await waitFor(`!$('tab-find').hidden && $('findLib').textContent.includes('Nothing in your library matches “zzqx”.')`, 'Find says the library has no match', 5000)
+    await waitFor(`!$('tab-search').hidden && $('findLib').textContent.includes('Nothing in your library matches “zzqx”.')`, 'Search says the library has no match', 5000)
     await click('#srcBtn')
     await waitFor(`srcRun.query === 'zzqx' && document.querySelectorAll('#ytResults .yt-pick-row').length === 3`, 'the miss searched outside')
     assert.deepEqual(browser.issues.slice(issuesBefore), [], 'console errors or warnings in the sources flow')
@@ -1359,7 +1369,7 @@ test('relay web UI: settings, plugins as intents, identification, music sources,
 
     for (const [name, n] of Object.entries(result.interactions)) assert.ok(n <= 3, name + ' took ' + n + ' interactions')
 
-    // 5. Taste gates on every place, both sizes, both schemes; then Find with results on screen and with the save
+    // 5. Taste gates on every place, both sizes, both schemes; then Search with results on screen and with the save
     // dialog open.
     browser.issues.length = 0
     // While the pages load, this process asks the relay for its status, one request after another. A slow page
@@ -1381,7 +1391,7 @@ test('relay web UI: settings, plugins as intents, identification, music sources,
     for (const [width, height] of [[1440, 900], [390, 844]]) {
       for (const scheme of ['light', 'dark']) {
         await viewport(width, height, scheme)
-        for (const tab of ['home', 'listen', 'watch', 'find', 'add', 'channels', 'sharing', 'tv', 'settings']) {
+        for (const tab of ['home', 'listen', 'watch', 'discover', 'search', 'add', 'channels', 'sharing', 'settings']) {
           const where = width + ' ' + scheme + ' ' + tab
           const loadStart = Date.now()
           // A load that never completes keeps what it waited on too.
@@ -1395,7 +1405,7 @@ test('relay web UI: settings, plugins as intents, identification, music sources,
           await shot(`${tab}-${width}-${scheme}`)
           result.viewports.push({ where, at: loadStart, loadMs, ...(slowRequests ? { slowRequests } : {}), ...audit })
         }
-        await open('#find')
+        await open('#search')
         await type('#srcInput', 'test band')
         await click('#srcBtn')
         await waitFor(`document.querySelectorAll('#ytResults .yt-pick-row').length === 3`, 'results for the taste gates', 5000)
@@ -1432,7 +1442,7 @@ test('relay web UI: settings, plugins as intents, identification, music sources,
     // A stopped relay is named in the header, in sight on the place that is open, not left as a stale error under a
     // form.
     relay.kill('SIGTERM')
-    await waitFor(`[...document.querySelectorAll('#pills .pill')].some(p => p.textContent.includes('Relay unreachable') && p.getBoundingClientRect().width > 0)`, 'offline pill in sight', 15_000)
+    await waitFor(`[...document.querySelectorAll('#pills .pill')].some(p => p.textContent.includes('The relay cannot be reached') && p.getBoundingClientRect().width > 0)`, 'offline pill in sight', 15_000)
     await shot('offline-390-dark')
     result.checks.offlineShown = true
     result.pass = true
@@ -1450,7 +1460,7 @@ test('relay web UI: settings, plugins as intents, identification, music sources,
 // The one library (design/unified-library.md). Each behaviour is one named check: `checks[name]` is true, or it is
 // what the page showed in place of what the design says. Every check runs, so one run names everything that is
 // missing, and the test fails once, at its end.
-test('relay web UI: one library with Home, Listen, Watch and Find', { timeout: 900_000 }, async () => {
+test('relay web UI: one library with Home, Listen, Watch, Discover and Search', { timeout: 900_000 }, async () => {
   const shots = join(outDir, 'ui-audit/design')
   mkdirSync(shots, { recursive: true })
   const storage = mkdtempSync(join(tmpdir(), 'peartube-ui-design-storage-'))
@@ -1500,10 +1510,10 @@ test('relay web UI: one library with Home, Listen, Watch and Find', { timeout: 9
   })`)
   // The text of every match that is in sight, as a reader sees it.
   const texts = selector => evaluate(`[...document.querySelectorAll(${JSON.stringify(selector)})].filter(e => e.offsetParent !== null || getComputedStyle(e).position === 'fixed').map(e => e.innerText.trim().replace(/\\s+/g, ' ')).filter(Boolean)`)
-  // Types into the Find field as a reader does, and returns the library's groups: "Albums: First Light".
+  // Types into the Search field as a reader does, and returns the library's groups: "Albums: First Light".
   const typeFind = async words => {
     await type('#srcInput', words)
-    await waitFor(`!$('tab-find').hidden && location.hash === '#find/' + encodeURIComponent(${JSON.stringify(words)})`, 'Find with “' + words + '”', 4000)
+    await waitFor(`!$('tab-search').hidden && location.hash === '#search/' + encodeURIComponent(${JSON.stringify(words)})`, 'Search with “' + words + '”', 4000)
     return evaluate(`[...document.querySelectorAll('#findLib .find-group')].map(g => g.querySelector('h3').textContent + ': ' + [...g.querySelectorAll('.album-name, .ft-name, .tile-title')].map(e => e.textContent).join(', '))`)
   }
   const asked = (from, part) => [...new Set(browser.requests.slice(from).map(u => new URL(u).pathname).filter(p => p.startsWith(part)))].sort()
@@ -1523,7 +1533,7 @@ test('relay web UI: one library with Home, Listen, Watch and Find', { timeout: 9
       saw.way = await evaluate(`[...document.querySelectorAll('#tab-watch .empty a')].map(a => a.getAttribute('href'))`)
       return same(saw, {
         home: ['Nothing in your library yet. Add to library'],
-        listen: ['No albums yet. Use Find to save one, or add a folder. Add to library'],
+        listen: ['No albums yet. Use Search to save one, or add a folder. Add to library'],
         watch: ['Nothing in your library yet. Add to library'],
         way: ['#add']
       })
@@ -1555,7 +1565,7 @@ test('relay web UI: one library with Home, Listen, Watch and Find', { timeout: 9
     await shot('home-1440-dark')
     await check('roomsByClick', async () => {
       const saw = []
-      for (const room of ['Listen', 'Watch', 'Home']) {
+      for (const room of ['Listen', 'Watch', 'Discover', 'Home']) {
         await goTab(room)
         saw.push(await place())
       }
@@ -1564,12 +1574,23 @@ test('relay web UI: one library with Home, Listen, Watch and Find', { timeout: 9
       return same(saw, [
         { panel: 'listen', room: 'Listen', hash: '#listen' },
         { panel: 'watch', room: 'Watch', hash: '#watch' },
+        { panel: 'discover', room: 'Discover', hash: '#discover' },
         { panel: 'home', room: 'Home', hash: '#home' },
         { panel: 'listen', room: 'Listen', hash: '#listen' }
       ])
     })
-    // Music and video have a room each: the shelf holds no film, and the grid holds no album. Listen is one flat
-    // grid of covers with the artist under each name, not a shelf cut into bands of artists.
+    // Discover: the library's artists, and a shelf list that starts empty. Nothing is asked until a press; a press
+    // opens Search with the artist in the one field and asks the sources there.
+    await check('discoverArtists', async () => {
+      await open('#discover')
+      const chips = await texts('#discArtists .chip')
+      const shelves = await texts('#discShelves p')
+      const from = browser.requests.length
+      await clickText('Test Band', '#discArtists')
+      await waitFor(`!$('tab-search').hidden && location.hash === '#search/' + encodeURIComponent('Test Band') && $('srcInput').value === 'Test Band'`, 'Search holds the artist', 5000)
+      await waitFor(`document.querySelectorAll('#srcGroup-youtube .yt-pick-row').length === 3`, 'the artist was asked of the sources', 5000)
+      return same({ chips, shelves, asked: asked(from, '/v1/search/'), at: (await place()).panel }, { chips: ['Test Band'], shelves: ['A Soulseek shelf you open from Search shows here.'], asked: ['/v1/search/global', '/v1/search/sources'], at: 'search' })
+    })
     await check('roomContents', async () => {
       await open('#listen')
       const listen = { count: await texts('#musicCount'), artistBands: await evaluate(`document.querySelectorAll('#albums .artist-head').length`), albums: await texts('#albums .album-name') }
@@ -1591,7 +1612,71 @@ test('relay web UI: one library with Home, Listen, Watch and Find', { timeout: 9
     // The bar: the rooms, one way to add, and the relay's own pages. Peers and rates are on Sharing.
     await check('topBarWords', async () => {
       await open('#home')
-      return same(await texts('.top a, .top button'), ['PearTube', 'Home', 'Listen', 'Watch', 'Add to library', 'Channels', 'Sharing', 'TV', 'Settings'])
+      return same(await texts('.top a, .top button'), ['PearTube', 'Home', 'Listen', 'Watch', 'Discover', 'Add to library', 'Channels', 'Sharing', 'Settings'])
+    })
+    // The More menu holds the relay's own pages and the theme. A click outside it, Escape or Back closes it, and the
+    // control that opened it takes the focus back. The theme item is the one that stays open after a press.
+    await check('moreMenu', async () => {
+      await viewport(1280, 900, 'dark')
+      await open('#home')
+      await click('#moreBtn')
+      await waitFor(`!!document.querySelector('dialog.menu[open]')`, 'the More menu', 4000)
+      const box = await evaluate(`(() => { const r = document.querySelector('dialog.menu').getBoundingClientRect(); return { x: r.left, y: r.top, w: r.width, h: r.height } })()`)
+      const saw = {
+        items: await texts('dialog.menu .mi'),
+        focus: await evaluate(`!!(document.activeElement && document.activeElement.closest('dialog.menu'))`),
+        scroll: await evaluate(`getComputedStyle(document.documentElement).overflow`)
+      }
+      // A point over the dialog's backdrop, outside the menu's box: the page behind would take the press.
+      assert.ok(box.x > 20 && box.y > 20, 'the menu sits away from the page corner')
+      const outside = { x: 8, y: 8 }
+      await browser.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: outside.x, y: outside.y })
+      await browser.send('Input.dispatchMouseEvent', { type: 'mousePressed', x: outside.x, y: outside.y, button: 'left', clickCount: 1 })
+      await browser.send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: outside.x, y: outside.y, button: 'left', clickCount: 1 })
+      await sleep(400)
+      const shut = await evaluate(`[!!document.querySelector('dialog.menu[open]'), document.activeElement === $('moreBtn'), location.hash]`)
+      // Escape and Back close it too.
+      await click('#moreBtn'); await sleep(300)
+      await press('Escape'); await sleep(400)
+      const esc = await evaluate(`[!!document.querySelector('dialog.menu[open]'), document.activeElement === $('moreBtn')]`)
+      await click('#moreBtn'); await sleep(300)
+      await evaluate('history.back()')
+      await sleep(600)
+      const back = await evaluate(`[!!document.querySelector('dialog.menu[open]'), location.hash]`)
+      // The theme item changes the theme and leaves the menu open; Escape still closes it.
+      await click('#moreBtn'); await sleep(300)
+      await clickName('Theme: follow this device', 'dialog.menu')
+      await sleep(300)
+      const stay = await evaluate(`[!!document.querySelector('dialog.menu[open]'), document.documentElement.dataset.theme, document.activeElement?.textContent]`)
+      await press('Escape'); await sleep(300)
+      await evaluate(`localStorage.removeItem(THEME_KEY); applyTheme('system')`)
+      await viewport(1440, 900, 'dark')
+      return same({ saw, shut, esc, back, stay }, {
+        saw: { items: ['Channels', 'Sharing', 'Settings', 'Theme: follow this device', 'Close'], focus: true, scroll: 'hidden' },
+        shut: [false, true, '#home'],
+        esc: [false, true],
+        back: [false, '#home'],
+        stay: [true, 'dark', 'Theme: dark']
+      })
+    })
+    // The TVs dialog: the one TV icon opens it, a relay with no paired TV says so, the code field is labelled with
+    // an example, and Escape closes it back onto the icon. No TV's network address is ever on the page.
+    await check('tvDialog', async () => {
+      await open('#home')
+      await click('#tvBtn')
+      await waitFor(`$('tvsDlg').open`, 'the TVs dialog', 4000)
+      const saw = {
+        title: await evaluate(`$('tvsTitle').textContent`),
+        says: await texts('#tvs p'),
+        field: await evaluate(`[$('pairInput').getAttribute('placeholder'), document.querySelector('label[for="pairInput"]').textContent]`),
+        address: await evaluate(`/\\b\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}\\b/.test($('tvsDlg').innerText)`)
+      }
+      await press('Escape')
+      await sleep(400)
+      return same({ saw, shut: await evaluate('[$("tvsDlg").open, document.activeElement === $("tvBtn")]') }, {
+        saw: { title: 'TVs', says: ['No TVs yet.'], field: ['K7M2QX', 'Code on the TV'], address: false },
+        shut: [false, true]
+      })
     })
     await check('addPage', async () => {
       await open('#home')
@@ -1645,11 +1730,11 @@ test('relay web UI: one library with Home, Listen, Watch and Find', { timeout: 9
     })
     await shot('watch-clips-1440-dark')
 
-    // Find: one field for everything. Typing narrows the library and asks nobody.
+    // Search: one field for everything. Typing narrows the library and asks nobody.
     await check('oneFindField', async () => {
       await open('#home')
       const fields = await evaluate(`[...document.querySelectorAll('input, textarea, select')].filter(e => e.offsetParent !== null && !['checkbox', 'radio', 'range', 'hidden'].includes(e.type)).map(e => ({ id: e.id, label: e.getAttribute('aria-label'), example: e.placeholder }))`)
-      return same(fields, [{ id: 'srcInput', label: 'Find', example: 'Blue Train' }])
+      return same(fields, [{ id: 'srcInput', label: 'Search', example: 'Blue Train' }])
     })
     await check('findInLibrary', async () => {
       await open('#home')
@@ -1681,7 +1766,7 @@ test('relay web UI: one library with Home, Listen, Watch and Find', { timeout: 9
     })
     // Enter asks outside the library with the same words: the sources that are on, and other relays.
     await check('enterAsksOutside', async () => {
-      await open('#find')
+      await open('#search')
       await typeFind('test band')
       const from = browser.requests.length
       await press('Enter')
@@ -1701,18 +1786,18 @@ test('relay web UI: one library with Home, Listen, Watch and Find', { timeout: 9
       await waitFor(`document.querySelectorAll('#srcGroup-youtube .yt-pick-row').length === 3`, 'YouTube rows with the relays off', 8000)
       await sleep(800)
       const askedOff = asked(from, '/v1/search/')
-      await open('#find')
+      await open('#search')
       const kept = await evaluate(`${chip}.getAttribute('aria-pressed')`)
       await click('#srcChips [data-src="relays"]')
       return same({ on, off, askedOff, kept, again: await evaluate(`${chip}.getAttribute('aria-pressed')`) }, { on: ['✓ Other relays', 'true'], off: ['Other relays', 'false', true], askedOff: ['/v1/search/sources'], kept: 'false', again: 'true' })
     })
-    // A link in the field is not searched for: Find says what it is and hands it to Add to library.
+    // A link in the field is not searched for: Search says what it is and hands it to Add to library.
     await check('linkInFind', async () => {
       await open('#home')
       const link = stub.base + '/media/Random.Clip.Name.mp4'
       const from = browser.requests.length
       await type('#srcInput', link)
-      await waitFor(`!$('tab-find').hidden && !!document.querySelector('#findLib .find-link')`, 'Find with a link', 4000)
+      await waitFor(`!$('tab-search').hidden && !!document.querySelector('#findLib .find-link')`, 'Search with a link', 4000)
       const says = await texts('#findLib .find-link span')
       await clickText('Add to library', '#findLib')
       const at = await place()
@@ -1796,8 +1881,13 @@ test('relay web UI: one library with Home, Listen, Watch and Find', { timeout: 9
     // `Play next` or `Play last`, wherever the page keeps it: in sight, or behind that page's More.
     const queueAction = async (word, scope) => {
       const there = await evaluate(`[...document.querySelectorAll(${quoted(scope)} + ' button, ' + ${quoted(scope)} + ' a')].filter(${VIS}).some(e => ${NAME}(e) === ${quoted(word)})`)
-      if (!there) await clickName('More', scope, false)
-      await clickName(word, scope)
+      if (!there) {
+        await clickName('More', scope, false)
+        await waitFor(`!!document.querySelector('dialog.menu[open]')`, 'the More menu', 4000)
+        await clickName(word, 'dialog.menu')
+      } else {
+        await clickName(word, scope)
+      }
       await sleep(500)
     }
 
@@ -1961,7 +2051,9 @@ test('relay web UI: one library with Home, Listen, Watch and Find', { timeout: 9
       // Rule 2: a film never enters the music list, so nothing on its page adds it. Look inside More as well.
       await clickName('More', '#detail', false)
       await sleep(300)
-      const acts = await names('#detail')
+      const menuOpen = await evaluate(`!!document.querySelector('dialog.menu[open]')`)
+      const acts = [...await names('#detail'), ...(menuOpen ? await names('dialog.menu') : [])]
+      if (menuOpen) { await press('Escape'); await sleep(300) }
       const saw = {
         panel: at.panel,
         room: at.room,
@@ -2038,7 +2130,7 @@ test('relay web UI: one library with Home, Listen, Watch and Find', { timeout: 9
       })`), ['Big Buck Bunny 2008: taller than wide', 'Night Ferry: taller than wide', 'Harbour Walk: wider than tall'])
     })
     // A provider reply with one album and a single track. Only these three HTTP replies are fixtures. Use the
-    // actual Find field and Browse control. Do not click Save: this checks the words, not a transfer from a peer.
+    // actual Search field and Browse control. Do not click Save: this checks the words, not a transfer from a peer.
     await check('saveWords', async () => {
       const files = ['01 Foam.flac', '02 Tide.flac', '03 Spray.flac', '01 Lone Track.flac'].map((name, i) => ({
         source: 'soulseek', username: i < 3 ? 'albumpeer' : 'trackpeer', filename: (i < 3 ? 'Shared/Tide Songs/' : 'Shared/One Off/') + name,
@@ -2050,8 +2142,8 @@ test('relay web UI: one library with Home, Listen, Watch and Find', { timeout: 9
         [base + '/v1/providers/soulseek/browse']: { username: 'albumpeer', files: files.slice(0, 3), tracks: 3, size: 123_000_000 }
       }, async () => {
         // On main the same source controls are under Music. Compare the labels, not the route that holds them.
-        await open('#find')
-        if (!await evaluate(`document.getElementById('tab-find') !== null`)) await open('#music')
+        await open('#search')
+        if (!await evaluate(`document.getElementById('tab-search') !== null`)) await open('#music')
         await waitFor(`!!document.querySelector('#srcChips [data-src="soulseek"][aria-pressed="true"]')`, 'a source available to search', 5000)
         await type('#srcInput', 'tide songs')
         await press('Enter')
@@ -2526,36 +2618,37 @@ test('relay web UI: one library with Home, Listen, Watch and Find', { timeout: 9
           name: name.width > 1 && name.top < 60 ? $('placeName').textContent : '',
           sideways: Math.max(0, document.documentElement.scrollWidth - document.documentElement.clientWidth)
         }
-      })()`), { row: 'fixed 0', rooms: ['Home', 'Listen', 'Watch', 'Find'], tall: true, name: 'Home', sideways: 0 })
+      })()`), { row: 'fixed 0', rooms: ['Home', 'Listen', 'Watch', 'Discover', 'Search'], tall: true, name: 'Home', sideways: 0 })
     })
     await shot('home-390-dark', true)
     await check('narrowMore', async () => {
       await open('#home')
       await click('#moreBtn')
-      const open1 = { pages: await texts('#ownerNav a'), said: await evaluate(`$('moreBtn').getAttribute('aria-expanded')`) }
+      const pages = await texts('dialog.menu .mi')
+      const open1 = { pages: pages.slice(0, 3), theme: (pages[3] || '').startsWith('Theme: '), open: await evaluate(`!!document.querySelector('dialog.menu[open]')`) }
       await press('Escape')
-      const shut = await evaluate(`[$('moreBtn').getAttribute('aria-expanded'), $('ownerNav').offsetParent === null, document.activeElement === $('moreBtn')]`)
+      const shut = await evaluate(`[!!document.querySelector('dialog.menu[open]'), $('ownerNav').offsetParent === null, document.activeElement === $('moreBtn')]`)
       await click('#moreBtn')
-      await clickText('Sharing', '#ownerNav')
+      await clickText('Sharing', 'dialog.menu')
       const at = await place()
-      return same({ open: open1, shut, went: at.panel + ' ' + at.hash, name: await evaluate(`$('placeName').textContent`), after: await evaluate(`$('moreBtn').getAttribute('aria-expanded')`) }, {
-        open: { pages: ['Channels', 'Sharing', 'TV', 'Settings'], said: 'true' },
-        shut: ['false', true, true],
+      return same({ open: open1, shut, went: at.panel + ' ' + at.hash, name: await evaluate(`$('placeName').textContent`), after: await evaluate(`!!document.querySelector('dialog.menu[open]')`) }, {
+        open: { pages: ['Channels', 'Sharing', 'Settings'], theme: true, open: true },
+        shut: [false, true, true],
         went: 'sharing #sharing',
         name: 'Sharing',
-        after: 'false'
+        after: false
       })
     })
     await check('narrowFind', async () => {
       await open('#home')
       const onHome = await evaluate(`$('srcInput').offsetParent !== null`)
-      await goTab('Find')
+      await goTab('Search')
       const at = await place()
       const field = await evaluate(`(() => { const r = $('srcInput').getBoundingClientRect(); return { inSight: $('srcInput').offsetParent !== null, wide: r.width >= 240, atTop: r.top < 60 } })()`)
       const library = await typeFind('ferry')
-      return same({ onHome, at: at.panel + ' ' + at.room, field, library }, { onHome: false, at: 'find Find', field: { inSight: true, wide: true, atTop: true }, library: ['Movies and series: Night Ferry'] })
+      return same({ onHome, at: at.panel + ' ' + at.room, field, library }, { onHome: false, at: 'search Search', field: { inSight: true, wide: true, atTop: true }, library: ['Movies and series: Night Ferry'] })
     })
-    await shot('find-390-dark', true)
+    await shot('search-390-dark', true)
     // The dock on a narrow screen is one row above the rooms: cover, two lines, Play or Pause and Next. The rest
     // of its controls are in the player.
     await check('narrowDock', async () => {
@@ -2644,7 +2737,7 @@ test('relay web UI: one library with Home, Listen, Watch and Find', { timeout: 9
       // Each place with the panel it must show: an audit of a place that did not open would pass on the page shown in its stead.
       const places = [['home', '#home', 'home'], ['listen', '#listen', 'listen'], ['artists', '#listen/artists', 'listen'], ['tracks', '#listen/tracks', 'listen'],
         ['album', album, 'detail'], ['artist', '#artist/Test%20Band', 'detail'], ['watch', '#watch', 'watch'], ['title', title, 'detail'],
-        ['find', '#find/light', 'find'], ['add', '#add', 'add'], ['playing', '#playing', 'playing']]
+        ['discover', '#discover', 'discover'], ['search', '#search/light', 'search'], ['add', '#add', 'add'], ['playing', '#playing', 'playing']]
       for (const [width, height] of [[1440, 900], [390, 844]]) {
         for (const scheme of ['light', 'dark']) {
           await viewport(width, height, scheme)

@@ -41,13 +41,17 @@ export const page = `<!doctype html>
   [hidden] { display: none !important; }
   body { margin: 0; font: 15px/1.5 system-ui, -apple-system, 'Segoe UI', sans-serif; letter-spacing: -0.005em; -webkit-font-smoothing: antialiased; background: var(--bg); color: var(--text); }
   a { color: var(--brand); }
-  /* ==== Places: the top bar with the rooms and the Find field; on a narrow screen the rooms are the row at the bottom.
-     One nav element per group serves both layouts. No blur and no shadow on the page's own chrome. ==== */
+  /* ==== Places: the top bar with the rooms and the search field; on a narrow screen the rooms are the row at the
+     bottom. One nav element per group serves both layouts. No blur and no shadow on the page's own chrome.
+     Each width range gives up one more thing (design/unified-library.md, section 2): 1399 px folds the relay's
+     pages into More, 1099 px drops the words of PearTube and Add, 820 px turns the field into a button, and 700 px
+     moves the rooms to the bottom. ==== */
   :root { --nav-h: 0px; }
   .top { position: sticky; top: 0; z-index: 20; background: var(--bg); border-bottom: 1px solid var(--line); }
   .bar { max-width: 1440px; margin: 0 auto; padding: 0 28px; min-height: 64px; display: flex; align-items: center; gap: 16px; }
   .brand { flex: none; display: flex; align-items: center; gap: 10px; font-weight: 700; font-size: 17px; letter-spacing: -0.02em; color: var(--text); text-decoration: none; }
-  .brand svg { width: 28px; height: 28px; border-radius: 8px; background: var(--brand); }
+  .brand svg { width: 28px; height: 28px; border-radius: 8px; background: var(--brand); transition: background var(--t-fast) var(--ease); }
+  .brand:hover svg { background: var(--brand-hover); }
   .brand svg rect { fill: transparent; }
   .brand svg path { fill: var(--on-brand); }
   .place-name { position: absolute; width: 1px; height: 1px; margin: 0; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; font-size: 20px; font-weight: 700; letter-spacing: -0.015em; }
@@ -56,6 +60,8 @@ export const page = `<!doctype html>
   .tabs a:hover, .tabs a[aria-current='page'] { color: var(--text); }
   .rooms { gap: 26px; margin-left: 16px; }
   .rooms a { font-size: 16px; line-height: 24px; padding: 20px 0; }
+  .rooms a:hover { color: var(--text); }
+  .rooms a:active { opacity: .7; }
   .rooms a[aria-current='page']::after { content: ''; position: absolute; left: 0; right: 0; bottom: 13px; height: 2px; background: var(--text); }
   .rooms .ti, .rooms .narrow-only { display: none; }
   .ti { fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
@@ -64,6 +70,11 @@ export const page = `<!doctype html>
   .find-box input[type=search] { min-height: 40px; padding-left: 36px; }
   .pills { display: flex; gap: 6px; align-items: center; }
   .bar-right { flex: none; display: flex; align-items: center; gap: 12px; }
+  .btn.icon-btn { position: relative; width: 40px; padding: 0; justify-content: center; }
+  .bar .icon-btn { min-height: 38px; }
+  .icon-btn svg { flex: none; width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+  .bar .find-btn { display: none; }
+  .tv-dot { position: absolute; top: 6px; right: 6px; width: 9px; height: 9px; border-radius: 50%; background: var(--ok); box-shadow: 0 0 0 2px var(--bg); }
   .bar .add-link { min-height: 38px; gap: 6px; padding: 0 12px 0 10px; }
   .add-link svg { flex: none; width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; }
   .bar .add-link[aria-current='page'] { border-color: var(--dim); }
@@ -74,19 +85,21 @@ export const page = `<!doctype html>
   .owner a[aria-current='page']::after { content: ''; position: absolute; left: 0; right: 0; bottom: 3px; height: 2px; background: var(--text); }
   .bar .theme-toggle { min-height: 34px; padding: 0 8px; gap: 10px; color: var(--dim); }
   .bar .theme-toggle:hover:not(:disabled) { color: var(--text); }
-  .theme-word { display: none; }
-  @media (max-width: 1180px) {
+  @media (max-width: 1399px) {
     .bar .more-btn { display: inline-flex; }
-    .owner { display: none; position: absolute; right: 0; top: calc(100% + 8px); z-index: 30; min-width: 220px; flex-direction: column; align-items: stretch; gap: 0; padding: 6px; background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-control); }
-    .owner.open { display: flex; }
-    .bar .owner a, .bar .owner .theme-toggle { display: flex; align-items: center; justify-content: flex-start; min-height: 44px; padding: 0 12px; border-radius: 8px; font-size: 15px; font-weight: 600; }
-    .bar .owner a:hover, .bar .owner .theme-toggle:hover:not(:disabled) { background: var(--raised); border-color: transparent; }
-    .owner a[aria-current='page']::after { left: 0; right: auto; top: 12px; bottom: 12px; width: 2px; height: auto; }
-    .theme-word { display: inline; }
+    .owner { display: none; }
   }
-  @media (max-width: 900px) {
+  @media (max-width: 1099px) {
     .bar .add-link { width: 40px; padding: 0; justify-content: center; }
-    .add-link span { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+    .add-link span, .brand-name { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+  }
+  @media (max-width: 820px) {
+    .find-box { display: none; }
+    .bar .find-btn { display: inline-flex; margin-left: auto; }
+    /* On Search the field takes a row of its own under the bar. */
+    body.at-search .bar { flex-wrap: wrap; }
+    body.at-search .find-box { display: block; order: 10; flex: 0 0 100%; max-width: none; margin: 0 0 10px; }
+    body.at-search .find-btn { display: none; }
   }
   .pill { font-size: 12px; font-weight: 500; padding: 4px 10px; border-radius: var(--r-pill); background: var(--raised); color: var(--dim); white-space: nowrap; }
   .pill b { color: var(--text); font-weight: 600; font-variant-numeric: tabular-nums; }
@@ -103,6 +116,7 @@ export const page = `<!doctype html>
   .seg-btn { min-height: 30px; padding: 0 14px; border: 0; border-radius: var(--r-pill); background: transparent; color: var(--dim); font: inherit; font-size: 13px; font-weight: 600; cursor: pointer; transition: background var(--t-fast) var(--ease), color var(--t-fast) var(--ease); }
   .seg-btn:hover { color: var(--text); }
   .seg-btn[aria-pressed='true'] { background: var(--raised); color: var(--text); }
+  .seg-btn[aria-pressed='true']:hover { background: var(--line); }
   .seg-btn:focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; }
   .field.filter { max-width: 420px; margin: -8px 0 18px; }
   .row-head { display: flex; align-items: baseline; gap: 12px; margin: 0 0 14px; }
@@ -125,6 +139,10 @@ export const page = `<!doctype html>
   .src-in > .btn { margin-left: auto; }
   /* ==== end Places ==== */
   main { max-width: 1440px; margin: 0 auto; padding: 24px 28px 96px; }
+  /* Until the library answers, the page shows only its note: the rooms reveal themselves in their final place,
+     so nothing the reader can see moves when the data lands. */
+  .boot { max-width: 1440px; margin: 0 auto; color: var(--dim); font-size: 15px; }
+  body:not(.loaded) [data-panel] { visibility: hidden; }
   h2 { font-size: 20px; font-weight: 700; letter-spacing: -0.015em; margin: 40px 0 16px; display: flex; align-items: baseline; gap: 10px; }
   h2 .count { color: var(--dim); font-weight: 500; font-size: 13px; font-variant-numeric: tabular-nums; }
   h3 { font-size: 15px; font-weight: 600; margin: 0 0 4px; }
@@ -141,10 +159,14 @@ export const page = `<!doctype html>
   .btn:hover:not(:disabled) { border-color: color-mix(in srgb, var(--dim) 45%, transparent); }
   .btn.primary { background: var(--brand); border-color: var(--brand); color: var(--on-brand); }
   .btn.primary:hover:not(:disabled) { background: var(--brand-hover); border-color: var(--brand-hover); }
-  :is(#tab-home, #tab-listen, #tab-watch, #tab-find, #tab-add, #detail) .btn.primary { background: var(--text); border-color: var(--text); color: var(--bg); }
+  :is(#tab-home, #tab-listen, #tab-watch, #tab-search, #tab-discover, #tab-add, #detail) .btn.primary { background: var(--text); border-color: var(--text); color: var(--bg); }
+  :is(#tab-home, #tab-listen, #tab-watch, #tab-search, #tab-discover, #tab-add, #detail) .btn.primary:hover:not(:disabled) { background: color-mix(in srgb, var(--text) 84%, var(--bg)); border-color: color-mix(in srgb, var(--text) 84%, var(--bg)); }
   .btn.quiet { background: transparent; border-color: transparent; color: var(--dim); }
   .btn.quiet:hover:not(:disabled) { color: var(--text); border-color: var(--line); }
   .btn:disabled { opacity: .5; cursor: default; }
+  /* A press shows at once, before the click lands. */
+  .btn:active:not(:disabled), .np-btn:active:not(:disabled), .seg-btn:active, .chip:active:not([aria-disabled='true']), .track-play:active, .person:active, .brand:active svg, .np-art:active, .album-open:active .sleeve { transform: scale(.96); }
+  .tabs a:active, .row-all:active, .page-by:active, .track-of:active, .np-title:active, .np-sub a:active, .music-link:active, .np-action:active { opacity: .7; }
   .chips { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 14px; }
   .chip { min-height: 32px; padding: 0 14px; border-radius: var(--r-pill); border: 1px solid var(--line); background: transparent; color: var(--dim); font: inherit; font-size: 13px; font-weight: 600; cursor: pointer; transition: color var(--t-fast) var(--ease), background var(--t-fast) var(--ease), border-color var(--t-fast) var(--ease); }
   .chip:hover { color: var(--text); border-color: color-mix(in srgb, var(--dim) 45%, transparent); }
@@ -170,8 +192,8 @@ export const page = `<!doctype html>
   .tile .poster { width: 100%; height: auto; aspect-ratio: 2 / 3; border-radius: var(--r-card); font-size: 40px; margin-bottom: 8px; background: linear-gradient(160deg, var(--raised), var(--line)); box-shadow: 0 0 0 1px var(--line); transition: transform var(--t-base) var(--ease), box-shadow var(--t-base) var(--ease); }
   .grid > .empty { grid-column: 1 / -1; }
   .tile:hover .poster { transform: translateY(-4px); box-shadow: 0 22px 44px rgba(0,0,0,.45), 0 0 0 1px color-mix(in srgb, var(--ring) 35%, transparent); }
-  .tile:focus-visible { outline: none; }
-  .tile:focus-visible .poster { outline: 2px solid var(--ring); outline-offset: 3px; transform: translateY(-4px); }
+  .tile:focus-visible { outline: 2px solid var(--ring); outline-offset: 3px; border-radius: var(--r-card); }
+  .tile:focus-visible .poster { transform: translateY(-4px); }
   .tile-title { font-weight: 600; font-size: 14px; line-height: 1.3; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
   .tile-meta { color: var(--dim); font-size: 12.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .tile-meta.ok { color: var(--ok); }
@@ -196,6 +218,7 @@ export const page = `<!doctype html>
   .keep-rows { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
   .keep-row { display: flex; align-items: center; gap: 12px; padding: 8px; border: 1px solid transparent; border-radius: var(--r-card); background: none; color: inherit; font: inherit; text-align: left; cursor: pointer; }
   .keep-row:hover { background: var(--surface); border-color: var(--line); }
+  .keep-row:active { background: var(--raised); border-color: var(--line); }
   .keep-row .keep-art { flex: none; width: 128px; border-radius: 10px; }
   .keep-row .keep-art.square { width: 72px; }
   .keep-row .sleeve-mono { font-size: 24px; }
@@ -224,7 +247,6 @@ export const page = `<!doctype html>
   .seasons { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 14px; }
   .ep-name { color: var(--dim); font-weight: 500; margin-left: 10px; }
   .btn.dots { min-width: 38px; padding: 0; font-size: 19px; line-height: 1; }
-  .menu.wide { min-width: 232px; }
   .title-page .page-art .poster { width: 100%; height: auto; aspect-ratio: 2 / 3; font-size: 56px; border-radius: var(--r-panel); }
   .wide-art { position: relative; display: flex; align-items: center; justify-content: center; width: 100%; aspect-ratio: 16 / 9; overflow: hidden; border-radius: var(--r-card); background: linear-gradient(160deg, var(--raised), var(--line)); }
   .wide-art > img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
@@ -232,10 +254,40 @@ export const page = `<!doctype html>
   .wide-grid { grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); }
   .tile.wide .wide-art { margin-bottom: 8px; transition: transform var(--t-base) var(--ease), box-shadow var(--t-base) var(--ease); }
   .tile.wide:hover .wide-art { transform: translateY(-4px); box-shadow: 0 22px 44px rgba(0,0,0,.45); }
-  .tile.wide:focus-visible .wide-art { outline: 2px solid var(--ring); outline-offset: 3px; }
+  .tile.wide:focus-visible { outline: 2px solid var(--ring); outline-offset: 3px; border-radius: var(--r-card); }
+  .tile.wide:focus-visible .wide-art { transform: translateY(-4px); }
   a.tile { color: inherit; text-decoration: none; }
   #ytSave { width: min(760px, calc(100% - 24px)); max-height: calc(100% - 48px); padding: 0; border: 1px solid var(--line); border-radius: var(--r-panel); background: var(--surface); color: var(--text); box-shadow: 0 40px 90px rgba(0,0,0,.5); }
   #ytSave::backdrop { background: color-mix(in srgb, #05060a 72%, transparent); backdrop-filter: blur(6px); }
+  /* The TVs dialog: the save dialog's look at a smaller width. */
+  dialog.sheet { width: min(480px, calc(100% - 24px)); max-height: calc(100% - 48px); padding: 0; border: 1px solid var(--line); border-radius: var(--r-panel); background: var(--surface); color: var(--text); box-shadow: 0 40px 90px rgba(0,0,0,.5); }
+  dialog.sheet::backdrop { background: color-mix(in srgb, #05060a 72%, transparent); backdrop-filter: blur(6px); }
+  .sheet-body { position: relative; padding: 22px; }
+  .sheet-body h3 { font-size: 20px; margin: 0 96px 14px 0; }
+  .sheet-body h3:focus { outline: none; }
+  .sheet-close { position: absolute; top: 14px; right: 14px; }
+  .tv-row { display: flex; align-items: center; gap: 12px; padding: 10px 0; border-top: 1px solid var(--line); min-height: 44px; }
+  .tv-row:first-child { border-top: 0; }
+  .tv-row .text { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+  .tv-row strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .tv-row small { color: var(--dim); }
+  .tv-state { width: 10px; height: 10px; border-radius: 50%; border: 2px solid var(--dim); flex: none; box-sizing: border-box; }
+  .tv-state.ready { background: var(--ok); border-color: var(--ok); }
+  .tv-state.playing { background: var(--brand); border-color: var(--brand); }
+  #castNow { padding: 14px; border-radius: var(--r-card); background: var(--raised); margin-bottom: 12px; }
+  #pairForm { margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--line); }
+  #pairForm .field { margin: 0; }
+  .disc-top { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; margin: 8px 0 0; }
+  .disc-top .page-title { margin: 0; }
+  .disc-top .btn svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; margin-right: 8px; }
+  .people { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(260px, 100%), 1fr)); gap: 12px; }
+  .person { display: flex; align-items: center; gap: 12px; min-height: 44px; padding: 12px 14px; border: 1px solid var(--line); border-radius: var(--r-card); background: var(--surface); color: var(--text); text-decoration: none; min-width: 0; }
+  .person:hover { border-color: color-mix(in srgb, var(--dim) 45%, transparent); }
+  .person .who { width: 44px; height: 44px; border-radius: 50%; flex: none; display: grid; place-items: center; font-weight: 700; color: #fff; background: hsl(var(--hue, 260) 42% 40%); }
+  .person .text { display: flex; flex-direction: column; min-width: 0; }
+  .person strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .person small { color: var(--dim); }
+  .disc-planned { margin-top: 36px; }
   .rows { display: flex; flex-direction: column; }
   .row-item { display: flex; gap: 12px; align-items: center; padding: 12px 0; border-top: 1px solid var(--line); }
   #detail .meta, #ytSave .meta { white-space: normal; font-size: 13px; line-height: 1.5; }
@@ -261,6 +313,9 @@ export const page = `<!doctype html>
   .switch input:checked { background: var(--brand); }
   .switch input:checked::after { transform: translateX(18px); }
   .switch input:disabled { opacity: .5; cursor: default; }
+  .switch input:hover:not(:disabled) { box-shadow: 0 0 0 4px var(--brand-soft); }
+  .switch input:active:not(:disabled)::after { transform: scale(.85); }
+  .switch input:checked:active:not(:disabled)::after { transform: translateX(18px) scale(.85); }
   .setting { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 12px 0; border-top: 1px solid var(--line); flex-wrap: wrap; }
   .setting:first-of-type { border-top: 0; }
   .setting .what { display: flex; flex-direction: column; gap: 4px; min-width: 200px; flex: 1; }
@@ -272,31 +327,52 @@ export const page = `<!doctype html>
   .stat .v { font-size: 18px; font-weight: 700; }
   .stat .k { color: var(--dim); font-size: 13px; }
   .banner { background: var(--raised); border-left: 4px solid var(--warn); border-radius: 8px; padding: 12px 14px; margin-bottom: 14px; }
+  #offlineBar { max-width: 1440px; margin: 12px auto 0; padding: 10px 16px; border: 1px solid var(--line); border-left: 4px solid var(--warn); border-radius: 10px; background: var(--raised); color: var(--warn); font-size: 13.5px; }
   .cands { display: flex; flex-direction: column; gap: 6px; border: 0; padding: 0; margin: 12px 0; }
   .cands legend { font-weight: 600; font-size: 14px; margin-bottom: 6px; padding: 0; }
   .cand { display: flex; align-items: center; gap: 10px; padding: 8px; border: 1px solid var(--line); border-radius: 10px; cursor: pointer; font-weight: 500; }
   .cand:has(input:checked) { border-color: var(--brand); background: var(--raised); }
   .cand .poster { width: 32px; height: 48px; font-size: 14px; }
   .qr { width: 160px; height: 160px; background: #fff; border-radius: 8px; padding: 8px; }
-  .menu { position: absolute; right: 0; top: calc(100% + 4px); background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 6px; display: flex; flex-direction: column; min-width: 200px; z-index: 30; box-shadow: 0 8px 24px #0003; }
-  .menu .btn { justify-content: flex-start; background: transparent; border-color: transparent; }
-  .wrap-rel { position: relative; }
+  /* A menu is a modal dialog beside its control (placeMenu); on a narrow screen it is a sheet at the bottom. */
+  html.has-overlay { overflow: hidden; }
+  dialog.menu { position: fixed; inset: auto; margin: 0; width: 260px; max-width: calc(100vw - 16px); max-height: calc(100dvh - 16px); overflow-y: auto; overscroll-behavior: contain; padding: 6px; background: var(--surface); color: var(--text); border: 1px solid var(--line); border-radius: var(--r-card); box-shadow: 0 18px 50px rgb(0 0 0 / .45); }
+  dialog.menu::backdrop { background: transparent; }
+  dialog.menu[open] { display: flex; flex-direction: column; }
+  .menu .btn, .menu .mi { display: flex; align-items: center; justify-content: flex-start; gap: 12px; width: 100%; min-height: 44px; padding: 0 12px; border-radius: 9px; border: 1px solid transparent; background: transparent; color: var(--text); font: inherit; font-size: 15px; font-weight: 600; text-align: left; text-decoration: none; cursor: pointer; }
+  .menu .btn:hover, .menu .mi:hover { background: var(--raised); }
+  .menu .btn:active, .menu .mi:active { background: var(--line); }
+  .menu .mi[aria-current='page'] { color: var(--ring); }
+  .menu hr { border: 0; border-top: 1px solid var(--line); margin: 6px 0; }
+  .ask { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 12px 20px; position: sticky; bottom: 0; background: var(--raised); border-top: 1px solid var(--line); font-weight: 650; }
+  .ask span { flex: 1 1 160px; }
+  @media (max-width: 700px) {
+    dialog.menu { left: 0; right: 0; top: auto; bottom: 0; width: 100%; max-width: none; max-height: calc(100dvh - 28px); border-radius: 20px 20px 0 0; border-width: 1px 0 0; padding: 8px 8px calc(10px + env(safe-area-inset-bottom, 0px)); }
+    dialog.menu::backdrop { background: rgb(0 0 0 / .5); }
+  }
   #castBar { position: fixed; left: 50%; transform: translateX(-50%); bottom: calc(16px + var(--nav-h)); z-index: 40; background: var(--surface); border: 1px solid var(--line); border-radius: 14px; padding: 8px 10px 8px 16px; box-shadow: 0 8px 28px #0004; display: flex; align-items: center; gap: 8px; max-width: calc(100% - 24px); }
   #castBar .name { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   #toast { position: fixed; left: 50%; transform: translateX(-50%); bottom: calc(84px + var(--nav-h)); z-index: 50; background: var(--text); color: var(--bg); padding: 10px 16px; border-radius: 10px; font-size: 14px; max-width: calc(100% - 24px); }
   .vh { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
-  @media (max-width: 640px) {
+  @media (max-width: 700px) {
+    /* A thumb needs 44 px: the bar's buttons, chips, fields and rows all reach it. */
+    .bar .btn, .bar .add-link, .bar .icon-btn, .bar .brand, .bar .more-btn, .btn, .chip, select, input:not([type='checkbox'], [type='radio'], [type='range'], [type='hidden']), .seg-btn, .track-play, .album-play, .np-art, .np-btn, .track-del, .ic-btn, .person, .album-open, .row-all, .page-by, .track-of { min-height: 44px; }
+    .bar .add-link, .bar .icon-btn, .bar .brand, .album-play, .np-art, .np-btn, .track-play, .track-del, .ic-btn { min-width: 44px; }
+    .btn.dots { min-width: 44px; }
+    .np-title, #detail .page-head a, #detail .track-by a, .track-of { display: inline-flex; align-items: center; min-height: 44px; }
     :root { --nav-h: calc(56px + env(safe-area-inset-bottom, 0px)); }
     .bar { padding: 0 8px 0 16px; min-height: 56px; gap: 8px; }
     .brand-name { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
     .place-name { position: static; width: auto; height: auto; clip: auto; flex: 0 1 auto; min-width: 0; text-overflow: ellipsis; }
     .find-box { display: none; max-width: none; margin: 0; }
-    /* On Find the field takes the row, so what the bar has to say (a stopped relay, an album being added) goes under it. */
-    body.at-find .find-box { display: block; flex: 1 1 0; }
-    body.at-find .bar { flex-wrap: wrap; padding-top: 6px; padding-bottom: 6px; }
-    body.at-find .bar-right { display: contents; }
-    body.at-find .pills { order: 10; flex: 0 0 100%; justify-content: center; overflow-x: visible; }
-    body.at-find .pills:empty, body.at-find .place-name, body.at-find .add-link { display: none; }
+    .bar .find-btn { display: none; }
+    /* On Search the field takes the first row, so what the bar has to say (a stopped relay, an album being added)
+       goes under it. */
+    body.at-search .find-box { display: block; order: 0; flex: 1 1 0; margin: 0; }
+    body.at-search .bar { flex-wrap: wrap; padding-top: 6px; padding-bottom: 6px; }
+    body.at-search .bar-right { display: contents; }
+    body.at-search .pills { order: 10; flex: 0 0 100%; justify-content: center; overflow-x: visible; }
+    body.at-search .pills:empty, body.at-search .place-name, body.at-search .add-link, body.at-search #tvBtn { display: none; }
     .rooms { position: fixed; left: 0; right: 0; bottom: 0; z-index: 29; margin: 0; gap: 0; align-items: stretch; padding-bottom: env(safe-area-inset-bottom, 0px); background: var(--bg); border-top: 1px solid var(--line); }
     .rooms a { flex: 1; min-height: 56px; padding: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px; font-size: 11px; line-height: 14px; }
     .rooms a[aria-current='page']::after { display: none; }
@@ -360,21 +436,22 @@ export const page = `<!doctype html>
   .clock { font-variant-numeric: tabular-nums; font-size: 12.5px; color: var(--p-dim); min-width: 96px; }
   #playerModal.chrome-hidden .p-top, #playerModal.chrome-hidden .p-bar { opacity: 0; pointer-events: none; }
   /* Music: a dock above the room links and a full view of the same track and list. */
-  :root { --np-h: 72px; }
-  .np { position: fixed; inset: auto 0 var(--nav-h); height: var(--np-h); z-index: 30; display: grid; grid-template-columns: minmax(0,1fr) auto minmax(0,1fr); align-items: center; gap: 16px; padding: 6px clamp(16px,3vw,48px) 4px; background: var(--surface); }
-  body.np-on main { padding-bottom: calc(var(--np-h) + var(--nav-h) + 36px); }
-  body.np-on #toast, body.np-on #castBar { bottom: calc(var(--np-h) + var(--nav-h) + 12px); }
-  body.np-on #playerModal.mini { bottom: calc(var(--np-h) + var(--nav-h) + 12px); }
-  .np-progress { position: absolute; inset: -6px 0 auto; height: 16px; display: flex; align-items: center; }
-  .np-progress::before, .np-progress::after { content: ''; position: absolute; left: 0; right: 0; top: 6px; height: 3px; pointer-events: none; background: var(--line); }
+  :root { --np-h: 72px; --np-band: 22px; }
+  .np { position: fixed; inset: auto 0 var(--nav-h); height: calc(var(--np-h) + var(--np-band)); z-index: 30; display: grid; grid-template-columns: minmax(0,1fr) auto minmax(0,1fr); align-items: center; gap: 16px; padding: calc(6px + var(--np-band)) clamp(16px,3vw,48px) 4px; background: var(--surface); }
+  body.np-on main { padding-bottom: calc(var(--np-h) + var(--np-band) + var(--nav-h) + 36px); }
+  body.np-on #toast, body.np-on #castBar { bottom: calc(var(--np-h) + var(--np-band) + var(--nav-h) + 12px); }
+  body.np-on #playerModal.mini { bottom: calc(var(--np-h) + var(--np-band) + var(--nav-h) + 12px); }
+  .np-progress { position: absolute; inset: calc(-1 * var(--np-band)) 0 auto; height: 44px; display: flex; align-items: center; }
+  .np-progress::before, .np-progress::after { content: ''; position: absolute; left: 0; right: 0; top: 21px; height: 3px; pointer-events: none; background: var(--line); }
   .np-progress::after { background: var(--brand); transform: scaleX(var(--played,0)); transform-origin: left; }
-  #npSeek { z-index: 1; appearance: none; width: 100%; height: 16px; margin: 0; padding: 0; background: transparent; cursor: pointer; accent-color: var(--brand); }
+  #npSeek { z-index: 1; appearance: none; width: 100%; height: 44px; margin: 0; padding: 0; background: transparent; cursor: pointer; accent-color: var(--brand); }
   #npSeek::-webkit-slider-runnable-track { height: 3px; background: transparent; }
   #npSeek::-webkit-slider-thumb { appearance: none; width: 10px; height: 10px; border-radius: 50%; margin-top: -4px; background: var(--ring); opacity: 0; }
   #npSeek:hover::-webkit-slider-thumb, #npSeek:focus-visible::-webkit-slider-thumb { opacity: 1; }
   .np-info, .np-ctl, .np-centre, .np-side, .np-vol, .nq-head, .fp-times { display: flex; align-items: center; }
   .np-info { min-width: 0; gap: 12px; }
   .np-art { display: block; flex: none; width: 46px; height: 46px; border-radius: 6px; overflow: hidden; }
+  .np-art:hover { filter: brightness(1.12); }
   .np-art .sleeve, .fp-art .sleeve { width: 100%; height: 100%; border-radius: inherit; box-shadow: none; }
   .np-art .sleeve-mono { font-size: 18px; }
   .np-text, .fp-caption, .fp-record, .fp-list { min-width: 0; }
@@ -393,7 +470,7 @@ export const page = `<!doctype html>
   .np-btn[aria-pressed=true] { color: var(--ring); }
   .np-btn:disabled { opacity: .4; cursor: default; }
   .np-btn.np-play { background: var(--text); color: var(--bg); }
-  .np-btn.np-play:hover { background: var(--text); }
+  .np-btn.np-play:hover:not(:disabled) { background: color-mix(in srgb, var(--text) 84%, var(--bg)); }
   .np-btn svg, .track-play svg { width: 20px; height: 20px; fill: currentColor; }
   .i-pause, .on > .i-play { display: none; }
   .on > .i-pause { display: block; }
@@ -428,12 +505,12 @@ export const page = `<!doctype html>
   .nq-then { padding: 20px 12px 6px; color: var(--dim); font-size: 13px; }
   .nq-remove { margin-right: 4px; font-size: 18px; }
   @media (max-width: 980px) { .np-side .np-vol { display: none; } }
-  @media (min-width: 641px) { .fp-record { position: sticky; top: 82px; } }
-  @media (max-width: 640px) {
+  @media (min-width: 701px) { .fp-record { position: sticky; top: 82px; } }
+  @media (max-width: 700px) {
     :root { --np-h: 64px; }
-    .np { grid-template-columns: minmax(0,1fr) auto; padding: 6px 12px; gap: 6px; }
+    .np { grid-template-columns: minmax(0,1fr) auto; padding: calc(6px + var(--np-band)) 12px 4px; gap: 6px; }
     .np .np-side, .np-times, #npPrev { display: none; }
-    .np-art { width: 42px; height: 42px; }
+    .np-art { width: 44px; height: 44px; }
     .np-ctl .np-btn { width: 44px; height: 44px; }
     body.at-playing .top { display: none; }
     body.at-playing main { padding: 16px 16px calc(24px + env(safe-area-inset-bottom,0px)); }
@@ -448,6 +525,17 @@ export const page = `<!doctype html>
   }
   .rows .row-item.now { background: var(--brand-soft); border-radius: var(--r-control); padding-left: 10px; padding-right: 10px; }
   .rows .row-item.now + .row-item { border-top-color: transparent; }
+  /* A row plays or opens from anywhere in it: one real button spans the row, and the row's own controls sit above it. */
+  .row-item { position: relative; }
+  .row-hit { position: absolute; inset: 0; z-index: 0; width: 100%; padding: 0; border: 0; border-radius: inherit; background: transparent; cursor: pointer; }
+  .row-hit:hover { background: var(--raised); }
+  .row-hit:active { background: var(--brand-soft); }
+  .row-hit:focus-visible { outline: 2px solid var(--ring); outline-offset: -2px; }
+  .row-item > :not(.row-hit) { position: relative; z-index: 1; pointer-events: none; }
+  .row-item a, .row-item button:not(.row-hit), .row-item .acts { pointer-events: auto; }
+  .row-item .acts > * { pointer-events: auto; }
+  .tile:active { box-shadow: inset 0 0 0 2px var(--ring); }
+  .rooms a:hover { color: var(--text); background: var(--raised); }
   .row-item.now .label { color: var(--ring); }
   .tag.now { color: var(--ring); background: transparent; border: 1px solid currentColor; margin-left: 8px; vertical-align: 1px; }
   .track-play { flex: none; width: 36px; height: 36px; padding: 0; border-radius: 50%; border: 1px solid var(--line); background: transparent; color: var(--text); display: inline-flex; align-items: center; justify-content: center; cursor: pointer; }
@@ -493,8 +581,7 @@ export const page = `<!doctype html>
   .album-open .sleeve { width: 100%; height: auto; aspect-ratio: 1; border-radius: var(--r-card); margin-bottom: 8px; transition: transform var(--t-base) var(--ease), box-shadow var(--t-base) var(--ease); }
   .album-open .sleeve-mono { font-size: 44px; }
   .album-open:hover .sleeve { transform: translateY(-4px); box-shadow: inset 0 0 0 1px rgba(255,255,255,.1), 0 22px 44px rgba(0,0,0,.45); }
-  .album-open:focus-visible { outline: none; }
-  .album-open:focus-visible .sleeve { outline: 2px solid var(--ring); outline-offset: 3px; }
+  .album-open:focus-visible { outline: 2px solid var(--ring); outline-offset: 4px; border-radius: var(--r-card); }
   .album-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
   .album-name { font-weight: 600; font-size: 14px; line-height: 1.3; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .album-artist { color: var(--dim); font-size: 12.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -513,8 +600,8 @@ export const page = `<!doctype html>
   .stack .l1 { left: 8%; bottom: 8%; z-index: 2; opacity: .78; }
   .stack .l2 { left: 16%; bottom: 16%; z-index: 1; opacity: .56; }
   .artist-card:hover .l0 { transform: translateY(-4px); }
-  .artist-card:focus-visible { outline: none; }
-  .artist-card:focus-visible .stack { outline: 2px solid var(--ring); outline-offset: 3px; border-radius: var(--r-card); }
+  .artist-card:focus-visible { outline: 2px solid var(--ring); outline-offset: 3px; border-radius: var(--r-card); }
+  .artist-card:focus-visible .stack { transform: translateY(-4px); }
   .sleeve.xl { width: 100%; height: auto; aspect-ratio: 1; border-radius: var(--r-panel); box-shadow: inset 0 0 0 1px rgba(255,255,255,.1), 0 24px 50px rgba(0,0,0,.34); }
   .sleeve.xl .sleeve-mono { font-size: 84px; }
   .disc-head { font-size: 12px; font-weight: 700; color: var(--dim); margin: 18px 0 6px; }
@@ -714,7 +801,7 @@ export const page = `<!doctype html>
     .bar-track.indef > div { animation: none; width: 100%; background: var(--dim); }
   }
   @media (pointer: coarse) {
-    .chip { min-height: 40px; }
+    .chip { min-height: 44px; }
     .ic-btn { width: 44px; height: 44px; }
     .src-summary a { min-height: 44px; }
   }
@@ -751,31 +838,35 @@ export const page = `<!doctype html>
       <a href="#home" data-tab="home"><svg class="ti" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 11.5 12 4l8 7.5V20h-5.5v-5.5h-5V20H4z"/></svg>Home</a>
       <a href="#listen" data-tab="listen"><svg class="ti" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 18V6l10-2v12"/><circle cx="6.5" cy="18" r="2.5"/><circle cx="16.5" cy="16" r="2.5"/></svg>Listen</a>
       <a href="#watch" data-tab="watch"><svg class="ti" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="2.5"/><path d="M10.5 9.5v5l4-2.5z"/></svg>Watch</a>
-      <a href="#find" data-tab="find" class="narrow-only"><svg class="ti" viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6.5"/><path d="M16 16l4.5 4.5"/></svg>Find</a>
+      <a href="#discover" data-tab="discover"><svg class="ti" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M15.5 8.5l-2 5-5 2 2-5z"/></svg>Discover</a>
+      <a href="#search" data-tab="search" class="narrow-only"><svg class="ti" viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6.5"/><path d="M16 16l4.5 4.5"/></svg>Search</a>
     </nav>
     <div class="find-box">
       <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6.5"/><path d="M16 16l4.5 4.5"/></svg>
-      <input id="srcInput" form="srcForm" type="search" aria-label="Find" spellcheck="false" autocomplete="off" placeholder="Blue Train" required>
+      <input id="srcInput" form="srcForm" type="search" aria-label="Search" spellcheck="false" autocomplete="off" placeholder="Blue Train" required>
     </div>
+    <a class="btn quiet icon-btn find-btn" id="findBtn" href="#search" aria-label="Search" title="Search"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6.5"/><path d="M16 16l4.5 4.5"/></svg></a>
     <div class="bar-right">
       <div class="pills" id="pills"></div>
       <a class="btn add-link" id="addLink" href="#add" data-tab="add" title="Add to library"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg><span>Add to library</span></a>
+      <button class="btn quiet icon-btn" id="tvBtn" type="button" aria-haspopup="dialog" aria-label="TVs" title="TVs"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 9V6a1 1 0 0 1 1-1h16a1 1 0 0 1 1 1v12a1 1 0 0 1-1 1h-6M3 13a6 6 0 0 1 6 6M3 17a2 2 0 0 1 2 2"/></svg><span class="tv-dot" id="tvDot" hidden></span></button>
       <div class="more-wrap">
-        <button class="btn quiet more-btn" id="moreBtn" type="button" aria-expanded="false" aria-controls="ownerNav">More</button>
+        <button class="btn quiet more-btn" id="moreBtn" type="button" aria-haspopup="dialog">More</button>
         <nav class="tabs owner" id="ownerNav" aria-label="This relay">
           <a href="#channels" data-tab="channels">Channels</a>
           <a href="#sharing" data-tab="sharing">Sharing</a>
-          <a href="#tv" data-tab="tv">TV</a>
           <a href="#settings" data-tab="settings">Settings</a>
           <button class="btn quiet theme-toggle" id="themeToggle" type="button" aria-label="Theme" title="Theme">
-            <svg width="16" height="16" viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="10" r="6.6" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M10 3.4a6.6 6.6 0 010 13.2z" fill="currentColor"/></svg><span class="theme-word">Theme</span>
+            <svg width="16" height="16" viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="10" r="6.6" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M10 3.4a6.6 6.6 0 010 13.2z" fill="currentColor"/></svg>
           </button>
         </nav>
       </div>
     </div>
   </div>
 </header>
+<div id="offlineBar" role="status" hidden>Cannot reach the relay. The page shows the last library it saw.</div>
 <main>
+  <p class="boot" id="bootNote" hidden>Loading the library…</p>
   <form id="authForm" class="card" hidden>
     <div class="field">
       <label for="tokenInput">Access token</label>
@@ -823,8 +914,8 @@ export const page = `<!doctype html>
     <div id="detailBody"></div>
   </section>
 
-  <!-- ==== Find: one field in the top bar; the library first, then what is outside it ==== -->
-  <section id="tab-find" data-panel="find" hidden>
+  <!-- ==== Search: one field in the top bar; the library first, then what is outside it ==== -->
+  <section id="tab-search" data-panel="search" hidden>
     <div id="findLib"></div>
     <h2>Not in your library</h2>
     <!-- ==== Sources: one search over Soulseek, YouTube and other relays ==== -->
@@ -848,8 +939,22 @@ export const page = `<!doctype html>
         <button class="btn quiet" type="button" id="ytPickClear">Clear</button>
       </div>
     </form>
-    <div class="card slsk-browse" id="slskBrowse" hidden></div>
     <!-- ==== end Sources ==== -->
+  </section>
+
+  <!-- ==== Discover: back to a shelf that a person visited, and more from the artists in the library. Nothing here
+       asks a source until a press. ==== -->
+  <section id="tab-discover" data-panel="discover" hidden>
+    <div class="disc-top"><h2 class="page-title">Discover</h2><button class="btn primary" type="button" id="discAsk"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6.5"/><path d="M16 16l4.5 4.5"/></svg>Search your sources</button></div>
+    <section aria-labelledby="discShelvesHead"><h2 id="discShelvesHead">Shelves you visited</h2><div class="people" id="discShelves"></div></section>
+    <section aria-labelledby="discArtistsHead"><h2 id="discArtistsHead">More from artists you have</h2><div class="chips" id="discArtists" role="group" aria-labelledby="discArtistsHead"></div></section>
+    <p class="meta disc-planned">Planned: Rumble, SoundCloud.</p>
+  </section>
+
+  <!-- ==== A shelf: what one Soulseek user shares ==== -->
+  <section id="tab-shelf" data-panel="shelf" hidden>
+    <div class="page-bar"><button class="btn quiet" id="shelfBack" type="button">Back</button></div>
+    <div class="card slsk-browse" id="slskBrowse"></div>
   </section>
 
   <!-- ==== Add to library: links, pages, folders, catalogs and channels ==== -->
@@ -901,7 +1006,7 @@ export const page = `<!doctype html>
       <form id="writerForm" class="card" style="margin-top:12px">
         <div class="field">
           <label for="writerInput">Add device or writer key</label>
-          <input id="writerInput" type="text" spellcheck="false" placeholder="6049da41fd86a20f4883255bd6120bd6b580e19aa209693eb1f3f8c649c76d70" required>
+          <input id="writerInput" type="text" spellcheck="false" placeholder="6049da41fd86a20f4883255bd6120bd6b580e19aa209693eb1f3f8c649c76d70">
         </div>
         <div class="field">
           <label for="writerRole">Role</label>
@@ -917,7 +1022,7 @@ export const page = `<!doctype html>
       <form id="recoverForm" class="card" style="margin-top:12px">
         <div class="field">
           <label for="recoverInput">Link with 12-word recovery phrase</label>
-          <input id="recoverInput" type="text" spellcheck="false" placeholder="abandon ability able about above absent absorb abstract absurd abuse access accident" required>
+          <input id="recoverInput" type="text" spellcheck="false" placeholder="abandon ability able about above absent absorb abstract absurd abuse access accident">
           <span class="hint">Links this relay to an existing recovery phrase.</span>
         </div>
         <div class="row">
@@ -932,7 +1037,7 @@ export const page = `<!doctype html>
     <form id="followForm" class="card" style="margin-top:12px">
       <div class="field">
         <label for="followInput">Follow a channel or subscriber pass</label>
-        <input id="followInput" type="text" spellcheck="false" placeholder="peartube://channel/6049da41fd86a20f4883255bd6120bd6b580e19aa209693eb1f3f8c649c76d70" required>
+        <input id="followInput" type="text" spellcheck="false" placeholder="peartube://channel/6049da41fd86a20f4883255bd6120bd6b580e19aa209693eb1f3f8c649c76d70">
       </div>
       <div class="field">
         <label for="followName">Name</label>
@@ -957,7 +1062,7 @@ export const page = `<!doctype html>
       <form id="hiveForm" class="panel">
         <div class="field">
           <label for="hiveInput">Ask a HiveRelay to seed</label>
-          <input id="hiveInput" type="url" spellcheck="false" placeholder="http://192.168.1.50:9100" required>
+          <input id="hiveInput" type="url" spellcheck="false" placeholder="http://192.168.1.50:9100">
         </div>
         <div class="field">
           <label for="hiveKey">Its access key</label>
@@ -971,20 +1076,6 @@ export const page = `<!doctype html>
     <div class="card" id="appsCard"></div>
   </section>
 
-  <section id="tab-tv" data-panel="tv" hidden>
-    <div class="card" id="castNow" hidden></div>
-    <form id="pairForm" class="card">
-      <div class="field" style="margin:0">
-        <label for="pairInput">Pair a TV</label>
-        <div class="row"><input class="grow" id="pairInput" type="text" autocomplete="off" spellcheck="false" placeholder="K7Q2PX" required><button class="btn primary" type="submit">Pair</button></div>
-        <span class="hint">Enter the code or link shown on the TV.</span>
-      </div>
-      <div class="msg" id="pairMsg" role="status"></div>
-    </form>
-    <h2>Your TVs</h2>
-    <div class="list" id="tvs"></div>
-  </section>
-
   <section id="tab-settings" data-panel="settings" hidden>
     <div id="settingsBody"></div>
   </section>
@@ -996,7 +1087,7 @@ export const page = `<!doctype html>
         <div id="fpArt" class="fp-art"></div>
         <div class="fp-caption"><h2 id="fpName"></h2><a class="music-link" id="fpArtist"></a><div id="fpQuality" class="meta"></div><div id="fpStatus" class="meta" role="status"></div></div>
         <div class="fp-transport">
-          <input type="range" id="fpSeek" min="0" max="0" step="any" value="0" aria-label="Seek" disabled>
+          <input type="range" id="fpSeek" min="0" max="0" step="any" value="0" aria-label="Seek" title="Nothing is playing." disabled>
           <div class="fp-times"><span id="fpAt">0:00</span><span id="fpDur"></span></div>
           <div class="np-ctl" id="fpControls"></div>
           <label class="np-vol fp-volume">Volume <input type="range" id="fpVol" min="0" max="100" value="100" aria-label="Volume"></label>
@@ -1011,7 +1102,7 @@ export const page = `<!doctype html>
   </section>
 </main>
 <dialog id="ytSave" aria-labelledby="ytSaveTitle">
-  <form id="ytSaveForm" class="yt-save" novalidate>
+  <form id="ytSaveForm" class="yt-save" novalidate data-confirm>
     <h3 id="ytSaveTitle" tabindex="-1">Save from YouTube</h3>
     <div class="meta" id="ytSaveSub"></div>
     <div class="slsk-port alert" id="ytSaveNote" role="note" hidden></div>
@@ -1022,13 +1113,29 @@ export const page = `<!doctype html>
     <fieldset class="yt-tracks"><legend id="ytTracksLegend">Tracks</legend><ol id="ytTracks"></ol><span class="hint" id="ytTracksHint">Numbered in this order on disc 1.</span></fieldset>
     <div class="msg" id="ytSaveMsg" role="alert"></div>
     <div class="vh" id="ytSaveLive" role="status"></div>
-    <div class="row yt-save-acts"><button class="btn primary" type="submit" id="ytSaveBtn">Save track</button><button class="btn quiet" type="button" id="ytSaveCancel">Cancel</button></div>
-    <button class="btn quiet" type="button" id="ytSaveClose">Close</button>
+    <div class="row yt-save-acts"><button class="btn primary" type="submit" id="ytSaveBtn">Save track</button><button class="btn quiet" type="button" id="ytSaveCancel" data-cancel>Cancel</button></div>
+    <button class="btn quiet" type="button" id="ytSaveClose" data-close>Close</button>
   </form>
+</dialog>
+<dialog id="tvsDlg" class="sheet" aria-labelledby="tvsTitle">
+  <div class="sheet-body">
+    <h3 id="tvsTitle" tabindex="-1">TVs</h3>
+    <button class="btn quiet sheet-close" id="tvsClose" type="button" data-close>Close</button>
+    <div id="castNow" hidden></div>
+    <div id="tvs"></div>
+    <form id="pairForm" data-confirm>
+      <div class="field">
+        <label for="pairInput">Code on the TV</label>
+        <div class="row"><input class="grow" id="pairInput" type="text" autocomplete="off" spellcheck="false" placeholder="K7M2QX" required><button class="btn primary" type="submit">Pair</button></div>
+        <span class="hint">Open PearTube on the TV to see its code.</span>
+      </div>
+      <div class="msg" id="pairMsg" role="status"></div>
+    </form>
+  </div>
 </dialog>
 <div id="castBar" hidden></div>
 <div class="np" id="np" role="region" aria-label="Music player" hidden>
-  <div class="np-progress"><input type="range" id="npSeek" min="0" max="0" step="any" value="0" aria-label="Seek" disabled></div>
+  <div class="np-progress"><input type="range" id="npSeek" min="0" max="0" step="any" value="0" aria-label="Seek" title="Nothing is playing." disabled></div>
   <div class="np-info">
     <a class="np-art" id="npArt" href="#playing" aria-label="Open player" title="Open player"></a>
     <div class="np-text"><a class="np-title" id="npTitle" href="#playing"></a><div class="np-sub" id="npMeta" aria-live="polite"></div></div>
@@ -1044,6 +1151,7 @@ export const page = `<!doctype html>
       <details class="p-file-info" id="pFileInfo"><summary>File info</summary><div id="pBadge">Loading player…</div></details>
     </div>
     <div class="row">
+      <button class="btn icon-btn" id="pCastBtn" type="button" aria-haspopup="dialog" aria-label="Play on a TV" title="Play on a TV" hidden><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 9V6a1 1 0 0 1 1-1h16a1 1 0 0 1 1 1v12a1 1 0 0 1-1 1h-6M3 13a6 6 0 0 1 6 6M3 17a2 2 0 0 1 2 2"/></svg></button>
       <a class="btn" id="pRawLink" target="_blank" rel="noopener">Open file</a>
       <button class="btn" id="pMiniBtn" type="button" aria-label="Minimize player">Mini player</button>
       <button class="btn" id="pMiniRestore" type="button" aria-label="Expand player">Expand</button>
@@ -1151,12 +1259,20 @@ function say (id, text, bad) {
   m.textContent = text || ''
   m.classList.toggle('err', Boolean(bad))
 }
+// The button is off while its work runs, so it cannot send twice. An off button drops focus, so a keyboard user
+// gets it back when the work ends, unless they moved on.
 async function act (btn, fn, msgId) {
+  const had = Boolean(btn) && document.activeElement === btn
   if (btn) btn.disabled = true
   try { return await fn() } catch (err) {
     if (msgId) say(msgId, err.message, true)
     else toast(err.message)
-  } finally { if (btn) btn.disabled = false }
+  } finally {
+    if (btn) {
+      btn.disabled = false
+      if (had && btn.isConnected && (!document.activeElement || document.activeElement === document.body)) btn.focus({ preventScroll: true })
+    }
+  }
 }
 
 function copyText (text) {
@@ -1192,11 +1308,12 @@ function copyText (text) {
   }
   toast('Could not copy link')
 }
-const copyBtn = (label, text) => h('button', { class: 'btn', disabled: !text, title: text || '', onclick: () => copyText(text) }, label)
+const copyBtn = (label, text, fk) => h('button', { class: 'btn', 'data-fk': fk || null, disabled: !text, title: text || 'Nothing to copy yet.', onclick: () => copyText(text) }, label)
 
 // Holds the lists still while a finger is down, so an update never moves a button mid-press. Source groups that
 // answered during the press wait in srcHeld and are drawn when it ends.
 let pressing = false, refreshQueued = false, player = null, playerEntry = null, lastResumeSave = 0
+let playerOpener = null, playerSeq = 0, playerState = 0
 let srcHeld = null // null, or { names: Set of source groups whose answer is waiting for the press to end, said: the status line for it }
 // Where the mouse rests (never a finger, which leaves): what a redraw above it must not move.
 let srcPointer = null
@@ -1226,18 +1343,25 @@ const isYt = e => String((e && e.id) || '').startsWith('yt:')
 const setting = key => S.settings && S.settings.settings[key]
 const sval = key => setting(key) ? setting(key).value : undefined
 
-// ---- Places. The address names the place: the rooms (Home, Listen, Watch), the page of one album, artist or
-// title, Find, Add to library and the relay's own pages. An old link keeps working: #library is Home and #music is
-// Listen. With no place in the address the page opens the room this browser was in last, and Home on a first visit.
-const PLACES = { home: 'Home', listen: 'Listen', watch: 'Watch', album: 'Album', artist: 'Artist', title: 'Title', find: 'Find', add: 'Add to library', playing: 'Music player', channels: 'Channels', sharing: 'Sharing', tv: 'TV', settings: 'Settings' }
-const OLD_PLACES = { library: 'home', music: 'listen' }
-const ROOMS = ['home', 'listen', 'watch']
+// ---- Places. The address names the place: the rooms (Home, Listen, Watch, Discover), the page of one album, artist
+// or title, a person's shelf, Search, Add to library and the relay's own pages. An old link keeps working: #library is
+// Home, #music is Listen, #find is Search, and #tv opens the TVs dialog over the room this browser was in last. With
+// no place in the address the page opens the room this browser was in last, and Home on a first visit.
+const PLACES = { home: 'Home', listen: 'Listen', watch: 'Watch', discover: 'Discover', album: 'Album', artist: 'Artist', title: 'Title', shelf: 'Shelf', search: 'Search', add: 'Add to library', playing: 'Music player', channels: 'Channels', sharing: 'Sharing', settings: 'Settings' }
+const OLD_PLACES = { library: 'home', music: 'listen', find: 'search' }
+const ROOMS = ['home', 'listen', 'watch', 'discover']
 // A page of its own belongs to a room: the room stays lit in the bar, and leaving the page returns to it.
 const DETAIL_ROOM = { album: 'listen', artist: 'listen', title: 'watch' }
+const PAGE_ROOM = { shelf: 'discover', playing: 'listen' }
 const ROOM_KEY = 'peartube-room'
 let tab = 'home'
 let placeArg = ''
 let cameFrom = ''
+function lastRoom () {
+  let last = ''
+  try { last = localStorage.getItem(ROOM_KEY) || '' } catch {}
+  return ROOMS.includes(last) ? last : 'home'
+}
 function readPlace () {
   const raw = location.hash.slice(1)
   const cut = raw.indexOf('/')
@@ -1246,9 +1370,7 @@ function readPlace () {
   let arg = ''
   try { arg = cut < 0 ? '' : decodeURIComponent(raw.slice(cut + 1)) } catch {}
   if (Object.hasOwn(PLACES, name)) return { name, arg }
-  let last = ''
-  try { last = localStorage.getItem(ROOM_KEY) || '' } catch {}
-  return { name: ROOMS.includes(last) ? last : 'home', arg: '' }
+  return { name: lastRoom(), arg: '', tvs: named === 'tv' }
 }
 // A place opens at its top, and Back or Forward returns to where the reader was. Each history entry gets a number
 // the first time it is shown; the last scroll position seen under that number is kept while the page lives.
@@ -1257,7 +1379,11 @@ const placeBase = Date.now()
 let placeSeq = 0
 let placeId = 0
 if ('scrollRestoration' in history) history.scrollRestoration = 'manual'
-addEventListener('scroll', () => { if (placeId) scrollAt.set(placeId, scrollY) }, { passive: true })
+// While a position is being put back (scrollBack), the page's own clamped scrolls are not the reader's and are not
+// kept; a wheel, touch, key or press by the reader ends the putting back.
+let restoring = 0
+addEventListener('scroll', () => { if (placeId && restoring !== placeId) scrollAt.set(placeId, scrollY) }, { passive: true })
+for (const type of ['wheel', 'touchstart', 'keydown', 'pointerdown']) addEventListener(type, () => { restoring = 0 }, { passive: true, capture: true })
 function enterPlace () {
   const st = history.state
   let id = st && st.place
@@ -1281,47 +1407,211 @@ function showTab () {
   cameFrom = tab
   tab = place.name
   placeArg = place.arg
-  const room = DETAIL_ROOM[tab] || (tab === 'playing' ? 'listen' : tab)
+  // #tv (the TV page before the TVs became a dialog) names the room it shows, so Back and a reload come back to it.
+  if (place.tvs) history.replaceState(history.state, '', '#' + tab)
+  const room = DETAIL_ROOM[tab] || PAGE_ROOM[tab] || tab
   if (ROOMS.includes(room)) { try { localStorage.setItem(ROOM_KEY, room) } catch {} }
   const top = enterPlace()
   for (const a of document.querySelectorAll('[data-tab]')) a.setAttribute('aria-current', a.dataset.tab === room ? 'page' : 'false')
   for (const s of document.querySelectorAll('[data-panel]')) s.hidden = s.dataset.panel !== (DETAIL_ROOM[tab] ? 'detail' : tab)
   $('placeName').textContent = PLACES[tab]
-  document.body.classList.toggle('at-find', tab === 'find')
-  setMore(false)
+  document.body.classList.toggle('at-search', tab === 'search')
   showFindWords(place.arg)
   // A page says how well the files it lists stream here, and asks again every 3 s while it is open. Leaving it
   // stops the asking: nothing polls a page nobody is looking at.
   if (DETAIL_ROOM[tab]) { if (!infoTimer) infoTimer = setInterval(pollInfo, 3000) }
   else { clearInterval(infoTimer); infoTimer = 0; infoShown.clear(); infoWatched.clear() }
-  if (tab === 'tv') loadCast()
   if (tab === 'settings') renderSettings()
+  if (tab === 'shelf') showShelf(place.arg)
   render()
   paintBar()
-  scrollTo(0, top)
+  scrollBack(top)
   const then = afterPlace
   afterPlace = null
   if (then) then()
+  if (place.tvs) openTvs()
+}
+// Back to a long page: its rows may still be drawing, so the position is asked for again until the page is tall
+// enough or a second has passed.
+function scrollBack (top) {
+  scrollTo(0, top)
+  if (!top || Math.abs(scrollY - top) < 2) return
+  const id = restoring = placeId
+  const until = Date.now() + 1000
+  const again = () => {
+    if (restoring !== id || placeId !== id) return
+    scrollTo(0, top)
+    if (Math.abs(scrollY - top) < 2 || Date.now() > until) { restoring = 0; return }
+    requestAnimationFrame(again)
+  }
+  requestAnimationFrame(again)
 }
 addEventListener('hashchange', showTab)
 
-// ---- More: the relay's own pages fold into a menu when the bar has no room for them in a row.
-function setMore (open) {
-  $('ownerNav').classList.toggle('open', open)
-  $('moreBtn').setAttribute('aria-expanded', String(open))
+// ---- Overlays. Menus and dialogs are <dialog> elements that open modal, so the browser keeps focus inside and makes
+// the page behind inert. This adds the rest: one overlay at a time; a click or tap outside, Escape, Back and the close
+// control all close it; typed text is asked about before it goes; focus returns to the control that opened it; the
+// page behind does not scroll. A menu is made when it opens and removed when it closes.
+let overlay = null // { el, opener }
+let overlayPress = null
+let overlayBacking = null // set while history.back() runs after a close
+let overlayDownOutside = false
+const shownEl = el => !!el && el.isConnected && el.getClientRects().length > 0 && !el.disabled
+const outsideBox = (el, e) => { const r = el.getBoundingClientRect(); return e.clientX < r.left || e.clientX > r.right || e.clientY < r.top || e.clientY > r.bottom }
+const narrowScreen = () => matchMedia('(max-width: 700px)').matches
+const overlayMark = el => el.id || 'menu'
+addEventListener('pointerdown', e => {
+  overlayPress = e.target instanceof Element ? e.target.closest('a,button,[role=button],summary') : null
+  overlayDownOutside = !!overlay && e.target === overlay.el && outsideBox(overlay.el, e)
+}, true)
+addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') overlayPress = document.activeElement }, true)
+// A menu opens beside its control; on a narrow screen the style sheet makes it a sheet at the bottom.
+function placeMenu (el, anchor) {
+  el.style.left = el.style.top = ''
+  if (narrowScreen() || !shownEl(anchor)) return
+  const a = anchor.getBoundingClientRect()
+  const w = el.offsetWidth
+  const tall = el.offsetHeight
+  const left = Math.max(8, Math.min(a.right - w, innerWidth - w - 8))
+  const below = a.bottom + 6
+  const top = below + tall <= innerHeight - 8 ? below : Math.max(8, a.top - tall - 6)
+  el.style.left = left + 'px'
+  el.style.top = top + 'px'
 }
-$('moreBtn').onclick = () => setMore($('moreBtn').getAttribute('aria-expanded') !== 'true')
-addEventListener('click', ev => { if (!ev.target.closest('.more-wrap')) setMore(false) })
-// Escape closes the menu and gives the button its focus back. The key counts as used, so a page under the menu
-// stays where it is.
-addEventListener('keydown', ev => {
-  if (ev.key !== 'Escape' || $('moreBtn').getAttribute('aria-expanded') !== 'true') return
-  ev.preventDefault()
-  setMore(false)
-  $('moreBtn').focus()
+async function openOverlay (el, opts = {}) {
+  if (!el) return
+  if (overlayBacking) await overlayBacking
+  let opener = opts.opener || overlayPress || document.activeElement
+  let replace = false
+  if (overlay) {
+    if (overlay.el === el) return
+    // An overlay that opens from inside another takes its place, and its opener.
+    if (overlay.el.contains(opener)) opener = overlay.opener
+    const old = overlay.el
+    overlay = null
+    if (old.open) old.close()
+    if (old.dataset.temp) old.remove()
+    replace = true
+  }
+  overlay = { el, opener }
+  el._dirty = false
+  el._then = null
+  const ask = el.querySelector('.ask')
+  if (ask) ask.hidden = true
+  if (!el.isConnected) document.body.append(el)
+  document.documentElement.classList.add('has-overlay')
+  el.showModal()
+  if (el.classList.contains('menu')) placeMenu(el, opts.anchor || opener)
+  if (replace) history.replaceState({ ...history.state, overlay: overlayMark(el) }, '')
+  else history.pushState({ ...history.state, overlay: overlayMark(el) }, '')
+  el.dispatchEvent(new CustomEvent('overlay-open', { detail: opts }))
+}
+// how: 'ui' when a control, a key or a click outside closes it (its history entry is dropped), 'back' when the
+// browser's Back already dropped it, 'view' when the view changed under it.
+function closeOverlay (how = 'ui') {
+  if (!overlay) return overlayBacking || Promise.resolve()
+  const { el, opener } = overlay
+  overlay = null
+  el._dirty = false
+  if (el.open) el.close()
+  document.documentElement.classList.remove('has-overlay')
+  el.dispatchEvent(new CustomEvent('overlay-close'))
+  if (el.dataset.temp) el.remove()
+  if (shownEl(opener)) opener.focus({ preventScroll: true })
+  if (how === 'ui' && history.state && history.state.overlay) {
+    overlayBacking = new Promise(resolve => {
+      const done = () => { removeEventListener('popstate', done); clearTimeout(timer); overlayBacking = null; resolve() }
+      const timer = setTimeout(done, 500)
+      addEventListener('popstate', done)
+      history.back()
+    })
+    return overlayBacking
+  }
+  return Promise.resolve()
+}
+// Typed text is asked about before it goes, in forms that say so with data-confirm: on the close control, Escape, a
+// click outside, a link inside the overlay, Back and reload. Cancel throws it away on purpose.
+const overlayAsks = el => !!el && el._dirty && !!el.querySelector('form[data-confirm]')
+// then: what to do once the overlay is closed (a link inside it goes to its place).
+function askOrClose (el, then) {
+  if (!overlayAsks(el)) return closeOverlay('ui').then(() => { if (then) then() })
+  el._then = then || null
+  let ask = el.querySelector('.ask')
+  if (!ask) {
+    ask = h('div', { class: 'ask', role: 'group', 'aria-label': 'Discard what you typed?' }, h('span', null, 'Discard what you typed?'),
+      h('button', { class: 'btn', 'data-keep': true }, 'Keep editing'), h('button', { class: 'btn armed', 'data-discard': true }, 'Discard'))
+    el.append(ask)
+  }
+  ask.hidden = false
+  ask.querySelector('[data-keep]').focus()
+}
+addEventListener('click', e => {
+  if (!overlay) return
+  const el = overlay.el
+  const t = e.target instanceof Element ? e.target : null
+  if (!t) return
+  if (t === el) { if (overlayDownOutside && outsideBox(el, e)) askOrClose(el); return }
+  if (!el.contains(t)) return
+  if (t.closest('[data-keep]')) { el._then = null; el.querySelector('.ask').hidden = true; const f = el.querySelector('input,select,textarea'); if (f) f.focus(); return }
+  if (t.closest('[data-discard]')) { const then = el._then; el._then = null; closeOverlay('ui').then(() => { if (then) then() }); return }
+  if (t.closest('[data-cancel]')) { e.preventDefault(); closeOverlay('ui'); return }
+  if (t.closest('[data-close]')) { e.preventDefault(); askOrClose(el); return }
+  // A link inside an overlay closes it first, so that Back from the next place does not land on the overlay's entry.
+  const link = t.closest('a[href^="#"]')
+  if (link) { e.preventDefault(); const href = link.getAttribute('href'); askOrClose(el, () => { location.hash = href }); return }
+  // A menu item has done its work: the menu goes, unless the item changes something in place (data-stay).
+  if (el.classList.contains('menu') && t.closest('button') && !t.closest('[data-stay]')) closeOverlay('ui')
 })
+document.addEventListener('cancel', e => { if (overlay && e.target === overlay.el) { e.preventDefault(); askOrClose(overlay.el) } }, true)
+// The browser closes a dialog by itself on a second Escape; the bookkeeping must follow.
+document.addEventListener('close', e => { if (overlay && e.target === overlay.el) closeOverlay('ui') }, true)
+document.addEventListener('input', e => { const d = e.target instanceof Element ? e.target.closest('dialog') : null; if (d) d._dirty = true }, true)
+addEventListener('popstate', e => {
+  if (!overlay || (e.state && e.state.overlay === overlayMark(overlay.el))) return
+  if (!overlayAsks(overlay.el)) { closeOverlay('back'); return }
+  // Back on typed text: the overlay's history entry comes back, and the person is asked.
+  history.pushState({ ...history.state, overlay: overlayMark(overlay.el) }, '')
+  askOrClose(overlay.el)
+})
+addEventListener('hashchange', () => { if (overlay) closeOverlay('view') })
+// A reload or a closed tab with typed text in an overlay gets the browser's own question.
+addEventListener('beforeunload', e => { if (overlay && overlayAsks(overlay.el)) { e.preventDefault(); e.returnValue = '' } })
+addEventListener('resize', () => { if (overlay && overlay.el.classList.contains('menu')) placeMenu(overlay.el, overlay.opener) })
+// Up and Down move through a menu, as a remote control does.
+addEventListener('keydown', e => {
+  if (!overlay || !overlay.el.classList.contains('menu') || (e.key !== 'ArrowDown' && e.key !== 'ArrowUp')) return
+  const items = [...overlay.el.querySelectorAll('button,a[href]')].filter(shownEl)
+  if (!items.length) return
+  e.preventDefault()
+  const i = items.indexOf(document.activeElement)
+  items[(i + (e.key === 'ArrowDown' ? 1 : items.length - 1) + items.length) % items.length].focus()
+})
+// A reload on an entry that an overlay made leaves no overlay open: forget the mark.
+if (history.state && history.state.overlay) { const s = { ...history.state }; delete s.overlay; history.replaceState(s, '') }
+// A menu: a list of actions or links beside its control (a sheet at the bottom of a narrow screen). The control that
+// opened it closes it on a second press.
+function openMenu (opener, label, items) {
+  if (overlay && overlay.opener === opener && overlay.el.classList.contains('menu')) return closeOverlay('ui').then(() => opener.focus({ preventScroll: true }))
+  const el = h('dialog', { class: 'menu', 'data-temp': '1', 'aria-label': label }, items, h('hr'), h('button', { class: 'mi', 'data-close': true }, 'Close'))
+  return openOverlay(el, { opener })
+}
+
+// ---- More: the relay's own pages fold into a menu when the bar has no room for them in a row.
+$('moreBtn').onclick = ev => openMenu(ev.currentTarget, 'This relay', [
+  ...[...$('ownerNav').querySelectorAll('a')].map(a => h('a', { class: 'mi', href: a.getAttribute('href'), 'aria-current': a.getAttribute('aria-current') }, a.textContent)),
+  h('hr'),
+  h('button', { class: 'mi', 'data-stay': true, onclick: e => { $('themeToggle').click(); e.currentTarget.textContent = themeLabel(document.documentElement.dataset.theme || 'system') } }, themeLabel(document.documentElement.dataset.theme || 'system'))
+])
 
 // ---- Loading
+// The page names its loading or offline state where nothing else can move it.
+function paintBoot () {
+  const b = $('bootNote')
+  if (!b) return
+  b.hidden = needsToken || !!S.loaded
+  if (!b.hidden) b.textContent = S.offline ? 'Cannot reach the relay. Check that it is running, then reload the page.' : 'Loading the library…'
+  document.body.classList.toggle('loaded', !!S.loaded)
+}
 async function refresh () {
   if (pressing || player) { refreshQueued = true; return }
   try {
@@ -1343,6 +1633,7 @@ async function refresh () {
   } catch (err) {
     S.offline = !needsToken
   }
+  paintBoot()
   if (pressing || player) { refreshQueued = true; return }
   render()
   if (S.jobs.some(srcActive)) pollMirrors()
@@ -1370,23 +1661,24 @@ let refreshTimer = 0
 const soon = () => { clearTimeout(refreshTimer); refreshTimer = setTimeout(refresh, 250) }
 
 function render () {
+  $('offlineBar').hidden = !S.offline
   renderPills()
   if (tab === 'home') renderHome()
   if (tab === 'listen') renderMusic()
   if (tab === 'watch') renderLibrary()
   if (DETAIL_ROOM[tab]) renderDetail()
-  if (tab === 'find') renderFind()
+  if (tab === 'search') renderFind()
+  if (tab === 'discover') renderDiscover()
   if (tab === 'add') renderAdd()
   if (tab === 'channels') renderChannels()
   if (tab === 'sharing') renderSharing()
-  if (tab === 'tv') renderCast()
   renderCastBar()
 }
 
 // ---- Header: only what needs the reader now. Peer counts and rates are on the Sharing page.
 function renderPills () {
   const pills = []
-  if (S.offline) pills.push(h('span', { class: 'pill warn' }, 'Relay unreachable'))
+  if (S.offline) pills.push(h('span', { class: 'pill warn' }, 'The relay cannot be reached'))
   // An album being added runs for minutes; the header says so on every tab, and a press goes to its progress. A
   // percentage only when every running job knows its total (a YouTube save never does).
   const adding = S.jobs.filter(srcActive)
@@ -1394,7 +1686,7 @@ function renderPills () {
     const total = adding.every(j => j.total > 0) ? adding.reduce((n, j) => n + j.total, 0) : 0
     const pct = total ? Math.min(99, Math.floor(adding.reduce((n, j) => n + (j.bytes || 0), 0) / total * 100)) : null
     const btn = h('button', { class: 'pill busy', type: 'button' }, 'Adding' + (adding.length > 1 ? ' ' + adding.length + ' albums' : '') + (pct != null ? ' ' + pct + '%' : ''))
-    btn.onclick = () => goPlace('#find', () => $('srcJobs').scrollIntoView({ block: 'center' }))
+    btn.onclick = () => goPlace('#search', () => $('srcJobs').scrollIntoView({ block: 'center' }))
     pills.push(btn)
   }
   const restart = S.settings ? S.settings.restartNeeded.length : 0
@@ -1992,7 +2284,7 @@ function videoTile (t) {
 }
 // What an empty place says: why it is empty, then the way to fill it.
 function emptyNote (text) {
-  if (S.offline) return h('div', { class: 'empty' }, 'Can’t reach the relay.')
+  if (S.offline) return h('div', { class: 'empty' }, 'Cannot reach the relay.')
   if (!S.loaded && !needsToken) return h('div', { class: 'empty' }, 'Loading the library…')
   return h('div', { class: 'empty' }, text, h('div', { class: 'empty-acts' }, h('a', { class: 'btn primary', href: '#add' }, 'Add to library')))
 }
@@ -2172,7 +2464,7 @@ function renderMusic (force) {
   $('musicCount').textContent = view === 'artists' ? plural(artists.length, 'artist', 'artists')
     : view === 'tracks' ? plural(tracks.length, 'track', 'tracks')
     : plural(all.length, 'album', 'albums')
-  if (!every.length) { $('albums').replaceChildren(emptyNote('No albums yet. Use Find to save one, or add a folder.')); return }
+  if (!every.length) { $('albums').replaceChildren(emptyNote('No albums yet. Use Search to save one, or add a folder.')); return }
   if (!all.length) { $('albums').replaceChildren(h('div', { class: 'empty' }, 'No album here is saved on this relay.')); return }
   if (view === 'artists') $('albums').replaceChildren(h('div', { class: 'album-grid' }, artists.map(artistCard)))
   else if (view === 'tracks') {
@@ -2208,28 +2500,28 @@ function renderAdd () {
   }
 }
 
-// ---- Find: one field, in the top bar, for everything. Typing narrows the library at once and asks nobody. Enter
+// ---- Search: one field, in the top bar, for everything. Typing narrows the library at once and asks nobody. Enter
 // (or Search) also asks outside the library: the sources that are on, and other relays. The words are part of the
-// address (#find/blue train), so Back returns to them and a reload keeps them.
+// address (#search/blue train), so Back returns to them and a reload keeps them.
 const FIND_SHOWN = 12
 const LINK_WORDS = /^(https?|peartube|magnet):[^ ]+$/i
 const findWords = () => $('srcInput').value.trim()
 function showFindWords (words) {
   const box = $('srcInput')
-  if (tab !== 'find') { box.value = ''; return }
-  // A bare #find returns to the last search outside, so its results never stand under an empty field.
+  if (tab !== 'search') { box.value = ''; return }
+  // A bare #search returns to the last search outside, so its results never stand under an empty field.
   if (!words && srcRun) {
     words = srcRun.query
-    history.replaceState(history.state, '', '#find/' + encodeURIComponent(words))
+    history.replaceState(history.state, '', '#search/' + encodeURIComponent(words))
   }
   if (box.value.trim() !== words.trim()) box.value = words
 }
 $('srcInput').addEventListener('input', () => {
   const words = findWords()
-  const to = '#find' + (words ? '/' + encodeURIComponent(words) : '')
-  if (readPlace().name !== 'find') { location.hash = to; return }
+  const to = '#search' + (words ? '/' + encodeURIComponent(words) : '')
+  if (readPlace().name !== 'search') { location.hash = to; return }
   history.replaceState(history.state, '', to)
-  if (tab === 'find') renderFind()
+  if (tab === 'search') renderFind()
 })
 // Every word must be in the text, in any order; case, width, punctuation and the accents of Latin and Greek
 // letters do not count. A mark that is a letter (Cyrillic й and ё) still counts. fold() keeps each mark with its
@@ -2287,7 +2579,7 @@ function renderFind (force) {
   if (films.length) parts.push(findGroup('Movies and series', films.length, h('div', { class: 'grid' }, films.slice(0, FIND_SHOWN).map(videoTile))))
   if (clips.length) parts.push(findGroup('Clips', clips.length, h('div', { class: 'grid wide-grid' }, clips.slice(0, FIND_SHOWN).map(t => wideTile(t, tileLine(t), 0, () => openDetail(t.key))))))
   if (!link && !albums.length && !tracks.length && !films.length && !clips.length) {
-    parts.push(h('div', { class: 'empty' }, S.offline ? 'Can’t reach the relay.' : !S.loaded && !needsToken ? 'Loading the library…' : 'Nothing in your library matches “' + words + '”.'))
+    parts.push(h('div', { class: 'empty' }, S.offline ? 'Cannot reach the relay.' : !S.loaded && !needsToken ? 'Loading the library…' : 'Nothing in your library matches “' + words + '”.'))
   }
   box.replaceChildren(...parts)
   paintRows()
@@ -2429,6 +2721,7 @@ function slskMirrorBtn (g, pick, label, msgId, name) {
     pollMirrors()
   } }, label)
   srcSyncButton(b)
+  if (b.disabled && !b.title) b.title = 'Nothing selected in this folder.'
   return b
 }
 
@@ -3075,10 +3368,11 @@ function openYtSave (rows, opener) {
   $('ytSaveLive').textContent = ''
   renderYtSaveTracks()
   ytSaveNotes()
-  $('ytSave').showModal()
-  // A focused field on a touch screen raises the keyboard over half the form, so the title takes focus there.
-  if (matchMedia('(pointer: coarse)').matches) $('ytSaveTitle').focus()
-  else $('ytArtist').focus()
+  openOverlay($('ytSave'), { opener }).then(() => {
+    // A focused field on a touch screen raises the keyboard over half the form, so the title takes focus there.
+    if (matchMedia('(pointer: coarse)').matches) $('ytSaveTitle').focus()
+    else $('ytArtist').focus()
+  })
 }
 // Where each track lands. Saved into an album the library already has, a song it holds takes that song's number (the
 // copies then share one row) and a new one goes after the album's last track; otherwise the dialog's order. A song
@@ -3186,7 +3480,7 @@ function ytSaveNotes () {
   }
   if (peersLossless()) {
     // The way to those copies, not just their mention: the dialog closes on the peers' heading.
-    lines.push(['Peers offered ' + peersLossless() + ' for this search. ', h('button', { class: 'btn', onclick: () => { ytSave.opener = null; $('ytSave').close(); focusSrcHead('soulseek') } }, 'Show peer copies')])
+    lines.push(['Peers offered ' + peersLossless() + ' for this search. ', h('button', { class: 'btn', onclick: () => { ytSave.opener = null; closeYtSave().then(() => focusSrcHead('soulseek')) } }, 'Show peer copies')])
   }
   if (ytSave.tracks.some(t => ytFull(t.r))) lines.push('One long video saves as one track.')
   $('ytSaveNote').hidden = !lines.length
@@ -3222,13 +3516,14 @@ $('ytSaveForm').onsubmit = async ev => {
   // A refusal the owner can act on (the album folder holds other files) leads; the relay's words stay as detail.
   let r = null
   btn.disabled = true
+  btn.title = 'Saving this album.'
   try { r = await api('/v1/providers/youtube/mirror', { body }) } catch (err) { if (ytSave === mine) ytSayFail('ytSaveMsg', err.message); else toast('Could not save “' + album + '”: ' + err.message) } finally { btn.disabled = false }
   if (ytSave === mine) btn.textContent = label
   if (!r || !r.job) return
   for (const t of mine.tracks) ytPicked.delete(t.r.videoId)
   for (const t of plan.send) ytStarted.set(t.r.videoId, { id: r.job.jobId, at: Date.now() })
   mine.done = true
-  if (ytSave === mine) $('ytSave').close()
+  if (ytSave === mine) closeYtSave()
   if (!S.jobs.some(j => j.jobId === r.job.jobId)) S.jobs.unshift(r.job)
   renderMirrors()
   renderYtRows()
@@ -3238,9 +3533,8 @@ $('ytSaveForm').onsubmit = async ev => {
   const name = document.querySelector('[data-job="' + r.job.jobId + '"] .name')
   if (name) name.focus()
 }
-const ytSaveCancel = () => $('ytSave').close()
-$('ytSaveCancel').onclick = ytSaveCancel
-$('ytSaveClose').onclick = ytSaveCancel
+// Cancel (data-cancel) and Close (data-close) are the overlay rules' own: Close asks about typed text, Cancel does not.
+const closeYtSave = () => overlay && overlay.el === $('ytSave') ? closeOverlay('ui') : Promise.resolve()
 // Esc, Cancel and Close give focus back to the control that opened the dialog (or its redrawn twin).
 $('ytSave').addEventListener('close', () => {
   if (!ytSave || ytSave.done) return
@@ -3250,14 +3544,28 @@ $('ytSave').addEventListener('close', () => {
   if (back) back.focus()
 })
 
-// Browse: the relay caches a peer's list for a few minutes, so reopening is instant; the first fetch can take
-// seconds (up to 30), so it shows a ticking spinner, and a peer that does not answer is said plainly.
-async function openSlskBrowse (username, focusDir, again) {
+// Browse: a peer's shared files open as a page of their own (#shelf/<user>, under Discover), so Back returns to the
+// search and Discover lists the shelf to open again. The relay caches a peer's list for a few minutes, so reopening is
+// instant; the first fetch can take seconds (up to 30), so it shows a ticking spinner, and a peer that does not answer
+// is said plainly.
+let shelfFocus = null // { username, dir }: the folder that a Browse press came from, opened first on the shelf
+function openSlskBrowse (username, focusDir) {
+  shelfFocus = { username, dir: focusDir || '' }
+  goPlace('#shelf/' + encodeURIComponent(username))
+}
+function showShelf (username) {
+  if (!username) { location.replace('#discover'); return }
+  const focus = shelfFocus && shelfFocus.username === username ? shelfFocus.dir : null
+  shelfFocus = null
+  // Back or Forward to a shelf that is loaded, or still loading, shows it as it was.
+  if (focus === null && slskView && slskView.username === username && !slskView.error) return renderSlskBrowse()
+  loadShelf(username, focus || '', false)
+}
+async function loadShelf (username, focusDir, again) {
   const view = { username, focus: focusDir || '', data: null, error: '', filter: '', open: new Set(), off: new Map(), shown: 40, started: Date.now() }
   if (focusDir) view.open.add(slskKey(username, focusDir))
   slskView = view
   renderSlskBrowse()
-  $('slskBrowse').scrollIntoView({ block: 'start', behavior: 'smooth' })
   const timer = setInterval(() => {
     const t = $('slskWaitText')
     if (t && slskView === view) t.textContent = slskWaitText(view)
@@ -3267,11 +3575,13 @@ async function openSlskBrowse (username, focusDir, again) {
     view.folders = slskFolders(view.data.files || [])
     const focus = slskKey(username, view.focus)
     view.folders.sort((a, b) => (b.key === focus) - (a.key === focus) || (a.dir < b.dir ? -1 : a.dir > b.dir ? 1 : 0))
+    noteShelf(username, view.folders.length)
   } catch (err) {
     view.error = err.message
   } finally { clearInterval(timer) }
   if (slskView === view) renderSlskBrowse()
 }
+$('shelfBack').onclick = () => { if (cameFrom === 'search' || cameFrom === 'discover') history.back(); else location.hash = '#discover' }
 const slskWaitText = v => 'Asking ' + v.username + ' for their shared files… ' + Math.round((Date.now() - v.started) / 1000) + ' s'
 function renderSlskBrowse () {
   const box = $('slskBrowse')
@@ -3284,8 +3594,7 @@ function renderSlskBrowse () {
     : v.error ? 'Could not list files' : 'Loading'
   const head = h('div', { class: 'slsk-head' },
     h('div', { class: 'grow' }, h('h3', null, v.username), h('div', { class: 'meta' }, summary)),
-    h('button', { class: 'btn quiet', disabled: !d && !v.error, onclick: () => openSlskBrowse(v.username, v.focus, true) }, 'Refresh'),
-    h('button', { class: 'btn quiet', onclick: () => { slskView = null; renderSlskBrowse() } }, 'Close'))
+    h('button', { class: 'btn quiet', disabled: !d && !v.error, title: !d && !v.error ? 'Wait for the list to load.' : null, onclick: () => loadShelf(v.username, v.focus, true) }, 'Refresh'))
   if (!d && !v.error) {
     return box.replaceChildren(head, h('div', { class: 'slsk-wait', role: 'status' }, h('span', { class: 'slsk-spin', 'aria-hidden': 'true' }), h('span', { id: 'slskWaitText' }, slskWaitText(v))))
   }
@@ -3319,7 +3628,7 @@ function slskFolderItem (g) {
   const mirror = slskMirrorBtn(g, picked, label(), 'slskBrowseMsg')
   // Nothing picked keeps the button off, also when a finished mirror gives it back.
   mirror.toggleAttribute('data-none', !picked().length)
-  if (!picked().length) mirror.disabled = true
+  if (!picked().length) { mirror.disabled = true; mirror.title = 'Nothing selected in this folder.' }
   const where = slskLeaf(g.dir, 2)
   const facts = [plural(g.files.length, 'track', 'tracks'), slskQuality(g), size(g.bytes), g.secs ? slskMinutes(g.secs) : ''].filter(Boolean).join(' · ')
   const toggle = h('button', { class: 'btn quiet', 'aria-expanded': String(open), onclick: () => { if (open) v.open.delete(g.key); else v.open.add(g.key); renderSlskFolders() } }, open ? 'Hide files' : 'Files')
@@ -3342,6 +3651,7 @@ function slskFolderItem (g) {
             if (slskStarted.has(g.key)) return
             mirror.textContent = mirror.dataset.label
             mirror.disabled = !picked().length
+            mirror.title = mirror.disabled ? 'Nothing selected in this folder.' : ''
           } }),
           h('span', { class: 'grow' }, slskLeaf(slskPath(f.filename)))),
         h('span', { class: 'meta' }, [slskRate(f.bit_depth, f.sample_rate, f.bitrate), duration(f.length), size(f.size)].filter(Boolean).join(' · ')),
@@ -3352,6 +3662,48 @@ function slskFolderItem (g) {
       h('div', { class: 'info' }, h('div', { class: 'name' }, g.title), h('div', { class: 'meta' }, where !== g.title ? where + ' · ' + facts : facts)),
       h('div', { class: 'acts' }, toggle, mirror)),
     files)
+}
+
+// ---- Discover: what to look for next. One main action (search the sources), the Soulseek shelves this browser
+// opened, newest first, and the library's artists. A press on an artist opens Search with the name and asks the
+// sources there, so every answer and its Save are in one place. Nothing here asks a source by itself.
+const SHELVES_KEY = 'peartube-shelves'
+function visitedShelves () {
+  try {
+    const v = JSON.parse(localStorage.getItem(SHELVES_KEY) || '[]')
+    return Array.isArray(v) ? v.filter(s => s && typeof s.user === 'string' && s.user) : []
+  } catch { return [] }
+}
+function noteShelf (user, folders) {
+  const list = [{ user, folders, at: Date.now() }, ...visitedShelves().filter(s => s.user !== user)].slice(0, 12)
+  try { localStorage.setItem(SHELVES_KEY, JSON.stringify(list)) } catch {}
+}
+const sinceWords = t => {
+  const m = Math.round((Date.now() - t) / 60000)
+  return m < 2 ? 'just now' : m < 60 ? m + ' min ago' : m < 2880 ? Math.round(m / 60) + ' h ago' : Math.round(m / 1440) + ' days ago'
+}
+const hueOf = s => [...String(s)].reduce((n, c) => (n * 31 + c.codePointAt(0)) % 360, 7)
+let discoverShown = ''
+function renderDiscover () {
+  const shelves = visitedShelves()
+  const artists = artistList(libraryTiles().filter(t => t.kind === 'album')).filter(a => a.name !== 'Unknown artist')
+    .sort((a, b) => b.albums.length - a.albums.length || a.name.localeCompare(b.name)).slice(0, 24)
+  const sig = JSON.stringify([S.loaded, shelves.map(s => [s.user, s.folders, sinceWords(s.at)]), artists.map(a => a.name)])
+  if (sig === discoverShown) return
+  discoverShown = sig
+  redrawKeepingFocus($('discShelves'), shelves.length
+    ? shelves.map(s => h('a', { class: 'person', 'data-fk': 'shelf-' + s.user, href: '#shelf/' + encodeURIComponent(s.user), style: '--hue:' + hueOf(s.user) },
+      h('span', { class: 'who', 'aria-hidden': 'true' }, [...s.user][0].toUpperCase()),
+      h('span', { class: 'text' }, h('strong', null, s.user), h('small', null, [Number.isFinite(s.folders) ? plural(s.folders, 'folder', 'folders') : '', sinceWords(s.at)].filter(Boolean).join(' · ')))))
+    : [h('p', { class: 'meta' }, 'A Soulseek shelf you open from Search shows here.')])
+  redrawKeepingFocus($('discArtists'), artists.length
+    ? artists.map(a => h('button', { class: 'chip', 'data-fk': 'artist-' + a.name, onclick: () => goPlace('#search/' + encodeURIComponent(a.name), () => $('srcForm').requestSubmit()) }, a.name))
+    : [h('p', { class: 'meta' }, S.loaded ? 'Artists show here once the library has music.' : 'Loading your artists…')])
+}
+$('discAsk').onclick = () => {
+  // The top bar's field is the one place to search; on a narrow screen it is at the top of Search.
+  if (shownEl($('srcInput'))) $('srcInput').focus()
+  else goPlace('#search', () => $('srcInput').focus())
 }
 
 // ---- Progress: one card per album being added from a source, redrawn every second from /v1/jobs while any is
@@ -3485,10 +3837,12 @@ function srcSyncButton (b) {
     started.delete(key.slice(2))
     b.textContent = b.dataset.label
     b.disabled = b.hasAttribute('data-none')
+    b.title = b.disabled ? 'Nothing selected in this folder.' : ''
     return
   }
   b.textContent = j ? jobState(j).short : key.startsWith('y:') ? 'Waiting' : 'Saving'
   b.disabled = true
+  b.title = 'This save is shown above while it runs.'
 }
 function renderSrcJobs () {
   const box = $('srcJobs')
@@ -3510,7 +3864,7 @@ function renderSrcJobs () {
 }
 function renderMirrors () {
   renderPills()
-  if (tab === 'find') renderSourcesStatus()
+  if (tab === 'search') renderSourcesStatus()
 }
 // Cheap and independent of the full refresh, which holds still while a film plays. When the last mirror ends, one
 // full refresh loads the new album's tracks so its card can open it.
@@ -3565,20 +3919,30 @@ function openDetail (key, season = null) {
   detailSeason = season
   goPlace((t && t.kind === 'album' ? '#album/' : '#title/') + encodeURIComponent(key))
 }
+// Play on a TV: this browser, the TVs, and the way to pair one, from a film's page, its file rows and the player.
 function castButton (e) {
-  const tvs = (S.cast && S.cast.receivers) || []
-  if (!tvs.length) return null
-  const wrap = h('span', { class: 'wrap-rel' })
-  wrap.append(h('button', { class: 'btn', 'aria-haspopup': 'menu', onclick: () => {
-    if (wrap.querySelector('.menu')) return wrap.querySelector('.menu').remove()
-    wrap.append(h('div', { class: 'menu', role: 'menu' }, tvs.map(tv => h('button', { class: 'btn', role: 'menuitem', onclick: ev => act(ev.currentTarget, async () => {
-      await api('/v1/cast/play', { body: { receiverId: tv.id, key: e.key } })
-      wrap.querySelector('.menu')?.remove()
-      toast('Playing on ' + tv.name)
-      loadCast()
-    }) }, tv.name))))
-  } }, 'Cast'))
-  return wrap
+  if (!S.cast) return null
+  return h('button', { class: 'btn', 'aria-haspopup': 'dialog', onclick: ev => tvMenu(ev.currentTarget, e) }, 'Play on a TV')
+}
+function tvMenu (opener, e) {
+  const here = Boolean(player && playerEntry === e)
+  const items = [h('button', { class: 'mi', 'aria-current': here ? 'true' : null, onclick: () => { if (!here) play(e) } }, 'This browser')]
+  for (const tv of tvList()) {
+    const st = tvState(tv)
+    items.push(h('button', { class: 'mi', disabled: !st.ok, title: st.why || null, onclick: () => castTo(tv, e) }, h('span', { class: 'grow' }, tv.name || 'TV'), h('small', { class: 'meta' }, st.word)))
+  }
+  items.push(h('hr'), h('button', { class: 'mi', onclick: () => openTvs(opener) }, 'Pair a TV…'))
+  return openMenu(opener, 'Play on a TV', items)
+}
+async function castTo (tv, e) {
+  try {
+    await api('/v1/cast/play', { body: { receiverId: tv.id, key: e.key } })
+    if (player && playerEntry === e) closePlayer()
+    toast('Playing on ' + (tv.name || 'the TV'))
+  } catch (err) {
+    toast((tv.name || 'The TV') + ' is not reachable: ' + err.message)
+  }
+  loadCast()
 }
 const resumeAtFor = e => {
   const w = watchStore[watchId(e)]
@@ -3636,7 +4000,9 @@ function armDelete (b, idle, ask, run) {
       return
     }
     reset()
-    act(b, run)
+    // A delete chosen in a menu closes the menu first, since the page under it changes.
+    if (overlay && overlay.el.classList.contains('menu') && overlay.el.contains(b)) closeOverlay('ui').then(() => act(b, run))
+    else act(b, run)
   }
   idle()
   return b
@@ -3749,6 +4115,8 @@ function commonQuality (t) {
 }
 const trackSecs = d => (d && d.media && d.media.duration) || 0
 const ICON_DOWNLOAD = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4v11m0 0l-4.5-4.5M12 15l4.5-4.5M5 19h14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>'
+// A row is one pointer target, and that target is a real button; the row's own controls sit above it.
+const rowHit = (label, go) => h('button', { class: 'row-hit', type: 'button', tabindex: '-1', 'aria-label': label, onclick: ev => { ev.stopPropagation(); go() } })
 // The whole row plays its track; the number turns into play or pause on the row being hovered or playing.
 function trackRow (i, t, common) {
   const e = i.e
@@ -3756,11 +4124,12 @@ function trackRow (i, t, common) {
   infoEntries.set(e.key, e)
   if (!d && readableHere(e)) loadInfo(e.key)
   const go = () => { if (canQueue(e)) isCurrent(e) ? musicToggle() : startQueue(albumTracks(t), e, t.title) }
-  const btn = h('button', { class: 'track-play', disabled: !canQueue(e), 'aria-label': 'Play ' + trackName(e), onclick: ev => { ev.stopPropagation(); go() } }, h('span', { class: 'tn' }, String(i.episode)))
+  const btn = h('button', { class: 'track-play', disabled: !canQueue(e), title: cannotQueue(e), 'aria-label': 'Play ' + trackName(e), onclick: ev => { ev.stopPropagation(); go() } }, h('span', { class: 'tn' }, String(i.episode)))
   btn.insertAdjacentHTML('beforeend', ICON_PLAY + ICON_PAUSE)
   const dl = e.streamUrl ? h('a', { class: 'track-dl', href: downloadHref(e, (trackNo(e) ? trackNo(e) + ' ' : '') + trackName(e) + ' — ' + t.title), download: '', title: 'Download', 'aria-label': 'Download ' + trackName(e) }) : null
   if (dl) dl.innerHTML = ICON_DOWNLOAD
-  return h('div', { class: 'row-item track', 'data-track': e.key, 'data-name': trackName(e), onclick: ev => { if (!ev.target.closest('a, button')) go() } },
+  return h('div', { class: 'row-item track', 'data-track': e.key, 'data-name': trackName(e) },
+    rowHit('Play ' + trackName(e), go),
     btn,
     h('div', { class: 'grow', style: 'min-width:0' },
       h('div', { class: 'label' }, trackName(e), h('span', { class: 'tag now', hidden: true })),
@@ -3921,6 +4290,7 @@ let heldForVideo = false
 let parkedAt = 0
 let musicActivity = Number(musicStore.t) || 0
 const canQueue = e => playable(e) && e.season != null && e.episode != null && !String(e.id).startsWith('imdb:')
+const cannotQueue = e => canQueue(e) ? null : 'This file has no track number, so it cannot join the list.'
 const musicPosition = () => audioEl && audioEl.getAttribute('src') ? audioEl.currentTime || 0 : parkedAt
 const musicLength = () => Number.isFinite(audioEl?.duration) ? audioEl.duration : trackSecs(infoData.get(queue[queueIndex]?.key))
 function startQueue (list, start, title, verb = 'Playing') {
@@ -3958,10 +4328,7 @@ function addToQueue (list, next, title) {
 }
 function queueOptions (list, title) {
   if (!list.some(canQueue)) return []
-  return [['Play next', true], ['Play last', false]].map(([label, next]) => h('button', { class: 'btn quiet', onclick: ev => {
-    ev.currentTarget.closest('.menu')?.remove()
-    addToQueue(list, next, title)
-  } }, label))
+  return [['Play next', true], ['Play last', false]].map(([label, next]) => h('button', { class: 'btn quiet', onclick: () => addToQueue(list, next, title) }, label))
 }
 function playAt (i, announce, offset = 0) {
   const e = queue[i]
@@ -4192,8 +4559,11 @@ function paintBar () {
     play.setAttribute('aria-label', label)
     play.title = label
     $(prefix + 'Repeat').setAttribute('aria-pressed', String(repeatList))
-    $(prefix + 'Shuffle').disabled = queue.length - queueIndex < 3
+    const few = queue.length - queueIndex < 3
+    $(prefix + 'Shuffle').disabled = few
+    $(prefix + 'Shuffle').title = few ? 'Needs three tracks after this one.' : 'Shuffle the coming tracks.'
     $(prefix + 'Next').disabled = last && !repeatList
+    $(prefix + 'Next').title = last && !repeatList ? 'Nothing after this track.' : 'Next track.'
     $(prefix + 'Vol').value = String(Math.round((audioEl?.volume ?? 1) * 100))
   }
   musicArt('npArt', t, e)
@@ -4217,6 +4587,7 @@ function paintBar () {
     musicText($('fpFrom'), albumName(queueTitle))
     $('fpFrom').href = first && queueTitle === first.title ? musicHref('album', first.key) : musicHref('artist', first?.artist || name)
     $('npClear').disabled = last
+    $('npClear').title = last ? 'Nothing after this track.' : 'Remove the tracks after this one.'
   }
   document.title = trackName(e) + ' · ' + album
   paintTime()
@@ -4233,6 +4604,7 @@ function paintTime () {
   for (const id of ['npSeek', 'fpSeek']) {
     const s = $(id)
     s.disabled = !dur
+    s.title = dur ? '' : 'Nothing is playing.'
     if (s !== seekDragging) { s.max = String(dur); s.value = String(at) }
     s.setAttribute('aria-valuetext', dur ? here + ' of ' + end : here)
   }
@@ -4457,23 +4829,11 @@ function pollInfo () {
 const goneNote = what => h('div', { class: 'empty', id: 'detailTitle' }, !S.loaded && !needsToken ? 'Loading the library…' : 'This ' + what + ' is no longer in the library.')
 const playIcons = () => { const ic = h('span', { class: 'btn-ic' }); ic.innerHTML = ICON_PLAY + ICON_PAUSE; return ic }
 const playIcon = () => { const ic = h('span', { class: 'btn-ic' }); ic.innerHTML = ICON_PLAY; return ic }
-// What a page can do beyond its two main actions. Real actions only: with none, there is no button.
+// What a page can do beyond its two main actions, in a menu. Real actions only: with none, there is no button.
 function moreMenu (label, items) {
   const real = items.flat().filter(Boolean)
   if (!real.length) return null
-  const wrap = h('span', { class: 'wrap-rel' })
-  wrap.append(h('button', {
-    class: 'btn dots',
-    'aria-haspopup': 'menu',
-    'aria-label': label,
-    title: label,
-    onclick: () => {
-      const open = wrap.querySelector('.menu')
-      if (open) return open.remove()
-      wrap.append(h('div', { class: 'menu wide', role: 'menu' }, real))
-    }
-  }, '…'))
-  return wrap
+  return h('button', { class: 'btn dots', 'aria-haspopup': 'dialog', 'aria-label': label, title: label, onclick: ev => openMenu(ev.currentTarget, label, real) }, '…')
 }
 function shuffled (list) {
   const pool = list.slice()
@@ -4579,10 +4939,12 @@ function renderArtistPage (box, name) {
 function songRow (t, i) {
   const e = i.e
   const by = (e.music && e.music.artist) || t.artist || ''
-  const btn = h('button', { class: 'track-play flat', disabled: !canQueue(e), 'aria-label': 'Play ' + trackName(e), onclick: () => isCurrent(e) ? musicToggle() : startQueue(albumTracks(t), e, t.title) })
+  const btn = h('button', { class: 'track-play flat', disabled: !canQueue(e), title: cannotQueue(e), 'aria-label': 'Play ' + trackName(e), onclick: () => isCurrent(e) ? musicToggle() : startQueue(albumTracks(t), e, t.title) })
   btn.insertAdjacentHTML('beforeend', ICON_PLAY + ICON_PAUSE)
   btn.append(h('span', { class: 'track-name' }, trackName(e)))
+  const go = () => { if (canQueue(e)) isCurrent(e) ? musicToggle() : startQueue(albumTracks(t), e, t.title) }
   return h('div', { class: 'row-item', 'data-track': e.key, 'data-name': trackName(e) },
+    rowHit('Play ' + trackName(e), go),
     btn,
     h('span', { class: 'track-by' }, by),
     h('a', { class: 'track-of', href: '#album/' + encodeURIComponent(t.key) }, t.album),
@@ -4686,10 +5048,8 @@ function leaveDetail () {
 $('detailClose').onclick = leaveDetail
 // Escape leaves a page, the way Back does. Anything else that is open takes the key first.
 addEventListener('keydown', ev => {
-  if (ev.key !== 'Escape' || ev.defaultPrevented || !DETAIL_ROOM[tab]) return
-  if (document.querySelector('dialog[open], .menu')) return
+  if (ev.key !== 'Escape' || ev.defaultPrevented || !DETAIL_ROOM[tab] || overlay) return
   if ($('playerModal').classList.contains('open')) return
-  if ($('moreBtn').getAttribute('aria-expanded') === 'true') return
   leaveDetail()
 })
 
@@ -4698,6 +5058,7 @@ $('followForm').onsubmit = async ev => {
   ev.preventDefault()
   const val = $('followInput').value.trim()
   const alias = $('followName').value.trim()
+  if (!val) { say('followMsg', 'Add a channel key, a link or a pass.', true); $('followInput').focus(); return }
   await act(ev.submitter, async () => {
     const access = /^peartube:(?:[/][/])?access[/]/i.test(val)
     const body = HEX.test(val) ? { key: val.toLowerCase(), kind: 'channel', alias } : { uri: val, alias }
@@ -4713,6 +5074,7 @@ $('writerForm').onsubmit = async ev => {
   const writer = $('writerInput').value.trim().toLowerCase()
   const role = $('writerRole').value
   const alias = $('writerName').value.trim()
+  if (!writer) { say('writerMsg', 'Add the device’s key to allow it to write.', true); $('writerInput').focus(); return }
   await act(ev.submitter, async () => {
     S.identity = await api('/v1/identity/writers', { body: { writer, role, alias } })
     $('writerInput').value = ''
@@ -4724,6 +5086,7 @@ $('writerForm').onsubmit = async ev => {
 $('recoverForm').onsubmit = async ev => {
   ev.preventDefault()
   const mnemonic = $('recoverInput').value.trim()
+  if (!mnemonic) { say('recoverMsg', 'Add the 12 words that came with the channel.', true); $('recoverInput').focus(); return }
   await act(ev.submitter, async () => {
     S.identity = await api('/v1/identity/recover', { body: { mnemonic } })
     $('recoverInput').value = ''
@@ -4758,9 +5121,24 @@ function envNote (key) {
   const s = setting(key)
   return s && s.source === 'env' ? 'From ' + s.env : ''
 }
-function switchRow (label, checked, onchange, { disabled = false, note = '' } = {}) {
-  const input = h('input', { type: 'checkbox', role: 'switch', checked: Boolean(checked), disabled })
-  input.onchange = () => act(input, () => onchange(input.checked)).then(render)
+// A switch sends its change and stays in reach: the redraw that follows gives focus back (its data-fk names it), and a
+// press while the change is in flight waits for it instead of racing it.
+function switchRow (label, checked, onchange, { disabled = false, note = '', fk = '' } = {}) {
+  const input = h('input', { id: fk ? 'sw-' + fk : null, 'data-fk': fk || null, type: 'checkbox', role: 'switch', checked: Boolean(checked), 'aria-busy': 'false', title: disabled ? 'Off with private routing.' : null })
+  let busy = false
+  input.addEventListener('click', e => { if (busy || disabled) e.preventDefault() })
+  input.onchange = async () => {
+    busy = true
+    input.setAttribute('aria-busy', 'true')
+    try { await onchange(input.checked) } catch (err) { toast(err.message) } finally {
+      busy = false
+      input.setAttribute('aria-busy', 'false')
+      render()
+      // The row is drawn again around its switch: a keyboard or pointer user keeps the same switch under their hands.
+      const twin = fk && document.querySelector('[data-fk="' + fk + '"]')
+      if (twin && (!document.activeElement || document.activeElement === document.body)) twin.focus({ preventScroll: true })
+    }
+  }
   return h('label', { class: 'switch' }, input, h('span', null, label), note ? h('span', { class: 'tag' }, note) : null)
 }
 
@@ -4798,20 +5176,20 @@ function renderChannels () {
   }
   const following = (src.sources || []).filter(s => !s.writable)
   $('followCount').textContent = following.length ? String(following.length) : ''
-  $('following').replaceChildren(...(following.length ? following.map(s => {
+  redrawKeepingFocus($('following'), following.length ? following.map(s => {
     const listed = published.has(s.key)
     return h('div', { class: 'item' },
       h('div', { class: 'info' },
         h('div', { class: 'name' }, s.alias || 'Channel ' + short(s.key)),
         h('div', { class: 'meta' }, 'Channel' + (listed ? ' · In your directory' : '')),
-        canEdit ? switchRow('Keep a copy here', copying(s.key), on => keepCopy(s.key, on)) : null),
+        canEdit ? switchRow('Keep a copy here', copying(s.key), on => keepCopy(s.key, on), { fk: 'keep-' + s.key }) : null),
       h('div', { class: 'acts' },
-        copyBtn('Copy link', 'peartube://channel/' + s.key),
+        copyBtn('Copy link', 'peartube://channel/' + s.key, 'link-' + s.key),
         listed
-          ? h('button', { class: 'btn quiet', onclick: e => act(e.currentTarget, async () => { await api('/v1/channel/sources/' + s.key, { method: 'DELETE' }); refresh() }) }, 'Remove from directory')
-          : h('button', { class: 'btn quiet', onclick: e => act(e.currentTarget, async () => { await api('/v1/channel/publish', { body: { type: 'source', sourceKey: s.key, kind: 'channel', title: s.alias || short(s.key) } }); refresh() }) }, 'Add to directory'),
-        h('button', { class: 'btn quiet', onclick: e => act(e.currentTarget, async () => { await api('/v1/sources/' + s.key, { method: 'DELETE' }); refresh() }) }, 'Unfollow')))
-  }) : [h('div', { class: 'empty' }, 'You are not following anything yet.')]))
+          ? h('button', { class: 'btn quiet', 'data-fk': 'dir-' + s.key, onclick: e => act(e.currentTarget, async () => { await api('/v1/channel/sources/' + s.key, { method: 'DELETE' }); refresh() }) }, 'Remove from directory')
+          : h('button', { class: 'btn quiet', 'data-fk': 'dir-' + s.key, onclick: e => act(e.currentTarget, async () => { await api('/v1/channel/publish', { body: { type: 'source', sourceKey: s.key, kind: 'channel', title: s.alias || short(s.key) } }); refresh() }) }, 'Add to directory'),
+        h('button', { class: 'btn quiet', 'data-fk': 'unfollow-' + s.key, onclick: e => act(e.currentTarget, async () => { await api('/v1/sources/' + s.key, { method: 'DELETE' }); refresh() }) }, 'Unfollow')))
+  }) : [h('div', { class: 'empty' }, 'You are not following anything yet.')])
   const found = (src.discovered || []).filter(d => !(src.sources || []).some(s => s.key === d.key))
   $('foundWrap').hidden = !found.length
   $('found').replaceChildren(...found.map(d => h('div', { class: 'item' },
@@ -4825,7 +5203,7 @@ function renderSharing () {
   const st = S.status
   const routes = st.routes || {}
   const lan = st.lan
-  $('netCard').replaceChildren(
+  redrawKeepingFocus($('netCard'), [
     h('div', { class: 'stats' },
       stat(String((routes.public && routes.public.peers) || 0), 'over the internet'),
       stat(String(st.lanPeers || 0), lan ? 'nearby on ' + lan.host : 'nearby'),
@@ -4833,7 +5211,7 @@ function renderSharing () {
       stat(st.privateGuard ? String(st.privateGuard.activeCircuits || 0) : 'Off', 'guard circuits'),
       stat(rate(st.upBps), 'sending now'),
       stat(rate(st.downBps), 'receiving now')),
-    S.settings ? h('div', { style: 'margin-top:12px' }, switchRow('Find peers on this network', sval('lan'), on => saveSettings({ lan: on }), { note: envNote('lan') })) : null)
+    S.settings ? h('div', { style: 'margin-top:12px' }, switchRow('Find peers on this network', sval('lan'), on => saveSettings({ lan: on }), { note: envNote('lan'), fk: 'lan' })) : null])
 
   const rep = plugin('p2p-replicate')
   const only = sval('replicateSources') || []
@@ -4847,28 +5225,28 @@ function renderSharing () {
     else if (rep.activeTitles && rep.activeTitles.length) copyLines.push(h('div', { class: 'meta', style: 'margin-top:10px' }, 'Copying ' + rep.activeTitles.map(t => t.split(' · ').slice(1).join(' · ')).join(', ')))
     if (rep.skippedDiskFull) copyLines.push(h('div', { class: 'meta' }, plural(rep.skippedDiskFull, 'video', 'videos') + ' skipped to keep disk space free'))
   }
-  $('copiesCard').replaceChildren(
+  redrawKeepingFocus($('copiesCard'), [
     S.settings
-      ? switchRow(only.length ? 'Keep copies of ' + plural(only.length, 'followed source', 'followed sources') : 'Keep copies of everything I follow', sval('replicate'), on => saveSettings({ replicate: on, replicateSources: on ? only : [] }), { note: envNote('replicate') })
+      ? switchRow(only.length ? 'Keep copies of ' + plural(only.length, 'followed source', 'followed sources') : 'Keep copies of everything I follow', sval('replicate'), on => saveSettings({ replicate: on, replicateSources: on ? only : [] }), { note: envNote('replicate'), fk: 'replicate' })
       : h('div', { class: 'hint' }, 'Sign in to change sharing.'),
     ...copyLines,
-    h('div', { class: 'hint', style: 'margin-top:8px' }, 'Disk and speed limits are in ', h('a', { href: '#settings' }, 'Settings'), '.'))
+    h('div', { class: 'hint', style: 'margin-top:8px' }, 'Disk and speed limits are in ', h('a', { href: '#settings' }, 'Settings'), '.')])
 
   const mc = plugin('media-check')
-  $('globalCard').replaceChildren(
+  redrawKeepingFocus($('globalCard'), [
     S.settings
-      ? switchRow('Answer searches from other nodes', sval('globalSearch'), on => saveSettings({ globalSearch: on }), { note: envNote('globalSearch'), disabled: Boolean(st.privateRouting) })
+      ? switchRow('Answer searches from other nodes', sval('globalSearch'), on => saveSettings({ globalSearch: on }), { note: envNote('globalSearch'), disabled: Boolean(st.privateRouting), fk: 'globalSearch' })
       : h('div', { class: 'hint' }, 'Sign in to change sharing.'),
     mc.enabled && !st.privateRouting
       ? h('div', { class: 'stats' }, stat(String(mc.mediaFiles || 0), 'files offered'), stat(String(mc.checkedFiles || 0), 'files checked'))
       : null,
     st.privateRouting ? h('div', { class: 'hint' }, 'Off while private routing is on.') : null,
-    h('div', { class: 'hint', style: 'margin-top:8px' }, 'Offers media this relay holds; each file is checked once.'))
+    h('div', { class: 'hint', style: 'margin-top:8px' }, 'Offers media this relay holds; each file is checked once.')])
 
   const hr = plugin('hiverelay-seed')
   const relays = sval('hiverelays') || []
   const lines = []
-  if (S.settings) lines.push(switchRow('Find HiveRelays automatically', sval('hiverelayDiscover'), on => saveSettings({ hiverelayDiscover: on }), { note: envNote('hiverelayDiscover') }))
+  if (S.settings) lines.push(switchRow('Find HiveRelays automatically', sval('hiverelayDiscover'), on => saveSettings({ hiverelayDiscover: on }), { note: envNote('hiverelayDiscover'), fk: 'hiverelayDiscover' }))
   if (hr.enabled) {
     lines.push(h('div', { class: 'stats' },
       stat(String((hr.p2pAcceptedRelays || []).length + (hr.configuredRelays || []).filter(r => r.pubkey).length), 'HiveRelays seeding'),
@@ -4884,20 +5262,21 @@ function renderSharing () {
     const later = S.settings.restartNeeded.includes('hiverelays')
     lines.push(h('div', { class: 'listedit', style: 'margin-top:10px' }, relays.map(r => h('div', { class: 'entry' }, h('span', null, r.label, ' ',
       h('span', { class: 'tag' + (running.get(r.label)?.pubkey ? ' ok' : '') }, later && !running.has(r.label) ? 'Not applied yet' : running.get(r.label)?.pubkey ? 'Seeding' : 'Not reached yet')),
-      h('button', { class: 'btn quiet', onclick: e => act(e.currentTarget, () => saveSettings({ hiverelays: relays.filter(x => x !== r).map(x => x.ref) })) }, 'Remove')))))
+      h('button', { class: 'btn quiet', 'data-fk': 'hive-' + r.ref, onclick: e => act(e.currentTarget, () => saveSettings({ hiverelays: relays.filter(x => x !== r).map(x => x.ref) })) }, 'Remove')))))
   }
-  $('hiveStatus').replaceChildren(...lines)
+  redrawKeepingFocus($('hiveStatus'), lines)
   $('hiveForm').hidden = !S.settings
 
   const origin = location.origin
-  $('appsCard').replaceChildren(
-    h('div', { class: 'setting' }, h('div', { class: 'what' }, h('span', { class: 'label' }, 'Stremio add-on'), h('span', { class: 'hint' }, 'Install this address in Stremio.')), copyBtn('Copy address', origin + '/manifest.json')),
-    h('div', { class: 'setting' }, h('div', { class: 'what' }, h('span', { class: 'label' }, 'M3U playlist'), h('span', { class: 'hint' }, 'For VLC, Kodi and IPTV players.')), copyBtn('Copy address', origin + '/v1/playlist.m3u')))
+  redrawKeepingFocus($('appsCard'), [
+    h('div', { class: 'setting' }, h('div', { class: 'what' }, h('span', { class: 'label' }, 'Stremio add-on'), h('span', { class: 'hint' }, 'Install this address in Stremio.')), copyBtn('Copy address', origin + '/manifest.json', 'stremio')),
+    h('div', { class: 'setting' }, h('div', { class: 'what' }, h('span', { class: 'label' }, 'M3U playlist'), h('span', { class: 'hint' }, 'For VLC, Kodi and IPTV players.')), copyBtn('Copy address', origin + '/v1/playlist.m3u', 'm3u'))])
 }
 $('hiveForm').onsubmit = async ev => {
   ev.preventDefault()
   const url = $('hiveInput').value.trim().replace(/[/]+$/, '')
   const key = $('hiveKey').value.trim()
+  if (!url) { say('hiveMsg', 'Add the HiveRelay’s address first.', true); $('hiveInput').focus(); return }
   await act(ev.submitter, async () => {
     await saveSettings({ hiverelays: [...(sval('hiverelays') || []).map(r => r.ref), key ? url + '=' + key : url] })
     $('hiveInput').value = ''
@@ -4906,7 +5285,24 @@ $('hiveForm').onsubmit = async ev => {
   }, 'hiveMsg')
 }
 
-// ---- TV
+// ---- TVs: one dialog from the TV icon in the top bar (and #tv). It names a TV, never its network address.
+const tvList = () => (S.cast && S.cast.receivers) || []
+const tvsOpen = () => Boolean(overlay && overlay.el === $('tvsDlg'))
+let tvsShown = ''
+// What a TV can do now, in the words of the dialog and of the Play on a TV menu.
+function tvState (tv) {
+  const s = S.cast && S.cast.session
+  if (s && s.receiverId === tv.id) return { word: 'Playing', dot: 'playing', ok: true }
+  if (tv.current === false) return { word: 'Needs an update', why: 'This TV runs an older PearTube. Update it to play here.' }
+  if (!tv.paired) return { word: 'Needs its code', why: 'Pair it first: type the code that the TV shows.' }
+  return { word: 'Ready', dot: 'ready', ok: true }
+}
+function openTvs (opener) {
+  say('pairMsg', '')
+  tvsShown = ''
+  return openOverlay($('tvsDlg'), { opener }).then(() => { renderCast(); loadCast() })
+}
+$('tvBtn').onclick = ev => openTvs(ev.currentTarget)
 $('pairForm').onsubmit = async ev => {
   ev.preventDefault()
   const val = $('pairInput').value.trim()
@@ -4914,45 +5310,76 @@ $('pairForm').onsubmit = async ev => {
     const body = /^peartube:/i.test(val) ? { uri: val } : { code: val.toUpperCase() }
     const r = await api('/v1/cast/pair', { body })
     $('pairInput').value = ''
+    $('tvsDlg')._dirty = false
     say('pairMsg', 'Paired with ' + ((r && r.name) || 'the TV') + '.')
     loadCast()
   }, 'pairMsg')
 }
 function castControl (body) {
-  return api('/v1/cast/control', { body }).then(s => { S.cast = s; renderCast() })
+  return api('/v1/cast/control', { body }).then(s => { S.cast = s; renderCast() }, err => toast(err.message))
 }
+// The remote's buttons, in the TVs dialog and in the bar at the bottom. They are drawn again with every answer from
+// the TV, so each keeps its data-fk and the focus stays on it.
 function castButtons () {
   const state = (S.cast && S.cast.session && S.cast.session.state) || {}
   const paused = state.paused === true || state.playing === false
   return [
-    h('button', { class: 'btn', 'aria-label': 'Back 10 seconds', onclick: e => act(e.currentTarget, () => castControl({ action: 'skip', deltaMs: -10000 })) }, '-10s'),
-    h('button', { class: 'btn primary', onclick: e => act(e.currentTarget, () => castControl({ action: 'togglePlay' })) }, paused ? 'Play' : 'Pause'),
-    h('button', { class: 'btn', 'aria-label': 'Forward 10 seconds', onclick: e => act(e.currentTarget, () => castControl({ action: 'skip', deltaMs: 10000 })) }, '+10s'),
-    h('button', { class: 'btn', onclick: e => act(e.currentTarget, async () => { S.cast = await api('/v1/cast/stop', { body: {} }); render() }) }, 'Stop')
+    h('button', { class: 'btn', 'data-fk': 'cast-back', 'aria-label': 'Back 10 seconds', onclick: () => castControl({ action: 'skip', deltaMs: -10000 }) }, '-10s'),
+    h('button', { class: 'btn primary', 'data-fk': 'cast-play', onclick: () => castControl({ action: 'togglePlay' }) }, paused ? 'Play' : 'Pause'),
+    h('button', { class: 'btn', 'data-fk': 'cast-fwd', 'aria-label': 'Forward 10 seconds', onclick: () => castControl({ action: 'skip', deltaMs: 10000 }) }, '+10s'),
+    h('button', { class: 'btn', 'data-fk': 'cast-stop', onclick: e => act(e.currentTarget, async () => { S.cast = await api('/v1/cast/stop', { body: {} }); renderCast() }) }, 'Stop')
   ]
+}
+// An empty slot in the list is left out: replaceChildren would print it as the word "null".
+function redrawKeepingFocus (box, kids) {
+  const fk = box.contains(document.activeElement) ? document.activeElement.dataset.fk : ''
+  box.replaceChildren(...kids.filter(k => k != null && k !== false))
+  const again = fk && [...box.querySelectorAll('[data-fk]')].find(b => b.dataset.fk === fk)
+  if (again) again.focus({ preventScroll: true })
 }
 function renderCastBar () {
   const session = S.cast && S.cast.session
   const bar = $('castBar')
-  bar.hidden = !session || tab === 'tv'
+  bar.hidden = !session
   if (!session) return
   const state = session.state || {}
-  bar.replaceChildren(h('div', { class: 'grow', style: 'min-width:0' }, h('div', { class: 'name' }, state.title || 'Casting'), h('div', { class: 'meta' }, 'on ' + session.receiverName)), ...castButtons())
+  redrawKeepingFocus(bar, [h('div', { class: 'grow', style: 'min-width:0' }, h('div', { class: 'name' }, state.title || 'A film'), h('div', { class: 'meta' }, 'on ' + session.receiverName)), ...castButtons()])
 }
 function renderCast () {
   const c = S.cast
   const session = c && c.session
+  const label = session ? 'TVs: playing on ' + session.receiverName : 'TVs'
+  $('tvDot').hidden = !session
+  $('tvBtn').setAttribute('aria-label', label)
+  $('tvBtn').title = label
+  renderCastBar()
+  if (!tvsOpen()) return
   $('castNow').hidden = !session
   if (session) {
     const state = session.state || {}
     const clock = state.durationMs ? fmtClock((state.positionMs || 0) / 1000) + ' / ' + fmtClock(state.durationMs / 1000) : ''
-    $('castNow').replaceChildren(h('div', { class: 'label' }, 'Playing on ' + session.receiverName), h('h3', { style: 'margin:6px 0' }, state.title || 'Casting'), clock ? h('div', { class: 'meta' }, clock) : null, h('div', { class: 'row', style: 'margin-top:12px' }, castButtons()))
-  }
-  const tvs = (c && c.receivers) || []
-  $('tvs').replaceChildren(...(tvs.length ? tvs.map(tv => h('div', { class: 'item' },
-    h('div', { class: 'info' }, h('div', { class: 'name' }, tv.name || 'TV'), h('div', { class: 'meta' }, h('span', { class: tv.online ? 'tag ok' : 'tag' }, tv.online ? 'Online' : 'Offline'), ' ', tv.paired ? 'Paired' : 'Not paired', tv.host ? ' · ' + tv.host : '')),
-    h('div', { class: 'acts' }, h('button', { class: 'btn quiet', onclick: e => act(e.currentTarget, async () => { await api('/v1/cast/receivers/' + encodeURIComponent(tv.id), { method: 'DELETE' }); loadCast() }) }, 'Forget')))) : [h('div', { class: 'empty' }, c ? 'No TVs yet. Pair one with its code.' : 'Casting is not available on this relay.')]))
-  renderCastBar()
+    redrawKeepingFocus($('castNow'), [h('div', { class: 'label' }, 'Playing on ' + session.receiverName), h('strong', null, state.title || 'A film'), clock ? h('div', { class: 'meta' }, clock) : null, h('div', { class: 'row', style: 'margin-top:12px' }, castButtons())])
+  } else $('castNow').replaceChildren()
+  // The list is drawn again only when a TV or its state changes, so a Forget that waits for its second press stays.
+  const tvs = tvList()
+  const sig = JSON.stringify([Boolean(c), tvs.map(tv => [tv.id, tv.name, tvState(tv).word])])
+  if (sig === tvsShown) return
+  tvsShown = sig
+  $('pairForm').hidden = !c
+  redrawKeepingFocus($('tvs'), tvs.length ? tvs.map(tvRow) : [h('p', { class: 'empty' }, c ? 'No TVs yet.' : 'TVs are not available on this relay.')])
+}
+function tvRow (tv) {
+  const st = tvState(tv)
+  const ask = h('small', { class: 'del-ask', role: 'status', hidden: true }, 'Pairing again needs its code.')
+  const b = h('button', { class: 'btn quiet', 'data-fk': 'forget-' + tv.id })
+  armDelete(b, () => { b.textContent = 'Forget' }, ask, async () => {
+    await api('/v1/cast/receivers/' + encodeURIComponent(tv.id), { method: 'DELETE' })
+    await loadCast()
+  })
+  return h('div', { class: 'tv-row' },
+    h('span', { class: 'tv-state' + (st.dot ? ' ' + st.dot : ''), 'aria-hidden': 'true' }),
+    h('div', { class: 'text' }, h('strong', null, tv.name || 'TV'), h('small', null, st.word), ask),
+    b)
 }
 
 // ---- Settings
@@ -5005,8 +5432,17 @@ const dirtyCards = new Set()
 
 async function saveSettings (patch, card = null) {
   const reopens = Object.keys(patch).some(k => !setting(k).live)
+  const msg = card && card.querySelector('.save-msg')
+  if (msg) { msg.textContent = ''; msg.hidden = true }
   if (reopens) toast('Applying…')
-  const r = await api('/v1/settings', { method: 'PUT', body: patch })
+  let r
+  try { r = await api('/v1/settings', { method: 'PUT', body: patch }) } catch (err) {
+    if (!msg) throw err
+    msg.textContent = err.message
+    msg.hidden = false
+    return null
+  }
+  if (!r) return null
   S.settings = r
   if (r.warning) toast(r.warning)
   else toast(reopens && r.changed.length ? 'Saved and applied' : 'Saved')
@@ -5041,7 +5477,9 @@ function settingRow (item, draft) {
   const changed = el => {
     const card = el.closest('.card')
     dirtyCards.add(card.dataset.group)
-    card.querySelector('.save').disabled = false
+    const save = card.querySelector('.save')
+    save.disabled = false
+    save.removeAttribute('title')
   }
   const tags = [h('span', { class: 'tag ok' }, s.live ? 'Applies on save' : 'Applies on save, reconnects peers')]
   // A pending "Use PEARTUBE_…" is undone by any later edit of the same setting: the newest edit is what Save sends.
@@ -5073,7 +5511,7 @@ function settingRow (item, draft) {
       else draft.set(item.key, input.checked)
       changed(input)
     }
-    return h('div', { class: 'setting' }, what, h('div', { class: 'control narrow' }, h('span', { class: 'switch' }, input)))
+    return h('div', { class: 'setting' }, what, h('div', { class: 'control narrow' }, h('label', { class: 'switch' }, input)))
   }
   if (s.type === 'keys' || s.type === 'hosts' || s.type === 'urls') {
     const shown = v => s.type === 'urls' ? v.label : v
@@ -5098,7 +5536,8 @@ function settingRow (item, draft) {
       input.value = ''
       edited(add)
     }
-    input.onkeydown = e => { if (e.key === 'Enter') { e.preventDefault(); add.click() } }
+    // Enter adds the entry and saves the card, since a card is a form and Enter in it saves.
+    input.onkeydown = e => { if (e.key === 'Enter') { e.preventDefault(); add.click(); input.closest('form')?.requestSubmit() } }
     return h('div', { class: 'setting' }, what, h('div', { class: 'control listedit' }, entries,
       h('div', { class: 'row' }, h('span', { class: 'grow' }, input), add)))
   }
@@ -5120,12 +5559,15 @@ function readField (input) {
   return input.value.trim()
 }
 
+// A card is a form: Enter in any of its fields saves it, as Save changes does.
 function settingsCard (g) {
   const draft = new Map()
-  const card = h('div', { class: 'card' }, h('h3', null, g.title), g.hint ? h('div', { class: 'hint', style: 'margin:-2px 0 6px' }, g.hint) : null, g.items.filter(item => !item.when || item.when()).map(item => settingRow(item, draft)))
+  const card = h('form', { class: 'card', novalidate: true }, h('h3', null, g.title), g.hint ? h('div', { class: 'hint', style: 'margin:-2px 0 6px' }, g.hint) : null, g.items.filter(item => !item.when || item.when()).map(item => settingRow(item, draft)))
   card.dataset.group = g.title
-  const save = h('button', { class: 'btn primary save', disabled: true }, 'Save changes')
-  save.onclick = () => {
+  const save = h('button', { class: 'btn primary save', type: 'submit', disabled: true, title: 'Change a setting first.' }, 'Save changes')
+  card.onsubmit = ev => {
+    ev.preventDefault()
+    if (save.disabled) return
     const patch = Object.fromEntries(draft)
     for (const input of card.querySelectorAll('input[data-key]')) {
       if (draft.has(input.dataset.key)) continue
@@ -5135,7 +5577,7 @@ function settingsCard (g) {
     }
     if (Object.keys(patch).length) act(save, () => saveSettings(patch, card))
   }
-  card.append(h('div', { class: 'row', style: 'margin-top:12px' }, save))
+  card.append(h('div', { class: 'row', style: 'margin-top:12px' }, save), h('div', { class: 'msg err save-msg', role: 'alert', hidden: true }))
   return card
 }
 
@@ -5167,7 +5609,7 @@ function renderSettings (force) {
       h('div', { class: 'meta' }, rechunk.running ? 'Converting old-format videos: ' + done + ' of ' + rechunk.total : plural(rechunk.remaining, 'video uses', 'videos use') + ' the old storage format.'),
       rechunk.running ? h('div', { class: 'bar-track' }, h('div', { style: 'width:' + Math.round(done / Math.max(1, rechunk.total) * 100) + '%' })) : null,
       h('div', { class: 'row', style: 'margin-top:12px' },
-        h('button', { class: 'btn primary', disabled: Boolean(rechunk.running), onclick: e => act(e.currentTarget, async () => { api('/v1/plugins/blob-rechunk/run', { body: { foreground: true } }).then(refresh, err => toast(err.message)); toast('Converting now'); setTimeout(refresh, 500) }) }, 'Convert now'))))
+        h('button', { class: 'btn primary', disabled: Boolean(rechunk.running), title: rechunk.running ? 'A conversion is already running.' : null, onclick: e => act(e.currentTarget, async () => { api('/v1/plugins/blob-rechunk/run', { body: { foreground: true } }).then(refresh, err => toast(err.message)); toast('Converting now'); setTimeout(refresh, 500) }) }, 'Convert now'))))
   }
   blocks.push(h('div', { class: 'card' }, h('h3', null, 'Access'),
     h('div', { class: 'row' }, h('span', { class: 'grow hint' }, token ? 'Signed in on this browser.' : 'No token needed on this relay.'),
@@ -5197,6 +5639,7 @@ $('authForm').onsubmit = async ev => {
 }
 
 showTab()
+paintBoot()
 // Settings need the token: ask for it first instead of probing with a request that fails.
 refresh().then(() => {
   if (S.status.tokenRequired && !token) {
@@ -5228,7 +5671,7 @@ setInterval(() => {
   const busy = S.jobs.some(j => j.status === 'running' || j.status === 'queued' || j.status === 'transferring' || j.status === 'announcing') || plugin('p2p-replicate').replicating || plugin('blob-rechunk').running
   if (busy || document.visibilityState === 'visible') refresh()
 }, 4000)
-setInterval(() => { if (tab === 'tv' || (S.cast && S.cast.session)) loadCast() }, 5000)
+setInterval(() => { if (tvsOpen() || (S.cast && S.cast.session)) loadCast() }, 5000)
 
 // In-browser peartube-media WebAssembly player: demuxes MKV/AVI/MP4/TS over same-origin HTTP Range,
 // hardware-accelerates H.264/HEVC via fMP4 MSE when supported, falls back to WASM SIMD software video,
@@ -5381,11 +5824,19 @@ function setMiniPlayer (mini) {
   modal.classList.toggle('mini', mini)
   modal.setAttribute('aria-modal', String(!mini))
   modal.classList.remove('chrome-hidden')
-  if (!mini) showPlayerChrome()
+  if (!mini) {
+    if (!(history.state && history.state.player === playerState)) {
+      playerState = ++playerSeq
+      history.pushState({ ...history.state, player: playerState }, '')
+    }
+    showPlayerChrome()
+  }
 }
 
-function closePlayer () {
+function closePlayer (opts = {}) {
   if (!player) return
+  const drop = !opts.keepEntry && history.state && history.state.player === playerState
+  const opener = playerOpener
   clearTimeout(seekTimer)
   clearTimeout(chromeTimer)
   $('playerModal').classList.remove('mini', 'chrome-hidden')
@@ -5413,11 +5864,20 @@ function closePlayer () {
   $('pBackdrop').classList.remove('vis')
   const sc = $('pSubCanvas')
   sc.getContext('2d').clearRect(0, 0, sc.width, sc.height)
+  playerOpener = null
+  // Focus goes back to what opened the player, whichever way it closed (its own control, Escape, or Back).
+  let back = opener
+  if (back && $('playerModal').contains(back)) back = document.querySelector('#detail [data-play]') || null
+  if (back && back.isConnected && !opts.noFocus) back.focus({ preventScroll: true })
+  if (!opts.keepEntry && drop) history.back()
   if (refreshQueued) { refreshQueued = false; setTimeout(refresh, 50) }
 }
 
 function openPlayer (entry, at = 0) {
-  closePlayer()
+  const wasOpen = Boolean(player)
+  const opener = wasOpen ? playerOpener : document.activeElement instanceof HTMLElement && document.activeElement !== document.body ? document.activeElement : null
+  closePlayer({ keepEntry: true })
+  playerOpener = opener
   // One sound at a time: a film or a clip pauses the album, which stays on its bar to resume after.
   if (audioEl && !audioEl.paused) {
     heldForVideo = true
@@ -5434,6 +5894,7 @@ function openPlayer (entry, at = 0) {
   $('pFileInfo').open = false
   $('pBadge').textContent = workerWarm ? 'Opening…' : 'Loading player…'
   $('pRawLink').href = streamUrl
+  $('pCastBtn').hidden = !S.cast || entry.locked
   showStatus(workerWarm ? 'Opening stream…' : 'Loading player…')
   const imdbId = (entry.id && (entry.id.match(/^imdb:(tt[0-9]+)/) || [])[1]) || null
   const cachedArt = imdbId ? [...document.querySelectorAll('#detail img.poster, #entries img.poster')].find(i => i.complete && i.naturalWidth > 0 && i.src.includes(imdbId)) : null
@@ -5451,6 +5912,15 @@ function openPlayer (entry, at = 0) {
   $('playerModal').setAttribute('aria-modal', 'true')
   $('playerModal').classList.add('open')
   showPlayerChrome()
+  // Back closes the player and leaves the view under it; a second film in the same player reuses its entry.
+  if (wasOpen && history.state && history.state.player) {
+    playerState = ++playerSeq
+    history.replaceState({ ...history.state, player: playerState }, '')
+  } else {
+    playerState = ++playerSeq
+    history.pushState({ ...history.state, player: playerState }, '')
+  }
+  $('pCloseBtn').focus({ preventScroll: true })
 
   // Each decoded chunk becomes its own AudioBufferSourceNode. If its sample rate differs from the context's, the browser
   // resamples every 20–30 ms buffer on its own and the edges click; matching the rate leaves one resampler at the output.
@@ -5967,6 +6437,7 @@ function openPlayer (entry, at = 0) {
         return o
       }) : [Object.assign(el('option', null, 'No Audio'), { value: '-1' })]))
       aSel.disabled = auds.length <= 1
+      aSel.title = aSel.disabled ? 'This file has one audio track.' : 'Pick the audio track.'
 
       const sSel = $('pSubSel')
       const offOpt = el('option', null, 'Subtitles off'); offOpt.value = '-1'
@@ -5976,6 +6447,7 @@ function openPlayer (entry, at = 0) {
         return o
       }))
       sSel.disabled = subs.length === 0
+      sSel.title = sSel.disabled ? 'This file has no subtitles.' : 'Pick subtitles.'
 
       p.webCodecsSupported = Boolean(m.webCodecsSupported)
       const MS = window.MediaSource || window.ManagedMediaSource
@@ -6491,6 +6963,7 @@ function seekTo (targetSecs) {
 }
 
 $('pCloseBtn').onclick = closePlayer
+$('pCastBtn').onclick = ev => { if (playerEntry) tvMenu(ev.currentTarget, playerEntry) }
 $('pMiniBtn').onclick = () => setMiniPlayer(true)
 $('pMiniRestore').onclick = () => setMiniPlayer(false)
 $('pMiniPlay').onclick = togglePlay
@@ -6561,8 +7034,20 @@ $('pVol').oninput = () => {
   $('pMuteBtn').textContent = 'Mute'
   if (player?.gainNode) player.gainNode.gain.value = Number($('pVol').value) / 100
 }
+addEventListener('popstate', e => { if (player && !$('playerModal').classList.contains('mini') && !(e.state && e.state.player === playerState)) closePlayer({ keepEntry: true }) })
+// The player covers the page like a dialog: Tab walks its controls and comes round, never the page behind.
 addEventListener('keydown', ev => {
-  if (!player || ev.altKey || ev.ctrlKey || ev.metaKey || /^(INPUT|SELECT|TEXTAREA)$/.test(ev.target.tagName) || ev.target.isContentEditable) return
+  if (ev.key !== 'Tab' || !player || overlay) return
+  const m = $('playerModal')
+  if (m.classList.contains('mini')) return
+  const items = [...m.querySelectorAll('button, a[href], select, input, summary, [tabindex]:not([tabindex="-1"])')].filter(shownEl)
+  if (!items.length) return
+  const i = items.indexOf(document.activeElement)
+  if (ev.shiftKey && i <= 0) { ev.preventDefault(); items[items.length - 1].focus() }
+  else if (!ev.shiftKey && (i === -1 || i === items.length - 1)) { ev.preventDefault(); items[0].focus() }
+})
+addEventListener('keydown', ev => {
+  if (!player || overlay || ev.altKey || ev.ctrlKey || ev.metaKey || /^(INPUT|SELECT|TEXTAREA)$/.test(ev.target.tagName) || ev.target.isContentEditable) return
   if ($('playerModal').classList.contains('mini') && !$('playerModal').contains(document.activeElement)) return
   if (ev.key === 'Escape') { ev.preventDefault(); if (document.fullscreenElement) document.exitFullscreen().catch(() => {}); else closePlayer() }
   else if (ev.key === ' ') { ev.preventDefault(); togglePlay() }
@@ -6625,7 +7110,6 @@ function applyTheme (mode) {
   if (!t) return
   t.setAttribute('aria-label', themeLabel(mode))
   t.title = themeLabel(mode) + ' — click to change'
-  t.querySelector('.theme-word').textContent = themeLabel(mode)
 }
 applyTheme(document.documentElement.dataset.theme || 'system')
 $('themeToggle').onclick = () => {

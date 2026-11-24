@@ -130,6 +130,7 @@ export async function openPeerApi ({
     slskListenPort: 0,
     slskShare: Boolean(cfg('slskShare')),
     slskShareMaxFiles: Number(cfg('slskShareMaxFiles')) || 2000,
+    soulseekOpts: { persistJobs: true },
     youtube: {
       info: (query, opts) => ubitInfo(query, { configDir: ubitConfigDir, ...opts }),
       download: (pageUrl, dir, opts) => downloadPage(pageUrl, dir, { configDir: ubitConfigDir, ...opts })

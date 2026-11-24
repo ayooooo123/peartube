@@ -10,7 +10,7 @@
 //   - Jobs report `queued` (waiting on the peer) / `transferring` / `failed` with a plain reason; a peer that never
 //     answers or never connects back fails the job instead of leaving it at 0 bytes
 import { createHash, randomUUID } from 'node:crypto'
-import { closeSync, copyFileSync, existsSync, fstatSync, mkdirSync, openSync, readSync, renameSync, rmSync, statSync, unlinkSync, writeFileSync } from 'node:fs'
+import { closeSync, copyFileSync, existsSync, fstatSync, mkdirSync, openSync, readFileSync, readSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import process from 'node:process'
 import { basename, extname, join } from 'node:path'
 import b4a from 'b4a'
@@ -32,6 +32,40 @@ const BROWSE_CACHE_MAX = 16
 // connection is failed with the reason; a peer that reported a queue place is waited on.
 const NO_ANSWER_MS = 3 * 60_000
 const NO_CONNECT_MS = 90_000
+const DURABLE_RETRY_BACKOFF_MS = [5_000, 15_000, 45_000, 120_000, 300_000]
+const MAX_AUTO_WAKE_RESUMES = 3
+const STALE_JOB_TTL_MS = 7 * 24 * 60 * 60 * 1000
+const JOBS_FILENAME = 'soulseek-jobs.json'
+
+function isTransientError (err) {
+  const msg = String(err?.message || err || '')
+  if (msg === 'Cancelled' || err?.reason === 'unplaced' || err?.status === 400 || err?.status === 422) return false
+  if (msg.includes('refused the file:') || /upload denied/i.test(msg)) return false
+  return true
+}
+
+function existingTrackSize (tmpDest, item, completedFiles, destName) {
+  if (!existsSync(tmpDest)) return 0
+  let existingSize = 0
+  try { existingSize = statSync(tmpDest).size || 0 } catch {
+    // ast-grep-ignore: js-no-empty-catch -- unreadable partial treated as missing
+    return 0
+  }
+  const recordedDone = completedFiles.includes(destName)
+  if ((recordedDone && existingSize > 0) || (item.size > 0 && existingSize === item.size)) {
+    return existingSize
+  }
+  return 0
+}
+
+function partLen (dest) {
+  try {
+    return statSync(`${dest}.part`).size || 0
+  } catch {
+    // ast-grep-ignore: js-no-empty-catch -- missing .part file means 0 bytes resumed
+    return 0
+  }
+}
 
 // Plain-English reason for a failed browse or download; `reason` tags the cause so `info()` can flag the listen port.
 function peerError (err, username, port, secrets) {
@@ -243,6 +277,7 @@ export function createSoulseekPlugin ({
   browseTimeoutMs = BROWSE_TIMEOUT_MS,
   noAnswerMs = NO_ANSWER_MS,
   noConnectMs = NO_CONNECT_MS,
+  persistJobs = false,
   onchange = null,
   loadAddon = null
 }) {
@@ -260,6 +295,9 @@ export function createSoulseekPlugin ({
   let loginPromise = null
   let closed = false
   const jobs = new Map() // jobId -> job record for /v1/jobs progress
+  const jobMeta = new Map() // jobId -> { request, items, workDir, completedFiles, activeRunner, transientFailure, autoResumes }
+  const wakeListeners = new Set()
+  let hostCtx = null
   const browseCache = new Map() // username -> { at, promise }
   // Evidence about the listen port this session: failures that mean "a peer could not reach us", and transfers that
   // moved bytes. The relay cannot probe its own public port, so the UI warns from these.
@@ -409,11 +447,470 @@ export function createSoulseekPlugin ({
     return { ...(await promise), cached: false }
   }
 
+  function notifyWake () {
+    for (const fn of [...wakeListeners]) fn()
+  }
+
+  function waitBackoff (job, waitMs) {
+    return new Promise((resolve, reject) => {
+      if (closed || job.cancelled) return reject(new Error('Cancelled'))
+      let done = false
+      const finish = (err) => {
+        if (done) return
+        done = true
+        clearTimeout(timer)
+        clearInterval(poll)
+        wakeListeners.delete(onWake)
+        if (err) reject(err)
+        else resolve()
+      }
+      const onWake = () => finish(closed || job.cancelled ? new Error('Cancelled') : null)
+      const timer = setTimeout(() => finish(null), waitMs)
+      const poll = setInterval(() => {
+        if (closed || job.cancelled) finish(new Error('Cancelled'))
+      }, 200)
+      timer.unref?.()
+      poll.unref?.()
+      wakeListeners.add(onWake)
+    })
+  }
+
+  function saveJobs () {
+    if (!persistJobs || !storage) return
+    const now = Date.now()
+    const snapshot = []
+    for (const [id, j] of jobs) {
+      if (j.cancelled || j.status === 'cancelled') continue
+      const meta = jobMeta.get(id)
+      if (!meta) continue
+      snapshot.push({
+        id,
+        request: meta.request,
+        items: meta.items,
+        completedFiles: meta.completedFiles,
+        status: j.status,
+        created: j.created,
+        updated: now,
+        bytes: j.bytes || 0,
+        total: j.total ?? null,
+        file: j.file || '',
+        fileIndex: j.fileIndex || 1,
+        error: j.error || null,
+        note: j.note || null,
+        transientFailure: Boolean(meta.transientFailure),
+        autoResumes: Number(meta.autoResumes) || 0
+      })
+    }
+    const path = join(storage, JOBS_FILENAME)
+    const tmp = `${path}.tmp`
+    try {
+      mkdirSync(storage, { recursive: true })
+      writeFileSync(tmp, JSON.stringify({ version: 1, jobs: snapshot }), { mode: 0o600 })
+      renameSync(tmp, path)
+    } catch {
+      // Disk persistence is best-effort; in-memory queue continues
+      return
+    }
+  }
+
+  function loadPersistedJobs () {
+    if (!persistJobs || !storage) return
+    const path = join(storage, JOBS_FILENAME)
+    if (!existsSync(path)) return
+    let parsed = null
+    try {
+      parsed = JSON.parse(readFileSync(path, 'utf8'))
+    } catch {
+      // ast-grep-ignore: js-no-empty-catch -- corrupt persisted snapshot falls back to empty queue
+      return
+    }
+    const now = Date.now()
+    for (const entry of Array.isArray(parsed?.jobs) ? parsed.jobs : []) {
+      if (!entry?.id || !Array.isArray(entry.items) || !entry.items.length || !entry.request?.username) continue
+      const workDir = join(storage, `.slsk-job-${entry.id}`)
+      const age = now - Math.max(Number(entry.updated) || 0, Number(entry.created) || 0)
+      if (age > STALE_JOB_TTL_MS && (entry.status === 'done' || entry.status === 'failed')) {
+        cleanupDir(workDir)
+        continue
+      }
+      let status = 'queued'
+      if (entry.status === 'done') status = 'done'
+      else if (entry.status === 'failed') status = 'failed'
+      else if (entry.status !== 'queued' && entry.status !== 'transferring' && entry.status !== 'announcing') continue
+
+      let diskBytes = 0
+      if (status !== 'done' && existsSync(workDir)) {
+        const seenNames = new Set()
+        for (let i = 0; i < entry.items.length; i++) {
+          const item = entry.items[i]
+          let destName = item.base
+          if (seenNames.has(destName.toLowerCase())) {
+            const ext = extname(destName)
+            destName = `${String(i + 1).padStart(2, '0')} - ${basename(destName, ext)}${ext}`
+          }
+          seenNames.add(destName.toLowerCase())
+          const dest = join(workDir, destName)
+          try {
+            diskBytes += statSync(dest).size || 0
+          } catch {
+            // ast-grep-ignore: js-no-empty-catch -- incomplete track falls back to .part length
+            diskBytes += partLen(dest)
+          }
+        }
+      }
+      const bytes = status === 'done' ? Number(entry.bytes) || 0 : Math.max(diskBytes, Number(entry.bytes) || 0)
+      const items = entry.items
+      const albumTotal = items.every(f => f.size > 0) ? items.reduce((sum, f) => sum + f.size, 0) : null
+      const callerId = entry.request.callerId || ''
+      const callerRelease = entry.request.callerRelease || null
+      const rawTitle = entry.request.rawTitle || ''
+      let phase = 'queued'
+      if (status === 'failed') phase = 'failed'
+      else if (status === 'done') phase = 'completed'
+      const job = {
+        jobId: entry.id,
+        id: (callerId && ID.test(callerId)) ? callerId : callerRelease,
+        title: rawTitle || peerFolderHint(items)?.album || 'Album download',
+        plugin: 'soulseek',
+        channel: true,
+        private: false,
+        status,
+        created: Number(entry.created) || now,
+        peer: entry.request.username,
+        file: entry.file || basename(items[0].filename.replace(/\\/g, '/')),
+        fileIndex: Math.max(1, Math.min(Number(entry.fileIndex) || 1, items.length)),
+        fileCount: items.length,
+        phase,
+        queuePlace: null,
+        speed: 0,
+        listenPort: 0,
+        bytes,
+        total: entry.total ?? albumTotal,
+        error: entry.error || null,
+        ...(entry.note ? { note: entry.note } : {}),
+        ...(status === 'done' ? { size: bytes, sha256s: [] } : {}),
+        cancelled: false,
+        progressAt: now
+      }
+      jobs.set(entry.id, job)
+      jobMeta.set(entry.id, {
+        request: entry.request,
+        items,
+        workDir,
+        completedFiles: Array.isArray(entry.completedFiles) ? [...entry.completedFiles] : [],
+        activeRunner: false,
+        transientFailure: Boolean(entry.transientFailure),
+        autoResumes: Number(entry.autoResumes) || 0
+      })
+    }
+    if (jobs.size > 0) saveJobs()
+  }
+
+  async function loginWithBackoff (job) {
+    const maxAttempts = persistJobs ? DURABLE_RETRY_BACKOFF_MS.length : 0
+    for (let attempt = 0; attempt <= maxAttempts; attempt++) {
+      if (closed || job.cancelled) throw new Error('Cancelled')
+      try {
+        return await ensureLoggedIn()
+      } catch (err) {
+        if (attempt === maxAttempts || closed || job.cancelled || !isTransientError(err)) throw err
+        const waitMs = DURABLE_RETRY_BACKOFF_MS[attempt]
+        Object.assign(job, {
+          status: 'queued',
+          phase: 'retrying',
+          queuePlace: null,
+          speed: 0,
+          note: `Waiting for Soulseek connection — retrying in ${Math.round(waitMs / 1000)}s (${attempt + 1}/${maxAttempts})…`,
+          progressAt: Date.now()
+        })
+        saveJobs()
+        onchange?.()
+        await waitBackoff(job, waitMs)
+      }
+    }
+    throw Object.assign(new Error('Soulseek login failed'), { status: 502 })
+  }
+
+  async function executeJob (jobId, initialClient, ctx) {
+    const job = jobs.get(jobId)
+    const meta = jobMeta.get(jobId)
+    if (!job || !meta) throw new Error('Job not found')
+    const { request, items, workDir } = meta
+    const { username, callerId, callerRelease, rawTitle, callerTrack } = request
+    const albumTotal = () => items.every(f => f.size > 0) ? items.reduce((sum, f) => sum + f.size, 0) : null
+    mkdirSync(workDir, { recursive: true, mode: 0o700 })
+
+    const downloadAttempt = (activeClient, item, tmpDest, onProgress) => new Promise((resolve, reject) => {
+      let phase = 'queued'
+      let since = Date.now()
+      let answered = false
+      let bytes = 0
+      let settled = false
+      const finish = fn => value => {
+        if (settled) return
+        settled = true
+        clearInterval(watchdog)
+        fn(value)
+      }
+      const ok = finish(resolve)
+      const fail = finish(reject)
+      const port = advertisedPort()
+      const watchdog = setInterval(() => {
+        if (closed || job.cancelled) return fail(new Error('Cancelled'))
+        const idle = Date.now() - since
+        if (phase === 'connecting' && idle > noConnectMs) {
+          fail(Object.assign(new Error(`${username} was ready to send but could not connect to this relay on port ${port || '(none)'}.`), { reason: 'no-inbound' }))
+        } else if (phase === 'queued' && !answered && idle > noAnswerMs) {
+          fail(Object.assign(new Error(`${username} never answered in ${Math.round(noAnswerMs / 60_000) || 1} min: it may be offline, or unable to reach this relay on port ${port || '(none)'}.`), { reason: 'no-answer' }))
+        } else if (phase === 'transferring' && idle > noAnswerMs) {
+          fail(Object.assign(new Error(`${username} stopped sending: no data for ${Math.round(noAnswerMs / 60_000) || 1} min.`), { reason: 'stalled' }))
+        }
+      }, 1000)
+      watchdog.unref?.()
+      activeClient.download(username, item.filename, tmpDest, prog => {
+        if (settled) return
+        const next = String(prog?.phase || phase)
+        const got = Number(prog?.bytes) || 0
+        if (next !== phase || got > bytes) since = Date.now()
+        phase = next
+        bytes = Math.max(bytes, got)
+        if (Number.isInteger(prog?.queue) && prog.queue >= 0) answered = true
+        onProgress(prog, phase)
+      }).then(ok, err => fail(peerError(err, username, port, secrets())))
+    })
+
+    const downloadOne = async (activeClientRef, item, tmpDest, onProgress) => {
+      const maxRetries = persistJobs ? DURABLE_RETRY_BACKOFF_MS.length : 3
+      let activeClient = activeClientRef.client
+      for (let attempt = 0; attempt <= maxRetries; attempt++) {
+        try {
+          const res = await downloadAttempt(activeClient, item, tmpDest, onProgress)
+          activeClientRef.client = activeClient
+          return res
+        } catch (err) {
+          const retryable = persistJobs
+            ? isTransientError(err)
+            : /server session disconnected/i.test(String(err?.message || ''))
+          if (attempt === maxRetries || closed || job.cancelled || !retryable) throw err
+          const waitMs = persistJobs ? DURABLE_RETRY_BACKOFF_MS[attempt] : 2000 * (attempt + 1)
+          Object.assign(job, {
+            status: 'queued',
+            phase: persistJobs ? 'retrying' : 'queued',
+            queuePlace: null,
+            speed: 0,
+            ...(persistJobs ? { note: `Connection paused — retrying in ${Math.round(waitMs / 1000)}s (${attempt + 1}/${maxRetries})…` } : {}),
+            progressAt: Date.now()
+          })
+          saveJobs()
+          onchange?.()
+          await waitBackoff(job, waitMs)
+          // ast-grep-ignore: js-no-empty-catch -- keep the existing client when reconnect has not finished yet; the next download attempt will surface any persistent login error
+          try { activeClient = await ensureLoggedIn() } catch {}
+        }
+      }
+    }
+
+    let completedBytes = 0
+    let lastNotify = 0
+    const downloaded = []
+    meta.activeRunner = true
+    try {
+      const activeClientRef = { client: initialClient || await loginWithBackoff(job) }
+      for (let i = 0; i < items.length; i++) {
+        if (closed || job.cancelled) throw new Error('Cancelled')
+        const item = items[i]
+        const usedNames = new Set(downloaded.map(d => d.name.toLowerCase()))
+        let destName = item.base
+        if (usedNames.has(destName.toLowerCase())) {
+          const ext = extname(destName)
+          destName = `${String(i + 1).padStart(2, '0')} - ${basename(destName, ext)}${ext}`
+        }
+        const tmpDest = join(workDir, destName)
+
+        const existingSize = persistJobs ? existingTrackSize(tmpDest, item, meta.completedFiles, destName) : 0
+        if (existingSize > 0) {
+          completedBytes += existingSize
+          job.bytes = completedBytes
+          job.file = basename(item.filename.replace(/\\/g, '/'))
+          job.fileIndex = i + 1
+          if (job.total != null && completedBytes > job.total) job.total = completedBytes
+          downloaded.push({ name: destName, tmpPath: tmpDest, size: existingSize })
+          continue
+        }
+
+        const existingPart = persistJobs ? partLen(tmpDest) : 0
+        Object.assign(job, {
+          status: 'queued',
+          phase: 'queued',
+          queuePlace: null,
+          speed: 0,
+          ...(persistJobs ? { bytes: completedBytes + existingPart } : {}),
+          progressAt: Date.now(),
+          file: basename(item.filename.replace(/\\/g, '/')),
+          fileIndex: i + 1
+        })
+        if (persistJobs) delete job.note
+        onchange?.()
+        let rateAt = 0
+        let rateBytes = 0
+        const res = await downloadOne(activeClientRef, item, tmpDest, (prog, phase) => {
+          const cur = Number(prog?.bytes) || 0
+          const tot = Number(prog?.total) || 0
+          if (tot > item.size) {
+            item.size = tot
+            const t = albumTotal()
+            if (t != null) job.total = Math.max(job.total || 0, t)
+          }
+          const statusChanged = job.phase !== phase
+          const now = Date.now()
+          if (statusChanged || completedBytes + cur > job.bytes) job.progressAt = now
+          job.phase = phase
+          job.status = phase === 'transferring' || phase === 'completed' ? 'transferring' : 'queued'
+          job.queuePlace = Number.isInteger(prog?.queue) && prog.queue >= 0 ? prog.queue : job.queuePlace
+          job.bytes = completedBytes + cur
+          if (phase !== 'transferring') {
+            rateAt = 0
+            job.speed = 0
+          } else if (!rateAt) {
+            rateAt = now
+            rateBytes = job.bytes
+          } else if (now - rateAt >= 1000) {
+            const inst = (job.bytes - rateBytes) * 1000 / (now - rateAt)
+            job.speed = Math.round(job.speed ? job.speed * 0.5 + inst * 0.5 : inst)
+            rateAt = now
+            rateBytes = job.bytes
+          }
+          if (statusChanged || now - lastNotify >= 350) {
+            lastNotify = now
+            onchange?.()
+          }
+        })
+        const finalSize = Number(res?.size) || statSync(tmpDest).size
+        if (finalSize > item.size) item.size = finalSize
+        completedBytes += finalSize
+        if (finalSize > 0) transfersOk++
+        job.bytes = completedBytes
+        job.speed = 0
+        if (persistJobs) delete job.note
+        if (job.total != null && completedBytes > job.total) job.total = completedBytes
+        if (!meta.completedFiles.includes(destName)) meta.completedFiles.push(destName)
+        downloaded.push({ name: destName, tmpPath: tmpDest, size: finalSize })
+        saveJobs()
+        onchange?.()
+      }
+
+      if (closed || job.cancelled) throw new Error('Cancelled')
+      job.status = 'announcing'
+      job.phase = 'waiting'
+      onchange?.()
+
+      const tagList = downloaded.map(d => readHeadTags(d.tmpPath))
+      const lone = downloaded.length === 1 && !(callerId && ID.test(callerId) && !callerRelease)
+      const needsPlace = lone && !tagList[0]?.track && !callerTrack && !/^\d{1,3}(?!\d)/.test(basename(items[0].base, extname(items[0].base)))
+      const single = lone
+        ? placeSingleTrack({ tags: tagList[0], filename: items[0].filename, release: callerRelease, track: callerTrack, position: needsPlace ? await folderPosition(username, items[0].filename) : null, fallbackTitle: rawTitle })
+        : null
+      if (single?.error) throw Object.assign(new Error(single.error), { status: 422, reason: 'unplaced' })
+      const firstNamed = tagList.find(t => t && (t.album || t.albumArtist || t.artist))
+      const hint = peerFolderHint(items)
+      const folderName = single
+        ? single.folder
+        : formatAlbumDir({
+          artist: firstNamed?.albumArtist || firstNamed?.artist || hint?.artist || '',
+          album: firstNamed?.album || hint?.album || '',
+          year: firstNamed?.year || hint?.year || '',
+          fallbackTitle: rawTitle
+        })
+      if (single) {
+        if (!rawTitle) job.title = [single.trackTitle, single.albumTitle].filter(Boolean).join(' · ').slice(0, MAX_TITLE)
+        if (single.from === 'peer folder') job.note = `No album tag: placed in “${folderName}” from the peer's folder name.`
+      } else if (!rawTitle && (firstNamed?.album || hint?.album)) {
+        job.title = [firstNamed?.albumArtist || firstNamed?.artist || hint?.artist, firstNamed?.album || hint?.album]
+          .filter(Boolean)
+          .join(' · ')
+          .slice(0, MAX_TITLE) || folderName
+      }
+
+      if (closed || job.cancelled) throw new Error('Cancelled')
+      const finalAlbumDir = join(stagingRoot, folderName)
+      const placed = new Set()
+      const place = () => {
+        mkdirSync(finalAlbumDir, { recursive: true })
+        const pinPath = join(finalAlbumDir, ALBUM_PIN)
+        if (callerRelease) writeFileSync(pinPath, JSON.stringify({ release: callerRelease, ...(single ? { title: single.albumTitle } : {}) }) + '\n')
+        else if (single && !existsSync(pinPath)) writeFileSync(pinPath, JSON.stringify({ release: single.release, title: single.albumTitle }) + '\n')
+        for (const d of downloaded) {
+          const dst = freePath(finalAlbumDir, single ? single.file : d.name)
+          placed.add(basename(dst))
+          try {
+            renameSync(d.tmpPath, dst)
+          } catch {
+            copyFileSync(d.tmpPath, dst)
+            rmSync(d.tmpPath, { force: true })
+          }
+          if (downloaded.length === 1 && !single && !callerRelease && callerId && ID.test(callerId)) {
+            writeFileSync(`${dst}.json`, JSON.stringify({ id: callerId, title: job.title }))
+          }
+        }
+        noteMirrored(finalAlbumDir, placed)
+        cleanupDir(workDir)
+        job.phase = 'importing'
+        onchange?.()
+      }
+      let finalScan = { scanned: 0, ingested: 0, items: [] }
+      if (placeAndScan) finalScan = await placeAndScan(place, ctx, { cancelled: () => closed || job.cancelled })
+      else place()
+
+      Object.assign(job, {
+        status: 'done',
+        size: completedBytes,
+        bytes: completedBytes,
+        total: completedBytes,
+        sha256s: (finalScan?.items || []).filter(it => placed.has(it.file) && it.rel === `${folderName}/${it.file}`).map(it => it.sha256)
+      })
+      saveJobs()
+      onchange?.()
+      return {
+        jobId,
+        folder: folderName,
+        files: downloaded.length,
+        bytes: completedBytes,
+        ingested: finalScan?.ingested || 0,
+        items: finalScan?.items || [],
+        ...(single ? { placed: { file: [...placed][0], from: single.from, release: single.release, note: job.note || null } } : {})
+      }
+    } catch (err) {
+      if (persistJobs && closed && !job.cancelled) {
+        Object.assign(job, { status: 'queued', phase: 'queued', queuePlace: null, speed: 0 })
+        saveJobs()
+        throw Object.assign(new Error('Cancelled'), { status: 502 })
+      }
+      if (!persistJobs || job.cancelled) cleanupDir(workDir)
+      if (!job.cancelled) {
+        job.status = 'failed'
+        job.phase = 'failed'
+        job.error = scrub(err?.message || String(err), secrets())
+        meta.transientFailure = isTransientError(err)
+        if (persistJobs) job.note = 'Progress saved — tap Retry to continue.'
+        notePeerFailure(err)
+      }
+      job.speed = 0
+      saveJobs()
+      onchange?.()
+      throw Object.assign(new Error(job.error || 'Cancelled'), { status: err?.status || 502 })
+    } finally {
+      meta.activeRunner = false
+    }
+  }
+
   function trimJobs () {
     if (jobs.size <= 48) return
     for (const [id, j] of jobs) {
       if (j.status === 'done' || j.status === 'failed' || j.status === 'cancelled') {
+        const meta = jobMeta.get(id)
+        if (persistJobs && meta?.workDir) cleanupDir(meta.workDir)
         jobs.delete(id)
+        jobMeta.delete(id)
         if (jobs.size <= 32) break
       }
     }
@@ -479,249 +976,25 @@ export function createSoulseekPlugin ({
       cancelled: false,
       progressAt: Date.now()
     }
+    if (ctx) hostCtx = ctx
     trimJobs()
     jobs.set(jobId, job)
+    const workDir = join(storage, persistJobs ? `.slsk-job-${jobId}` : `.slsk-tmp-${jobId}`)
+    jobMeta.set(jobId, {
+      request: { username, callerId, callerRelease, rawTitle, callerTrack },
+      items,
+      workDir,
+      completedFiles: [],
+      activeRunner: false,
+      transientFailure: false,
+      autoResumes: 0
+    })
+    saveJobs()
     onchange?.()
 
-    const workDir = join(storage, `.slsk-tmp-${jobId}`)
     mkdirSync(workDir, { recursive: true, mode: 0o700 })
 
-    // One file through the addon, failed by a watchdog when the peer never answers or never connects back (the addon
-    // itself waits forever), and when the job is cancelled. A peer that reported a queue place is waited on.
-    const downloadAttempt = (activeClient, item, tmpDest, onProgress) => new Promise((resolve, reject) => {
-      let phase = 'queued'
-      let since = Date.now()
-      let answered = false
-      let bytes = 0
-      let settled = false
-      const finish = fn => value => {
-        if (settled) return
-        settled = true
-        clearInterval(watchdog)
-        fn(value)
-      }
-      const ok = finish(resolve)
-      const fail = finish(reject)
-      const port = advertisedPort()
-      const watchdog = setInterval(() => {
-        if (closed || job.cancelled) return fail(new Error('Cancelled'))
-        const idle = Date.now() - since
-        if (phase === 'connecting' && idle > noConnectMs) {
-          fail(Object.assign(new Error(`${username} was ready to send but could not connect to this relay on port ${port || '(none)'}.`), { reason: 'no-inbound' }))
-        } else if (phase === 'queued' && !answered && idle > noAnswerMs) {
-          fail(Object.assign(new Error(`${username} never answered in ${Math.round(noAnswerMs / 60_000) || 1} min: it may be offline, or unable to reach this relay on port ${port || '(none)'}.`), { reason: 'no-answer' }))
-        } else if (phase === 'transferring' && idle > noAnswerMs) {
-          fail(Object.assign(new Error(`${username} stopped sending: no data for ${Math.round(noAnswerMs / 60_000) || 1} min.`), { reason: 'stalled' }))
-        }
-      }, 1000)
-      watchdog.unref?.()
-      activeClient.download(username, item.filename, tmpDest, prog => {
-        if (settled) return
-        const next = String(prog?.phase || phase)
-        const got = Number(prog?.bytes) || 0
-        // Idle time restarts on a phase change and, while transferring, on every byte that arrives.
-        if (next !== phase || got > bytes) since = Date.now()
-        phase = next
-        bytes = Math.max(bytes, got)
-        if (Number.isInteger(prog?.queue) && prog.queue >= 0) answered = true
-        onProgress(prog, phase)
-      }).then(ok, err => fail(peerError(err, username, port, secrets())))
-    })
-
-    const downloadOne = async (item, tmpDest, onProgress) => {
-      const maxRetries = 3
-      let activeClient = c
-      for (let attempt = 0; attempt <= maxRetries; attempt++) {
-        try {
-          return await downloadAttempt(activeClient, item, tmpDest, onProgress)
-        } catch (err) {
-          const retryable = /server session disconnected/i.test(String(err?.message || ''))
-          if (attempt === maxRetries || closed || job.cancelled || !retryable) throw err
-          Object.assign(job, { status: 'queued', phase: 'queued', speed: 0, progressAt: Date.now() })
-          onchange?.()
-          const waitMs = 2000 * (attempt + 1)
-          for (let waited = 0; waited < waitMs; waited += 200) {
-            if (closed || job.cancelled) throw new Error('Cancelled')
-            await new Promise(resolve => setTimeout(resolve, Math.min(200, waitMs - waited)))
-          }
-          if (closed || job.cancelled) throw new Error('Cancelled')
-          // ast-grep-ignore: js-no-empty-catch -- keep the existing client when reconnect has not finished yet; the next download attempt will surface any persistent login error
-          try { activeClient = await ensureLoggedIn() } catch {}
-        }
-      }
-    }
-
-    const runDownload = async () => {
-      let completedBytes = 0
-      let lastNotify = 0
-      const downloaded = []
-      try {
-        for (let i = 0; i < items.length; i++) {
-          if (closed || job.cancelled) throw new Error('Cancelled')
-          const item = items[i]
-          const usedNames = new Set(downloaded.map(d => d.name.toLowerCase()))
-          let destName = item.base
-          if (usedNames.has(destName.toLowerCase())) {
-            const ext = extname(destName)
-            const stem = basename(destName, ext)
-            destName = `${String(i + 1).padStart(2, '0')} - ${stem}${ext}`
-          }
-          const tmpDest = join(workDir, destName)
-          Object.assign(job, { status: 'queued', phase: 'queued', queuePlace: null, speed: 0, progressAt: Date.now(), file: basename(item.filename.replace(/\\/g, '/')), fileIndex: i + 1 })
-          onchange?.()
-          // Speed is measured here from bytes received over at least a second, smoothed: the addon's own figure
-          // jumps to impossible values (GB/s) between progress events.
-          let rateAt = 0
-          let rateBytes = 0
-          const res = await downloadOne(item, tmpDest, (prog, phase) => {
-            const cur = Number(prog?.bytes) || 0
-            // The peer states the file's size when it starts sending; a larger or first-known size updates the total.
-            const tot = Number(prog?.total) || 0
-            if (tot > item.size) {
-              item.size = tot
-              const t = albumTotal()
-              if (t != null) job.total = Math.max(job.total || 0, t)
-            }
-            const statusChanged = job.phase !== phase
-            const now = Date.now()
-            if (statusChanged || completedBytes + cur > job.bytes) job.progressAt = now
-            job.phase = phase
-            job.status = phase === 'transferring' || phase === 'completed' ? 'transferring' : 'queued'
-            job.queuePlace = Number.isInteger(prog?.queue) && prog.queue >= 0 ? prog.queue : job.queuePlace
-            job.bytes = completedBytes + cur
-            if (phase !== 'transferring') {
-              rateAt = 0
-              job.speed = 0
-            } else if (!rateAt) {
-              rateAt = now
-              rateBytes = job.bytes
-            } else if (now - rateAt >= 1000) {
-              const inst = (job.bytes - rateBytes) * 1000 / (now - rateAt)
-              job.speed = Math.round(job.speed ? job.speed * 0.5 + inst * 0.5 : inst)
-              rateAt = now
-              rateBytes = job.bytes
-            }
-            if (statusChanged || now - lastNotify >= 350) {
-              lastNotify = now
-              onchange?.()
-            }
-          })
-          const finalSize = Number(res?.size) || statSync(tmpDest).size
-          completedBytes += finalSize
-          if (finalSize > 0) transfersOk++
-          job.bytes = completedBytes
-          job.speed = 0
-          if (job.total != null && completedBytes > job.total) job.total = completedBytes
-          downloaded.push({ name: destName, tmpPath: tmpDest, size: finalSize })
-          onchange?.()
-        }
-
-        if (closed || job.cancelled) throw new Error('Cancelled')
-        // 'waiting' until this album's own import starts: nothing is in the import folder yet and Cancel works.
-        job.status = 'announcing'
-        job.phase = 'waiting'
-        onchange?.()
-
-        // Name the folder from the peer's tags (or its folder name). Peer bytes are stored as served: when the caller
-        // named the album, the folder is pinned to that release and the importer announces every file under it.
-        // One track on its own (not a clip or film the caller named) is placed as a track of its album instead.
-        const tagList = downloaded.map(d => readHeadTags(d.tmpPath))
-        const lone = downloaded.length === 1 && !(callerId && ID.test(callerId) && !callerRelease)
-        const needsPlace = lone && !tagList[0]?.track && !callerTrack && !/^\d{1,3}(?!\d)/.test(basename(items[0].base, extname(items[0].base)))
-        const single = lone
-          ? placeSingleTrack({ tags: tagList[0], filename: items[0].filename, release: callerRelease, track: callerTrack, position: needsPlace ? await folderPosition(username, items[0].filename) : null, fallbackTitle: rawTitle })
-          : null
-        if (single?.error) throw Object.assign(new Error(single.error), { status: 422, reason: 'unplaced' })
-        const firstNamed = tagList.find(t => t && (t.album || t.albumArtist || t.artist))
-        const hint = peerFolderHint(items)
-        const folderName = single
-          ? single.folder
-          : formatAlbumDir({
-            artist: firstNamed?.albumArtist || firstNamed?.artist || hint?.artist || '',
-            album: firstNamed?.album || hint?.album || '',
-            year: firstNamed?.year || hint?.year || '',
-            fallbackTitle: rawTitle
-          })
-        if (single) {
-          if (!rawTitle) job.title = [single.trackTitle, single.albumTitle].filter(Boolean).join(' · ').slice(0, MAX_TITLE)
-          // Said on the job, so the owner knows the album came from a folder name and not from the file itself.
-          if (single.from === 'peer folder') job.note = `No album tag: placed in “${folderName}” from the peer's folder name.`
-        } else if (!rawTitle && (firstNamed?.album || hint?.album)) {
-          job.title = [firstNamed?.albumArtist || firstNamed?.artist || hint?.artist, firstNamed?.album || hint?.album]
-            .filter(Boolean)
-            .join(' · ')
-            .slice(0, MAX_TITLE) || folderName
-        }
-
-        if (closed || job.cancelled) throw new Error('Cancelled')
-        const finalAlbumDir = join(stagingRoot, folderName)
-        const placed = new Set()
-        // Runs only once no other import holds the folder (`placeAndScan`), in one step with this album's own
-        // import: until then the files stay in the work folder, so a mirror that is cancelled or gives up while it
-        // waits leaves nothing for a later scan to add.
-        const place = () => {
-          mkdirSync(finalAlbumDir, { recursive: true })
-          // The pin goes in before the files. A lone track pins a new folder to its album; a folder that already
-          // has a pin keeps it.
-          const pinPath = join(finalAlbumDir, ALBUM_PIN)
-          if (callerRelease) writeFileSync(pinPath, JSON.stringify({ release: callerRelease, ...(single ? { title: single.albumTitle } : {}) }) + '\n')
-          else if (single && !existsSync(pinPath)) writeFileSync(pinPath, JSON.stringify({ release: single.release, title: single.albumTitle }) + '\n')
-          for (const d of downloaded) {
-            const dst = freePath(finalAlbumDir, single ? single.file : d.name)
-            placed.add(basename(dst))
-            try {
-              renameSync(d.tmpPath, dst)
-            } catch {
-              copyFileSync(d.tmpPath, dst)
-              try { unlinkSync(d.tmpPath) } catch {}
-            }
-            // A single file mirrored for a non-album id (a clip or film) carries that id in a sidecar.
-            if (downloaded.length === 1 && !single && !callerRelease && callerId && ID.test(callerId)) {
-              writeFileSync(`${dst}.json`, JSON.stringify({ id: callerId, title: job.title }))
-            }
-          }
-          noteMirrored(finalAlbumDir, placed)
-          cleanupDir(workDir)
-          job.phase = 'importing'
-          onchange?.()
-        }
-        let finalScan = { scanned: 0, ingested: 0, items: [] }
-        if (placeAndScan) finalScan = await placeAndScan(place, ctx, { cancelled: () => closed || job.cancelled })
-        else place()
-
-        // The sha256 of each file this album added, so a client can open the album the mirror created.
-        Object.assign(job, {
-          status: 'done',
-          size: completedBytes,
-          bytes: completedBytes,
-          total: completedBytes,
-          // By path inside the import folder: another album's file of the same name is not this mirror's.
-          sha256s: (finalScan?.items || []).filter(it => placed.has(it.file) && it.rel === `${folderName}/${it.file}`).map(it => it.sha256)
-        })
-        onchange?.()
-        return {
-          jobId,
-          folder: folderName,
-          files: downloaded.length,
-          bytes: completedBytes,
-          ingested: finalScan?.ingested || 0,
-          items: finalScan?.items || [],
-          // Where a lone track went and what named its album: `tags`, `peer folder` or the caller's `release`.
-          ...(single ? { placed: { file: [...placed][0], from: single.from, release: single.release, note: job.note || null } } : {})
-        }
-      } catch (err) {
-        cleanupDir(workDir)
-        if (!job.cancelled) {
-          job.status = 'failed'
-          job.phase = 'failed'
-          job.error = scrub(err?.message || String(err), secrets())
-          notePeerFailure(err)
-        }
-        job.speed = 0
-        onchange?.()
-        throw Object.assign(new Error(job.error || 'Cancelled'), { status: err?.status || 502 })
-      }
-    }
+    const runDownload = () => executeJob(jobId, c, ctx)
 
     if (payload.wait === true) {
       return runDownload()
@@ -762,7 +1035,11 @@ export function createSoulseekPlugin ({
   // tell a slow peer from a stuck one without comparing clocks.
   function publicSlskJob ({ cancelled: _c, progressAt, ...rest }) {
     const waiting = rest.status === 'queued' || rest.status === 'transferring'
-    return { ...rest, idleMs: waiting ? Date.now() - progressAt : null }
+    return {
+      ...rest,
+      ...(persistJobs && rest.status === 'failed' ? { retryable: true } : {}),
+      idleMs: waiting ? Date.now() - progressAt : null
+    }
   }
 
   function listJobs () {
@@ -777,19 +1054,103 @@ export function createSoulseekPlugin ({
   function cancelJob (jobId) {
     const j = jobs.get(jobId)
     if (!j) return null
+    const meta = jobMeta.get(jobId)
     // Cancel works until this album's own import starts: while it waits for another import, nothing is placed yet.
     if (j.status === 'queued' || j.status === 'transferring' || (j.status === 'announcing' && j.phase === 'waiting')) {
       j.cancelled = true
       j.status = 'cancelled'
+      notifyWake()
+      if (persistJobs && meta && !meta.activeRunner) cleanupDir(meta.workDir)
+      saveJobs()
       onchange?.()
       return publicSlskJob(j)
     }
     if (j.status !== 'announcing') {
+      if (persistJobs && meta?.workDir) cleanupDir(meta.workDir)
       jobs.delete(jobId)
+      jobMeta.delete(jobId)
+      saveJobs()
       onchange?.()
       return { ...publicSlskJob(j), status: 'removed' }
     }
     return publicSlskJob(j)
+  }
+
+  function retryJob (jobId, ctx) {
+    if (!persistJobs || closed) return null
+    if (ctx) hostCtx = ctx
+    const j = jobs.get(jobId)
+    const meta = jobMeta.get(jobId)
+    if (!j || !meta) return null
+    if (j.status !== 'failed' || meta.activeRunner) return publicSlskJob(j)
+    Object.assign(j, {
+      status: 'queued',
+      phase: 'queued',
+      error: null,
+      cancelled: false,
+      speed: 0,
+      queuePlace: null,
+      progressAt: Date.now()
+    })
+    delete j.note
+    meta.transientFailure = false
+    meta.autoResumes = 0
+    saveJobs()
+    onchange?.()
+    executeJob(jobId, null, ctx || hostCtx).catch(() => {})
+    return publicSlskJob(j)
+  }
+
+  function resumePersisted (ctx) {
+    if (ctx) hostCtx = ctx
+    if (!persistJobs || closed || !configured()) return
+    let started = false
+    for (const [id, j] of jobs) {
+      const meta = jobMeta.get(id)
+      if (!meta || meta.activeRunner || j.cancelled || j.status !== 'queued') continue
+      j.progressAt = Date.now()
+      started = true
+      executeJob(id, null, ctx || hostCtx).catch(() => {})
+    }
+    if (started) onchange?.()
+  }
+
+  function wakeJobs (ctx) {
+    if (ctx) hostCtx = ctx
+    notifyWake()
+    if (!persistJobs || closed || !configured()) return 0
+    let active = 0
+    let started = false
+    for (const [id, j] of jobs) {
+      const meta = jobMeta.get(id)
+      if (!meta || j.cancelled) continue
+      if (meta.activeRunner) {
+        active++
+        continue
+      }
+      const resumeQueued = j.status === 'queued'
+      const resumeTransient = j.status === 'failed' && meta.transientFailure && meta.autoResumes < MAX_AUTO_WAKE_RESUMES
+      if (resumeQueued || resumeTransient) {
+        if (resumeTransient) meta.autoResumes++
+        Object.assign(j, {
+          status: 'queued',
+          phase: 'queued',
+          error: null,
+          speed: 0,
+          queuePlace: null,
+          progressAt: Date.now()
+        })
+        delete j.note
+        active++
+        started = true
+        executeJob(id, null, ctx || hostCtx).catch(() => {})
+      }
+    }
+    if (started) {
+      saveJobs()
+      onchange?.()
+    }
+    return active
   }
 
   function configure ({ slskUser: nextUser, slskPass: nextPass, slskServer: nextServer } = {}) {
@@ -815,6 +1176,7 @@ export function createSoulseekPlugin ({
         ensureAddon().then(() => { onchange?.() }, () => {})
       }
       onchange?.()
+      if (persistJobs) wakeJobs(hostCtx)
     }
   }
 
@@ -856,17 +1218,29 @@ export function createSoulseekPlugin ({
   async function stop () {
     closed = true
     for (const j of jobs.values()) {
-      if (j.status === 'queued' || j.status === 'transferring') j.cancelled = true
-      // A mirror waiting for another import has placed nothing: closing ends it as a cancel, not as a failure.
-      if (j.status === 'announcing' && j.phase === 'waiting') {
-        j.cancelled = true
-        j.status = 'cancelled'
+      if (persistJobs) {
+        if (j.status === 'queued' || j.status === 'transferring' || (j.status === 'announcing' && j.phase === 'waiting')) {
+          j.status = 'queued'
+          j.phase = 'queued'
+          j.speed = 0
+          j.queuePlace = null
+        }
+      } else {
+        if (j.status === 'queued' || j.status === 'transferring') j.cancelled = true
+        // A mirror waiting for another import has placed nothing: closing ends it as a cancel, not as a failure.
+        if (j.status === 'announcing' && j.phase === 'waiting') {
+          j.cancelled = true
+          j.status = 'cancelled'
+        }
       }
     }
+    notifyWake()
+    saveJobs()
     browseCache.clear()
     closeClient()
   }
 
+  if (persistJobs) loadPersistedJobs()
   // Probe addon availability lazily when configured so /v1/plugins stays unconfigured-inert when credentials are empty,
   // and reports `unavailable` when configured on a platform without a prebuild.
   if (configured()) ensureAddon().then(() => { onchange?.() }, () => {})
@@ -896,6 +1270,9 @@ export function createSoulseekPlugin ({
     listJobs,
     getJob,
     cancelJob,
+    retryJob,
+    wakeJobs,
+    resumePersisted,
     stop,
     info
   }

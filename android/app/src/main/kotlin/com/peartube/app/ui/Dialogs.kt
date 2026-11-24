@@ -475,6 +475,11 @@ fun AddToLibrarySheet(
                         AcquireJobCard(
                             job = job,
                             onAction = { model.cancelOrDismissJob(job.jobId) },
+                            onRetry = if (job.isFailed && (job.retryable || job.plugin.equals("soulseek", ignoreCase = true))) {
+                                { model.retryJob(job.jobId) }
+                            } else {
+                                null
+                            },
                         )
                     }
                 }
@@ -530,6 +535,7 @@ fun AddToLibrarySheet(
 private fun AcquireJobCard(
     job: AcquireJob,
     onAction: () -> Unit,
+    onRetry: (() -> Unit)? = null,
 ) {
     Column(
         Modifier
@@ -562,6 +568,15 @@ private fun AcquireJobCard(
                     job.statusLabel(),
                 ).joinToString(" · ")
                 Text(meta, color = statusColor, fontSize = 12.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                val note = job.note?.takeIf { it.isNotBlank() }
+                if (note != null) {
+                    Text(note, color = Dim, fontSize = 11.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                }
+            }
+            if (onRetry != null) {
+                TextButton(onClick = onRetry) {
+                    Text("Retry", color = BrandRing, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                }
             }
             TextButton(onClick = onAction) {
                 Text(

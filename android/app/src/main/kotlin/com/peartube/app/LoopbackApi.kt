@@ -192,9 +192,12 @@ data class AcquireJob(
     val title: String = "",
     val plugin: String = "",
     val status: String = "queued",
+    val phase: String? = null,
     val bytes: Long = 0L,
     val total: Long? = null,
     val error: String? = null,
+    val note: String? = null,
+    val retryable: Boolean = false,
     val peer: String? = null,
     val queuePlace: Int? = null,
     val tracksDone: Int? = null,
@@ -203,17 +206,18 @@ data class AcquireJob(
     val isActive: Boolean get() = status.lowercase(Locale.ROOT) !in TERMINAL_JOB_STATUSES
     val isDone: Boolean get() = status.lowercase(Locale.ROOT) in DONE_JOB_STATUSES
     val isFailed: Boolean get() = status.lowercase(Locale.ROOT) in FAILED_JOB_STATUSES
+    val isRetrying: Boolean get() = phase.equals("retrying", ignoreCase = true)
 
     val progressFraction: Float?
         get() {
+            val tot = total
+            if (tot != null && tot > 0L) {
+                return (bytes.toFloat() / tot.toFloat()).coerceIn(0f, 1f)
+            }
             val td = tracksDone
             val tt = tracksTotal
             if (tt != null && tt > 0 && td != null) {
                 return (td.toFloat() / tt.toFloat()).coerceIn(0f, 1f)
-            }
-            val tot = total
-            if (tot != null && tot > 0L) {
-                return (bytes.toFloat() / tot.toFloat()).coerceIn(0f, 1f)
             }
             return null
         }
@@ -223,6 +227,7 @@ data class AcquireJob(
         val pct = progressFraction?.let { (it * 100f).toInt().coerceIn(0, 100) }
         return when (st) {
             "queued", "pending" -> {
+                if (isRetrying) return "Retrying…"
                 val q = queuePlace
                 if (q != null && q > 0) "Queued (#$q)" else "Queued"
             }
@@ -236,7 +241,7 @@ data class AcquireJob(
                     else -> "Downloading…"
                 }
             }
-            "saving", "importing", "processing", "muxing", "verifying", "scanning", "publishing" -> "Saving"
+            "saving", "importing", "processing", "muxing", "verifying", "scanning", "publishing", "announcing" -> "Saving"
             "done", "completed", "complete", "added" -> "Added"
             "cancelled", "canceled" -> "Cancelled"
             "failed", "error", "dead" -> if (!error.isNullOrBlank()) "Failed: $error" else "Failed"
@@ -253,9 +258,12 @@ data class AcquireJob(
                 title = json.optString("title"),
                 plugin = json.optString("plugin"),
                 status = json.optString("status", "queued"),
+                phase = json.optString("phase").takeUnless { json.isNull("phase") || it.isBlank() },
                 bytes = json.optLong("bytes", 0L).coerceAtLeast(0L),
                 total = optPositiveLong(json, "total"),
                 error = json.optString("error").takeUnless { json.isNull("error") || it.isBlank() },
+                note = json.optString("note").takeUnless { json.isNull("note") || it.isBlank() },
+                retryable = json.optBoolean("retryable", false),
                 peer = json.optString("peer").takeUnless { json.isNull("peer") || it.isBlank() },
                 queuePlace = optNonNegativeInt(json, "queuePlace"),
                 tracksDone = optNonNegativeInt(json, "tracksDone") ?: optNonNegativeInt(json, "fileIndex"),
@@ -982,6 +990,23 @@ class LoopbackApi(private val baseUrlProvider: () -> String?) {
             readTimeoutMs = 10_000,
         ).map { }
     }
+
+    suspend fun retryJob(jobId: String): Result<AcquireJob> {
+        val encoded = URLEncoder.encode(jobId, "UTF-8")
+        return requestJson(
+            method = "POST",
+            path = "/v1/jobs/$encoded/retry",
+            body = JSONObject(),
+            readTimeoutMs = 15_000,
+        ).mapCatching { AcquireJob.from(it) }
+    }
+
+    suspend fun resumeJobs(): Result<Int> = requestJson(
+        method = "POST",
+        path = "/v1/jobs/resume",
+        body = JSONObject(),
+        readTimeoutMs = 10_000,
+    ).mapCatching { json -> json.optInt("resumed", 0) }
 
     suspend fun listPlugins(): Result<List<PluginInfo>> = requestJson(
         method = "GET",

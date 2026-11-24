@@ -14,8 +14,7 @@ class PearTubeApp : Application() {
         model = AppModel(this)
         ProcessLifecycleOwner.get().lifecycle.addObserver(object : DefaultLifecycleObserver {
             override fun onStart(owner: LifecycleOwner) {
-                model.inForeground = true
-                model.applyBackgroundPolicy()
+                model.onForeground()
             }
 
             override fun onStop(owner: LifecycleOwner) {

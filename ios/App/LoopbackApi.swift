@@ -321,6 +321,7 @@ struct AcquireJob: Identifiable, Decodable, Hashable {
     var fileCount: Int?
     var error: String?
     var note: String?
+    var retryable: Bool = false
     var created: Double
 
     var id: String { jobId }
@@ -356,6 +357,7 @@ struct AcquireJob: Identifiable, Decodable, Hashable {
             return "Transferring"
         case "announcing": return "Saving to library"
         case "queued":
+            if phase?.lowercased() == "retrying" { return "Retrying…" }
             if let q = queuePlace, q > 0 { return "Queued on peer (#\(q))" }
             return "Queued"
         case "done": return "Saved"
@@ -379,7 +381,7 @@ struct AcquireJob: Identifiable, Decodable, Hashable {
 
     enum CodingKeys: String, CodingKey {
         case job, jobId, id, title, plugin, source, status, phase, bytes, total, speed
-        case peer, queuePlace, file, fileIndex, fileCount, error, note, created
+        case peer, queuePlace, file, fileIndex, fileCount, error, note, retryable, created
     }
 
     init(
@@ -400,6 +402,7 @@ struct AcquireJob: Identifiable, Decodable, Hashable {
         fileCount: Int? = nil,
         error: String? = nil,
         note: String? = nil,
+        retryable: Bool = false,
         created: Double = 0
     ) {
         self.jobId = jobId
@@ -419,6 +422,7 @@ struct AcquireJob: Identifiable, Decodable, Hashable {
         self.fileCount = fileCount
         self.error = error
         self.note = note
+        self.retryable = retryable
         self.created = created
     }
 
@@ -444,6 +448,7 @@ struct AcquireJob: Identifiable, Decodable, Hashable {
         self.fileCount = (try? c.decodeIfPresent(FlexibleInt.self, forKey: .fileCount))?.value
         self.error = try? c.decodeIfPresent(String.self, forKey: .error)
         self.note = try? c.decodeIfPresent(String.self, forKey: .note)
+        self.retryable = (try? c.decodeIfPresent(Bool.self, forKey: .retryable)) ?? false
         self.created = (try? c.decodeIfPresent(FlexibleDouble.self, forKey: .created))?.value ?? 0
     }
 }
@@ -1400,6 +1405,17 @@ struct LoopbackApi {
     func cancelJob(jobId: String) async throws {
         let encoded = jobId.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? jobId
         _ = try await requestRaw(method: "DELETE", path: "v1/jobs/\(encoded)", body: nil, timeout: 15)
+    }
+
+    func retryJob(jobId: String) async throws -> AcquireJob {
+        let encoded = jobId.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? jobId
+        return try await postJSON("v1/jobs/\(encoded)/retry", body: [:], timeout: 15)
+    }
+
+    func resumeJobs() async throws -> Int {
+        struct ResumeResponse: Decodable { var resumed: Int? }
+        let res: ResumeResponse = try await postJSON("v1/jobs/resume", body: [:], timeout: 10)
+        return res.resumed ?? 0
     }
 
     func listPlugins() async throws -> [PluginInfo] {

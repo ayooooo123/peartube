@@ -1,4 +1,5 @@
 import Foundation
+import Network
 import SwiftUI
 import UIKit
 
@@ -72,6 +73,8 @@ final class AppModel: ObservableObject {
     @Published var identifyError: String?
     @Published var jobs: [AcquireJob] = []
     private var previousActiveJobIDs: Set<String> = []
+    private var transferBgTask: UIBackgroundTaskIdentifier = .invalid
+    private var pathMonitor: NWPathMonitor?
     @Published var enabledSources: Set<MediaSourceKind> = Set(MediaSourceKind.allCases)
     @Published var sourceSearchQuery = ""
     @Published var sourceSearchResponse: SourceSearchResponse?
@@ -694,6 +697,40 @@ final class AppModel: ObservableObject {
         }
     }
 
+    func retryJob(_ jobId: String) async {
+        do {
+            let api = try await ensureLoopback()
+            let job = try await api.retryJob(jobId: jobId)
+            upsertJob(job)
+            await refreshJobs(silent: true)
+            notice = "Resuming \(job.title)…"
+        } catch {
+            self.error = error.localizedDescription
+        }
+    }
+
+    private func startPathMonitorIfNeeded() {
+        guard pathMonitor == nil else { return }
+        let monitor = NWPathMonitor()
+        monitor.pathUpdateHandler = { [weak self] path in
+            guard path.status == .satisfied else { return }
+            Task { @MainActor [weak self] in
+                guard let self, self.running, let api = self.loopback else { return }
+                _ = try? await api.resumeJobs()
+                await self.refreshJobs(silent: true)
+            }
+        }
+        monitor.start(queue: DispatchQueue(label: "com.peartube.network-monitor"))
+        pathMonitor = monitor
+    }
+
+    private func endTransferBackgroundTask() {
+        guard transferBgTask != .invalid else { return }
+        let taskId = transferBgTask
+        transferBgTask = .invalid
+        UIApplication.shared.endBackgroundTask(taskId)
+    }
+
     func toggleSource(_ source: MediaSourceKind) {
         if enabledSources.contains(source) {
             enabledSources.remove(source)
@@ -1208,18 +1245,41 @@ final class AppModel: ObservableObject {
         } catch { self.error = error.localizedDescription }
     }
     func sceneChanged(_ phase: ScenePhase) {
+        startPathMonitorIfNeeded()
         if phase == .background {
             background = true; recordProgress(force: true); player.suspend(); reconcileBackground(); writeEvidence(force: true)
         } else if phase == .active {
             background = false
+            endTransferBackgroundTask()
             worker?.resume()
             worker?.refreshDiscovery()
-            player.resume(); Task { await refresh() }
+            player.resume()
+            Task {
+                await refresh()
+                if let api = loopback {
+                    _ = try? await api.resumeJobs()
+                }
+                await refreshJobs(silent: true)
+            }
         }
     }
     private func reconcileBackground() {
         let keepAwake = !session.isEmpty || !downloads.isEmpty || hasActiveJobs || music.isPlaying
-        if background && !keepAwake { worker?.suspend() } else { worker?.resume() }
+        if background && !keepAwake {
+            endTransferBackgroundTask()
+            worker?.suspend()
+        } else {
+            worker?.resume()
+            if background && (hasActiveJobs || !downloads.isEmpty) && transferBgTask == .invalid {
+                transferBgTask = UIApplication.shared.beginBackgroundTask(withName: "PearTubeTransfer") { [weak self] in
+                    Task { @MainActor [weak self] in
+                        self?.endTransferBackgroundTask()
+                    }
+                }
+            } else if !background || (!hasActiveJobs && downloads.isEmpty) {
+                endTransferBackgroundTask()
+            }
+        }
     }
     func download(_ entry: MediaEntry) {
         guard downloadTasks[entry.key] == nil, let url = URL(string: entry.downloadURL.isEmpty ? entry.streamURL : entry.downloadURL) else { return }

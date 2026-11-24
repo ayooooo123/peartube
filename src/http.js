@@ -426,6 +426,14 @@ export function createApi (state) {
     if (match && req.method === 'DELETE') {
       return (acquirer ? acquirer.cancel(match[1]) : null) || state.mirror?.cancelProviderJob?.(match[1]) || null
     }
+    if (req.method === 'POST' && path === '/v1/jobs/resume') {
+      const resumed = state.mirror?.wakeProviderJobs?.() || 0
+      return { resumed }
+    }
+    const retryMatch = path.match(/^\/v1\/jobs\/([0-9a-f-]{36})\/retry$/)
+    if (retryMatch && req.method === 'POST') {
+      return state.mirror?.retryProviderJob?.(retryMatch[1]) || null
+    }
     if (req.method === 'GET' && path === '/v1/plugins') {
       return { plugins: state.mirror ? state.mirror.list() : [] }
     }

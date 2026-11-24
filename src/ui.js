@@ -5142,6 +5142,7 @@ function slskJobState (j) {
   if (j.status === 'cancelled') return { tone: '', text: 'Cancelled', short: 'Cancelled' }
   if (j.status === 'announcing') return j.phase === 'waiting' ? { tone: '', text: 'Waiting for another import to finish', short: 'Waiting' } : { tone: '', text: 'Adding to your library', short: 'Adding' }
   if (j.status === 'transferring') return { tone: '', text: 'Downloading from ' + j.peer + (pct != null ? ' · ' + pct + '%' : ''), short: pct != null ? pct + '%' : 'Downloading' }
+  if (j.phase === 'retrying') return { tone: 'warn', text: j.note || 'Connection paused — retrying…', short: 'Retrying' }
   if (j.phase === 'connecting') return { tone: '', text: 'Connecting to ' + j.peer, short: 'Connecting' }
   if (j.queuePlace > 0) return { tone: '', text: 'Queued at ' + j.queuePlace + ' on ' + j.peer, short: 'Queued at ' + j.queuePlace }
   if (j.queuePlace === 0) return { tone: '', text: 'Next in line on ' + j.peer, short: 'Next in line' }
@@ -5231,6 +5232,7 @@ function srcJobItem (j) {
       j.status === 'failed' && unreachable ? h('div', { class: 'meta wrap slsk-fix' }, ...slskPortFix(p.listenPort || p.listenPortSetting || j.listenPort)) : null),
     h('div', { class: 'acts' },
       album ? btn(openLabel, () => { const t = tileOf(album); if (t) openDetail(t.key) }) : null,
+      j.status === 'failed' && j.retryable ? btn('Retry', e => act(e.currentTarget, async () => { await api('/v1/jobs/' + j.jobId + '/retry', { method: 'POST' }); refresh() })) : null,
       // Once a job's own import runs there is nothing left to cancel, so no button offers it.
       active && j.status === 'announcing' && j.phase !== 'waiting' ? null : btn(active ? 'Cancel' : 'Dismiss', e => act(e.currentTarget, async () => { await api('/v1/jobs/' + j.jobId, { method: 'DELETE' }); refresh() }))))
 }

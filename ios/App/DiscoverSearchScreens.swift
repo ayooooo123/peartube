@@ -1834,6 +1834,14 @@ struct AddToLibrarySheet: View {
                         .foregroundStyle(job.isFailed ? PTColor.bad : (job.isDone ? PTColor.ok : PTColor.dim))
                 }
                 Spacer(minLength: 8)
+                if job.isFailed && (job.retryable || job.plugin.lowercased() == "soulseek") {
+                    Button("Retry") {
+                        Task { await model.retryJob(job.jobId) }
+                    }
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(PTColor.brand)
+                    .accessibilityIdentifier("job.retry.\(job.jobId)")
+                }
                 Button(job.isActive ? "Cancel" : "Dismiss", role: job.isActive ? .destructive : nil) {
                     Task { await model.cancelOrDismissJob(job.jobId) }
                 }

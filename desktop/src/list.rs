@@ -795,13 +795,30 @@ impl PearTube {
                             }),
                     )
                     .child(
-                        Button::new(SharedString::from(format!("{id_prefix}-cancel-{}", job.job_id)))
-                            .ghost()
-                            .small()
-                            .label(if active { "Cancel" } else { "Dismiss" })
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                this.cancel_or_dismiss_job(job_id.clone(), cx);
-                            })),
+                        h_flex()
+                            .gap_1()
+                            .items_center()
+                            .when(failed && (job.retryable || job.plugin == "soulseek"), |row| {
+                                let retry_id = job.job_id.clone();
+                                row.child(
+                                    Button::new(SharedString::from(format!("{id_prefix}-retry-{}", job.job_id)))
+                                        .ghost()
+                                        .small()
+                                        .label("Retry")
+                                        .on_click(cx.listener(move |this, _, _, cx| {
+                                            this.retry_job(retry_id.clone(), cx);
+                                        })),
+                                )
+                            })
+                            .child(
+                                Button::new(SharedString::from(format!("{id_prefix}-cancel-{}", job.job_id)))
+                                    .ghost()
+                                    .small()
+                                    .label(if active { "Cancel" } else { "Dismiss" })
+                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                        this.cancel_or_dismiss_job(job_id.clone(), cx);
+                                    })),
+                            ),
                     ),
             )
             .when_some(pct.filter(|_| active), |card, frac| {
@@ -1181,9 +1198,13 @@ pub(crate) fn top_bar_jobs_pill(jobs: &[AcquireJob]) -> Option<(String, bool)> {
             if let Some(frac) = first.progress_fraction().filter(|_| first.bytes > 0) {
                 format!("Adding · {}%", (frac * 100.0).round() as u32)
             } else if first.status == "queued" {
-                match first.queue_place {
-                    Some(q) if q > 0 => format!("Queued (#{q})"),
-                    _ => "Adding…".into(),
+                if first.phase.as_deref() == Some("retrying") {
+                    "Retrying…".into()
+                } else {
+                    match first.queue_place {
+                        Some(q) if q > 0 => format!("Queued (#{q})"),
+                        _ => "Adding…".into(),
+                    }
                 }
             } else {
                 "Adding…".into()
@@ -1231,6 +1252,14 @@ mod tests {
         assert_eq!(
             top_bar_jobs_pill(&[queued]),
             Some(("Queued (#12)".into(), false))
+        );
+
+        let mut retrying = job("3b", "queued");
+        retrying.phase = Some("retrying".into());
+        assert_eq!(retrying.status_label(), "Retrying…");
+        assert_eq!(
+            top_bar_jobs_pill(&[retrying]),
+            Some(("Retrying…".into(), false))
         );
 
         let failed_only = vec![job("4", "failed"), job("5", "failed")];

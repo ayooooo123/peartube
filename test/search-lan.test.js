@@ -18,6 +18,7 @@ import { createLan } from '../src/lan.js'
 import { createGlobalSearch, SEARCH_TOPIC } from '../src/search.js'
 import { formatWatchUri } from '../src/protocol.js'
 import { serveChannel } from '../src/control-channel.js'
+import { SEARCH } from '../spec/protocols.js'
 import { mdnsBus } from './mdns.js'
 
 const tmp = () => mkdtempSync(join(tmpdir(), 'peartube-search-lan-'))
@@ -139,9 +140,9 @@ test('cold search returning empty still fires onUpdate when a LAN relay connects
     blob: { blockOffset: 0, blockLength: 10, byteOffset: 0, byteLength: 5000 }
   })
   serveChannel(serverConn, {
-    protocol: 'peartube/search/v1',
+    spec: SEARCH,
     label: 'Searcher',
-    onRequest: async () => ({ hits: [{ uri }] })
+    handlers: { query: async () => ({ hits: [{ uri }] }) }
   })
   conns.add(clientConn)
   lanConns.add(clientConn)
@@ -173,9 +174,9 @@ test('a failed search call does not count as answered or cut the collect window 
   const [clientConn, serverConn] = await noisePair()
   t.after(() => { clientConn.destroy(); serverConn.destroy() })
   serveChannel(serverConn, {
-    protocol: 'peartube/search/v1',
+    spec: SEARCH,
     label: 'Searcher',
-    onRequest: async () => { throw new Error('busy') }
+    handlers: { query: async () => { throw new Error('busy') } }
   })
   const conns = new Set([clientConn])
   const listeners = new Set()

@@ -49,6 +49,8 @@ import androidx.compose.ui.unit.sp
 import com.peartube.app.AppModel
 import com.peartube.app.Room
 import com.peartube.app.Screen
+import com.peartube.app.Status
+import com.peartube.app.formatRate
 import com.peartube.app.player.PlayerHost
 
 @Composable
@@ -56,6 +58,7 @@ fun App(model: AppModel, player: PlayerHost) {
     val screen by model.screen.collectAsState()
     val room by model.currentRoom.collectAsState()
     val catalog by model.catalog.collectAsState()
+    val status by model.status.collectAsState()
     val cast by model.cast.collectAsState()
     val showTvs by model.showTvsDialog.collectAsState()
     val showAdd by model.showAddSheet.collectAsState()
@@ -117,9 +120,11 @@ fun App(model: AppModel, player: PlayerHost) {
                     Screen.Main -> {
                         Column(Modifier.fillMaxSize().navigationBarsPadding()) {
                             TopAppBarRow(
+                                status = status,
                                 casting = cast.session != null,
                                 activeAcquireCount = activeAcquireCount,
                                 onOpenHood = { showHood = true },
+                                onOpenNetwork = { model.pushScreen(Screen.Network) },
                                 onOpenAdd = { model.openAddSheet() },
                                 onOpenTvs = { model.openCastSheet() },
                                 onOpenSettings = { model.pushScreen(Screen.Settings) },
@@ -224,6 +229,18 @@ fun App(model: AppModel, player: PlayerHost) {
                         onOpenArtist = { model.pushScreen(Screen.ArtistDetail(it)) },
                         onOpenAlbum = { model.pushScreen(Screen.AlbumDetail(it)) },
                     )
+                    Screen.Network -> {
+                        Column(Modifier.fillMaxSize().navigationBarsPadding()) {
+                            Box(Modifier.weight(1f).fillMaxWidth()) {
+                                NetworkScreen(
+                                    model = model,
+                                    onBack = { model.popScreen() },
+                                )
+                            }
+                            CastRemoteBar(model)
+                            MiniPlayerDock(model, onOpenFull = { model.pushScreen(Screen.MusicPlayerFull) })
+                        }
+                    }
                     Screen.Settings -> SettingsScreen(model)
                     is Screen.Play -> key(current.entry.key) {
                         PlayScreen(model, player, current.entry, current.startPositionMs)
@@ -244,6 +261,10 @@ fun App(model: AppModel, player: PlayerHost) {
         UnderTheHoodSheet(
             model = model,
             onClose = { showHood = false },
+            onOpenNetwork = {
+                showHood = false
+                model.pushScreen(Screen.Network)
+            },
             onOpenSettings = {
                 showHood = false
                 model.pushScreen(Screen.Settings)
@@ -264,13 +285,22 @@ fun App(model: AppModel, player: PlayerHost) {
 
 @Composable
 private fun TopAppBarRow(
+    status: Status?,
     casting: Boolean,
     activeAcquireCount: Int,
     onOpenHood: () -> Unit,
+    onOpenNetwork: () -> Unit,
     onOpenAdd: () -> Unit,
     onOpenTvs: () -> Unit,
     onOpenSettings: () -> Unit,
 ) {
+    val peers = status?.routes?.totalPeers ?: 0L
+    val totalBps = (status?.downBps ?: 0L) + (status?.upBps ?: 0L)
+    val netLabel = when {
+        totalBps > 0L -> "$peers · ${formatRate(totalBps)}"
+        peers == 1L -> "1 peer"
+        else -> "$peers peers"
+    }
     Row(
         Modifier
             .fillMaxWidth()
@@ -281,7 +311,6 @@ private fun TopAppBarRow(
     ) {
         Row(
             Modifier
-                .weight(1f)
                 .clickable(onClick = onOpenHood)
                 .padding(vertical = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
@@ -295,6 +324,32 @@ private fun TopAppBarRow(
                 softWrap = false,
             )
         }
+        Spacer(Modifier.width(8.dp))
+        Row(
+            modifier = Modifier
+                .clip(PillShape)
+                .background(CardElevated)
+                .border(1.dp, if (peers > 0L) Accent.copy(alpha = 0.4f) else Line, PillShape)
+                .clickable(onClick = onOpenNetwork)
+                .padding(horizontal = 9.dp, vertical = 5.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Box(
+                Modifier
+                    .size(6.dp)
+                    .background(if (peers > 0L) Accent else Dim, CircleShape),
+            )
+            Spacer(Modifier.width(5.dp))
+            Text(
+                text = netLabel,
+                color = if (peers > 0L) Ink else Dim,
+                fontSize = 11.sp,
+                fontWeight = FontWeight.Medium,
+                maxLines = 1,
+                softWrap = false,
+            )
+        }
+        Spacer(Modifier.weight(1f))
         if (activeAcquireCount > 0) {
             Row(
                 modifier = Modifier

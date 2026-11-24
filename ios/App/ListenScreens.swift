@@ -17,7 +17,7 @@ struct ListenScreen: View {
     @State private var section: ListenSection = .albums
     @State private var savedOnly = false
     @State private var trackFilter = ""
-    @State private var sortField: TrackSortField = .title
+    @State private var sortField: TrackSortField = .library
     @State private var sortAscending = true
 
     private var filteredAlbums: [LibraryTile] {
@@ -36,6 +36,31 @@ struct ListenScreen: View {
 
     private var filteredTracks: [TrackRow] {
         model.catalog.sortedTracks(filter: trackFilter, sortBy: sortField, ascending: sortAscending, savedOnly: savedOnly)
+    }
+
+    private var activePlayList: [TrackRow] {
+        switch section {
+        case .albums:
+            return filteredAlbums.flatMap { model.catalog.tracks(forAlbum: $0) }
+        case .artists:
+            return filteredArtists.flatMap(\.tracks)
+        case .tracks:
+            return filteredTracks
+        }
+    }
+
+    private var activeSourceLabel: String {
+        switch section {
+        case .albums, .artists:
+            return "Library"
+        case .tracks:
+            return trackFilter.isEmpty ? "Tracks" : "Tracks · \(trackFilter)"
+        }
+    }
+
+    private var waitingPausedTrack: TrackRow? {
+        guard let cur = music.currentTrack, !music.isPlaying else { return nil }
+        return cur
     }
 
     private var countLabel: String {
@@ -59,13 +84,54 @@ struct ListenScreen: View {
                 .pickerStyle(.segmented)
                 .accessibilityIdentifier("listen.picker")
 
+                if !model.catalog.tracks.isEmpty {
+                    HStack(spacing: 8) {
+                        if let waiting = waitingPausedTrack {
+                            Button {
+                                music.togglePlayPause()
+                            } label: {
+                                Label("Resume", systemImage: "play.fill")
+                            }
+                            .buttonStyle(PTPrimaryButtonStyle(compact: true))
+                            .accessibilityLabel("Resume \(waiting.title)")
+                            .accessibilityIdentifier("listen.playAll")
+                        } else {
+                            Button {
+                                music.playTrackList(activePlayList, startIndex: 0, sourceLabel: activeSourceLabel, shuffleOn: false)
+                            } label: {
+                                Label("Play all", systemImage: "play.fill")
+                            }
+                            .buttonStyle(PTPrimaryButtonStyle(compact: true))
+                            .disabled(activePlayList.isEmpty)
+                            .accessibilityIdentifier("listen.playAll")
+                        }
+
+                        Button {
+                            music.playTrackList(activePlayList, startIndex: nil, sourceLabel: activeSourceLabel, shuffleOn: true)
+                        } label: {
+                            Label("Shuffle", systemImage: "shuffle")
+                        }
+                        .buttonStyle(PTQuietButtonStyle(compact: true))
+                        .disabled(activePlayList.isEmpty)
+                        .accessibilityIdentifier("listen.shuffle")
+
+                        Spacer(minLength: 4)
+
+                        PTChipButton(title: "Saved here", selected: savedOnly, identifier: "listen.saved") {
+                            savedOnly.toggle()
+                        }
+                    }
+                }
+
                 HStack {
                     Text(countLabel)
                         .font(.subheadline)
                         .foregroundStyle(PTColor.dim)
                     Spacer()
-                    PTChipButton(title: "Saved here", selected: savedOnly, identifier: "listen.saved") {
-                        savedOnly.toggle()
+                    if model.catalog.tracks.isEmpty {
+                        PTChipButton(title: "Saved here", selected: savedOnly, identifier: "listen.saved") {
+                            savedOnly.toggle()
+                        }
                     }
                 }
             }
@@ -142,7 +208,7 @@ struct ListenScreen: View {
     }
 
     private var tracksToolbar: some View {
-        HStack(spacing: 10) {
+        HStack(spacing: 8) {
             HStack(spacing: 8) {
                 Image(systemName: "line.3.horizontal.decrease")
                     .foregroundStyle(PTColor.dim)
@@ -166,29 +232,49 @@ struct ListenScreen: View {
             Menu {
                 ForEach(TrackSortField.allCases) { field in
                     Button {
-                        if sortField == field { sortAscending.toggle() }
-                        else { sortField = field; sortAscending = (field != .size) }
+                        if sortField == field {
+                            sortAscending.toggle()
+                        } else {
+                            sortField = field
+                            sortAscending = (field != .size && field != .quality)
+                        }
                     } label: {
                         if sortField == field {
-                            Label("\(field.rawValue) (\(sortAscending ? "A-Z" : "Z-A"))", systemImage: sortAscending ? "arrow.up" : "arrow.down")
+                            Label(field.rawValue, systemImage: "checkmark")
                         } else {
                             Text(field.rawValue)
                         }
                     }
                 }
             } label: {
-                HStack(spacing: 5) {
-                    Text("Sort: \(sortField.rawValue)")
-                    Image(systemName: sortAscending ? "chevron.up" : "chevron.down").font(.caption2)
+                HStack(spacing: 4) {
+                    Text(sortField == .library ? "Order" : sortField.rawValue)
+                        .lineLimit(1)
+                    Image(systemName: "chevron.up.chevron.down").font(.caption2)
                 }
                 .font(.subheadline.weight(.medium))
                 .foregroundStyle(PTColor.ink)
-                .padding(.horizontal, 12)
+                .padding(.horizontal, 10)
                 .padding(.vertical, 9)
                 .background(PTColor.surface, in: RoundedRectangle(cornerRadius: PTRadius.control))
                 .overlay(RoundedRectangle(cornerRadius: PTRadius.control).strokeBorder(PTColor.line, lineWidth: 1))
             }
+            .accessibilityLabel("Sort tracks: \(sortField.rawValue)")
             .accessibilityIdentifier("listen.tracks.sort")
+
+            Button {
+                sortAscending.toggle()
+            } label: {
+                Image(systemName: sortAscending ? "arrow.up" : "arrow.down")
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(PTColor.ink)
+                    .frame(width: 38, height: 38)
+                    .background(PTColor.surface, in: RoundedRectangle(cornerRadius: PTRadius.control))
+                    .overlay(RoundedRectangle(cornerRadius: PTRadius.control).strokeBorder(PTColor.line, lineWidth: 1))
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(sortAscending ? "Ascending order" : "Descending order")
+            .accessibilityIdentifier("listen.tracks.sortDirection")
         }
     }
 
@@ -301,14 +387,23 @@ private struct ListenTrackRow: View {
                             .lineLimit(1)
                     }
                     Spacer(minLength: 8)
-                    if isCurrent {
-                        Image(systemName: music.isPlaying ? "waveform" : "pause.fill")
-                            .font(.caption)
-                            .foregroundStyle(PTColor.brand)
-                    } else if row.entry.size > 0 {
-                        Text(bytes(row.entry.size))
-                            .font(.caption.monospacedDigit())
-                            .foregroundStyle(PTColor.dim)
+                    VStack(alignment: .trailing, spacing: 2) {
+                        if isCurrent {
+                            Image(systemName: music.isPlaying ? "waveform" : "pause.fill")
+                                .font(.caption)
+                                .foregroundStyle(PTColor.brand)
+                        }
+                        if let quality = row.qualityLabel {
+                            Text(quality)
+                                .font(.caption2.weight(.medium))
+                                .foregroundStyle(row.entry.isYouTube ? PTColor.warn : PTColor.dim)
+                                .lineLimit(1)
+                        }
+                        if row.entry.size > 0 {
+                            Text(bytes(row.entry.size))
+                                .font(.caption.monospacedDigit())
+                                .foregroundStyle(PTColor.dim)
+                        }
                     }
                 }
                 .padding(.vertical, 10)

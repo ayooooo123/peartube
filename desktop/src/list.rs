@@ -14,7 +14,7 @@ use gpui_kit::*;
 use peartube::worker::{Entry, Status};
 
 use crate::api::{AcquireJob, IdentifyResult, extract_shared_url, format_duration, is_web_url};
-use crate::app::{DetailView, ListenTab, PearTube, Room, WatchKind};
+use crate::app::{DetailView, ListenTab, NetworkTab, PearTube, Room, WatchKind};
 use crate::qr::qr_card;
 use crate::theme::{ACCENT, BG, BRAND, CARD, CARD_ELEVATED, DANGER, DIM, INK, LINE};
 
@@ -30,6 +30,25 @@ pub fn format_bytes(bytes: u64) -> String {
         format!("{:.0} KB", bytes as f64 / KB as f64)
     } else {
         format!("{bytes} B")
+    }
+}
+
+pub fn format_rate(bps: u64) -> String {
+    if bps == 0 {
+        "0 B/s".to_string()
+    } else {
+        format!("{}/s", format_bytes(bps))
+    }
+}
+
+pub fn total_peers(status: &Status) -> u64 {
+    let routed = status.routes.lan.peers
+        + status.routes.public_route.peers
+        + status.routes.private_route.peers;
+    if routed > 0 {
+        routed
+    } else {
+        status.peers + status.lan_peers
     }
 }
 
@@ -187,6 +206,7 @@ impl PearTube {
                 Room::Watch(kind) => self.render_watch(kind.clone(), cx).into_any_element(),
                 Room::Discover => self.render_discover(cx).into_any_element(),
                 Room::Search => self.render_search(cx).into_any_element(),
+                Room::Network(tab) => self.render_network(*tab, cx).into_any_element(),
             },
         };
 
@@ -267,11 +287,12 @@ impl PearTube {
                                     .cleanable(true),
                             ),
                         )
-                        // Right: Adding… pill (when active), Add (+), TVs (green dot when casting), Settings
+                        // Right: live network pill, Adding… pill (when active), Add (+), TVs (green dot when casting), Settings
                         .child(
                             h_flex()
                                 .items_center()
                                 .gap_1p5()
+                                .child(self.render_network_pill(&active_nav, cx))
                                 .when_some(jobs_pill, |row, (pill_text, is_error)| {
                                     let dot_color = if is_error { rgb(DANGER) } else { rgb(BRAND) };
                                     let border_color = if is_error { rgb(DANGER) } else { rgb(LINE) };
@@ -351,6 +372,53 @@ impl PearTube {
                     .overflow_y_scrollbar()
                     .child(body),
             )
+    }
+
+    fn render_network_pill(&self, active_nav: &Room, cx: &mut Context<Self>) -> impl IntoElement {
+        let active = matches!(active_nav, Room::Network(_));
+        let (peers, rate_bps, online) = match &self.status {
+            Some(st) => (total_peers(st), st.down_bps + st.up_bps, true),
+            None => (0, 0, false),
+        };
+        let label_txt = if !online {
+            "Network".to_string()
+        } else {
+            let p_str = if peers == 1 {
+                "1 peer".to_string()
+            } else {
+                format!("{peers} peers")
+            };
+            if rate_bps > 0 {
+                format!("{p_str} · {}", format_rate(rate_bps))
+            } else {
+                p_str
+            }
+        };
+        let dot_color = if !online || peers == 0 {
+            rgb(DIM)
+        } else {
+            rgb(ACCENT)
+        };
+        h_flex()
+            .id("top-network-pill")
+            .items_center()
+            .gap_1p5()
+            .px_2p5()
+            .py_1()
+            .rounded(px(99.))
+            .bg(if active { rgb(CARD_ELEVATED) } else { rgb(CARD) })
+            .border_1()
+            .border_color(if active { rgb(BRAND) } else { rgb(LINE) })
+            .text_xs()
+            .font_weight(FontWeight::MEDIUM)
+            .text_color(if active { rgb(INK) } else { rgb(DIM) })
+            .cursor_pointer()
+            .hover(|s| s.border_color(rgb(BRAND)).text_color(rgb(INK)))
+            .on_click(cx.listener(|this, _, _, cx| {
+                this.open_room(Room::Network(NetworkTab::Globe), cx);
+            }))
+            .child(div().size(px(6.)).rounded(px(99.)).bg(dot_color))
+            .child(label_txt)
     }
 
     /// `Add to library` dialog (Rule 11 & Rule 18) with auto-identification (`ubit`) and live `Adding` jobs list.

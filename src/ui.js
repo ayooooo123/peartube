@@ -866,6 +866,121 @@ export const page = `<!doctype html>
   .slsk-file .slsk-one { flex: none; min-height: 32px; padding: 0 10px; font-size: 13px; }
   @media (max-width: 640px) { .slsk-file .meta { order: 2; } }
   /* ==== end Delete ==== */
+  /* ==== Sketch sync: Home quick-start cards, Watch views, Tracks table, Network ==== */
+  .home-pair { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; margin-bottom: 24px; }
+  .home-hero { position: relative; overflow: hidden; display: flex; flex-direction: column; gap: 10px; min-height: 204px; padding: 22px 24px; border: 1px solid var(--line); border-radius: var(--r-panel); background: var(--surface); }
+  .home-hero::before { content: ''; position: absolute; inset: 0; pointer-events: none; background: radial-gradient(circle at 88% 18%, hsl(var(--h, 258) 58% 46% / .22), transparent 62%); }
+  .home-hero > * { position: relative; z-index: 1; }
+  .home-hero .eyebrow { font-size: 12px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; color: var(--dim); }
+  .home-hero .hero-title { margin: 0; font-size: clamp(20px, 2.4vw, 28px); line-height: 1.15; letter-spacing: -.02em; max-width: 72%; overflow: hidden; text-overflow: ellipsis; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+  .home-hero .hero-facts { display: flex; flex-wrap: wrap; gap: 8px; color: var(--dim); font-size: 14px; }
+  .home-hero .hero-prog { display: block; width: min(260px, 72%); height: 4px; border-radius: 99px; background: var(--line); overflow: hidden; }
+  .home-hero .hero-prog > i { display: block; height: 100%; background: var(--brand); }
+  .home-hero .hero-acts { margin-top: auto; display: flex; flex-wrap: wrap; gap: 10px; padding-top: 6px; }
+  .home-collage { position: absolute; right: 16px; top: 16px; width: 112px; height: 112px; display: grid; grid-template-columns: repeat(2, 1fr); gap: 4px; border-radius: 10px; overflow: hidden; opacity: .92; pointer-events: none; }
+  .home-collage .sleeve, .home-collage img { width: 100%; height: 100%; border-radius: 4px; object-fit: cover; }
+  .top-acts { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+  .tracks-tbl { border: 1px solid var(--line); border-radius: var(--r-card); background: var(--surface); overflow: hidden; }
+  .tracks-thead, .tracks-trow { display: grid; grid-template-columns: 44px minmax(180px, 2.2fr) minmax(120px, 1.3fr) minmax(120px, 1.3fr) minmax(110px, 1fr) 84px 66px 40px; align-items: center; gap: 8px; padding: 0 12px; }
+  .tracks-thead { min-height: 40px; border-bottom: 1px solid var(--line); color: var(--dim); font-size: 12.5px; font-weight: 600; }
+  .tracks-trow { position: relative; min-height: 46px; border-bottom: 1px solid color-mix(in srgb, var(--line) 55%, transparent); }
+  .tracks-trow > :not(.row-hit) { position: relative; z-index: 1; pointer-events: none; }
+  .tracks-trow a, .tracks-trow button:not(.row-hit) { pointer-events: auto; }
+  .tracks-trow:last-child { border-bottom: 0; }
+  .tracks-trow:hover { background: var(--raised); }
+  .tracks-trow.is-playing { background: var(--brand-soft); }
+  .th-btn { display: inline-flex; align-items: center; gap: 4px; width: 100%; padding: 6px 0; border: 0; background: transparent; color: inherit; font: inherit; font-weight: 600; cursor: pointer; text-align: left; }
+  .th-btn:hover { color: var(--text); }
+  .th-btn.right, .t-right { justify-content: flex-end; text-align: right; font-variant-numeric: tabular-nums; }
+  .t-play-btn { position: relative; z-index: 1; display: inline-flex; align-items: center; gap: 10px; min-width: 0; border: 0; background: transparent; color: var(--text); font: inherit; font-weight: 600; text-align: left; cursor: pointer; padding: 4px 0; }
+  .t-play-btn .t-no { width: 28px; flex: none; text-align: right; color: var(--dim); font-variant-numeric: tabular-nums; font-size: 13px; }
+  .t-play-btn .t-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .t-cell { position: relative; z-index: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13.5px; color: var(--dim); }
+  .t-cell a { color: inherit; text-decoration: none; }
+  .t-cell a:hover { color: var(--text); text-decoration: underline; }
+  .t-sort-pick { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
+  .t-sort-pick select { max-width: 240px; }
+  .watch-mode-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-bottom: 12px; }
+  .tonight-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 14px; margin-bottom: 20px; }
+  .tonight-card { position: relative; overflow: hidden; display: flex; flex-direction: column; gap: 8px; padding: 18px 20px; border: 1px solid var(--line); border-radius: var(--r-panel); background: var(--surface); }
+  .tonight-card::before { content: ''; position: absolute; inset: 0; pointer-events: none; background: radial-gradient(circle at 90% 15%, hsl(var(--h, 258) 54% 46% / .22), transparent 64%); }
+  .tonight-card > * { position: relative; z-index: 1; }
+  .tonight-card h3 { margin: 0; font-size: 20px; line-height: 1.2; }
+  .tonight-card .hero-acts { margin-top: auto; display: flex; flex-wrap: wrap; gap: 8px; padding-top: 6px; }
+  .az-bar { display: flex; flex-wrap: wrap; gap: 4px; margin: 14px 0 12px; }
+  .az-bar button { min-width: 32px; min-height: 32px; padding: 0 8px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); color: var(--text); font: inherit; font-size: 13px; font-weight: 600; cursor: pointer; }
+  .az-bar button:hover { border-color: var(--brand); color: var(--brand-hover); }
+  .az-letter { margin: 16px 0 6px; font-size: 13px; font-weight: 700; color: var(--dim); letter-spacing: .04em; }
+  .az-list { display: flex; flex-direction: column; border: 1px solid var(--line); border-radius: var(--r-card); background: var(--surface); overflow: hidden; }
+  .az-row { display: flex; align-items: center; gap: 12px; min-height: 46px; padding: 8px 14px; border-bottom: 1px solid color-mix(in srgb, var(--line) 55%, transparent); color: var(--text); text-decoration: none; }
+  .az-row:last-child { border-bottom: 0; }
+  .az-row:hover { background: var(--raised); }
+  .az-swatch { width: 10px; height: 26px; border-radius: 4px; flex: none; background: hsl(var(--h, 258) 55% 48%); }
+  .shelf-row { margin-bottom: 24px; }
+  .shelf-row h2 { margin: 0 0 10px; font-size: 17px; }
+  .shelf-wrap { overflow-x: auto; padding: 14px 12px 10px; border: 1px solid var(--line); border-radius: var(--r-panel); background: var(--surface); }
+  .spine-shelf { display: flex; align-items: flex-end; gap: 6px; min-height: 224px; border-bottom: 6px solid var(--raised); padding-bottom: 2px; }
+  .spine { position: relative; flex: none; width: var(--w, 40px); height: calc(196px + var(--tall, 0) * 1px); padding: 10px 4px; border: 1px solid rgba(255,255,255,.14); border-radius: 5px 5px 2px 2px; background: linear-gradient(180deg, hsl(var(--h, 258) 46% 32%), hsl(var(--h, 258) 42% 20%)); color: #f6f7fb; display: flex; flex-direction: column; align-items: center; justify-content: space-between; cursor: pointer; transition: transform var(--t-fast) var(--ease); }
+  .spine:hover, .spine:focus-visible { transform: translateY(-10px); }
+  .spine.mark { box-shadow: inset 0 3px 0 var(--brand); }
+  .spine-top { font-size: 11px; font-weight: 700; opacity: .85; }
+  .spine-name { writing-mode: vertical-rl; transform: rotate(180deg); font-size: 12.5px; font-weight: 700; max-height: 146px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .spine-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--ok); }
+  .spine-dot.away { background: transparent; border: 1.5px solid rgba(255,255,255,.65); }
+  .cover-card { display: grid; grid-template-columns: 120px minmax(0, 1fr); gap: 16px; align-items: start; margin-top: 10px; }
+  .onnow-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 14px; margin-bottom: 18px; }
+  .guide { overflow-x: auto; border: 1px solid var(--line); border-radius: var(--r-panel); background: var(--surface); }
+  .guide-in { position: relative; width: max-content; min-width: 100%; padding-bottom: 6px; }
+  .guide-times, .guide-row { display: flex; align-items: stretch; }
+  .guide-times { border-bottom: 1px solid var(--line); color: var(--dim); font-size: 12px; font-variant-numeric: tabular-nums; padding: 8px 0; }
+  .guide-row { border-bottom: 1px solid color-mix(in srgb, var(--line) 55%, transparent); padding: 6px 0; }
+  .guide-row:last-child { border-bottom: 0; }
+  .guide-ch { position: sticky; left: 0; z-index: 2; flex: none; width: 112px; padding: 6px 12px; background: var(--surface); display: flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 600; border-right: 1px solid var(--line); }
+  .guide-block { flex: none; margin-right: 4px; padding: 8px 10px; border: 1px solid var(--line); border-left: 3px solid hsl(var(--h, 258) 58% 52%); border-radius: 8px; background: var(--raised); color: var(--text); text-align: left; cursor: pointer; display: flex; flex-direction: column; gap: 2px; overflow: hidden; }
+  .guide-block.now { border-color: var(--brand); background: var(--brand-soft); }
+  .guide-block strong, .guide-block small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .guide-block small { color: var(--dim); font-size: 12px; }
+  .guide-now { position: absolute; top: 0; bottom: 0; width: 2px; background: var(--brand); pointer-events: none; z-index: 3; }
+  .net-wrap { margin-bottom: 24px; }
+  .net-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 12px; }
+  .net-grid { display: grid; grid-template-columns: minmax(0, 1.35fr) minmax(280px, 1fr); gap: 16px; align-items: stretch; }
+  .net-scene { position: relative; min-height: 320px; border: 1px solid var(--line); border-radius: var(--r-panel); background: var(--surface); overflow: hidden; display: flex; flex-direction: column; }
+  .net-canvas, .net-flow { width: 100%; height: 320px; display: block; flex: 1; }
+  .net-flow text { fill: var(--text); font-size: 14px; font-family: inherit; }
+  .net-flow text.lbl { fill: var(--dim); font-size: 12px; }
+  .net-flow path.rib { fill: none; opacity: .52; stroke-linecap: round; }
+  .net-flow path.dash { fill: none; stroke: rgba(255,255,255,.5); stroke-width: 1.5; stroke-dasharray: 4 10; animation: netFlow 1.6s linear infinite; }
+  @keyframes netFlow { from { stroke-dashoffset: 28; } to { stroke-dashoffset: 0; } }
+  .net-scene-key { display: flex; flex-wrap: wrap; gap: 12px; padding: 10px 14px; border-top: 1px solid var(--line); font-size: 12.5px; color: var(--text); }
+  .net-scene-key span { display: inline-flex; align-items: center; gap: 6px; }
+  .net-scene-key i, .net-route i { display: inline-block; width: 9px; height: 9px; border-radius: 50%; flex: none; }
+  .net-scene-cap { padding: 0 14px 10px; font-size: 12.5px; color: var(--dim); }
+  .net-cards { display: flex; flex-direction: column; gap: 12px; }
+  .net-nowpair { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
+  .net-big { font-size: 22px; font-weight: 700; font-variant-numeric: tabular-nums; margin: 2px 0 6px; }
+  .net-spark { width: 100%; height: 34px; display: block; }
+  .net-spark path { fill: none; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+  .c-down { color: var(--brand-hover); }
+  .c-up { color: var(--ok); }
+  .net-say { font-size: 14.5px; font-weight: 600; margin-bottom: 10px; }
+  .net-meter { display: flex; height: 8px; border-radius: 99px; overflow: hidden; background: var(--raised); gap: 2px; }
+  .net-meter .give { background: var(--ok); }
+  .net-meter .take { background: var(--brand); }
+  .net-meter-key { display: flex; justify-content: space-between; gap: 10px; margin-top: 8px; font-size: 12.5px; font-variant-numeric: tabular-nums; }
+  .net-route { display: grid; grid-template-columns: 12px minmax(0, 1fr) auto auto; align-items: center; gap: 10px; padding: 6px 0; font-size: 13.5px; }
+  .net-route.off { opacity: .55; }
+  .net-route .rate { color: var(--dim); font-size: 12.5px; font-variant-numeric: tabular-nums; }
+  @media (prefers-reduced-motion: reduce) { .net-flow path.dash { animation: none; } }
+  @media (max-width: 900px) { .home-pair, .net-grid { grid-template-columns: 1fr; } }
+  @media (max-width: 700px) {
+    .home-hero { padding: 18px; min-height: 170px; }
+    .home-collage { width: 76px; height: 76px; }
+    .tracks-thead { display: none; }
+    .tracks-trow { grid-template-columns: minmax(0, 1fr) 44px; padding: 6px 10px; }
+    .tracks-trow .c-hide-sm { display: none; }
+    .cover-card { grid-template-columns: 1fr; }
+  }
+  /* ==== end Sketch sync ==== */
 </style>
 </head>
 <body>
@@ -915,8 +1030,9 @@ export const page = `<!doctype html>
     <div class="msg err" id="authMsg" role="alert"></div>
   </form>
 
-  <!-- ==== Home: what is not finished, then a row of music and a row of video ==== -->
+  <!-- ==== Home: paired Listen/Watch quick start, what is not finished, then a row of music and a row of video ==== -->
   <section id="tab-home" data-panel="home">
+    <div class="home-pair" id="homeHero" hidden></div>
     <section id="keepWrap" hidden>
       <div class="row-head"><h2>Keep playing</h2></div>
       <div class="keep" id="keep"></div>
@@ -927,6 +1043,7 @@ export const page = `<!doctype html>
   <!-- ==== Listen: the music room ==== -->
   <section id="tab-listen" data-panel="listen" hidden>
     <div class="room-ctl" id="listenCtl" hidden>
+      <div class="top-acts" id="listenActs"></div>
       <div class="seg" id="listenSeg" role="group" aria-label="Show"></div>
       <span class="count" id="musicCount"></span>
       <button class="chip" type="button" id="listenSaved" aria-pressed="false">Saved here</button>
@@ -943,6 +1060,8 @@ export const page = `<!doctype html>
     <div class="room-ctl" id="watchCtl" hidden>
       <div class="kinds" id="libKinds" role="group" aria-label="Show"></div>
       <button class="chip" type="button" id="watchSaved" aria-pressed="false">Saved here</button>
+      <div class="seg" id="watchModes" role="group" aria-label="Watch view"></div>
+      <button class="btn quiet" type="button" id="watchSurprise">Play something</button>
     </div>
     <div id="entries"></div>
   </section>
@@ -1107,6 +1226,7 @@ export const page = `<!doctype html>
   </section>
 
   <section id="tab-sharing" data-panel="sharing" hidden>
+    <div class="net-wrap" id="netSection"></div>
     <h2>Peers</h2>
     <div class="card" id="netCard"></div>
     <h2>Keep copies</h2>
@@ -1188,6 +1308,13 @@ export const page = `<!doctype html>
       </div>
       <div class="msg" id="pairMsg" role="status"></div>
     </form>
+  </div>
+</dialog>
+<dialog id="coverDlg" class="sheet" aria-labelledby="coverTitle">
+  <div class="sheet-body">
+    <h3 id="coverTitle" tabindex="-1"></h3>
+    <button class="btn quiet sheet-close" id="coverClose" type="button" data-close>Close</button>
+    <div id="coverBody"></div>
   </div>
 </dialog>
 <div id="castBar" hidden></div>
@@ -1407,7 +1534,7 @@ const sval = key => setting(key) ? setting(key).value : undefined
 // Home, #music is Listen, #find is Search, and #tv opens the TVs dialog over the room this browser was in last. With
 // no place in the address the page opens the room this browser was in last, and Home on a first visit.
 const PLACES = { home: 'Home', listen: 'Listen', watch: 'Watch', discover: 'Discover', album: 'Album', artist: 'Artist', title: 'Title', shelf: 'Shelf', search: 'Search', add: 'Add to library', playing: 'Music player', channels: 'Channels', sharing: 'Sharing', settings: 'Settings' }
-const OLD_PLACES = { library: 'home', music: 'listen', find: 'search' }
+const OLD_PLACES = { library: 'home', music: 'listen', find: 'search', network: 'sharing' }
 const ROOMS = ['home', 'listen', 'watch', 'discover']
 // A page of its own belongs to a room: the room stays lit in the bar, and leaving the page returns to it.
 const DETAIL_ROOM = { album: 'listen', artist: 'listen', title: 'watch' }
@@ -1482,6 +1609,7 @@ function showTab () {
   else { clearInterval(infoTimer); infoTimer = 0; infoShown.clear(); infoWatched.clear() }
   if (tab === 'settings') renderSettings()
   if (tab === 'shelf') showShelf(place.arg)
+  if (tab !== 'sharing' && typeof stopNetScene === 'function') stopNetScene()
   render()
   paintBar()
   scrollBack(top)
@@ -1684,6 +1812,7 @@ async function refresh () {
       S.settings ? api('/v1/identity').catch(() => S.identity) : null
     ])
     Object.assign(S, { status: st, sources: src, entries: ent.results || [], jobs: jb.jobs || [], jobsAsked: asked, plugins: pl.plugins || [], offline: false })
+    if (typeof recordNetSample === 'function') recordNetSample(st)
     if (set) S.settings = set
     if (ident) S.identity = ident
     noticeJobs(!S.loaded)
@@ -2434,6 +2563,74 @@ function homeRow (title, all, href, body) {
     h('div', { class: 'row-head' }, h('h2', null, title), all ? h('a', { class: 'row-all', href }, all) : null),
     body)
 }
+function pickSurpriseVideo (videos, excludeKey) {
+  const unwatchedLocal = videos.filter(t => t.key !== excludeKey && t.saved === t.items.length && !t.items.some(i => watchStore[watchId(i.e)]))
+  let pool = unwatchedLocal
+  if (!pool.length) pool = videos.filter(t => t.key !== excludeKey && t.saved > 0)
+  if (!pool.length) pool = videos.filter(t => t.key !== excludeKey)
+  if (!pool.length) pool = videos
+  if (!pool.length) return null
+  return pool[Math.floor(Math.random() * pool.length)]
+}
+function playSurpriseVideo (videos) {
+  const pick = pickSurpriseVideo(videos, '')
+  if (!pick) return
+  const up = nextUp(pick)
+  play(up.i.e)
+}
+function renderHomeHero (albums, videos) {
+  const box = $('homeHero')
+  if (!albums.length && !videos.length) { box.hidden = true; box.replaceChildren(); return }
+  box.hidden = false
+  const cards = []
+  if (albums.length) {
+    const allTracks = albumTracksList(albums).map(p => p.i.e).filter(canQueue)
+    const cur = queue.length ? queue[queueIndex] : null
+    const isPlayingNow = Boolean(cur && audioEl && !audioEl.paused && npState === 'playing')
+    const collage = albums.slice(0, 4).map(a => albumArt(a))
+    let listenTitle = plural(allTracks.length, 'track', 'tracks')
+    let listenSub = plural(albums.length, 'album', 'albums')
+    if (cur) {
+      listenTitle = trackName(cur)
+      listenSub = (cur.music && cur.music.artist) || albumName(cur.title)
+    }
+    let primaryBtn
+    if (cur) {
+      primaryBtn = h('button', { class: 'btn primary', type: 'button', onclick: () => musicToggle() }, isPlayingNow ? 'Pause' : 'Resume')
+    } else {
+      primaryBtn = h('button', { class: 'btn primary', type: 'button', disabled: !allTracks.length, title: allTracks.length ? null : 'No playable tracks yet.', onclick: () => startQueue(allTracks, allTracks[0], 'Library') }, 'Play all')
+    }
+    cards.push(h('div', { class: 'home-hero', style: '--h:258' },
+      h('div', { class: 'home-collage', 'aria-hidden': 'true' }, ...collage),
+      h('span', { class: 'eyebrow' }, 'Listen'),
+      h('h2', { class: 'hero-title' }, listenTitle),
+      h('div', { class: 'hero-facts' }, h('span', null, listenSub)),
+      h('div', { class: 'hero-acts' },
+        primaryBtn,
+        h('button', { class: 'btn', type: 'button', disabled: !allTracks.length, title: allTracks.length ? null : 'No playable tracks yet.', onclick: () => startQueue(shuffled(allTracks), undefined, 'Library', 'Shuffling') }, 'Shuffle'))))
+  }
+  if (videos.length) {
+    const resuming = resumeTiles(videos)
+    const first = resuming[0] || null
+    const watchHue = first ? hueOf(first.t.title) : 20
+    let watchTitle = plural(videos.length, 'title', 'titles')
+    let watchSub = 'Movies, series and clips'
+    if (first) {
+      watchTitle = first.t.kind === 'show' && first.i.season ? first.t.title + ' · ' + epWords(first.i) : first.t.title
+      watchSub = timeLeft(first.w.dur - first.w.at)
+    }
+    const acts = []
+    if (first) acts.push(h('button', { class: 'btn primary', type: 'button', onclick: () => play(first.i.e) }, 'Continue'))
+    acts.push(h('button', { class: first ? 'btn' : 'btn primary', type: 'button', onclick: () => playSurpriseVideo(videos) }, 'Play something'))
+    cards.push(h('div', { class: 'home-hero', style: '--h:' + watchHue },
+      h('span', { class: 'eyebrow' }, 'Watch'),
+      h('h2', { class: 'hero-title' }, watchTitle),
+      h('div', { class: 'hero-facts' }, h('span', null, watchSub)),
+      first ? h('span', { class: 'hero-prog', 'aria-hidden': 'true' }, h('i', { style: 'width:' + Math.max(3, Math.round(first.pct * 100)) + '%' })) : null,
+      h('div', { class: 'hero-acts' }, ...acts)))
+  }
+  box.replaceChildren(...cards)
+}
 function renderHome (force) {
   const tiles = libraryTiles()
   const albums = tiles.filter(t => t.kind === 'album')
@@ -2443,11 +2640,13 @@ function renderHome (force) {
   const films = videos.filter(t => t.kind !== 'video')
   const row = (films.length ? films : videos).slice(0, HOME_VIDEOS)
   const first = albums.slice(0, HOME_ALBUMS)
-  const signature = [S.offline, S.loaded, needsToken, albums.length, videos.length,
+  const curKey = queue.length && queue[queueIndex] ? queue[queueIndex].key : ''
+  const signature = [S.offline, S.loaded, needsToken, albums.length, videos.length, curKey, npState,
     ...keep.map(k => k.key + Math.round(k.pct * 100) + k.sub),
     ...[...first, ...row].map(t => t.key + tileState(t)[0] + t.items.length + '/' + (t.keys || []).length)].join('|')
   if (!force && signature === homeSignature) return
   homeSignature = signature
+  renderHomeHero(albums, videos)
   renderKeep(keep)
   const rows = []
   if (first.length) rows.push(homeRow('Albums', 'All albums', '#listen', h('div', { class: 'album-grid row-grid' }, first.map(albumCard))))
@@ -2459,32 +2658,242 @@ function renderHome (force) {
   paintRows()
 }
 
-// ---- Watch: the video room. Movies, series and clips; albums are in Listen. The chip that is on is part of the
-// address (#watch/series), and a chip press replaces the address, so Back leaves the room in one step.
+// ---- Watch: the video room. Four views share one library: Rows (default, with kind chips), Tonight (three picks
+// + A-Z index), Video store (spine shelves) and Channels (pseudo-live 4-hour guide).
+const WATCH_MODES = [['rows', 'Rows', ''], ['tonight', 'Tonight', 'tonight'], ['shelf', 'Store', 'shelf'], ['channels', 'Channels', 'channels']]
+function watchMode () {
+  if (placeArg === 'tonight' || placeArg === 'shelf' || placeArg === 'channels') return placeArg
+  return 'rows'
+}
 const libKind = () => (KINDS.find(k => k[2] && k[2] === placeArg) || KINDS[0])[0]
+let tonightPickKey = ''
+function stripArticle (name) {
+  return String(name || '').replace(/^(the|a|an)\\s+/i, '')
+}
+function videoProgressOf (t) {
+  let best = null
+  for (const i of t.items) {
+    const w = watchStore[watchId(i.e)]
+    if (!w || !(w.dur > 0)) continue
+    const pct = w.at / w.dur
+    if (pct < 0.02 || pct > 0.95) continue
+    if (!best || (w.t || 0) > (best.w.t || 0)) best = { i, w, pct }
+  }
+  return best
+}
+function openCoverSheet (opener, t) {
+  const up = nextUp(t)
+  const prog = videoProgressOf(t)
+  const [state] = tileState(t)
+  const totalBytes = t.items.reduce((n, i) => n + (i.e.size || 0), 0)
+  $('coverTitle').textContent = t.title
+  $('coverBody').replaceChildren(h('div', { class: 'cover-card' },
+    posterBox(t.imdb ? '/v1/poster/' + t.imdb : null, t.title),
+    h('div', { class: 'stack' },
+      h('div', { class: 'meta' }, [tileLine(t), totalBytes ? size(totalBytes) : '', state].filter(Boolean).join(' · ')),
+      prog ? h('div', { class: 'meta' }, timeLeft(prog.w.dur - prog.w.at)) : null,
+      prog ? h('span', { class: 'hero-prog', 'aria-hidden': 'true' }, h('i', { style: 'width:' + Math.max(3, Math.round(prog.pct * 100)) + '%' })) : null,
+      h('div', { class: 'row', style: 'margin-top:8px' },
+        h('button', { class: 'btn primary', type: 'button', onclick: () => { closeOverlay('ui'); play(up.i.e) } }, prog ? 'Continue' : 'Play'),
+        h('button', { class: 'btn', type: 'button', onclick: () => { closeOverlay('ui'); openDetail(t.key) } }, 'Details')))))
+  return openOverlay($('coverDlg'), { opener })
+}
+function renderWatchTonight (all) {
+  const started = resumeTiles(all)
+  const cont = started[0] || null
+  const nextSeries = all.find(t => t.kind === 'show' && (!cont || t.key !== cont.t.key) && nextUp(t).verb === 'Next episode') || null
+  if (!tonightPickKey || !all.some(t => t.key === tonightPickKey)) {
+    const picked = pickSurpriseVideo(all, cont ? cont.t.key : '')
+    tonightPickKey = picked ? picked.key : ''
+  }
+  const surprise = all.find(t => t.key === tonightPickKey) || all[0]
+  const cards = []
+  if (cont) {
+    cards.push(h('div', { class: 'tonight-card', style: '--h:' + hueOf(cont.t.title) },
+      h('span', { class: 'eyebrow' }, 'Continue'),
+      h('h3', null, cont.t.kind === 'show' && cont.i.season ? cont.t.title + ' · ' + epWords(cont.i) : cont.t.title),
+      h('div', { class: 'meta' }, timeLeft(cont.w.dur - cont.w.at)),
+      h('span', { class: 'hero-prog', 'aria-hidden': 'true' }, h('i', { style: 'width:' + Math.max(3, Math.round(cont.pct * 100)) + '%' })),
+      h('div', { class: 'hero-acts' }, h('button', { class: 'btn primary', type: 'button', onclick: () => play(cont.i.e) }, 'Play'))))
+  }
+  if (nextSeries) {
+    const up = nextUp(nextSeries)
+    cards.push(h('div', { class: 'tonight-card', style: '--h:' + hueOf(nextSeries.title) },
+      h('span', { class: 'eyebrow' }, 'Next episode'),
+      h('h3', null, nextSeries.title + ' · ' + epWords(up.i)),
+      h('div', { class: 'meta' }, tileLine(nextSeries)),
+      h('div', { class: 'hero-acts' }, h('button', { class: cont ? 'btn' : 'btn primary', type: 'button', onclick: () => play(up.i.e) }, 'Play'))))
+  }
+  if (surprise) {
+    const up = nextUp(surprise)
+    cards.push(h('div', { class: 'tonight-card', style: '--h:' + hueOf(surprise.title) },
+      h('span', { class: 'eyebrow' }, 'Surprise me'),
+      h('h3', null, surprise.title),
+      h('div', { class: 'meta' }, tileLine(surprise)),
+      h('div', { class: 'hero-acts' },
+        h('button', { class: !cont && !nextSeries ? 'btn primary' : 'btn', type: 'button', onclick: () => play(up.i.e) }, 'Play'),
+        h('button', { class: 'btn quiet', type: 'button', onclick: () => { const nxt = pickSurpriseVideo(all, tonightPickKey); tonightPickKey = nxt ? nxt.key : ''; renderLibrary(true) } }, 'Another'))))
+  }
+  const ordered = all.slice().sort((a, b) => stripArticle(a.title).localeCompare(stripArticle(b.title)))
+  const letters = [...new Set(ordered.map(t => (stripArticle(t.title)[0] || '#').toUpperCase()))].sort((a, b) => a.localeCompare(b))
+  const azJump = h('div', { class: 'az-bar', role: 'group', 'aria-label': 'Jump to a letter' },
+    letters.map(ch => h('button', { type: 'button', onclick: () => { const el = document.getElementById('az-' + ch); if (el) el.scrollIntoView({ block: 'start' }) } }, ch)))
+  const listNodes = []
+  let prevLetter = ''
+  for (const t of ordered) {
+    const letter = (stripArticle(t.title)[0] || '#').toUpperCase()
+    if (letter !== prevLetter) {
+      prevLetter = letter
+      listNodes.push(h('div', { class: 'az-letter', id: 'az-' + letter }, letter))
+    }
+    const prog = videoProgressOf(t)
+    listNodes.push(h('a', { class: 'az-row', href: '#title/' + encodeURIComponent(t.key) },
+      h('span', { class: 'az-swatch', style: '--h:' + hueOf(t.title), 'aria-hidden': 'true' }),
+      h('span', { class: 'grow' }, t.title),
+      h('span', { class: 'meta' }, prog ? timeLeft(prog.w.dur - prog.w.at) : tileLine(t))))
+  }
+  return [h('div', { class: 'tonight-grid' }, ...cards), azJump, h('div', { class: 'az-list' }, ...listNodes)]
+}
+function renderWatchStore (all) {
+  const groups = [
+    ['Series', all.filter(t => t.kind === 'show')],
+    ['Movies', all.filter(t => t.kind === 'movie')],
+    ['Clips', all.filter(t => t.kind === 'video').slice(0, 120)]
+  ].filter(g => g[1].length)
+  return groups.map(([name, list]) => h('section', { class: 'shelf-row', 'aria-label': name },
+    h('h2', null, name),
+    h('div', { class: 'shelf-wrap' },
+      h('div', { class: 'spine-shelf' }, list.map(t => {
+        const prog = videoProgressOf(t)
+        const seasons = t.kind === 'show' ? Math.max(1, new Set(t.items.map(i => i.season || 1)).size) : 1
+        let width = 32
+        if (t.kind === 'show') width = Math.min(84, 42 + seasons * 8)
+        else if (t.kind === 'movie') width = 40
+        const hVal = hueOf(t.title)
+        return h('button', {
+          type: 'button',
+          class: 'spine' + (prog ? ' mark' : ''),
+          style: '--h:' + hVal + ';--w:' + width + 'px;--tall:' + (hVal % 5) * 5,
+          'aria-haspopup': 'dialog',
+          title: t.title,
+          onclick: ev => openCoverSheet(ev.currentTarget, t)
+        },
+          h('span', { class: 'spine-top', 'aria-hidden': 'true' }, t.kind === 'show' ? '×' + t.items.length : ''),
+          h('span', { class: 'spine-name' }, t.title),
+          h('span', { class: 'spine-dot' + (t.saved === t.items.length ? '' : ' away'), 'aria-hidden': 'true' }))
+      })))))
+}
+function entryDurationSecs (e, kind) {
+  const info = infoData.get(e.key)
+  if (info && info.media && info.media.duration > 30) return Math.round(info.media.duration)
+  const w = watchStore[watchId(e)]
+  if (w && w.dur > 30) return Math.round(w.dur)
+  if (kind === 'show') return 42 * 60
+  if (kind === 'movie') return 100 * 60
+  return 20 * 60
+}
+function renderWatchChannels (all) {
+  const MIN_PX = 4
+  const d = new Date()
+  const nowSec = d.getHours() * 3600 + d.getMinutes() * 60
+  const startSec = Math.floor(nowSec / 1800) * 1800
+  const spanSec = 4 * 3600
+  const hhmm = s => {
+    const x = ((s % 86400) + 86400) % 86400
+    return String(Math.floor(x / 3600)).padStart(2, '0') + ':' + String(Math.floor((x % 3600) / 60)).padStart(2, '0')
+  }
+  const makeProg = kind => {
+    if (kind === 'show') {
+      return all.filter(t => t.kind === 'show').flatMap(t => t.items.slice(0, 6).map(i => ({ t, e: i.e, sub: epWords(i), secs: entryDurationSecs(i.e, 'show') })))
+    }
+    return all.filter(t => t.kind === kind).map(t => ({ t, e: t.items[0].e, sub: tileLine(t), secs: entryDurationSecs(t.items[0].e, kind) }))
+  }
+  const chans = [['1', 'Series', makeProg('show')], ['2', 'Movies', makeProg('movie')], ['3', 'Clips', makeProg('video')]].filter(c => c[2].length)
+  if (!chans.length) return [h('div', { class: 'empty' }, 'No video available for channels.')]
+  const laid = chans.map(([no, name, list]) => {
+    const total = Math.max(1, list.reduce((s, x) => s + x.secs, 0))
+    let at = startSec % total
+    let idx = 0
+    while (at >= list[idx].secs) { at -= list[idx].secs; idx = (idx + 1) % list.length }
+    const blocks = []
+    let x = startSec
+    while (x < startSec + spanSec) {
+      const it = list[idx]
+      const from = x
+      const len = Math.max(300, it.secs - at)
+      blocks.push({ it, from, to: Math.min(from + len, startSec + spanSec), into: at, live: nowSec >= from && nowSec < from + len })
+      x = from + len
+      at = 0
+      idx = (idx + 1) % list.length
+    }
+    return { no, name, blocks, live: blocks.find(b => b.live) || blocks[0] }
+  })
+  const onNow = h('div', { class: 'onnow-grid' }, laid.map(c => {
+    const b = c.live
+    const into = Math.max(0, b.into + (nowSec - b.from))
+    const pct = Math.min(100, Math.round((into / Math.max(1, b.it.secs)) * 100))
+    return h('div', { class: 'tonight-card', style: '--h:' + hueOf(b.it.t.title) },
+      h('span', { class: 'eyebrow' }, 'CH ' + c.no + ' · ' + c.name + ' · on now'),
+      h('h3', null, b.it.t.title),
+      h('div', { class: 'meta' }, [b.it.sub, timeLeft(Math.max(60, b.it.secs - into))].filter(Boolean).join(' · ')),
+      h('span', { class: 'hero-prog', 'aria-hidden': 'true' }, h('i', { style: 'width:' + pct + '%' })),
+      h('div', { class: 'hero-acts' }, h('button', { class: 'btn primary', type: 'button', onclick: () => play(b.it.e, into) }, 'Watch')))
+  }))
+  const timesRow = h('div', { class: 'guide-times', 'aria-hidden': 'true' },
+    h('span', { class: 'guide-ch' }, 'Today'),
+    ...Array.from({ length: spanSec / 1800 }, (_, k) => h('span', { style: 'width:' + (30 * MIN_PX) + 'px' }, hhmm(startSec + k * 1800))))
+  const guideRows = laid.map(c => h('div', { class: 'guide-row' },
+    h('span', { class: 'guide-ch' }, h('span', { class: 'meta' }, c.no), h('span', null, c.name)),
+    ...c.blocks.map(b => h('button', {
+      type: 'button',
+      class: 'guide-block' + (b.live ? ' now' : ''),
+      'aria-haspopup': 'dialog',
+      style: '--h:' + hueOf(b.it.t.title) + ';width:' + Math.max(54, Math.round(((b.to - b.from) / 60) * MIN_PX) - 4) + 'px',
+      onclick: ev => openCoverSheet(ev.currentTarget, b.it.t)
+    }, h('strong', null, b.it.t.title), h('small', null, [b.it.sub, hhmm(b.from)].filter(Boolean).join(' · '))))))
+  const nowLeft = 112 + Math.round(((nowSec - startSec) / 60) * MIN_PX)
+  return [onNow, h('div', { class: 'guide', role: 'group', 'aria-label': 'Guide', tabindex: '0' },
+    h('div', { class: 'guide-in' }, timesRow, ...guideRows, h('span', { class: 'guide-now', style: 'left:' + nowLeft + 'px' })))]
+}
 function renderLibrary (force) {
   const tiles = libraryTiles()
   const every = tiles.filter(t => t.kind !== 'album')
   const all = watchSaved ? every.filter(t => t.saved === t.items.length) : every
+  const mode = watchMode()
   const kind = libKind()
   const list = all.filter(t => kind === 'all' || t.kind === kind)
-  const keep = kind === 'all' ? resumeTiles(all) : []
+  const keep = mode === 'rows' && kind === 'all' ? resumeTiles(all) : []
   // Progress polls arrive every few seconds; redraw only when what the room shows has changed.
-  const signature = [kind, libShown, watchSaved, S.offline, S.loaded, needsToken, tiles.length - every.length,
+  const signature = [mode, kind, libShown, watchSaved, tonightPickKey, S.offline, S.loaded, needsToken, tiles.length - every.length,
     ...keep.map(k => k.i.e.key + Math.round(k.pct * 100)),
     ...list.slice(0, libShown).map(t => t.key + tileState(t)[0] + t.items.length)].join('|')
   if (!force && signature === libSignature) return
   libSignature = signature
   $('watchCtl').hidden = every.length < 2
+  $('libKinds').hidden = mode !== 'rows'
   $('libKinds').replaceChildren(...KINDS.map(([k, label, view]) => {
     const n = k === 'all' ? all.length : all.filter(t => t.kind === k).length
     return n || k === 'all' ? h('button', { class: 'chip', 'aria-pressed': String(kind === k), onclick: () => { libShown = 60; location.replace('#watch' + (view ? '/' + view : '')) } }, label + ' ', h('span', { class: 'count' }, String(n))) : null
   }).filter(Boolean))
+  $('watchModes').replaceChildren(...WATCH_MODES.map(([id, label, arg]) => h('button', {
+    class: 'seg-btn',
+    type: 'button',
+    'aria-pressed': String(mode === id),
+    onclick: () => location.replace('#watch' + (arg ? '/' + arg : ''))
+  }, label)))
+  $('watchSurprise').onclick = () => playSurpriseVideo(all.length ? all : every)
   $('watchSaved').setAttribute('aria-pressed', String(watchSaved))
   if (!every.length) {
     $('entries').replaceChildren(emptyNote(tiles.length ? 'No video yet. Your albums are in Listen.' : 'Nothing in your library yet.'))
     return
   }
+  if (!all.length) {
+    $('entries').replaceChildren(h('div', { class: 'empty' }, watchSaved ? 'Nothing here is saved on this relay.' : 'Nothing in this view.'))
+    return
+  }
+  if (mode === 'tonight') { $('entries').replaceChildren(...renderWatchTonight(all)); return }
+  if (mode === 'shelf') { $('entries').replaceChildren(...renderWatchStore(all)); return }
+  if (mode === 'channels') { $('entries').replaceChildren(...renderWatchChannels(all)); return }
   if (!list.length) {
     $('entries').replaceChildren(h('div', { class: 'empty' }, watchSaved ? 'Nothing here is saved on this relay.' : 'Nothing in this view.'))
     return
@@ -2512,8 +2921,7 @@ function renderLibrary (force) {
 function showMore () { libShown += 60; renderLibrary() }
 $('watchSaved').onclick = () => { watchSaved = !watchSaved; libShown = 60; renderLibrary(true) }
 
-// ---- Listen: the music room. Albums, artists or tracks, each part of the address (#listen/artists); a press
-// replaces the address, so Back leaves the room in one step. An album's page is where listening starts.
+// ---- Listen: the music room. Albums, artists or tracks, with Play all / Shuffle and a sortable Tracks table.
 const LISTEN_VIEWS = [['albums', 'Albums', ''], ['artists', 'Artists', 'artists'], ['tracks', 'Tracks', 'tracks']]
 const listenView = () => (LISTEN_VIEWS.find(v => v[2] && v[2] === placeArg) || LISTEN_VIEWS[0])[0]
 const TRACKS_PAGE = 200
@@ -2521,18 +2929,156 @@ let musicSignature = ''
 let listenSaved = false
 let trackWords = ''
 let tracksShown = TRACKS_PAGE
+let trackSort = { key: '', up: true }
+try {
+  const savedSort = JSON.parse(sessionStorage.getItem('peartube-track-sort') || 'null')
+  if (savedSort && typeof savedSort.key === 'string') trackSort = { key: savedSort.key, up: savedSort.up !== false }
+} catch (err) { /* ignore storage errors */ }
+function trackQualityInfo (e) {
+  if (isYt(e)) return { label: YT_LABEL, rank: 128 }
+  if (isSc(e)) return { label: SC_LABEL, rank: 128 }
+  const info = infoData.get(e.key)
+  const a = info && info.media && info.media.audio && info.media.audio[0]
+  if (!a) return { label: '', rank: 0 }
+  const parts = [a.codec || '']
+  if (a.bitsPerSample) parts.push(a.bitsPerSample + '-bit')
+  if (a.sampleRate) parts.push((a.sampleRate / 1000).toFixed(1).replace(/\\.0$/, '') + ' kHz')
+  const isLossless = /FLAC|ALAC|PCM|WAV/i.test(a.codec || '')
+  const rank = (isLossless ? 100000 : 1000) + (a.bitsPerSample || 0) * 100 + Math.round((a.sampleRate || 0) / 1000)
+  return { label: parts.filter(Boolean).join(' '), rank }
+}
+function sortedTrackPairs (list) {
+  if (!trackSort.key) return list
+  const k = trackSort.key
+  const dir = trackSort.up ? 1 : -1
+  const known = []
+  const unknown = []
+  for (let idx = 0; idx < list.length; idx++) {
+    const p = list[idx]
+    const e = p.i.e
+    if (k === 'quality') {
+      const q = trackQualityInfo(e)
+      if (q.rank > 0) known.push([q.rank, idx, p])
+      else unknown.push(p)
+    } else if (k === 'size') {
+      if (e.size > 0) known.push([e.size, idx, p])
+      else unknown.push(p)
+    } else if (k === 'time') {
+      const secs = trackSecs(infoData.get(e.key))
+      if (secs > 0) known.push([secs, idx, p])
+      else unknown.push(p)
+    } else if (k === 'title') {
+      known.push([trackName(e), idx, p])
+    } else if (k === 'artist') {
+      known.push([(e.music && e.music.artist) || p.t.artist || '', idx, p])
+    } else if (k === 'album') {
+      known.push([p.t.album || p.t.title || '', idx, p])
+    } else {
+      known.push([idx, idx, p])
+    }
+  }
+  known.sort((a, b) => {
+    let cmp = 0
+    if (typeof a[0] === 'number') cmp = (b[0] - a[0]) * dir
+    else cmp = String(a[0]).localeCompare(String(b[0])) * dir
+    return cmp !== 0 ? cmp : a[1] - b[1]
+  })
+  return known.map(x => x[2]).concat(unknown)
+}
+function setTrackSort (key) {
+  if (!key) trackSort = { key: '', up: true }
+  else if (trackSort.key === key) trackSort = { key, up: !trackSort.up }
+  else trackSort = { key, up: true }
+  try { sessionStorage.setItem('peartube-track-sort', JSON.stringify(trackSort)) } catch (err) { /* ignore storage errors */ }
+  renderMusic(true)
+}
+function renderTracksTable (rows, label) {
+  const ordered = sortedTrackPairs(rows)
+  const queueEntries = ordered.map(p => p.i.e).filter(canQueue)
+  const shown = ordered.slice(0, tracksShown)
+  const narrow = narrowScreen()
+  const parts = []
+  if (narrow) {
+    const picks = [['', 'Library order'], ['title', 'Title'], ['artist', 'Artist'], ['album', 'Album'], ['quality', 'Best quality first'], ['size', 'Largest first']]
+    const sel = h('select', { 'aria-label': 'Sort tracks' }, ...picks.map(([val, text]) => h('option', { value: val, selected: trackSort.key === val }, text)))
+    sel.onchange = () => { trackSort = { key: sel.value, up: true }; try { sessionStorage.setItem('peartube-track-sort', JSON.stringify(trackSort)) } catch (err) { /* ignore storage errors */ } renderMusic(true) }
+    parts.push(h('div', { class: 't-sort-pick' }, h('span', { class: 'meta' }, 'Sort'), sel))
+  }
+  const headBtn = (key, text, right) => {
+    const on = trackSort.key === key
+    let ariaSort = 'none'
+    if (on) ariaSort = trackSort.up ? 'ascending' : 'descending'
+    const arrow = on ? (trackSort.up ? ' ↑' : ' ↓') : ''
+    return h('div', { role: 'columnheader', 'aria-sort': ariaSort },
+      h('button', { type: 'button', class: 'th-btn' + (right ? ' right' : ''), onclick: () => setTrackSort(key) }, text + arrow))
+  }
+  const tblRows = shown.map((p, idx) => {
+    const e = p.i.e
+    const name = trackName(e)
+    const by = (e.music && e.music.artist) || p.t.artist || ''
+    const q = trackQualityInfo(e)
+    const secs = trackSecs(infoData.get(e.key))
+    const go = () => {
+      if (!canQueue(e)) return
+      if (isCurrent(e)) musicToggle()
+      else startQueue(queueEntries, e, label)
+    }
+    return h('div', { class: 'tracks-trow' + (isCurrent(e) ? ' is-playing' : ''), role: 'row', 'data-track': e.key, 'data-name': name },
+      rowHit('Play ' + name, go),
+      h('div', { role: 'cell', class: 'c-hide-sm t-right meta' }, String(idx + 1)),
+      h('div', { role: 'cell' },
+        h('button', { type: 'button', class: 't-play-btn', disabled: !canQueue(e), title: cannotQueue(e), 'aria-label': 'Play ' + name, onclick: ev => { ev.stopPropagation(); go() } },
+          h('span', { class: 't-title' }, name))),
+      h('div', { role: 'cell', class: 't-cell c-hide-sm' }, by ? h('a', { href: '#artist/' + encodeURIComponent(by) }, by) : ''),
+      h('div', { role: 'cell', class: 't-cell c-hide-sm' }, h('a', { href: '#album/' + encodeURIComponent(p.t.key) }, p.t.album)),
+      h('div', { role: 'cell', class: 't-cell c-hide-sm' }, q.label),
+      h('div', { role: 'cell', class: 't-cell t-right c-hide-sm' }, e.size ? size(e.size) : ''),
+      h('div', { role: 'cell', class: 't-cell t-right c-hide-sm' }, secs ? clock(secs) : ''),
+      h('div', { role: 'cell' }, moreMenu('More', queueOptions([e], p.t.title))))
+  })
+  const head = h('div', { class: 'tracks-thead', role: 'row' },
+    h('div', { role: 'columnheader', 'aria-sort': trackSort.key ? 'none' : 'ascending' },
+      h('button', { type: 'button', class: 'th-btn right', 'aria-label': 'Library order', onclick: () => setTrackSort('') }, '#')),
+    headBtn('title', 'Title', false),
+    headBtn('artist', 'Artist', false),
+    headBtn('album', 'Album', false),
+    headBtn('quality', 'Quality', false),
+    headBtn('size', 'Size', true),
+    headBtn('time', 'Time', true),
+    h('div', { role: 'columnheader' }, h('span', { class: 'vh' }, 'More')))
+  parts.push(h('div', { class: 'tracks-tbl', role: 'table', 'aria-label': label }, head, ...tblRows))
+  if (ordered.length > tracksShown) {
+    parts.push(h('div', { class: 'more' }, h('button', { class: 'btn', onclick: () => { tracksShown += TRACKS_PAGE; renderMusic(true) } }, 'Show more')))
+  }
+  return parts
+}
+function renderListenActs (list, label) {
+  const playableList = list.filter(canQueue)
+  const cur = queue.length ? queue[queueIndex] : null
+  const waiting = Boolean(cur && audioEl && audioEl.paused && npState !== 'playing')
+  const firstBtn = waiting
+    ? h('button', { class: 'btn primary', type: 'button', onclick: () => musicToggle() }, 'Resume')
+    : h('button', { class: 'btn primary', type: 'button', disabled: !playableList.length, title: playableList.length ? null : 'No playable tracks yet.', onclick: () => startQueue(playableList, playableList[0], label) }, 'Play all')
+  $('listenActs').replaceChildren(
+    firstBtn,
+    h('button', { class: 'btn', type: 'button', disabled: !playableList.length, title: playableList.length ? null : 'No playable tracks yet.', onclick: () => startQueue(shuffled(playableList), undefined, label, 'Shuffling') }, 'Shuffle'))
+}
 function renderMusic (force) {
   const every = libraryTiles().filter(t => t.kind === 'album')
   const all = listenSaved ? every.filter(t => t.saved === t.items.length) : every
   const view = listenView()
   const artists = view === 'artists' ? artistList(all) : []
-  const tracks = view === 'tracks' ? albumTracksList(all) : []
+  const tracks = albumTracksList(all)
+  const has = findIn(trackWords)
+  const filteredTracks = view === 'tracks' && trackWords ? tracks.filter(p => has.track(trackName(p.i.e), p.t.title + ' ' + ((p.i.e.music && p.i.e.music.artist) || ''))) : tracks
   // The copy count is in it too: removing one copy of a track leaves the rows alone but changes what the page says.
-  const signature = [view, listenSaved, trackWords, tracksShown, S.offline, S.loaded, needsToken,
+  const signature = [view, listenSaved, trackWords, tracksShown, trackSort.key, trackSort.up, npState, S.offline, S.loaded, needsToken,
     ...all.map(t => t.key + tileState(t)[0] + t.items.length + '/' + (t.keys || []).length)].join('|')
   if (!force && signature === musicSignature) return
   musicSignature = signature
   $('listenCtl').hidden = !every.length
+  const actTracks = (view === 'tracks' ? sortedTrackPairs(filteredTracks) : tracks).map(p => p.i.e)
+  renderListenActs(actTracks, view === 'tracks' ? 'Tracks' : 'Library')
   $('listenSeg').replaceChildren(...LISTEN_VIEWS.map(([name, label, arg]) => h('button', {
     class: 'seg-btn',
     'aria-pressed': String(view === name),
@@ -2540,23 +3086,16 @@ function renderMusic (force) {
   }, label)))
   $('listenSaved').setAttribute('aria-pressed', String(listenSaved))
   $('trackFilterWrap').hidden = view !== 'tracks'
-  $('musicCount').textContent = view === 'artists' ? plural(artists.length, 'artist', 'artists')
-    : view === 'tracks' ? plural(tracks.length, 'track', 'tracks')
-    : plural(all.length, 'album', 'albums')
+  if (view === 'artists') $('musicCount').textContent = plural(artists.length, 'artist', 'artists')
+  else if (view === 'tracks') $('musicCount').textContent = plural(tracks.length, 'track', 'tracks')
+  else $('musicCount').textContent = plural(all.length, 'album', 'albums')
   if (!every.length) { $('albums').replaceChildren(emptyNote('No albums yet. Use Search to save one, or add a folder.')); return }
   if (!all.length) { $('albums').replaceChildren(h('div', { class: 'empty' }, 'No album here is saved on this relay.')); return }
   if (view === 'artists') $('albums').replaceChildren(h('div', { class: 'album-grid' }, artists.map(artistCard)))
   else if (view === 'tracks') {
-    const has = findIn(trackWords)
-    const rows = trackWords ? tracks.filter(p => has.track(trackName(p.i.e), p.t.title + ' ' + ((p.i.e.music && p.i.e.music.artist) || ''))) : tracks
-    $('albums').replaceChildren(...[
-      rows.length
-        ? h('div', { class: 'rows tracks flat' }, rows.slice(0, tracksShown).map(p => songRow(p.t, p.i)))
-        : h('div', { class: 'empty' }, 'No track here matches those words.'),
-      rows.length > tracksShown
-        ? h('div', { class: 'more' }, h('button', { class: 'btn', onclick: () => { tracksShown += TRACKS_PAGE; renderMusic(true) } }, 'Show more'))
-        : null
-    ].filter(Boolean))
+    $('albums').replaceChildren(...(filteredTracks.length
+      ? renderTracksTable(filteredTracks, 'Tracks')
+      : [h('div', { class: 'empty' }, 'No track here matches those words.')]))
   } else $('albums').replaceChildren(h('div', { class: 'album-grid' }, all.map(albumCard)))
   paintRows()
 }
@@ -5285,6 +5824,8 @@ function paintBar () {
   $('fpBody').hidden = !e
   renderQueue()
   paintRows()
+  if (tab === 'home') renderHome()
+  if (tab === 'listen') renderMusic()
   if (!e) {
     document.title = 'PearTube'
     if (navigator.mediaSession) navigator.mediaSession.metadata = null
@@ -5943,9 +6484,311 @@ function renderChannels () {
     h('div', { class: 'acts' }, h('button', { class: 'btn', onclick: e => act(e.currentTarget, async () => { await api('/v1/sources', { body: { key: d.key, kind: 'channel', alias: d.title } }); refresh() }) }, 'Follow')))))
 }
 
-// ---- Sharing
+// ---- Network visualizations (Globe, Swarm, Flow) & Sharing
+const NET_ROUTES = [['lan', 'Home network', '--ok'], ['public', 'Internet', '--brand-hover'], ['private', 'Private route', '--warn']]
+const NET_VIEWS = [['globe', 'Globe'], ['swarm', 'Swarm'], ['flow', 'Flow']]
+const netHist = { down: [], up: [] }
+let netMode = 'globe'
+let netActive = null
+function recordNetSample (st) {
+  if (!st) return
+  netHist.down.push(Number(st.downBps) || 0)
+  netHist.up.push(Number(st.upBps) || 0)
+  if (netHist.down.length > 40) { netHist.down.shift(); netHist.up.shift() }
+}
+function stopNetScene () {
+  if (netActive) { netActive.stop(); netActive = null }
+}
+function netCss (name) {
+  return getComputedStyle(document.documentElement).getPropertyValue(name).trim()
+}
+function netSvg (tag, attrs, ...kids) {
+  const el = document.createElementNS('http://www.w3.org/2000/svg', tag)
+  for (const [k, v] of Object.entries(attrs || {})) if (v != null) el.setAttribute(k, String(v))
+  for (const k of kids.flat()) {
+    if (k == null || k === false) continue
+    el.append(typeof k === 'string' ? document.createTextNode(k) : k)
+  }
+  return el
+}
+function sparkPath (list) {
+  const pts = list.length ? list : [0, 0]
+  const top = Math.max(1, ...pts)
+  return pts.map((v, i) => (i ? 'L' : 'M') + (i * (200 / Math.max(1, pts.length - 1))).toFixed(1) + ' ' + (32 - (v / top) * 30).toFixed(1)).join('')
+}
+function normRoutes (st) {
+  const r = (st && st.routes) || {}
+  const pick = k => {
+    const v = r[k] || {}
+    return { peers: Number(v.peers) || 0, downBps: Number(v.downBps) || 0, upBps: Number(v.upBps) || 0, rxBytes: Number(v.rxBytes) || 0, txBytes: Number(v.txBytes) || 0 }
+  }
+  const lan = pick('lan')
+  if (!lan.peers && st && st.lanPeers) lan.peers = Number(st.lanPeers) || 0
+  return { lan, public: pick('public'), private: pick('private') }
+}
+function mountNetCanvas (kind, getStatus) {
+  const canvas = h('canvas', { class: 'net-canvas', role: 'img' })
+  const c = canvas.getContext('2d')
+  let W = 0, H = 0, raf = 0, then = 0, spin = 0.6
+  const turn = [0.3, 1.9, 4.1]
+  const pts = Array.from({ length: 380 }, (_, i) => {
+    const y = 1 - (i + 0.5) / 190
+    const r = Math.sqrt(Math.max(0, 1 - y * y))
+    const a = i * 2.399963
+    return [Math.cos(a) * r, y, Math.sin(a) * r]
+  })
+  const calm = () => matchMedia('(prefers-reduced-motion: reduce)').matches
+  const speedOf = r => 0.07 + 0.85 * Math.min(1, (r.downBps + r.upBps) / 4.2e6)
+  const fit = () => {
+    const box = canvas.getBoundingClientRect()
+    const dpr = Math.min(2, devicePixelRatio || 1)
+    W = Math.max(10, Math.round(box.width))
+    H = Math.max(10, Math.round(box.height))
+    canvas.width = W * dpr
+    canvas.height = H * dpr
+    if (c) c.setTransform(dpr, 0, 0, dpr, 0, 0)
+  }
+  const dot = (x, y, r, color, alpha) => { c.globalAlpha = alpha; c.fillStyle = color; c.beginPath(); c.arc(x, y, r, 0, 6.2832); c.fill() }
+  const paint = () => {
+    if (!c || !W) return
+    const routes = normRoutes(getStatus())
+    const col = { text: netCss('--text'), line: netCss('--line'), surface: netCss('--surface'), brand: netCss('--brand'), r: NET_ROUTES.map(x => netCss(x[2])) }
+    c.clearRect(0, 0, W, H)
+    if (kind === 'globe') {
+      const cx = W / 2, cy = H * 0.48, R = Math.min(W, H * 1.2) * 0.22
+      const squash = 0.36, roll = [-0.2, 0.13, -0.34], reach = [1.42, 1.86, 2.3]
+      const at = (k, a) => {
+        const x = Math.cos(a) * R * reach[k]
+        const y = Math.sin(a) * R * reach[k] * squash
+        const s = Math.sin(roll[k]), q = Math.cos(roll[k])
+        return [cx + x * q - y * s, cy + x * s + y * q, Math.sin(a) > 0]
+      }
+      const band = (k, front) => {
+        const rv = routes[NET_ROUTES[k][0]]
+        c.globalAlpha = front ? 0.5 : 0.22
+        c.strokeStyle = rv.peers ? col.r[k] : col.line
+        c.lineWidth = 1.2
+        c.beginPath()
+        for (let i = 0; i <= 40; i++) {
+          const [x, y] = at(k, (front ? 0 : Math.PI) + (i / 40) * Math.PI)
+          if (i) c.lineTo(x, y); else c.moveTo(x, y)
+        }
+        c.stroke()
+        const n = Math.min(rv.peers, 36)
+        const tail = speedOf(rv) * 0.55
+        for (let i = 0; i < n; i++) {
+          const a = turn[k] + (i / n) * 6.2832
+          const [x, y, near] = at(k, a)
+          if (near !== front) continue
+          for (let j = 1; j <= 6; j++) {
+            const [tx, ty, tn] = at(k, a - (tail * j) / 6)
+            if (tn === front) dot(tx, ty, (front ? 4.4 : 3.2) * (1 - j / 8), col.r[k], (front ? 0.5 : 0.22) * (1 - j / 7))
+          }
+          dot(x, y, front ? 5.4 : 3.8, col.r[k], front ? 1 : 0.45)
+        }
+      }
+      for (let k = 2; k >= 0; k--) band(k, false)
+      const g = c.createRadialGradient(cx - R * 0.35, cy - R * 0.4, R * 0.1, cx, cy, R * 1.05)
+      g.addColorStop(0, col.brand); g.addColorStop(1, col.surface)
+      c.globalAlpha = 0.94; c.fillStyle = col.surface; c.beginPath(); c.arc(cx, cy, R, 0, 6.2832); c.fill()
+      c.globalAlpha = 0.34; c.fillStyle = g; c.beginPath(); c.arc(cx, cy, R, 0, 6.2832); c.fill()
+      const s = Math.sin(spin), q = Math.cos(spin), tilt = 0.38, ts = Math.sin(tilt), tq = Math.cos(tilt)
+      for (const [px, py, pz] of pts) {
+        const x = px * q + pz * s
+        const z0 = -px * s + pz * q
+        const y = py * tq - z0 * ts
+        const z = py * ts + z0 * tq
+        if (z < -0.05) continue
+        dot(cx + x * R, cy - y * R, 0.7 + z * 0.9, col.text, 0.16 + z * 0.5)
+      }
+      for (let k = 0; k < 3; k++) band(k, true)
+    } else {
+      const cx = W / 2, cy = H * 0.5, top = Math.min(W, H) * 0.42
+      const rings = [0.42, 0.7, 0.98]
+      for (let k = 2; k >= 0; k--) {
+        const rv = routes[NET_ROUTES[k][0]]
+        const rad = top * rings[k]
+        c.globalAlpha = rv.peers ? 0.55 : 0.3
+        c.strokeStyle = rv.peers ? col.r[k] : col.line
+        c.lineWidth = rv.peers ? 1 + 5 * Math.min(1, (rv.downBps + rv.upBps) / 4.2e6) : 1
+        c.setLineDash(rv.peers ? [] : [4, 7])
+        c.beginPath(); c.arc(cx, cy, rad, 0, 6.2832); c.stroke(); c.setLineDash([])
+        const n = Math.min(rv.peers, 36)
+        for (let i = 0; i < n; i++) {
+          const a = turn[k] * 0.35 + (i / n) * 6.2832 + k
+          const x = cx + Math.cos(a) * rad, y = cy + Math.sin(a) * rad
+          c.globalAlpha = 0.22; c.strokeStyle = col.r[k]; c.lineWidth = 1; c.beginPath(); c.moveTo(cx, cy); c.lineTo(x, y); c.stroke()
+          const f = ((turn[k] * 0.9 + i * 0.37) % 1 + 1) % 1
+          if (rv.downBps + rv.upBps > 0) dot(x + (cx - x) * f, y + (cy - y) * f, 2.2, col.r[k], 0.75)
+          dot(x, y, 6.5, col.r[k], 1)
+        }
+      }
+      dot(cx, cy, 24, col.surface, 1); dot(cx, cy, 24, col.brand, 0.3); dot(cx, cy, 13, col.brand, 1); dot(cx, cy, 5, '#fff', 0.95)
+    }
+    c.globalAlpha = 1
+  }
+  const frame = now => {
+    raf = requestAnimationFrame(frame)
+    const dt = Math.min(0.1, (now - then) / 1000)
+    then = now
+    if (document.hidden) return
+    const routes = normRoutes(getStatus())
+    spin += dt * 0.11
+    for (let k = 0; k < 3; k++) turn[k] += dt * speedOf(routes[NET_ROUTES[k][0]])
+    paint()
+  }
+  const motion = matchMedia('(prefers-reduced-motion: reduce)')
+  const go = () => {
+    cancelAnimationFrame(raf); raf = 0
+    if (calm()) paint()
+    else { then = performance.now(); raf = requestAnimationFrame(frame) }
+  }
+  const ro = new ResizeObserver(() => { fit(); paint() })
+  return {
+    el: canvas,
+    start () { fit(); ro.observe(canvas); motion.addEventListener('change', go); paint(); go() },
+    update () { if (calm()) paint() },
+    stop () { cancelAnimationFrame(raf); raf = 0; motion.removeEventListener('change', go); ro.disconnect() }
+  }
+}
+function renderNetFlow (st) {
+  const routes = normRoutes(st)
+  const wide = v => v > 0 ? Math.max(3, Math.min(64, (v / 4.2e6) * 64)) : 0
+  const ys = [170, 300, 430]
+  const inW = NET_ROUTES.map(r => wide(routes[r[0]].downBps))
+  const outW = NET_ROUTES.map(r => wide(routes[r[0]].upBps))
+  const stack = ws => {
+    const total = ws.reduce((a, b) => a + b, 0) + 6 * (ws.length - 1)
+    let y = 300 - total / 2
+    return ws.map(w => { const mid = y + w / 2; y += w + 6; return mid })
+  }
+  const inY = stack(inW), outY = stack(outW)
+  const kids = [
+    netSvg('text', { class: 'lbl', x: 24, y: 70 }, 'Received'),
+    netSvg('text', { class: 'lbl', x: 776, y: 70, 'text-anchor': 'end' }, 'Shared')
+  ]
+  NET_ROUTES.forEach((r, k) => {
+    const v = routes[r[0]]
+    const color = 'var(' + r[2] + ')'
+    kids.push(
+      netSvg('text', { x: 24, y: ys[k] - 6, opacity: v.peers ? 1 : 0.5 }, r[1]),
+      netSvg('text', { class: 'lbl', x: 24, y: ys[k] + 14 }, v.peers ? rate(v.downBps) : 'no peers'),
+      netSvg('text', { x: 776, y: ys[k] - 6, 'text-anchor': 'end', opacity: v.peers ? 1 : 0.5 }, r[1]),
+      netSvg('text', { class: 'lbl', x: 776, y: ys[k] + 14, 'text-anchor': 'end' }, v.peers ? rate(v.upBps) : 'no peers'))
+    if (inW[k]) {
+      const d = 'M190 ' + ys[k] + ' C 270 ' + ys[k] + ', 270 ' + inY[k] + ', 340 ' + inY[k]
+      kids.push(netSvg('path', { class: 'rib', d, stroke: color, 'stroke-width': inW[k].toFixed(1) }), netSvg('path', { class: 'dash', d }))
+    }
+    if (outW[k]) {
+      const d = 'M460 ' + outY[k] + ' C 530 ' + outY[k] + ', 530 ' + ys[k] + ', 610 ' + ys[k]
+      kids.push(netSvg('path', { class: 'rib', d, stroke: color, 'stroke-width': outW[k].toFixed(1) }), netSvg('path', { class: 'dash', d }))
+    }
+  })
+  const cached = Number(st.cachedBytes) || 0
+  const maxB = Number(st.cacheMaxBytes) || 0
+  const full = maxB > 0 ? Math.min(1, cached / maxB) : (cached > 0 ? 0.45 : 0.08)
+  kids.push(
+    netSvg('rect', { x: 340, y: 210, width: 120, height: 180, rx: 18, fill: 'var(--raised)', stroke: 'var(--line)' }),
+    netSvg('rect', { x: 352, y: 222 + 156 * (1 - full), width: 96, height: 156 * full, rx: 10, fill: 'var(--brand)', opacity: 0.55 }),
+    netSvg('text', { x: 400, y: 296, 'text-anchor': 'middle', 'font-weight': 800 }, 'This relay'),
+    netSvg('text', { class: 'lbl', x: 400, y: 318, 'text-anchor': 'middle' }, size(cached) + ' kept'))
+  return netSvg('svg', { class: 'net-flow', viewBox: '0 0 800 600', role: 'img', 'aria-label': 'Network traffic flow' }, ...kids)
+}
+function renderNetworkViz () {
+  if (placeArg === 'swarm' || placeArg === 'flow' || placeArg === 'globe') netMode = placeArg
+  const st = S.status || {}
+  const routes = normRoutes(st)
+  const totalPeers = routes.lan.peers + routes.public.peers + routes.private.peers
+  const rx = Number(st.rxBytes) || 0
+  const tx = Number(st.txBytes) || 0
+  const share = rx + tx > 0 ? tx / (rx + tx) : 0
+  const ratio = st.reciprocity && typeof st.reciprocity.ratio === 'number' ? st.reciprocity.ratio : (rx > 0 ? tx / rx : 0)
+  let sayText = 'Nothing moved yet.'
+  if (rx + tx > 0) {
+    if (ratio >= 1) sayText = 'You gave more than you took. Thank you.'
+    else if (ratio >= 0.1) sayText = 'You shared ' + Math.round(ratio * 10) + ' GB for every 10 GB you got.'
+    else if (tx > 0) sayText = 'You mostly receive now. Peers take when they ask.'
+    else sayText = 'You only received so far.'
+  }
+  const box = $('netSection')
+  if (!netActive || netActive.mode !== netMode || !box.firstChild) {
+    stopNetScene()
+    const head = h('div', { class: 'net-head' },
+      h('h2', { style: 'margin:0' }, 'Network'),
+      h('div', { class: 'seg', role: 'group', 'aria-label': 'Network view' }, NET_VIEWS.map(([id, label]) => h('button', {
+        type: 'button',
+        class: 'seg-btn',
+        'aria-pressed': String(netMode === id),
+        onclick: () => { netMode = id; renderNetworkViz() }
+      }, label))))
+    const sceneHost = h('div', { class: 'net-scene' })
+    const keyEl = h('div', { class: 'net-scene-key' })
+    const capEl = h('div', { class: 'net-scene-cap' })
+    let canvasCtrl = null
+    let flowSlot = null
+    if (netMode === 'flow') {
+      flowSlot = h('div', null, renderNetFlow(st))
+      sceneHost.append(flowSlot, keyEl, capEl)
+    } else {
+      canvasCtrl = mountNetCanvas(netMode, () => S.status || {})
+      sceneHost.append(canvasCtrl.el, keyEl, capEl)
+    }
+    const downSpark = netSvg('path', { stroke: 'currentColor' })
+    const upSpark = netSvg('path', { stroke: 'currentColor' })
+    const downNum = h('div', { class: 'net-big' })
+    const upNum = h('div', { class: 'net-big' })
+    const sayEl = h('div', { class: 'net-say' })
+    const giveEl = h('i', { class: 'give' })
+    const takeEl = h('i', { class: 'take' })
+    const meterKey = h('div', { class: 'net-meter-key' })
+    const routesEl = h('div')
+    const keptEl = h('div', { class: 'meta', style: 'margin-top:8px' })
+    const cards = h('div', { class: 'net-cards' },
+      h('div', { class: 'card' }, h('div', { class: 'net-nowpair' },
+        h('div', { class: 'c-down' }, h('div', { class: 'meta' }, 'Receiving'), downNum, netSvg('svg', { class: 'net-spark', viewBox: '0 0 200 34', preserveAspectRatio: 'none', 'aria-hidden': 'true' }, downSpark)),
+        h('div', { class: 'c-up' }, h('div', { class: 'meta' }, 'Sharing'), upNum, netSvg('svg', { class: 'net-spark', viewBox: '0 0 200 34', preserveAspectRatio: 'none', 'aria-hidden': 'true' }, upSpark)))),
+      h('div', { class: 'card' }, sayEl, h('div', { class: 'net-meter', 'aria-hidden': 'true' }, giveEl, takeEl), meterKey),
+      h('div', { class: 'card' }, h('div', { class: 'meta', style: 'margin-bottom:6px;font-weight:700' }, 'Routes'), routesEl, keptEl))
+    box.replaceChildren(head, h('div', { class: 'net-grid' }, sceneHost, cards))
+    if (canvasCtrl) canvasCtrl.start()
+    netActive = {
+      mode: netMode,
+      stop: () => { if (canvasCtrl) canvasCtrl.stop() },
+      update: (curSt, curRoutes, peers, curSay, curShare, curRx, curTx) => {
+        if (flowSlot) flowSlot.replaceChildren(renderNetFlow(curSt))
+        if (canvasCtrl) canvasCtrl.update()
+        keyEl.replaceChildren(...NET_ROUTES.map(r => h('span', { class: curRoutes[r[0]].peers ? '' : 'meta' }, h('i', { style: 'background:var(' + r[2] + ')' }), r[1] + ' · ' + curRoutes[r[0]].peers)))
+        let cap = 'Connections, not locations'
+        if (peers === 0) cap = 'No peers now. Your library still plays from this relay.'
+        else if (netMode === 'flow') cap = 'Width is speed.'
+        capEl.textContent = cap
+        downNum.textContent = rate(curSt.downBps)
+        upNum.textContent = rate(curSt.upBps)
+        downSpark.setAttribute('d', sparkPath(netHist.down))
+        upSpark.setAttribute('d', sparkPath(netHist.up))
+        sayEl.textContent = curSay
+        giveEl.style.width = (curShare * 100).toFixed(1) + '%'
+        takeEl.style.width = ((curRx + curTx > 0 ? 1 - curShare : 0) * 100).toFixed(1) + '%'
+        meterKey.replaceChildren(h('span', { class: 'c-up' }, 'Shared ' + size(curTx)), h('span', { class: 'c-down' }, 'Received ' + size(curRx)))
+        routesEl.replaceChildren(...NET_ROUTES.map(r => {
+          const v = curRoutes[r[0]]
+          return h('div', { class: 'net-route' + (v.peers ? '' : ' off') },
+            h('i', { style: 'background:var(' + r[2] + ')' }),
+            h('span', null, r[1]),
+            h('strong', null, String(v.peers)),
+            h('span', { class: 'rate' }, v.peers ? '↓ ' + rate(v.downBps) + '  ↑ ' + rate(v.upBps) : ''))
+        }))
+        const cached = Number(curSt.cachedBytes) || 0
+        const maxB = Number(curSt.cacheMaxBytes) || 0
+        keptEl.textContent = maxB > 0 ? 'Kept ' + size(cached) + ' of ' + size(maxB) : 'Kept ' + size(cached)
+      }
+    }
+  }
+  netActive.update(st, routes, totalPeers, sayText, share, rx, tx)
+}
 const stat = (v, k) => h('div', { class: 'stat' }, h('div', { class: 'v' }, v), h('div', { class: 'k' }, k))
 function renderSharing () {
+  renderNetworkViz()
   const st = S.status
   const routes = st.routes || {}
   const lan = st.lan

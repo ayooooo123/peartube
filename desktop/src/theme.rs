@@ -14,6 +14,8 @@ pub const BRAND: u32 = 0x9147ff;
 pub const BRAND_HOVER: u32 = 0xa866ff;
 pub const RING: u32 = 0xb98bff;
 pub const ACCENT: u32 = 0x45d08a;
+#[allow(dead_code)]
+pub const WARN: u32 = 0xf5a623;
 pub const DANGER: u32 = 0xff7d7d;
 pub fn apply(cx: &mut App) {
     Theme::change(ThemeMode::Dark, None, cx);

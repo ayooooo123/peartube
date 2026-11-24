@@ -3,6 +3,7 @@
 #![forbid(unsafe_code)]
 
 use std::cmp::Ordering;
+use std::collections::HashMap;
 
 use gpui_kit::assets::IconName as Lucide;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
@@ -13,12 +14,102 @@ use gpui_kit::component::{Icon, Sizable as _, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
+use crate::api::format_duration;
 use crate::app::{DetailView, ListenTab, PearTube, Room, TrackSortCol};
 use crate::catalog::{AlbumTile, ArtistGroup, TrackRow, fold, is_saved, plural};
 use crate::list::{column, format_bytes};
 use crate::music::TrackItem;
 use crate::sleeves::{album_sleeve, artist_sleeve_stack};
 use crate::theme::{BRAND, CARD, CARD_ELEVATED, DIM, INK, LINE};
+
+fn track_quality_info(row: &TrackRow) -> Option<(u32, &'static str)> {
+    if row.is_yt {
+        Some((128, "YouTube · AAC 128"))
+    } else {
+        None
+    }
+}
+
+fn compare_opt_u64(a: Option<u64>, b: Option<u64>, asc: bool) -> Ordering {
+    match (a, b) {
+        (Some(va), Some(vb)) => {
+            if asc {
+                va.cmp(&vb)
+            } else {
+                vb.cmp(&va)
+            }
+        }
+        (Some(_), None) => Ordering::Less,
+        (None, Some(_)) => Ordering::Greater,
+        (None, None) => Ordering::Equal,
+    }
+}
+
+fn sort_track_rows<'a>(
+    tracks: &[&'a TrackRow],
+    query: &str,
+    sort_col: TrackSortCol,
+    asc: bool,
+    durations: &HashMap<String, u64>,
+) -> Vec<&'a TrackRow> {
+    let q = query.trim().to_lowercase();
+    let mut indexed: Vec<(usize, &'a TrackRow)> = tracks
+        .iter()
+        .copied()
+        .filter(|t| {
+            q.is_empty()
+                || t.track_name.to_lowercase().contains(&q)
+                || t.artist.to_lowercase().contains(&q)
+                || t.album_title.to_lowercase().contains(&q)
+        })
+        .enumerate()
+        .collect();
+
+    if sort_col == TrackSortCol::Order {
+        if !asc {
+            indexed.reverse();
+        }
+        return indexed.into_iter().map(|(_, r)| r).collect();
+    }
+
+    indexed.sort_by(|(ia, a), (ib, b)| {
+        let ord = match sort_col {
+            TrackSortCol::Order => ia.cmp(ib),
+            TrackSortCol::Title => {
+                let c = a.track_name.to_lowercase().cmp(&b.track_name.to_lowercase());
+                if asc { c } else { c.reverse() }
+            }
+            TrackSortCol::Artist => {
+                let c = a.artist.to_lowercase().cmp(&b.artist.to_lowercase());
+                if asc { c } else { c.reverse() }
+            }
+            TrackSortCol::Album => {
+                let c = a.album_title.to_lowercase().cmp(&b.album_title.to_lowercase());
+                if asc { c } else { c.reverse() }
+            }
+            TrackSortCol::Quality => {
+                let qa = track_quality_info(a).map(|(r, _)| u64::from(r));
+                let qb = track_quality_info(b).map(|(r, _)| u64::from(r));
+                // Ascending = highest quality first (matching sketch), unknown last in both directions.
+                compare_opt_u64(qa, qb, !asc)
+            }
+            TrackSortCol::Size => {
+                let sa = (a.entry.size > 0).then_some(a.entry.size);
+                let sb = (b.entry.size > 0).then_some(b.entry.size);
+                // Ascending = largest first (matching sketch), unknown last in both directions.
+                compare_opt_u64(sa, sb, !asc)
+            }
+            TrackSortCol::Time => {
+                let da = durations.get(&a.entry.key).copied().filter(|&d| d > 0);
+                let db = durations.get(&b.entry.key).copied().filter(|&d| d > 0);
+                compare_opt_u64(da, db, !asc)
+            }
+        };
+        if ord == Ordering::Equal { ia.cmp(ib) } else { ord }
+    });
+
+    indexed.into_iter().map(|(_, r)| r).collect()
+}
 
 impl PearTube {
     pub fn render_listen(&self, tab: ListenTab, cx: &mut Context<Self>) -> impl IntoElement {
@@ -42,14 +133,48 @@ impl PearTube {
             .filter(|t| !saved_only || t.saved)
             .collect();
 
+        let (sort_col, asc) = self.track_sort;
+        let tracks_sorted = if tab == ListenTab::Tracks {
+            let q = self.track_filter.read(cx).value().to_string();
+            sort_track_rows(&tracks_all, &q, sort_col, asc, &self.track_durations)
+        } else {
+            tracks_all.clone()
+        };
+
         let count_text = match tab {
             ListenTab::Albums => plural(albums.len(), "album", "albums"),
             ListenTab::Artists => plural(artists.len(), "artist", "artists"),
-            ListenTab::Tracks => plural(tracks_all.len(), "track", "tracks"),
+            ListenTab::Tracks => plural(tracks_sorted.len(), "track", "tracks"),
         };
 
+        let play_list: Vec<TrackItem> = tracks_sorted.iter().map(|r| TrackItem::from_track_row(r)).collect();
+        let play_label = if tab == ListenTab::Tracks { "Tracks" } else { "Library" };
+        let header = self.render_listen_header(&tab, &count_text, play_list, play_label, cx);
+
+        let body: AnyElement = match tab {
+            ListenTab::Albums => self.render_albums_grid(&albums, cx).into_any_element(),
+            ListenTab::Artists => self.render_artists_grid(&artists, cx).into_any_element(),
+            ListenTab::Tracks => self.render_tracks_table(&tracks_sorted, cx).into_any_element(),
+        };
+
+        column().py_6().gap_5().child(header).child(body)
+    }
+
+    fn render_listen_header(
+        &self,
+        tab: &ListenTab,
+        count_text: &str,
+        play_list: Vec<TrackItem>,
+        play_label: &'static str,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement + use<> {
+        let saved_only = self.listen_saved_only;
+        let waiting = self.music_queue.current().is_some() && !self.music_is_playing();
+        let has_tracks = !play_list.is_empty();
+        let shuffle_list = play_list.clone();
+
         let seg = |id: &'static str, lbl: &'static str, target: ListenTab, cx: &mut Context<Self>| {
-            let active = tab == target;
+            let active = *tab == target;
             div()
                 .id(id)
                 .px_3()
@@ -67,7 +192,7 @@ impl PearTube {
                 .child(lbl)
         };
 
-        let header = h_flex()
+        h_flex()
             .justify_between()
             .items_center()
             .flex_wrap()
@@ -75,7 +200,52 @@ impl PearTube {
             .child(
                 h_flex()
                     .items_center()
-                    .gap_4()
+                    .flex_wrap()
+                    .gap_3()
+                    .when(has_tracks || waiting, |row| {
+                        let primary_btn = if waiting {
+                            Button::new("listen-top-play")
+                                .primary()
+                                .small()
+                                .icon(Icon::new(Lucide::Play))
+                                .label("Resume")
+                                .on_click(cx.listener(|this, _, window, cx| this.toggle_music_play(window, cx)))
+                        } else {
+                            Button::new("listen-top-play")
+                                .primary()
+                                .small()
+                                .icon(Icon::new(Lucide::Play))
+                                .label("Play all")
+                                .on_click(cx.listener(move |this, _, window, cx| {
+                                    this.play_music_list(
+                                        play_list.clone(),
+                                        0,
+                                        play_label.to_string(),
+                                        Some(false),
+                                        window,
+                                        cx,
+                                    );
+                                }))
+                        };
+                        row.child(primary_btn).when(has_tracks, |r| {
+                            r.child(
+                                Button::new("listen-top-shuffle")
+                                    .small()
+                                    .icon(Icon::new(Lucide::Shuffle))
+                                    .label("Shuffle")
+                                    .on_click(cx.listener(move |this, _, window, cx| {
+                                        this.play_music_list(
+                                            shuffle_list.clone(),
+                                            0,
+                                            play_label.to_string(),
+                                            Some(true),
+                                            window,
+                                            cx,
+                                        );
+                                    })),
+                            )
+                        })
+                    })
                     .child(
                         h_flex()
                             .p_1()
@@ -88,7 +258,7 @@ impl PearTube {
                             .child(seg("listen-tab-artists", "Artists", ListenTab::Artists, cx))
                             .child(seg("listen-tab-tracks", "Tracks", ListenTab::Tracks, cx)),
                     )
-                    .child(div().text_sm().text_color(rgb(DIM)).child(count_text)),
+                    .child(div().text_sm().text_color(rgb(DIM)).child(count_text.to_string())),
             )
             .child(
                 Checkbox::new("listen-saved-only")
@@ -98,15 +268,7 @@ impl PearTube {
                         this.listen_saved_only = *checked;
                         cx.notify();
                     })),
-            );
-
-        let body: AnyElement = match tab {
-            ListenTab::Albums => self.render_albums_grid(&albums, cx).into_any_element(),
-            ListenTab::Artists => self.render_artists_grid(&artists, cx).into_any_element(),
-            ListenTab::Tracks => self.render_tracks_table(&tracks_all, cx).into_any_element(),
-        };
-
-        column().py_6().gap_5().child(header).child(body)
+            )
     }
 
     fn render_albums_grid(&self, albums: &[&AlbumTile], cx: &mut Context<Self>) -> impl IntoElement {
@@ -216,42 +378,15 @@ impl PearTube {
             .into_any_element()
     }
 
-    fn render_tracks_table(&self, tracks: &[&TrackRow], cx: &mut Context<Self>) -> impl IntoElement {
-        let q = self.track_filter.read(cx).value().trim().to_lowercase();
-        let mut rows: Vec<&TrackRow> = tracks
-            .iter()
-            .copied()
-            .filter(|t| {
-                q.is_empty()
-                    || t.track_name.to_lowercase().contains(&q)
-                    || t.artist.to_lowercase().contains(&q)
-                    || t.album_title.to_lowercase().contains(&q)
-            })
-            .collect();
-
+    fn render_tracks_table(&self, rows: &[&TrackRow], cx: &mut Context<Self>) -> impl IntoElement {
         let (sort_col, asc) = self.track_sort;
-        rows.sort_by(|a, b| {
-            let cmp = match sort_col {
-                TrackSortCol::Title => a.track_name.to_lowercase().cmp(&b.track_name.to_lowercase()),
-                TrackSortCol::Artist => a.artist.to_lowercase().cmp(&b.artist.to_lowercase()),
-                TrackSortCol::Album => a.album_title.to_lowercase().cmp(&b.album_title.to_lowercase()),
-                TrackSortCol::Size => a.entry.size.cmp(&b.entry.size),
-            };
-            let ordered = if asc { cmp } else { cmp.reverse() };
-            if ordered == Ordering::Equal {
-                a.track_name.to_lowercase().cmp(&b.track_name.to_lowercase())
-            } else {
-                ordered
-            }
-        });
-
         let queue_snapshot: Vec<TrackItem> = rows.iter().map(|r| TrackItem::from_track_row(r)).collect();
         let current_key = self.music_queue.current().map(|c| c.entry.key.clone());
 
         let sort_header = |id: &'static str, label: &'static str, col: TrackSortCol, right: bool, cx: &mut Context<Self>| {
             let active = sort_col == col;
             let arrow = if active {
-                Some(Icon::new(if asc { Lucide::ArrowUp } else { Lucide::ArrowDown }).size(px(12.)).text_color(rgb(BRAND)))
+                Some(if asc { "↑" } else { "↓" })
             } else {
                 None
             };
@@ -274,10 +409,8 @@ impl PearTube {
                     cx.notify();
                 }))
                 .child(label)
-                .when_some(arrow, |d, ic| d.child(ic))
+                .when_some(arrow, |d, sym| d.child(div().text_color(rgb(BRAND)).child(sym)))
         };
-
-        let weak = cx.entity().downgrade();
 
         v_flex()
             .gap_3()
@@ -301,98 +434,119 @@ impl PearTube {
                                 .gap_3()
                                 .border_b_1()
                                 .border_color(rgb(LINE))
-                                .child(div().w(px(36.)).text_xs().text_color(rgb(DIM)).text_right().child("#"))
+                                .child(div().w(px(36.)).child(sort_header("sort-order", "#", TrackSortCol::Order, true, cx)))
                                 .child(div().flex_1().min_w_0().child(sort_header("sort-title", "Title", TrackSortCol::Title, false, cx)))
-                                .child(div().w(px(180.)).child(sort_header("sort-artist", "Artist", TrackSortCol::Artist, false, cx)))
-                                .child(div().w(px(190.)).child(sort_header("sort-album", "Album", TrackSortCol::Album, false, cx)))
-                                .child(div().w(px(80.)).child(sort_header("sort-size", "Size", TrackSortCol::Size, true, cx)))
+                                .child(div().w(px(150.)).child(sort_header("sort-artist", "Artist", TrackSortCol::Artist, false, cx)))
+                                .child(div().w(px(150.)).child(sort_header("sort-album", "Album", TrackSortCol::Album, false, cx)))
+                                .child(div().w(px(120.)).child(sort_header("sort-quality", "Quality", TrackSortCol::Quality, false, cx)))
+                                .child(div().w(px(74.)).child(sort_header("sort-size", "Size", TrackSortCol::Size, true, cx)))
+                                .child(div().w(px(58.)).child(sort_header("sort-time", "Time", TrackSortCol::Time, true, cx)))
                                 .child(div().w(px(32.))),
                         )
                         .children(rows.iter().enumerate().take(200).map(|(idx, row)| {
-                            let is_cur = current_key.as_deref() == Some(row.entry.key.as_str());
-                            let list = queue_snapshot.clone();
-                            let single = TrackItem::from_track_row(row);
-                            let single_next = single.clone();
-                            let single_last = single.clone();
-                            let alb_key = row.album_key.clone();
-                            let w = weak.clone();
-                            h_flex()
-                                .id(SharedString::from(format!("trk-row-{idx}-{}", row.entry.key)))
-                                .items_center()
-                                .px_3()
-                                .py_2()
-                                .gap_3()
-                                .border_b_1()
-                                .border_color(hsla(0., 0., 1., 0.04))
-                                .cursor_pointer()
-                                .hover(|s| s.bg(hsla(0., 0., 1., 0.03)))
-                                .on_click(cx.listener(move |this, _, window, cx| {
-                                    // Rule 13: a row plays the list it is in, from that row.
-                                    this.play_music_list(list.clone(), idx, "Tracks".to_string(), None, window, cx);
-                                }))
-                                .child(
-                                    div()
-                                        .w(px(36.))
-                                        .text_xs()
-                                        .text_right()
-                                        .text_color(if is_cur { rgb(BRAND) } else { rgb(DIM) })
-                                        .child(if is_cur { "▶".to_string() } else { format!("{}", idx + 1) }),
-                                )
-                                .child(
-                                    div()
-                                        .flex_1()
-                                        .min_w_0()
-                                        .text_sm()
-                                        .font_weight(if is_cur { FontWeight::SEMIBOLD } else { FontWeight::NORMAL })
-                                        .text_color(if is_cur { rgb(BRAND) } else { rgb(INK) })
-                                        .truncate()
-                                        .child(if row.is_yt {
-                                            format!("{} · YouTube", row.track_name)
-                                        } else {
-                                            row.track_name.clone()
-                                        }),
-                                )
-                                .child(div().w(px(180.)).text_xs().text_color(rgb(DIM)).truncate().child(row.artist.clone()))
-                                .child(div().w(px(190.)).text_xs().text_color(rgb(DIM)).truncate().child(row.album_title.clone()))
-                                .child(div().w(px(80.)).text_xs().text_color(rgb(DIM)).text_right().child(format_bytes(row.entry.size)))
-                                .child(
-                                    div()
-                                        .w(px(32.))
-                                        .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                                        .child(
-                                            Button::new(SharedString::from(format!("trk-more-{idx}-{}", row.entry.key)))
-                                                .ghost()
-                                                .small()
-                                                .icon(Icon::new(Lucide::Ellipsis))
-                                                .tooltip("More")
-                                                .dropdown_menu(move |menu, _, _| {
-                                                    let w1 = w.clone();
-                                                    let w2 = w.clone();
-                                                    let w3 = w.clone();
-                                                    let sn = single_next.clone();
-                                                    let sl = single_last.clone();
-                                                    let ak = alb_key.clone();
-                                                    menu.item(PopupMenuItem::new("Play next").on_click(move |_, window, cx| {
-                                                        let _ = w1.update(cx, |this, cx| {
-                                                            this.play_music_next(vec![sn.clone()], sn.album.clone(), window, cx);
-                                                        });
-                                                    }))
-                                                    .item(PopupMenuItem::new("Play last").on_click(move |_, window, cx| {
-                                                        let _ = w2.update(cx, |this, cx| {
-                                                            this.play_music_last(vec![sl.clone()], sl.album.clone(), window, cx);
-                                                        });
-                                                    }))
-                                                    .item(PopupMenuItem::new("Go to album").on_click(move |_, _, cx| {
-                                                        let _ = w3.update(cx, |this, cx| {
-                                                            this.open_detail(DetailView::Album(ak.clone()), cx);
-                                                        });
-                                                    }))
-                                                }),
-                                        ),
-                                )
+                            self.render_track_table_row(idx, row, &queue_snapshot, current_key.as_deref(), cx)
                         })),
                 )
             })
+    }
+
+    fn render_track_table_row(
+        &self,
+        idx: usize,
+        row: &TrackRow,
+        queue_snapshot: &[TrackItem],
+        current_key: Option<&str>,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement + use<> {
+        let is_cur = current_key == Some(row.entry.key.as_str());
+        let list = queue_snapshot.to_vec();
+        let single = TrackItem::from_track_row(row);
+        let single_next = single.clone();
+        let single_last = single;
+        let alb_key = row.album_key.clone();
+        let w = cx.entity().downgrade();
+        let quality_text = track_quality_info(row).map(|(_, q)| q).unwrap_or("");
+        let size_text = if row.entry.size > 0 { format_bytes(row.entry.size) } else { String::new() };
+        let time_text = self
+            .track_durations
+            .get(&row.entry.key)
+            .copied()
+            .filter(|&d| d > 0)
+            .map(format_duration)
+            .unwrap_or_default();
+
+        h_flex()
+            .id(SharedString::from(format!("trk-row-{idx}-{}", row.entry.key)))
+            .items_center()
+            .px_3()
+            .py_2()
+            .gap_3()
+            .border_b_1()
+            .border_color(hsla(0., 0., 1., 0.04))
+            .cursor_pointer()
+            .hover(|s| s.bg(hsla(0., 0., 1., 0.03)))
+            .on_click(cx.listener(move |this, _, window, cx| {
+                // Rule 13: a row plays the list it is in, from that row.
+                this.play_music_list(list.clone(), idx, "Tracks".to_string(), None, window, cx);
+            }))
+            .child(
+                div()
+                    .w(px(36.))
+                    .text_xs()
+                    .text_right()
+                    .text_color(if is_cur { rgb(BRAND) } else { rgb(DIM) })
+                    .child(if is_cur { "▶".to_string() } else { format!("{}", idx + 1) }),
+            )
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .text_sm()
+                    .font_weight(if is_cur { FontWeight::SEMIBOLD } else { FontWeight::NORMAL })
+                    .text_color(if is_cur { rgb(BRAND) } else { rgb(INK) })
+                    .truncate()
+                    .child(row.track_name.clone()),
+            )
+            .child(div().w(px(150.)).text_xs().text_color(rgb(DIM)).truncate().child(row.artist.clone()))
+            .child(div().w(px(150.)).text_xs().text_color(rgb(DIM)).truncate().child(row.album_title.clone()))
+            .child(div().w(px(120.)).text_xs().text_color(rgb(DIM)).truncate().child(quality_text))
+            .child(div().w(px(74.)).text_xs().text_color(rgb(DIM)).text_right().child(size_text))
+            .child(div().w(px(58.)).text_xs().text_color(rgb(DIM)).text_right().child(time_text))
+            .child(
+                div()
+                    .w(px(32.))
+                    .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                    .child(
+                        Button::new(SharedString::from(format!("trk-more-{idx}-{}", row.entry.key)))
+                            .ghost()
+                            .small()
+                            .icon(Icon::new(Lucide::Ellipsis))
+                            .tooltip("More")
+                            .dropdown_menu(move |menu, _, _| {
+                                let w1 = w.clone();
+                                let w2 = w.clone();
+                                let w3 = w.clone();
+                                let sn = single_next.clone();
+                                let sl = single_last.clone();
+                                let ak = alb_key.clone();
+                                menu.item(PopupMenuItem::new("Play next").on_click(move |_, window, cx| {
+                                    let _ = w1.update(cx, |this, cx| {
+                                        this.play_music_next(vec![sn.clone()], sn.album.clone(), window, cx);
+                                    });
+                                }))
+                                .item(PopupMenuItem::new("Play last").on_click(move |_, window, cx| {
+                                    let _ = w2.update(cx, |this, cx| {
+                                        this.play_music_last(vec![sl.clone()], sl.album.clone(), window, cx);
+                                    });
+                                }))
+                                .item(PopupMenuItem::new("Go to album").on_click(move |_, _, cx| {
+                                    let _ = w3.update(cx, |this, cx| {
+                                        this.open_detail(DetailView::Album(ak.clone()), cx);
+                                    });
+                                }))
+                            }),
+                    ),
+            )
     }
 
     pub fn render_album_detail(&self, album_key: &str, cx: &mut Context<Self>) -> impl IntoElement {
@@ -872,5 +1026,63 @@ impl PearTube {
                     }),
             )
             .into_any_element()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+
+    use peartube::worker::Entry;
+
+    use super::{TrackRow, TrackSortCol, sort_track_rows};
+
+    fn mk_row(key: &str, name: &str, size: u64, is_yt: bool) -> TrackRow {
+        TrackRow {
+            entry: Entry {
+                key: key.to_string(),
+                size,
+                ..Entry::default()
+            },
+            album_key: "alb:1".to_string(),
+            album_title: "Album".to_string(),
+            artist: "Artist".to_string(),
+            track_no: "01".to_string(),
+            track_name: name.to_string(),
+            hue: 100,
+            seed: 1,
+            monogram: "AL".to_string(),
+            is_yt,
+            saved: true,
+        }
+    }
+
+    #[test]
+    fn unknown_quality_size_and_time_sort_last_in_both_directions() {
+        let a = mk_row("a", "Alpha", 5_000, true);
+        let b = mk_row("b", "Beta", 0, false);
+        let c = mk_row("c", "Gamma", 2_000, false);
+        let all = vec![&a, &b, &c];
+        let mut durs = HashMap::new();
+        durs.insert("a".to_string(), 240);
+        durs.insert("c".to_string(), 120);
+
+        // Size: b (0 = unknown) is always last
+        let sz_asc = sort_track_rows(&all, "", TrackSortCol::Size, true, &durs);
+        assert_eq!(sz_asc.iter().map(|r| r.entry.key.as_str()).collect::<Vec<_>>(), vec!["a", "c", "b"]);
+        let sz_desc = sort_track_rows(&all, "", TrackSortCol::Size, false, &durs);
+        assert_eq!(sz_desc.iter().map(|r| r.entry.key.as_str()).collect::<Vec<_>>(), vec!["c", "a", "b"]);
+
+        // Time: b (missing) is always last
+        let tm_asc = sort_track_rows(&all, "", TrackSortCol::Time, true, &durs);
+        assert_eq!(tm_asc.iter().map(|r| r.entry.key.as_str()).collect::<Vec<_>>(), vec!["a", "c", "b"]);
+        let tm_desc = sort_track_rows(&all, "", TrackSortCol::Time, false, &durs);
+        assert_eq!(tm_desc.iter().map(|r| r.entry.key.as_str()).collect::<Vec<_>>(), vec!["c", "a", "b"]);
+
+        // Quality: known (a) comes before unknowns (b, c) in both directions
+        let q_asc = sort_track_rows(&all, "", TrackSortCol::Quality, true, &durs);
+        assert_eq!(q_asc[0].entry.key, "a");
+        let q_desc = sort_track_rows(&all, "", TrackSortCol::Quality, false, &durs);
+        assert_eq!(q_desc[0].entry.key, "a");
     }
 }

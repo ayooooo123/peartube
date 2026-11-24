@@ -50,6 +50,7 @@ sealed interface Screen {
     data class TitleDetail(val titleKey: String) : Screen
     data class ShelfDetail(val peer: String) : Screen
     data object MusicPlayerFull : Screen
+    data object Network : Screen
     data object Settings : Screen
     data class Play(val entry: Entry, val startPositionMs: Long? = null) : Screen
 }
@@ -91,6 +92,7 @@ class AppModel(private val app: Application) {
     val worker = Worker(app)
     val settings = MutableStateFlow(Settings.load(dataDir))
     val status = MutableStateFlow<Status?>(null)
+    val networkHistory = MutableStateFlow(NetworkHistory())
     val identity = MutableStateFlow<IdentityInfo?>(null)
     val entries = MutableStateFlow<List<Entry>>(emptyList())
     val error = MutableStateFlow<String?>(null)
@@ -268,7 +270,7 @@ class AppModel(private val app: Application) {
         return current
     }
 
-    fun playEntry(entry: Entry, localOnly: Boolean = false) {
+    fun playEntry(entry: Entry, localOnly: Boolean = false, startPositionMs: Long? = null) {
         if (entry.locked) {
             error.value = "Subscriber pass needed: paste this channel's peartube://access/… pass in Search or Add to library."
             return
@@ -276,15 +278,25 @@ class AppModel(private val app: Application) {
         scope.launch {
             val current = resolveEntry(entry)
             val receiver = if (localOnly) null else (cast.value.session?.receiverId ?: selectedCastReceiver.value?.id)
-            val start = watchHistory.value[current.key]?.takeIf { it.partial }?.positionMs ?: 0L
+            val start = startPositionMs ?: (watchHistory.value[current.key]?.takeIf { it.partial }?.positionMs ?: 0L)
             if (receiver != null) {
                 castToReceiver(receiver, current.key, "auto", start)
             } else {
                 // Rule 3: Music waits for a video.
                 music.pauseForVideo()
-                pushScreen(Screen.Play(current))
+                pushScreen(Screen.Play(current, startPositionMs))
             }
         }
+    }
+
+    fun playSurpriseVideo(
+        videos: List<LibraryTile> = catalog.value.videos,
+        excludeTileKey: String? = null,
+    ): LibraryTile? {
+        val picked = pickSurpriseVideo(videos, watchHistory.value, excludeKey = excludeTileKey) ?: return null
+        val entry = primaryEntryForVideo(picked, watchHistory.value) ?: return null
+        playEntry(entry)
+        return picked
     }
 
     fun openCastSheet() {
@@ -425,6 +437,17 @@ class AppModel(private val app: Application) {
                 if (shouldPoll) {
                     refreshAcquireJobs()
                     delay(2_000L)
+                }
+            }
+        }
+        scope.launch {
+            while (true) {
+                screen.first { it is Screen.Network }
+                while (screen.value is Screen.Network) {
+                    if (inForeground) {
+                        runCatching { worker.status() }.onSuccess { recordStatus(it) }
+                    }
+                    delay(1_500L)
                 }
             }
         }
@@ -1557,17 +1580,22 @@ class AppModel(private val app: Application) {
     @Volatile
     var playStarted: Boolean = false
 
+    private fun recordStatus(st: Status) {
+        status.value = st
+        networkHistory.value = networkHistory.value.append(st.downBps, st.upBps, maxSamples = 40)
+    }
+
     private suspend fun refresh() {
         try {
             // Keep the worklet's QuickJS thread wide open once video frames are flowing.
             if (screen.value is Screen.Play && playStarted) {
-                status.value = worker.status()
+                recordStatus(worker.status())
             } else {
                 coroutineScope {
                     val st = async { worker.status() }
                     val en = async { worker.search() }
                     val id = async { runCatching { worker.identity(false) }.getOrNull() }
-                    status.value = st.await()
+                    recordStatus(st.await())
                     val loaded = en.await()
                     entries.value = loaded
                     music.refreshEntries(loaded)

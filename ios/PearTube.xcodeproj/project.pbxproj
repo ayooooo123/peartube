@@ -10,6 +10,7 @@
 		022914D6C31A4F8265BC7723 /* PearTubeShare.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = 4B490916BF6B0001DCB06865 /* PearTubeShare.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		08ADDC35BD0D705A6822F5D0 /* Sleeves.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4230C4A66C096F26968EB031 /* Sleeves.swift */; };
 		0B522A22E564B3F24E58EDC9 /* NativePlayer.swift in Sources */ = {isa = PBXBuildFile; fileRef = EE630C60C7D0BE89C70C3CA9 /* NativePlayer.swift */; };
+		E1A4B7C2D9F0123456789ABC /* NetworkScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = F2B5C8D3E0A123456789ABCD /* NetworkScreen.swift */; };
 		115FEB8698846BA92448B264 /* WatchScreens.swift in Sources */ = {isa = PBXBuildFile; fileRef = CBC59533A2A5D6726006E433 /* WatchScreens.swift */; };
 		27074CB4A400D78EA7EAB627 /* AppModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = D4A17A54BEF06AD8A74C2193 /* AppModel.swift */; };
 		34FCEA318F6D31C54AF09B14 /* Worker.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6B785159FD2F01F89A06C325 /* Worker.swift */; };
@@ -98,6 +99,7 @@
 		D4A17A54BEF06AD8A74C2193 /* AppModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppModel.swift; sourceTree = "<group>"; };
 		EE3F2D785975DAB347F6D6B6 /* ListenScreens.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ListenScreens.swift; sourceTree = "<group>"; };
 		EE630C60C7D0BE89C70C3CA9 /* NativePlayer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativePlayer.swift; sourceTree = "<group>"; };
+		F2B5C8D3E0A123456789ABCD /* NetworkScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NetworkScreen.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXGroup section */
@@ -135,6 +137,7 @@
 				7464498E918A9C39F8E01F4C /* MusicPlayer.swift */,
 				5F17B5436D54D5CE7C41CAD5 /* MusicPlayerScreens.swift */,
 				EE630C60C7D0BE89C70C3CA9 /* NativePlayer.swift */,
+				F2B5C8D3E0A123456789ABCD /* NetworkScreen.swift */,
 				94E6D71617B610AF449664AC /* PearTubeApp.swift */,
 				D169D9DC7C20208A72DEC729 /* PlayerScreen.swift */,
 				CA794DF05DA630E07BD6E746 /* QRCode.swift */,
@@ -383,6 +386,7 @@
 				6576EF51BDEE924A5888A006 /* MusicPlayer.swift in Sources */,
 				4B1772D3984DD0504D0DCF73 /* MusicPlayerScreens.swift in Sources */,
 				0B522A22E564B3F24E58EDC9 /* NativePlayer.swift in Sources */,
+				E1A4B7C2D9F0123456789ABC /* NetworkScreen.swift in Sources */,
 				821C4A891261A36BE749F134 /* PearTubeApp.swift in Sources */,
 				514D8502803EDC5BF84BBE70 /* PlayerScreen.swift in Sources */,
 				A96DCCB47FE96CA902AD0C41 /* QRCode.swift in Sources */,

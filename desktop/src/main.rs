@@ -14,6 +14,7 @@ mod list;
 mod listen;
 mod music;
 mod music_player;
+mod network;
 mod play;
 mod qr;
 mod settings_screen;

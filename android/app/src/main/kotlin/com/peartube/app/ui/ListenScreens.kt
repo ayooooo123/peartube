@@ -84,7 +84,7 @@ fun ListenScreen(
     var tab by rememberSaveable { mutableStateOf(ListenTab.Albums) }
     var savedOnly by rememberSaveable { mutableStateOf(false) }
     var trackFilter by rememberSaveable { mutableStateOf("") }
-    var trackSort by rememberSaveable { mutableStateOf(TrackSort.Title) }
+    var trackSort by rememberSaveable { mutableStateOf(TrackSort.LibraryOrder) }
     var sortAsc by rememberSaveable { mutableStateOf(true) }
     var sortMenu by remember { mutableStateOf(false) }
 
@@ -95,6 +95,12 @@ fun ListenScreen(
     val artists = remember(filteredAlbums) { buildArtists(filteredAlbums) }
     val tracks = remember(filteredAlbums, trackFilter, trackSort, sortAsc) {
         buildTrackRows(filteredAlbums, trackFilter, trackSort, sortAsc)
+    }
+    val allFilteredItems = remember(filteredAlbums) {
+        filteredAlbums.flatMap { it.toTrackItems() }
+    }
+    val visibleTrackItems = remember(tracks) {
+        tracks.map { it.toTrackItem() }
     }
 
     if (catalog.albums.isEmpty()) {
@@ -115,7 +121,42 @@ fun ListenScreen(
         ListenTab.Tracks -> plural(tracks.size, "track", "tracks")
     }
 
+    val waitingPaused = musicState.currentTrack != null && !musicState.playing
+    val actionItems = if (tab == ListenTab.Tracks) visibleTrackItems else allFilteredItems
+    val actionLabel = if (tab == ListenTab.Tracks) "Tracks" else "Library"
+
     Column(Modifier.fillMaxSize()) {
+        // Top actions row: Play all (or Resume when paused) and Shuffle
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .padding(start = 16.dp, end = 16.dp, top = 10.dp, bottom = 4.dp),
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            PrimaryLightButton(
+                text = if (waitingPaused) "Resume" else "Play all",
+                icon = PlayIcon,
+                enabled = waitingPaused || actionItems.isNotEmpty(),
+                onClick = {
+                    if (waitingPaused) {
+                        model.music.togglePlayPause()
+                    } else if (actionItems.isNotEmpty()) {
+                        model.music.playTrackList(actionItems, 0, actionLabel, shuffleOn = false)
+                    }
+                },
+            )
+            QuietActionButton(
+                text = "Shuffle",
+                icon = ShuffleIcon,
+                onClick = {
+                    if (actionItems.isNotEmpty()) {
+                        model.music.playTrackList(actionItems, -1, actionLabel, shuffleOn = true)
+                    }
+                },
+            )
+        }
+
         // Segmented control: Albums / Artists / Tracks
         Row(
             Modifier
@@ -190,30 +231,55 @@ fun ListenScreen(
                 )
                 Box {
                     QuietActionButton(
-                        text = "${trackSort.label} ${if (sortAsc) "↑" else "↓"}",
+                        text = trackSort.label,
                         icon = SortIcon,
                         onClick = { sortMenu = true },
                     )
                     DropdownMenu(expanded = sortMenu, onDismissRequest = { sortMenu = false }) {
                         TrackSort.entries.forEach { option ->
+                            val selected = option == trackSort
+                            val dirHint = when {
+                                !selected -> ""
+                                option == TrackSort.Quality -> if (sortAsc) " (low–high)" else " (best first)"
+                                option == TrackSort.Size -> if (sortAsc) " (smallest)" else " (largest)"
+                                option == TrackSort.LibraryOrder -> if (sortAsc) " (normal)" else " (reversed)"
+                                else -> if (sortAsc) " (A–Z)" else " (Z–A)"
+                            }
                             DropdownMenuItem(
                                 text = {
                                     Text(
-                                        text = if (option == trackSort) "${option.label} (${if (sortAsc) "A–Z" else "Z–A"})" else option.label,
-                                        color = if (option == trackSort) Brand else Ink,
+                                        text = "${option.label}$dirHint",
+                                        color = if (selected) Brand else Ink,
                                     )
                                 },
                                 onClick = {
                                     sortMenu = false
-                                    if (trackSort == option) sortAsc = !sortAsc
-                                    else {
+                                    if (trackSort == option) {
+                                        sortAsc = !sortAsc
+                                    } else {
                                         trackSort = option
-                                        sortAsc = option != TrackSort.Size
+                                        sortAsc = option != TrackSort.Size && option != TrackSort.Quality
                                     }
                                 },
                             )
                         }
                     }
+                }
+                Box(
+                    modifier = Modifier
+                        .size(44.dp)
+                        .clip(ControlShape)
+                        .background(CardElevated)
+                        .border(1.dp, Line, ControlShape)
+                        .clickable { sortAsc = !sortAsc },
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(
+                        imageVector = if (sortAsc) ArrowUpIcon else ArrowDownIcon,
+                        contentDescription = if (sortAsc) "Sort ascending" else "Sort descending",
+                        tint = Ink,
+                        modifier = Modifier.size(18.dp),
+                    )
                 }
             }
         }
@@ -343,17 +409,33 @@ private fun FlatTrackRow(
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
-            Text(
-                text = listOfNotNull(
-                    row.artist.takeIf { it.isNotBlank() },
-                    row.albumName.takeIf { it.isNotBlank() },
-                    row.size.takeIf { it > 0L }?.let { formatBytes(it) },
-                ).joinToString(" · "),
-                color = Dim,
-                fontSize = 12.sp,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
+            val subLine = listOfNotNull(
+                row.artist.takeIf { it.isNotBlank() },
+                row.albumName.takeIf { it.isNotBlank() },
+            ).joinToString(" · ")
+            if (subLine.isNotEmpty()) {
+                Text(
+                    text = subLine,
+                    color = Dim,
+                    fontSize = 12.sp,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+            val metaLine = listOfNotNull(
+                row.effectiveQualityLabel,
+                row.size.takeIf { it > 0L }?.let { formatBytes(it) },
+                if (!isSaved(row.entry)) "On the network" else null,
+            ).joinToString(" · ")
+            if (metaLine.isNotEmpty()) {
+                Text(
+                    text = metaLine,
+                    color = if (isYt(row.entry)) Warn else Dim,
+                    fontSize = 11.sp,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
         }
         Box {
             CinemaIcon(MoreVertIcon, "More options") { menu = true }

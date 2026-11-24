@@ -6,6 +6,8 @@ struct HomeScreen: View {
     @ObservedObject var music: MusicController
     let onNavigate: (AppRoute) -> Void
 
+    @Environment(\.horizontalSizeClass) private var sizeClass
+
     private struct ContinueItem: Identifiable {
         enum Payload {
             case video(tile: LibraryTile, entry: MediaEntry, progress: WatchProgress)
@@ -34,12 +36,25 @@ struct HomeScreen: View {
         return list.sorted { $0.updatedAt > $1.updatedAt }
     }
 
+    private var hasAlbums: Bool { !model.catalog.albums.isEmpty }
+    private var hasVideos: Bool { !model.catalog.allVideos.isEmpty }
+
+    private var musicPrimary: Bool {
+        guard hasAlbums else { return false }
+        guard let latestVideo = model.continueVideos.first else { return true }
+        if music.isPlaying { return true }
+        return music.canContinueOnHome && music.updatedAt >= latestVideo.progress.updatedAt
+    }
+
     var body: some View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 26) {
                 if model.entries.isEmpty {
                     emptyLibrary
                 } else {
+                    if hasAlbums || hasVideos {
+                        heroPairSection
+                    }
                     if !continueItems.isEmpty {
                         keepPlayingSection
                     }
@@ -59,6 +74,256 @@ struct HomeScreen: View {
         }
         .background(PTColor.bg)
         .refreshable { await model.refresh() }
+    }
+
+    @ViewBuilder
+    private var heroPairSection: some View {
+        if sizeClass == .regular && hasAlbums && hasVideos {
+            HStack(alignment: .top, spacing: 12) {
+                listenHeroCard
+                    .frame(maxWidth: .infinity)
+                watchHeroCard
+                    .frame(maxWidth: .infinity)
+            }
+        } else {
+            VStack(spacing: 12) {
+                if hasAlbums {
+                    listenHeroCard
+                }
+                if hasVideos {
+                    watchHeroCard
+                }
+            }
+        }
+    }
+
+    private var listenHeroCard: some View {
+        let cur = music.currentTrack
+        let collageAlbums = Array(model.catalog.albums.prefix(4))
+        let headline = cur?.title ?? plural(model.catalog.tracks.count, "track", "tracks")
+        let facts: String = {
+            if let cur {
+                return music.pausedForVideo ? "\(cur.displayArtist) · Paused for a video" : cur.displayArtist
+            }
+            return plural(model.catalog.albums.count, "album", "albums")
+        }()
+
+        return HStack(alignment: .center, spacing: 12) {
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Listen")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(PTColor.brandRing)
+                    .textCase(.uppercase)
+
+                Text(headline)
+                    .font(.title3.weight(.bold))
+                    .foregroundStyle(PTColor.ink)
+                    .lineLimit(2)
+
+                Text(facts)
+                    .font(.caption)
+                    .foregroundStyle(music.pausedForVideo ? PTColor.warn : PTColor.dim)
+                    .lineLimit(1)
+
+                HStack(spacing: 8) {
+                    if let cur {
+                        let playLabel = music.isPlaying ? "Pause" : "Resume"
+                        let playIcon = music.isPlaying ? "pause.fill" : "play.fill"
+                        heroActionButton(
+                            title: playLabel,
+                            icon: playIcon,
+                            primary: musicPrimary,
+                            accessibilityLabel: "\(playLabel) \(cur.title)",
+                            identifier: "home.hero.listen.play"
+                        ) {
+                            music.togglePlayPause()
+                        }
+                    } else {
+                        heroActionButton(
+                            title: "Play all",
+                            icon: "play.fill",
+                            primary: musicPrimary,
+                            accessibilityLabel: "Play all music",
+                            identifier: "home.hero.listen.play"
+                        ) {
+                            music.playTrackList(model.catalog.tracks, startIndex: 0, sourceLabel: "Library", shuffleOn: false)
+                        }
+                    }
+
+                    heroActionButton(
+                        title: "Shuffle",
+                        icon: "shuffle",
+                        primary: false,
+                        accessibilityLabel: "Shuffle library",
+                        identifier: "home.hero.listen.shuffle"
+                    ) {
+                        music.playTrackList(model.catalog.tracks, startIndex: nil, sourceLabel: "Library", shuffleOn: true)
+                    }
+                }
+                .padding(.top, 2)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+
+            if !collageAlbums.isEmpty {
+                albumCollage(collageAlbums)
+                    .frame(width: 74, height: 74)
+                    .accessibilityHidden(true)
+            }
+        }
+        .padding(14)
+        .background(
+            LinearGradient(
+                colors: [Color.hsl(hue: 258, saturation: 0.42, lightness: 0.16), PTColor.surface],
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            ),
+            in: RoundedRectangle(cornerRadius: PTRadius.card)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: PTRadius.card)
+                .strokeBorder(PTColor.line, lineWidth: 1)
+        )
+    }
+
+    @ViewBuilder
+    private func albumCollage(_ albums: [LibraryTile]) -> some View {
+        if albums.count == 1, let first = albums.first {
+            SleeveView(hue: first.hue, seed: first.seed, monogram: first.monogramText, cornerRadius: 8)
+        } else {
+            let tiles = Array(albums.prefix(4))
+            VStack(spacing: 3) {
+                HStack(spacing: 3) {
+                    if tiles.indices.contains(0) {
+                        SleeveView(hue: tiles[0].hue, seed: tiles[0].seed, monogram: tiles[0].monogramText, cornerRadius: 5)
+                    }
+                    if tiles.indices.contains(1) {
+                        SleeveView(hue: tiles[1].hue, seed: tiles[1].seed, monogram: tiles[1].monogramText, cornerRadius: 5)
+                    }
+                }
+                if tiles.count > 2 {
+                    HStack(spacing: 3) {
+                        if tiles.indices.contains(2) {
+                            SleeveView(hue: tiles[2].hue, seed: tiles[2].seed, monogram: tiles[2].monogramText, cornerRadius: 5)
+                        }
+                        if tiles.indices.contains(3) {
+                            SleeveView(hue: tiles[3].hue, seed: tiles[3].seed, monogram: tiles[3].monogramText, cornerRadius: 5)
+                        } else {
+                            Color.clear
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private var watchHeroCard: some View {
+        let featured = model.continueVideos.first
+        let hue = featured.map { Double(CatalogText.sleeveHash($0.tile.title) % 360) } ?? 20.0
+        let headline = featured?.tile.title ?? plural(model.catalog.allVideos.count, "title", "titles")
+        let facts: String = {
+            if let f = featured {
+                let epPrefix = f.entry.episode.map { "\($0) · " } ?? ""
+                let remaining = f.progress.durationMs > 0
+                    ? timeLeftText(seconds: f.progress.remainingSeconds)
+                    : "Resume at \(clock(f.progress.positionMs))"
+                return epPrefix + remaining
+            }
+            return "Films, series and clips"
+        }()
+
+        return VStack(alignment: .leading, spacing: 8) {
+            Text("Watch")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(PTColor.dim)
+                .textCase(.uppercase)
+
+            Text(headline)
+                .font(.title3.weight(.bold))
+                .foregroundStyle(PTColor.ink)
+                .lineLimit(2)
+
+            Text(facts)
+                .font(.caption)
+                .foregroundStyle(PTColor.dim)
+                .lineLimit(1)
+
+            if let f = featured, f.progress.fraction > 0 {
+                GeometryReader { geo in
+                    ZStack(alignment: .leading) {
+                        Capsule().fill(PTColor.line)
+                        Capsule()
+                            .fill(PTColor.brand)
+                            .frame(width: geo.size.width * max(0.03, min(1, f.progress.fraction)))
+                    }
+                }
+                .frame(height: 4)
+            }
+
+            HStack(spacing: 8) {
+                if let f = featured {
+                    heroActionButton(
+                        title: "Continue",
+                        icon: "play.fill",
+                        primary: !musicPrimary,
+                        accessibilityLabel: "Continue \(f.tile.title)",
+                        identifier: "home.hero.watch.continue"
+                    ) {
+                        model.play(f.entry)
+                    }
+                }
+
+                heroActionButton(
+                    title: "Play something",
+                    icon: "die.face.5",
+                    primary: featured == nil && !musicPrimary,
+                    accessibilityLabel: "Play a random video",
+                    identifier: "home.hero.watch.surprise"
+                ) {
+                    model.playRandomVideo()
+                }
+            }
+            .padding(.top, 2)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(14)
+        .background(
+            LinearGradient(
+                colors: [Color.hsl(hue: hue, saturation: 0.36, lightness: 0.15), PTColor.surface],
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            ),
+            in: RoundedRectangle(cornerRadius: PTRadius.card)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: PTRadius.card)
+                .strokeBorder(PTColor.line, lineWidth: 1)
+        )
+    }
+
+    @ViewBuilder
+    private func heroActionButton(
+        title: String,
+        icon: String,
+        primary: Bool,
+        accessibilityLabel: String,
+        identifier: String,
+        action: @escaping () -> Void
+    ) -> some View {
+        if primary {
+            Button(action: action) {
+                Label(title, systemImage: icon)
+            }
+            .buttonStyle(PTPrimaryButtonStyle(compact: true))
+            .accessibilityLabel(accessibilityLabel)
+            .accessibilityIdentifier(identifier)
+        } else {
+            Button(action: action) {
+                Label(title, systemImage: icon)
+            }
+            .buttonStyle(PTQuietButtonStyle(compact: true))
+            .accessibilityLabel(accessibilityLabel)
+            .accessibilityIdentifier(identifier)
+        }
     }
 
     private var emptyLibrary: some View {

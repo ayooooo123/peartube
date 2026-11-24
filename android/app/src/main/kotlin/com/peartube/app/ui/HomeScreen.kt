@@ -5,6 +5,7 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -20,6 +21,7 @@ import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.Icon
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
@@ -28,6 +30,8 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -40,11 +44,14 @@ import com.peartube.app.LibraryTile
 import com.peartube.app.MusicState
 import com.peartube.app.Room
 import com.peartube.app.Screen
+import com.peartube.app.VideoResumeInfo
 import com.peartube.app.WatchProgress
+import com.peartube.app.findStartedVideos
 import com.peartube.app.formatTimeLeft
 import com.peartube.app.plural
 import com.peartube.app.tileFactsLine
 import com.peartube.app.tileStateLabel
+import com.peartube.app.toTrackItem
 import com.peartube.app.toTrackItems
 import com.peartube.shared.formatBytes
 
@@ -77,6 +84,12 @@ fun HomeScreen(
 
     val keepItems = remember(catalog, history, musicState) {
         buildKeepPlaying(catalog, history, musicState, model, onOpenMusicPlayer)
+    }
+    val startedVideos = remember(catalog.videos, history) {
+        findStartedVideos(catalog.videos, history)
+    }
+    val allTrackItems = remember(catalog.allTracks) {
+        catalog.allTracks.map { it.toTrackItem() }
     }
     val homeAlbums = remember(catalog.albums) { catalog.albums.take(10) }
     val films = remember(catalog.movies, catalog.series) {
@@ -111,9 +124,32 @@ fun HomeScreen(
 
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
-        contentPadding = PaddingValues(top = 8.dp, bottom = 24.dp),
+        contentPadding = PaddingValues(top = 12.dp, bottom = 24.dp),
         verticalArrangement = Arrangement.spacedBy(22.dp),
     ) {
+        if (catalog.albums.isNotEmpty() || catalog.videos.isNotEmpty()) {
+            item(key = "home-heroes") {
+                HomeQuickStartPair(
+                    catalog = catalog,
+                    musicState = musicState,
+                    startedVideo = startedVideos.firstOrNull(),
+                    onToggleMusic = { model.music.togglePlayPause() },
+                    onPlayAllMusic = {
+                        if (allTrackItems.isNotEmpty()) {
+                            model.music.playTrackList(allTrackItems, 0, "Library", shuffleOn = false)
+                        }
+                    },
+                    onShuffleMusic = {
+                        if (allTrackItems.isNotEmpty()) {
+                            model.music.playTrackList(allTrackItems, -1, "Library", shuffleOn = true)
+                        }
+                    },
+                    onContinueVideo = { info -> model.playEntry(info.entry) },
+                    onPlaySomething = { model.playSurpriseVideo(catalog.videos) },
+                )
+            }
+        }
+
         if (keepItems.isNotEmpty()) {
             item(key = "keep-playing") {
                 Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -185,6 +221,262 @@ fun HomeScreen(
                         }
                     }
                 }
+            }
+        }
+    }
+}
+
+@Composable
+private fun HomeQuickStartPair(
+    catalog: LibraryCatalog,
+    musicState: MusicState,
+    startedVideo: VideoResumeInfo?,
+    onToggleMusic: () -> Unit,
+    onPlayAllMusic: () -> Unit,
+    onShuffleMusic: () -> Unit,
+    onContinueVideo: (VideoResumeInfo) -> Unit,
+    onPlaySomething: () -> Unit,
+) {
+    val hasMusic = catalog.albums.isNotEmpty()
+    val hasVideo = catalog.videos.isNotEmpty()
+    BoxWithConstraints(Modifier.fillMaxWidth().padding(horizontal = 16.dp)) {
+        if (maxWidth >= 600.dp && hasMusic && hasVideo) {
+            Row(
+                Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                ListenHeroCard(
+                    catalog = catalog,
+                    musicState = musicState,
+                    onToggle = onToggleMusic,
+                    onPlayAll = onPlayAllMusic,
+                    onShuffle = onShuffleMusic,
+                    modifier = Modifier.weight(1f),
+                )
+                WatchHeroCard(
+                    catalog = catalog,
+                    startedVideo = startedVideo,
+                    onContinue = onContinueVideo,
+                    onPlaySomething = onPlaySomething,
+                    modifier = Modifier.weight(1f),
+                )
+            }
+        } else {
+            Column(
+                Modifier.fillMaxWidth(),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                if (hasMusic) {
+                    ListenHeroCard(
+                        catalog = catalog,
+                        musicState = musicState,
+                        onToggle = onToggleMusic,
+                        onPlayAll = onPlayAllMusic,
+                        onShuffle = onShuffleMusic,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                }
+                if (hasVideo) {
+                    WatchHeroCard(
+                        catalog = catalog,
+                        startedVideo = startedVideo,
+                        onContinue = onContinueVideo,
+                        onPlaySomething = onPlaySomething,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ListenHeroCard(
+    catalog: LibraryCatalog,
+    musicState: MusicState,
+    onToggle: () -> Unit,
+    onPlayAll: () -> Unit,
+    onShuffle: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val cur = musicState.currentTrack
+    val collage = remember(catalog.albums) { catalog.albums.take(4) }
+    val tint = Color.hsl(258f, 0.40f, 0.16f)
+
+    Column(
+        modifier = modifier
+            .clip(CardShape)
+            .background(Brush.linearGradient(listOf(tint, CardBg)))
+            .border(1.dp, Line, CardShape)
+            .padding(16.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        Row(
+            Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Text("Listen", color = BrandRing, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
+                Text(
+                    text = cur?.title ?: plural(catalog.allTracks.size, "track", "tracks"),
+                    color = Ink,
+                    fontSize = 19.sp,
+                    fontWeight = FontWeight.Bold,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                val sub = when {
+                    cur != null && musicState.pausedForVideo -> "Paused for a video"
+                    cur != null -> cur.artist.ifBlank { cur.album.ifBlank { plural(catalog.albums.size, "album", "albums") } }
+                    else -> plural(catalog.albums.size, "album", "albums")
+                }
+                Text(
+                    text = sub,
+                    color = if (cur != null && musicState.pausedForVideo) Warn else Dim,
+                    fontSize = 13.sp,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+            if (collage.isNotEmpty()) {
+                SleeveCollage(albums = collage)
+            }
+        }
+        Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
+            if (cur != null) {
+                PrimaryLightButton(
+                    text = if (musicState.playing) "Pause" else "Resume",
+                    icon = if (musicState.playing) PauseIcon else PlayIcon,
+                    onClick = onToggle,
+                )
+            } else {
+                PrimaryLightButton(
+                    text = "Play all",
+                    icon = PlayIcon,
+                    onClick = onPlayAll,
+                    enabled = catalog.allTracks.isNotEmpty(),
+                )
+            }
+            QuietActionButton(
+                text = "Shuffle",
+                icon = ShuffleIcon,
+                onClick = onShuffle,
+            )
+        }
+    }
+}
+
+@Composable
+private fun SleeveCollage(albums: List<LibraryTile>) {
+    if (albums.size == 1) {
+        val a = albums[0]
+        AlbumSleeve(
+            hue = a.hue,
+            seed = a.seed,
+            monogramText = a.monogramText,
+            cornerRadius = 8.dp,
+            fontSize = 18.sp,
+            modifier = Modifier.size(64.dp),
+        )
+        return
+    }
+    Column(
+        Modifier.size(64.dp),
+        verticalArrangement = Arrangement.spacedBy(3.dp),
+    ) {
+        Row(Modifier.weight(1f), horizontalArrangement = Arrangement.spacedBy(3.dp)) {
+            val a0 = albums[0]
+            AlbumSleeve(a0.hue, a0.seed, a0.monogramText, Modifier.weight(1f), cornerRadius = 5.dp, fontSize = 9.sp)
+            val a1 = albums.getOrElse(1) { a0 }
+            AlbumSleeve(a1.hue, a1.seed, a1.monogramText, Modifier.weight(1f), cornerRadius = 5.dp, fontSize = 9.sp)
+        }
+        Row(Modifier.weight(1f), horizontalArrangement = Arrangement.spacedBy(3.dp)) {
+            val a2 = albums.getOrElse(2) { albums[0] }
+            AlbumSleeve(a2.hue, a2.seed, a2.monogramText, Modifier.weight(1f), cornerRadius = 5.dp, fontSize = 9.sp)
+            val a3 = albums.getOrElse(3) { albums.getOrElse(1) { albums[0] } }
+            AlbumSleeve(a3.hue, a3.seed, a3.monogramText, Modifier.weight(1f), cornerRadius = 5.dp, fontSize = 9.sp)
+        }
+    }
+}
+
+@Composable
+private fun WatchHeroCard(
+    catalog: LibraryCatalog,
+    startedVideo: VideoResumeInfo?,
+    onContinue: (VideoResumeInfo) -> Unit,
+    onPlaySomething: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val hue = ((startedVideo?.tile?.seed ?: 20L) % 360L).toFloat()
+    val tint = Color.hsl(hue, 0.34f, 0.15f)
+
+    Column(
+        modifier = modifier
+            .clip(CardShape)
+            .background(Brush.linearGradient(listOf(tint, CardBg)))
+            .border(1.dp, Line, CardShape)
+            .padding(16.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        Text("Watch", color = Dim, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
+        Text(
+            text = startedVideo?.tile?.title ?: plural(catalog.videos.size, "title", "titles"),
+            color = Ink,
+            fontSize = 19.sp,
+            fontWeight = FontWeight.Bold,
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis,
+        )
+        val facts = if (startedVideo != null) {
+            val epPrefix = if (startedVideo.tile.kind == LibraryKind.Series && startedVideo.entry.isEpisode) {
+                "${startedVideo.entry.episodeLabel} · "
+            } else {
+                ""
+            }
+            val leftPart = if (startedVideo.progress.durationMs > 0L) {
+                formatTimeLeft(startedVideo.progress.durationMs - startedVideo.progress.positionMs)
+            } else {
+                "In progress"
+            }
+            "$epPrefix$leftPart"
+        } else {
+            val parts = buildList {
+                if (catalog.movies.isNotEmpty()) add(plural(catalog.movies.size, "movie", "movies"))
+                if (catalog.series.isNotEmpty()) add(plural(catalog.series.size, "series", "series"))
+                if (catalog.clips.isNotEmpty()) add(plural(catalog.clips.size, "clip", "clips"))
+            }
+            parts.joinToString(" · ").ifEmpty { "Movies, series and clips" }
+        }
+        Text(facts, color = Dim, fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+
+        if (startedVideo != null && startedVideo.progress.positionMs > 0L && startedVideo.progress.durationMs > 0L) {
+            LinearProgressIndicator(
+                progress = { startedVideo.fraction.coerceIn(0.03f, 1f) },
+                modifier = Modifier.fillMaxWidth().height(4.dp).clip(PillShape),
+                color = Brand,
+                trackColor = Line,
+            )
+        }
+
+        Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
+            if (startedVideo != null) {
+                PrimaryLightButton(
+                    text = "Continue",
+                    icon = PlayIcon,
+                    onClick = { onContinue(startedVideo) },
+                )
+                QuietActionButton(
+                    text = "Play something",
+                    icon = DiceIcon,
+                    onClick = onPlaySomething,
+                )
+            } else {
+                PrimaryLightButton(
+                    text = "Play something",
+                    icon = DiceIcon,
+                    onClick = onPlaySomething,
+                )
             }
         }
     }

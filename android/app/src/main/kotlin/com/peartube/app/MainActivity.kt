@@ -17,7 +17,7 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         val model = (application as PearTubeApp).model
         if (savedInstanceState == null) {
-            intent?.dataString?.let(model::openUriOrKey)
+            handleIncomingIntent(intent, model)
         }
         player = PlayerHost(this)
         enableEdgeToEdge(
@@ -31,7 +31,28 @@ class MainActivity : ComponentActivity() {
         super.onNewIntent(intent)
         setIntent(intent)
         val model = (application as PearTubeApp).model
-        intent.dataString?.let(model::openUriOrKey)
+        handleIncomingIntent(intent, model)
+    }
+
+    private fun handleIncomingIntent(intent: Intent?, model: AppModel) {
+        if (intent == null) return
+        if (intent.action == Intent.ACTION_SEND) {
+            val sharedText = intent.getStringExtra(Intent.EXTRA_TEXT).orEmpty()
+            val sharedSubject = intent.getStringExtra(Intent.EXTRA_SUBJECT).orEmpty()
+            val candidate = when {
+                extractSharedUrl(sharedText) != null -> sharedText
+                extractSharedUrl(sharedSubject) != null -> sharedSubject
+                sharedText.isNotBlank() -> sharedText
+                else -> sharedSubject
+            }
+            if (candidate.isNotBlank()) {
+                model.handleSharedText(candidate)
+            }
+            return
+        }
+        intent.dataString?.takeIf { it.isNotBlank() }?.let { uri ->
+            model.handleSharedText(uri)
+        }
     }
 
     override fun onDestroy() {

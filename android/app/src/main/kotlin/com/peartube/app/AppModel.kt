@@ -16,14 +16,19 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
+import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
 import java.net.HttpURLConnection
@@ -43,12 +48,40 @@ sealed interface Screen {
     data class AlbumDetail(val albumKey: String) : Screen
     data class ArtistDetail(val artistKey: String) : Screen
     data class TitleDetail(val titleKey: String) : Screen
+    data class ShelfDetail(val peer: String) : Screen
     data object MusicPlayerFull : Screen
     data object Settings : Screen
     data class Play(val entry: Entry, val startPositionMs: Long? = null) : Screen
 }
 
 data class DownloadProgress(val bytes: Long, val total: Long)
+
+data class AddSheetState(
+    val rawInput: String = "",
+    val identifying: Boolean = false,
+    val identified: IdentifyResult? = null,
+    val identifyError: String? = null,
+    val titleInput: String = "",
+    val artistInput: String = "",
+    val audioOnly: Boolean = false,
+    val submitting: Boolean = false,
+    val submitError: String? = null,
+)
+
+data class SourceSearchState(
+    val query: String = "",
+    val requestedSources: Set<SearchSource> = emptySet(),
+    val result: SourceSearchResult = SourceSearchResult(),
+    val busy: Boolean = false,
+    val error: String? = null,
+)
+
+data class ShelfBrowserState(
+    val peer: String = "",
+    val shelf: SoulseekShelf? = null,
+    val busy: Boolean = false,
+    val error: String? = null,
+)
 
 /** The app's state. Lives with the process, so it outlasts the activity. */
 class AppModel(private val app: Application) {
@@ -79,6 +112,8 @@ class AppModel(private val app: Application) {
     val pendingCast = MutableStateFlow<PendingCast?>(null)
     val selectedCastReceiver = MutableStateFlow<CastReceiver?>(null)
     val showTvsDialog = MutableStateFlow(false)
+    val showAddSheet = MutableStateFlow(false)
+    val addSheet = MutableStateFlow(AddSheetState())
     val searchAutoFocus = MutableStateFlow(false)
     val notice = MutableStateFlow<String?>(null)
     val downloads = MutableStateFlow<Map<String, DownloadProgress>>(emptyMap())
@@ -86,6 +121,24 @@ class AppModel(private val app: Application) {
     private val historyFile = AtomicFile(File(dataDir, "watch-history.json"))
     val watchHistory = MutableStateFlow(loadWatchHistory())
     private val historyWrites = Channel<Map<String, WatchProgress>>(Channel.CONFLATED)
+
+    val loopbackApi = LoopbackApi { status.value?.apiUrl }
+    val acquireJobs = MutableStateFlow<List<AcquireJob>>(emptyList())
+    val plugins = MutableStateFlow<List<PluginInfo>>(emptyList())
+    val selectedSources = MutableStateFlow(SearchSource.entries.toSet())
+    val sourceSearch = MutableStateFlow(SourceSearchState())
+    private val visitedShelvesFile = AtomicFile(File(dataDir, "visited-shelves.json"))
+    val visitedShelves = MutableStateFlow(loadVisitedShelves())
+    val shelfState = MutableStateFlow(ShelfBrowserState())
+    val soulseekSettings = MutableStateFlow(SoulseekPeerSettings())
+    val soulseekBusy = MutableStateFlow(false)
+    val soulseekError = MutableStateFlow<String?>(null)
+    val soulseekMessage = MutableStateFlow<String?>(null)
+    private var identifyJob: Job? = null
+    private var sourceSearchJob: Job? = null
+    private var shelfJob: Job? = null
+    private var previousActiveJobIds: Set<String> = emptySet()
+    private var lastLoadedApiUrl: String? = null
 
     val music = MusicPlayerController(
         scope = scope,
@@ -136,7 +189,7 @@ class AppModel(private val app: Application) {
         saveLastRoom(Room.Search)
         navStack.value = listOf(Screen.Main)
         if (askRelays && term.trim().length >= 2) {
-            searchGlobal(term)
+            searchAll(term)
         }
     }
 
@@ -335,6 +388,28 @@ class AppModel(private val app: Application) {
                 wasPlaying = playing
             }
         }
+        scope.launch {
+            status.collect { st ->
+                val apiUrl = st?.apiUrl?.takeIf { it.isNotBlank() }
+                if (apiUrl != null && apiUrl != lastLoadedApiUrl) {
+                    lastLoadedApiUrl = apiUrl
+                    refreshAcquireJobs()
+                    refreshPlugins()
+                    refreshSoulseekSettings()
+                }
+            }
+        }
+        scope.launch {
+            while (true) {
+                val shouldPoll = combine(acquireJobs, showAddSheet, status) { jobs, sheetOpen, st ->
+                    !st?.apiUrl.isNullOrBlank() && (sheetOpen || jobs.any { it.isActive })
+                }.first { it }
+                if (shouldPoll) {
+                    refreshAcquireJobs()
+                    delay(2_000L)
+                }
+            }
+        }
         starts.trySend(settings.value)
     }
 
@@ -380,6 +455,7 @@ class AppModel(private val app: Application) {
         cast.value.session != null ||
             musicState.value.playing ||
             downloads.value.isNotEmpty() ||
+            acquireJobs.value.any { it.isActive } ||
             System.currentTimeMillis() < backgroundSyncUntil
 
     // The one rule for the background: in front, or behind with a cast, active music, a download or
@@ -400,6 +476,14 @@ class AppModel(private val app: Application) {
     fun openUriOrKey(raw: String) {
         val trimmed = raw.trim()
         if (trimmed.isEmpty()) return
+        parsePeartubeAddUrl(trimmed)?.let { targetUrl ->
+            openAddSheet(prefillUrl = targetUrl, autoIdentify = true)
+            return
+        }
+        if (trimmed.startsWith("http://", ignoreCase = true) || trimmed.startsWith("https://", ignoreCase = true)) {
+            openAddSheet(prefillUrl = trimmed, autoIdentify = true)
+            return
+        }
         scope.launch {
             try {
                 val res = worker.openUri(trimmed)
@@ -743,6 +827,460 @@ class AppModel(private val app: Application) {
             }
             soundFontSelected.value = SoundFont.file(dataDir).isFile
             soundFontBusy.value = false
+        }
+    }
+
+    fun handleSharedText(text: String) {
+        val extracted = extractSharedUrl(text)
+        if (extracted == null) {
+            error.value = "Could not find a link or channel key in the shared text."
+            return
+        }
+        val addTarget = parsePeartubeAddUrl(extracted)
+        if (addTarget != null) {
+            openAddSheet(prefillUrl = addTarget, autoIdentify = true)
+            return
+        }
+        if (extracted.startsWith("http://", ignoreCase = true) || extracted.startsWith("https://", ignoreCase = true)) {
+            openAddSheet(prefillUrl = extracted, autoIdentify = true)
+        } else {
+            openUriOrKey(extracted)
+        }
+    }
+
+    fun openAddSheet(prefillUrl: String? = null, autoIdentify: Boolean = false) {
+        if (prefillUrl != null) {
+            addSheet.value = AddSheetState(rawInput = prefillUrl)
+        }
+        showAddSheet.value = true
+        refreshAcquireJobs()
+        if (autoIdentify && !prefillUrl.isNullOrBlank()) {
+            identifyUrl(prefillUrl)
+        }
+    }
+
+    fun closeAddSheet(clearInput: Boolean = false) {
+        showAddSheet.value = false
+        if (clearInput) {
+            identifyJob?.cancel()
+            addSheet.value = AddSheetState()
+        }
+    }
+
+    fun updateAddInput(raw: String) {
+        val prev = addSheet.value
+        val changed = prev.rawInput.trim() != raw.trim()
+        addSheet.value = if (changed) {
+            prev.copy(
+                rawInput = raw,
+                identified = null,
+                identifyError = null,
+                submitError = null,
+            )
+        } else {
+            prev.copy(rawInput = raw)
+        }
+    }
+
+    fun updateAddTitle(title: String) {
+        addSheet.value = addSheet.value.copy(titleInput = title, submitError = null)
+    }
+
+    fun updateAddArtist(artist: String) {
+        addSheet.value = addSheet.value.copy(artistInput = artist, submitError = null)
+    }
+
+    fun updateAddAudioOnly(audioOnly: Boolean) {
+        addSheet.value = addSheet.value.copy(audioOnly = audioOnly, submitError = null)
+    }
+
+    fun identifyUrl(rawUrl: String = addSheet.value.rawInput) {
+        val url = rawUrl.trim()
+        if (!url.startsWith("http://", ignoreCase = true) && !url.startsWith("https://", ignoreCase = true)) {
+            addSheet.value = addSheet.value.copy(identifyError = "Paste an http(s) link to identify.")
+            return
+        }
+        identifyJob?.cancel()
+        addSheet.value = addSheet.value.copy(
+            rawInput = url,
+            identifying = true,
+            identified = null,
+            identifyError = null,
+            submitError = null,
+        )
+        identifyJob = scope.launch {
+            if (status.value?.apiUrl.isNullOrBlank()) {
+                withTimeoutOrNull(12_000L) {
+                    status.first { !it?.apiUrl.isNullOrBlank() }
+                }
+            }
+            val result = loopbackApi.identify(url)
+            if (addSheet.value.rawInput.trim() != url) return@launch
+            result.fold(
+                onSuccess = { info ->
+                    addSheet.value = addSheet.value.copy(
+                        identifying = false,
+                        identified = info,
+                        identifyError = null,
+                        titleInput = info.effectiveTitle,
+                        artistInput = info.effectiveArtist,
+                        audioOnly = info.audioOnly,
+                    )
+                },
+                onFailure = { err ->
+                    addSheet.value = addSheet.value.copy(
+                        identifying = false,
+                        identified = null,
+                        identifyError = err.message ?: "Could not identify that link.",
+                    )
+                },
+            )
+        }
+    }
+
+    fun submitAcquireFromSheet() {
+        val state = addSheet.value
+        val url = state.rawInput.trim()
+        if (!url.startsWith("http://", ignoreCase = true) && !url.startsWith("https://", ignoreCase = true)) {
+            openUriOrKey(url)
+            closeAddSheet(clearInput = true)
+            return
+        }
+        if (state.submitting) return
+        val identified = state.identified
+        val title = state.titleInput.trim()
+            .ifBlank { identified?.effectiveTitle.orEmpty() }
+            .ifBlank { url }
+        val artist = state.artistInput.trim().ifBlank { identified?.effectiveArtist.orEmpty() }
+        val id = identified?.effectiveId?.takeIf { it.isNotBlank() } ?: ""
+        val page = identified?.isPage ?: true
+        val audio = state.audioOnly
+        val music = if (audio || identified?.music != null || artist.isNotBlank()) {
+            MusicMeta(
+                title = title.takeIf { it.isNotBlank() },
+                artist = artist.takeIf { it.isNotBlank() },
+            )
+        } else {
+            null
+        }
+        addSheet.value = state.copy(submitting = true, submitError = null)
+        scope.launch {
+            loopbackApi.acquire(
+                id = id,
+                title = title,
+                url = url,
+                page = page,
+                audio = audio,
+                music = music,
+            ).fold(
+                onSuccess = { job ->
+                    recordSubmittedJob(job)
+                    addSheet.value = AddSheetState()
+                    notice.value = "Saving ${job.title.ifBlank { title }}…"
+                },
+                onFailure = { err ->
+                    addSheet.value = addSheet.value.copy(
+                        submitting = false,
+                        submitError = err.message ?: "Could not start download.",
+                    )
+                },
+            )
+        }
+    }
+
+    private fun recordSubmittedJob(job: AcquireJob) {
+        val current = acquireJobs.value.filterNot { it.jobId == job.jobId }
+        acquireJobs.value = listOf(job) + current
+        if (job.isActive) {
+            previousActiveJobIds = previousActiveJobIds + job.jobId
+        }
+        applyBackgroundPolicy()
+        refreshAcquireJobs()
+    }
+
+    fun refreshAcquireJobs() {
+        if (status.value?.apiUrl.isNullOrBlank()) return
+        scope.launch {
+            loopbackApi.listJobs().onSuccess { jobs ->
+                val newlyCompleted = jobs.filter { it.isDone && it.jobId in previousActiveJobIds }
+                val vanishedDone = previousActiveJobIds.filter { oldId -> jobs.none { it.jobId == oldId } }
+                if (newlyCompleted.isNotEmpty() || vanishedDone.isNotEmpty()) {
+                    refreshes.trySend(Unit)
+                    newlyCompleted.firstOrNull()?.let { done ->
+                        notice.value = "Added ${done.title.ifBlank { "to library" }}"
+                    }
+                }
+                previousActiveJobIds = jobs.filter { it.isActive }.map { it.jobId }.toSet()
+                acquireJobs.value = jobs
+                applyBackgroundPolicy()
+            }
+        }
+    }
+
+    fun cancelOrDismissJob(jobId: String) {
+        scope.launch {
+            loopbackApi.cancelJob(jobId).fold(
+                onSuccess = {
+                    acquireJobs.value = acquireJobs.value.filterNot { it.jobId == jobId }
+                    previousActiveJobIds = previousActiveJobIds - jobId
+                    applyBackgroundPolicy()
+                    refreshAcquireJobs()
+                },
+                onFailure = { err ->
+                    error.value = err.message ?: "Could not update job."
+                },
+            )
+        }
+    }
+
+    fun refreshPlugins() {
+        if (status.value?.apiUrl.isNullOrBlank()) return
+        scope.launch {
+            loopbackApi.listPlugins().onSuccess { list ->
+                plugins.value = list
+            }
+        }
+    }
+
+    fun toggleSearchSource(source: SearchSource) {
+        val current = selectedSources.value
+        selectedSources.value = if (source in current) current - source else current + source
+    }
+
+    fun searchAll(rawQuery: String) {
+        val q = rawQuery.trim()
+        if (q.length < 2) return
+        searchGlobal(q)
+        searchSources(q, selectedSources.value)
+    }
+
+    fun searchSources(rawQuery: String, sources: Set<SearchSource> = selectedSources.value) {
+        val q = rawQuery.trim()
+        if (q.length < 2) return
+        if (sources.isEmpty()) {
+            sourceSearch.value = SourceSearchState(
+                query = q,
+                requestedSources = emptySet(),
+                error = "Select at least one source above.",
+            )
+            return
+        }
+        sourceSearchJob?.cancel()
+        val prev = sourceSearch.value
+        sourceSearch.value = SourceSearchState(
+            query = q,
+            requestedSources = sources,
+            result = if (prev.query == q) prev.result else SourceSearchResult(),
+            busy = true,
+            error = null,
+        )
+        sourceSearchJob = scope.launch {
+            val res = loopbackApi.searchSources(q, sources.map { it.id })
+            if (sourceSearch.value.query != q) return@launch
+            sourceSearch.value = res.fold(
+                onSuccess = { parsed ->
+                    sourceSearch.value.copy(result = parsed, busy = false, error = null)
+                },
+                onFailure = { err ->
+                    sourceSearch.value.copy(busy = false, error = err.message ?: "Source search failed.")
+                },
+            )
+        }
+    }
+
+    fun saveSoulseekAlbum(candidate: SoulseekAlbumCandidate) {
+        scope.launch {
+            loopbackApi.mirrorSoulseek(
+                peer = candidate.peer,
+                folder = candidate.folder,
+                artist = candidate.artist,
+                album = candidate.displayTitle,
+                year = candidate.year.takeIf { it.isNotBlank() },
+                files = candidate.files,
+            ).fold(
+                onSuccess = { job ->
+                    recordSubmittedJob(job)
+                    notice.value = "Saving ${candidate.displayTitle}…"
+                },
+                onFailure = { err -> error.value = err.message },
+            )
+        }
+    }
+
+    fun saveSoulseekFolder(peer: String, folder: SoulseekShelfFolder) {
+        scope.launch {
+            loopbackApi.mirrorSoulseek(
+                peer = peer,
+                folder = folder.folder,
+                artist = folder.artist,
+                album = folder.displayTitle,
+                year = folder.year.takeIf { it.isNotBlank() },
+                files = folder.files,
+            ).fold(
+                onSuccess = { job ->
+                    recordSubmittedJob(job)
+                    notice.value = "Saving ${folder.displayTitle}…"
+                },
+                onFailure = { err -> error.value = err.message },
+            )
+        }
+    }
+
+    fun saveYouTubeTrack(candidate: YouTubeCandidate, artist: String, album: String, year: String? = null) {
+        val cleanArtist = artist.trim().ifBlank { candidate.channel.ifBlank { "YouTube" } }
+        val cleanAlbum = album.trim().ifBlank { candidate.title }
+        scope.launch {
+            loopbackApi.mirrorYouTube(
+                artist = cleanArtist,
+                album = cleanAlbum,
+                year = year?.trim()?.takeIf { it.isNotBlank() },
+                tracks = listOf(YouTubeTrackInput(videoId = candidate.videoId, title = candidate.title, track = 1, disc = 1)),
+            ).fold(
+                onSuccess = { job ->
+                    recordSubmittedJob(job)
+                    notice.value = "Saving ${candidate.title}…"
+                },
+                onFailure = { err -> error.value = err.message },
+            )
+        }
+    }
+
+    fun saveSoundCloudTrack(candidate: SoundCloudCandidate) {
+        val artist = candidate.artist.ifBlank { "SoundCloud" }
+        val album = candidate.album.ifBlank { candidate.title }
+        scope.launch {
+            loopbackApi.mirrorSoundCloud(
+                artist = artist,
+                album = album,
+                tracks = listOf(
+                    SoundCloudTrackInput(
+                        trackId = candidate.trackId,
+                        url = candidate.url,
+                        title = candidate.title,
+                        track = 1,
+                        disc = 1,
+                    ),
+                ),
+            ).fold(
+                onSuccess = { job ->
+                    recordSubmittedJob(job)
+                    notice.value = "Saving ${candidate.title}…"
+                },
+                onFailure = { err -> error.value = err.message },
+            )
+        }
+    }
+
+    fun saveRumbleItem(candidate: RumbleCandidate, audioOnly: Boolean) {
+        scope.launch {
+            loopbackApi.mirrorRumble(
+                title = candidate.title,
+                url = candidate.url,
+                rumbleId = candidate.rumbleId,
+                audio = audioOnly,
+            ).fold(
+                onSuccess = { job ->
+                    recordSubmittedJob(job)
+                    notice.value = if (audioOnly) "Saving audio for ${candidate.title}…" else "Saving ${candidate.title}…"
+                },
+                onFailure = { err -> error.value = err.message },
+            )
+        }
+    }
+
+    fun openShelf(peer: String) {
+        val clean = peer.trim()
+        if (clean.isEmpty()) return
+        recordVisitedShelf(clean, folderCount = visitedShelves.value.firstOrNull { it.peer == clean }?.folderCount ?: 0)
+        pushScreen(Screen.ShelfDetail(clean))
+        loadShelf(clean)
+    }
+
+    fun loadShelf(peer: String) {
+        val clean = peer.trim()
+        if (clean.isEmpty()) return
+        shelfJob?.cancel()
+        val existing = shelfState.value.takeIf { it.peer == clean }?.shelf
+        shelfState.value = ShelfBrowserState(peer = clean, shelf = existing, busy = true, error = null)
+        shelfJob = scope.launch {
+            val res = loopbackApi.browseSoulseek(clean)
+            if (shelfState.value.peer != clean) return@launch
+            res.fold(
+                onSuccess = { shelf ->
+                    shelfState.value = ShelfBrowserState(peer = clean, shelf = shelf, busy = false, error = null)
+                    recordVisitedShelf(clean, folderCount = shelf.folders.size)
+                },
+                onFailure = { err ->
+                    shelfState.value = shelfState.value.copy(
+                        busy = false,
+                        error = err.message ?: "Could not load $clean's shelf.",
+                    )
+                },
+            )
+        }
+    }
+
+    private fun loadVisitedShelves(): List<VisitedShelf> = runCatching {
+        val arr = JSONArray(visitedShelvesFile.openRead().bufferedReader().use { it.readText() })
+        (0 until arr.length()).mapNotNull { arr.optJSONObject(it)?.let(VisitedShelf::from) }.filter { it.peer.isNotBlank() }
+    }.getOrDefault(emptyList())
+
+    private fun recordVisitedShelf(peer: String, folderCount: Int) {
+        val entry = VisitedShelf(peer = peer, folderCount = folderCount, visitedAt = System.currentTimeMillis())
+        val updated = (listOf(entry) + visitedShelves.value.filterNot { it.peer.equals(peer, ignoreCase = true) }).take(30)
+        visitedShelves.value = updated
+        scope.launch(Dispatchers.IO) {
+            var stream: java.io.FileOutputStream? = null
+            try {
+                dataDir.mkdirs()
+                stream = visitedShelvesFile.startWrite()
+                val arr = JSONArray().apply { updated.forEach { put(it.toJson()) } }
+                stream.write(arr.toString().toByteArray(Charsets.UTF_8))
+                visitedShelvesFile.finishWrite(stream)
+            } catch (_: Exception) {
+                stream?.let(visitedShelvesFile::failWrite)
+            }
+        }
+    }
+
+    fun refreshSoulseekSettings() {
+        if (status.value?.apiUrl.isNullOrBlank()) return
+        scope.launch {
+            loopbackApi.getSoulseekSettings().onSuccess { loaded ->
+                soulseekSettings.value = loaded
+                soulseekError.value = null
+            }
+            refreshPlugins()
+        }
+    }
+
+    fun saveSoulseekSettings(username: String, password: String?, sharePublicMusic: Boolean) {
+        soulseekBusy.value = true
+        soulseekError.value = null
+        soulseekMessage.value = null
+        scope.launch {
+            val cleanUser = username.trim()
+            val effectivePassword = when {
+                !password.isNullOrEmpty() -> password
+                cleanUser.isEmpty() -> ""
+                else -> null
+            }
+            loopbackApi.updateSoulseekSettings(cleanUser, effectivePassword, sharePublicMusic).fold(
+                onSuccess = { updated ->
+                    soulseekSettings.value = updated
+                    soulseekBusy.value = false
+                    soulseekMessage.value = if (updated.username.isNotBlank()) {
+                        "Saved Soulseek account for ${updated.username}."
+                    } else {
+                        "Cleared Soulseek account."
+                    }
+                    refreshPlugins()
+                },
+                onFailure = { err ->
+                    soulseekBusy.value = false
+                    soulseekError.value = err.message ?: "Could not save Soulseek settings."
+                },
+            )
         }
     }
 

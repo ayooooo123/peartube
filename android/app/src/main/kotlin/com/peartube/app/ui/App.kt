@@ -9,11 +9,13 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -21,7 +23,9 @@ import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.ui.draw.clip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -54,11 +58,13 @@ fun App(model: AppModel, player: PlayerHost) {
     val catalog by model.catalog.collectAsState()
     val cast by model.cast.collectAsState()
     val showTvs by model.showTvsDialog.collectAsState()
+    val showAdd by model.showAddSheet.collectAsState()
+    val acquireJobs by model.acquireJobs.collectAsState()
     val error by model.error.collectAsState()
     val notice by model.notice.collectAsState()
+    val activeAcquireCount = remember(acquireJobs) { acquireJobs.count { it.isActive } }
 
     var showHood by remember { mutableStateOf(false) }
-    var showAdd by remember { mutableStateOf(false) }
 
     val snackbar = remember { SnackbarHostState() }
     LaunchedEffect(notice) {
@@ -69,7 +75,7 @@ fun App(model: AppModel, player: PlayerHost) {
         when {
             showTvs -> model.cancelCast()
             showHood -> showHood = false
-            showAdd -> showAdd = false
+            showAdd -> model.closeAddSheet()
             screen != Screen.Main -> model.popScreen()
             room != Room.Home -> model.selectRoom(Room.Home)
         }
@@ -112,8 +118,9 @@ fun App(model: AppModel, player: PlayerHost) {
                         Column(Modifier.fillMaxSize().navigationBarsPadding()) {
                             TopAppBarRow(
                                 casting = cast.session != null,
+                                activeAcquireCount = activeAcquireCount,
                                 onOpenHood = { showHood = true },
-                                onOpenAdd = { showAdd = true },
+                                onOpenAdd = { model.openAddSheet() },
                                 onOpenTvs = { model.openCastSheet() },
                                 onOpenSettings = { model.pushScreen(Screen.Settings) },
                             )
@@ -198,6 +205,19 @@ fun App(model: AppModel, player: PlayerHost) {
                             MiniPlayerDock(model, onOpenFull = { model.pushScreen(Screen.MusicPlayerFull) })
                         }
                     }
+                    is Screen.ShelfDetail -> {
+                        Column(Modifier.fillMaxSize().navigationBarsPadding()) {
+                            Box(Modifier.weight(1f).fillMaxWidth()) {
+                                ShelfDetailScreen(
+                                    model = model,
+                                    peer = current.peer,
+                                    onBack = { model.popScreen() },
+                                )
+                            }
+                            CastRemoteBar(model)
+                            MiniPlayerDock(model, onOpenFull = { model.pushScreen(Screen.MusicPlayerFull) })
+                        }
+                    }
                     Screen.MusicPlayerFull -> MusicPlayerFullScreen(
                         model = model,
                         onClose = { model.popScreen() },
@@ -233,7 +253,7 @@ fun App(model: AppModel, player: PlayerHost) {
     if (showAdd) {
         AddToLibrarySheet(
             model = model,
-            onClose = { showAdd = false },
+            onClose = { model.closeAddSheet() },
             onOpenSettings = { model.pushScreen(Screen.Settings) },
         )
     }
@@ -245,6 +265,7 @@ fun App(model: AppModel, player: PlayerHost) {
 @Composable
 private fun TopAppBarRow(
     casting: Boolean,
+    activeAcquireCount: Int,
     onOpenHood: () -> Unit,
     onOpenAdd: () -> Unit,
     onOpenTvs: () -> Unit,
@@ -273,6 +294,32 @@ private fun TopAppBarRow(
                 maxLines = 1,
                 softWrap = false,
             )
+        }
+        if (activeAcquireCount > 0) {
+            Row(
+                modifier = Modifier
+                    .padding(end = 4.dp)
+                    .clip(PillShape)
+                    .background(CardElevated)
+                    .border(1.dp, Brand.copy(alpha = 0.55f), PillShape)
+                    .clickable(onClick = onOpenAdd)
+                    .padding(horizontal = 10.dp, vertical = 5.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Box(
+                    Modifier
+                        .size(7.dp)
+                        .background(Brand, CircleShape),
+                )
+                Spacer(Modifier.width(6.dp))
+                Text(
+                    text = if (activeAcquireCount == 1) "Adding…" else "Adding $activeAcquireCount…",
+                    color = Ink,
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Medium,
+                    maxLines = 1,
+                )
+            }
         }
         CinemaIcon(AddIcon, "Add to library", Ink, onClick = onOpenAdd)
         IconButton(onClick = onOpenTvs, modifier = Modifier.size(44.dp)) {

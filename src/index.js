@@ -121,6 +121,8 @@ async function openNode ({
     isPrivate: () => Boolean(ctx.net.dht),
     isLan: conn => ctx.net.lanPeers.has(conn),
     isSourcePeer: hex => ctx.blobs.sourcePeers.has(hex),
+    joinLanTopic: ctx.net.joinLanTopic,
+    leaveLanTopic: ctx.net.leaveLanTopic,
     publicEntries: ctx.catalog.publicEntries,
     onUpdate: ctx.update
   })

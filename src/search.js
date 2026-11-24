@@ -21,7 +21,7 @@ const MAX_WORDS = 8
 const ASK_CONNECTED = 16 // peers already connected that one search asks
 const ASK_TOPIC = 4 // relays from the topic that one search asks
 const PER_BUCKET = 2 // of those, at most this many from one /24 (IPv6 /48)
-const COLLECT_MS = 1200 // a search returns what arrived by then; later answers come with the next call
+const COLLECT_MS = 2000 // a search returns once asks answer, and no later than this; later answers push an update
 const ASK_TIMEOUT_MS = 3000
 const IDLE_MS = 60_000 // after the last search the lookup ends and search-only connections close
 const KEEP_RUNS = 8
@@ -32,8 +32,35 @@ const WINDOW_MS = 10_000
 const PER_CHANNEL = 4 // queries per window from one channel
 const PER_NODE = 20 // queries per window for the whole node
 
-const sleep = ms => new Promise(resolve => { const t = setTimeout(resolve, ms); t.unref?.() })
 const hexOf = conn => conn.remotePublicKey ? b4a.toString(conn.remotePublicKey, 'hex') : ''
+
+function wake (run) {
+  const ws = run.waiters
+  if (!ws.length) return
+  run.waiters = []
+  for (const resolve of ws) resolve()
+}
+
+// Waits until every in-flight ask finishes and at least one relay answered, capped at COLLECT_MS.
+async function waitForAsks (run) {
+  const deadline = Date.now() + COLLECT_MS
+  while (!(run.pending === 0 && run.answered > 0)) {
+    const left = deadline - Date.now()
+    if (left <= 0) return
+    await new Promise(resolve => {
+      let done = false
+      const finish = () => {
+        if (done) return
+        done = true
+        clearTimeout(timer)
+        resolve()
+      }
+      const timer = setTimeout(finish, left)
+      timer.unref?.()
+      run.waiters.push(finish)
+    })
+  }
+}
 
 // A query and a title fold the same way: case, width and the accents of Latin and Greek letters go; a mark stays
 // where its script uses it as a letter (Cyrillic й and ё, Indic, Arabic). Turkish has two i's; both fold to i,
@@ -64,7 +91,7 @@ function checkHit (hit) {
   return entry
 }
 
-export function createGlobalSearch ({ swarm, peerConnections, connListeners, isPrivate, isLan, isSourcePeer, publicEntries, onUpdate = null }) {
+export function createGlobalSearch ({ swarm, peerConnections, connListeners, isPrivate, isLan, isSourcePeer, joinLanTopic = null, leaveLanTopic = null, publicEntries, onUpdate = null }) {
   let closed = false
   let serving = null // { isMedia } while this node answers
   let session = null // the searcher's client lookup on the topic
@@ -164,6 +191,7 @@ export function createGlobalSearch ({ swarm, peerConnections, connListeners, isP
       list = null
       for (const conn of peerConnections()) pair(conn)
       if (!announce) announce = swarm.join(SEARCH_TOPIC, { server: true, client: false })
+      joinLanTopic?.('search:serve', SEARCH_TOPIC)
       return
     }
     serving = null
@@ -175,6 +203,7 @@ export function createGlobalSearch ({ swarm, peerConnections, connListeners, isP
     peerHits.clear()
     announce?.destroy().catch(() => {})
     announce = null
+    leaveLanTopic?.('search:serve')
   }
 
   // ---- asking (any node) ----
@@ -224,9 +253,11 @@ export function createGlobalSearch ({ swarm, peerConnections, connListeners, isP
       run.topicAsked++
     } else if (run.asked.size - run.topicAsked >= ASK_CONNECTED) return
     run.asked.add(hex)
+    run.pending++
     try {
       const c = await control(conn)
       const res = await c.call('search', { q: run.q, mid: run.mid, limit: MAX_HITS }, ASK_TIMEOUT_MS)
+      run.answered++
       const hits = Array.isArray(res?.hits) ? res.hits.slice(0, MAX_HITS) : []
       let added = false
       for (const hit of hits) {
@@ -241,8 +272,11 @@ export function createGlobalSearch ({ swarm, peerConnections, connListeners, isP
         }
         if (!row.relays.has(hex)) { row.relays.add(hex); added = true }
       }
-      if (added && run.returned) onUpdate?.()
-    } catch {}
+      if (added && run.delivered) onUpdate?.()
+    } catch {} finally {
+      run.pending--
+      wake(run)
+    }
   }
 
   function onSwarmConnection (conn, peerInfo) {
@@ -251,8 +285,12 @@ export function createGlobalSearch ({ swarm, peerConnections, connListeners, isP
     conn.once('close', () => topicConns.delete(conn))
     if (current) ask(current, conn, true)
   }
+  function onConnection (conn) {
+    pair(conn)
+    if (session && current && isLan(conn)) ask(current, conn, false)
+  }
   swarm.on('connection', onSwarmConnection)
-  connListeners.add(pair)
+  connListeners.add(onConnection)
 
   // Ends the lookup and closes the connections only it made: not LAN links, not peers in a shared topic, and not a
   // peer that has served this node a block (a hit being played).
@@ -262,6 +300,7 @@ export function createGlobalSearch ({ swarm, peerConnections, connListeners, isP
     current = null
     session?.destroy().catch(() => {})
     session = null
+    leaveLanTopic?.('search:ask')
     for (const [conn, peerInfo] of topicConns) {
       const onlySearch = peerInfo.topics.every(t => b4a.equals(t, SEARCH_TOPIC))
       if (!onlySearch || isLan(conn) || isSourcePeer(hexOf(conn))) continue
@@ -270,8 +309,8 @@ export function createGlobalSearch ({ swarm, peerConnections, connListeners, isP
     topicConns.clear()
   }
 
-  // Rows for `query` (words in any order) and/or `id`, after COLLECT_MS. Asked again within FRESH_MS it returns the
-  // answers that arrived since; after that it is a new search, so a file published or removed since is seen.
+  // Rows for `query` (words in any order) and/or `id`, after asks answer or COLLECT_MS. Asked again within FRESH_MS
+  // it returns the answers that arrived since; after that it is a new search, so a file published or removed since is seen.
   async function searchGlobal ({ query = '', id = null, limit = MAX_HITS } = {}) {
     if (closed) throw new Error('Node is closing')
     if (isPrivate()) throw new Error('Global search is off while traffic is routed privately')
@@ -283,19 +322,22 @@ export function createGlobalSearch ({ swarm, peerConnections, connListeners, isP
     let run = runs.get(runKey)
     runs.delete(runKey)
     if (!run || Date.now() - run.at > FRESH_MS) {
-      run = { q, mid, at: Date.now(), rows: new Map(), asked: new Set(), buckets: new Map(), topicAsked: 0, returned: false }
+      run = { q, mid, at: Date.now(), rows: new Map(), asked: new Set(), buckets: new Map(), topicAsked: 0, pending: 0, answered: 0, delivered: false, waiters: [] }
     }
     runs.set(runKey, run)
     for (const k of runs.keys()) { if (runs.size <= KEEP_RUNS) break; runs.delete(k) }
     current = run
-    if (!session) session = swarm.join(SEARCH_TOPIC, { server: false, client: true, limit: ASK_TOPIC })
+    if (!session) {
+      session = swarm.join(SEARCH_TOPIC, { server: false, client: true, limit: ASK_TOPIC })
+      joinLanTopic?.('search:ask', SEARCH_TOPIC)
+    }
     clearTimeout(idleTimer)
     idleTimer = setTimeout(endSearch, IDLE_MS)
     idleTimer.unref?.()
     for (const conn of topicConns.keys()) ask(run, conn, true)
     for (const conn of peerConnections()) if (!topicConns.has(conn)) ask(run, conn, false)
-    if (!run.returned) await sleep(COLLECT_MS)
-    run.returned = true
+    if (run.answered === 0) await waitForAsks(run)
+    run.delivered = true
     return rows(run, Math.min(MAX_HITS * ASK_TOPIC, Math.max(1, Number(limit) || MAX_HITS)))
   }
 
@@ -308,7 +350,7 @@ export function createGlobalSearch ({ swarm, peerConnections, connListeners, isP
       serve(null)
       closed = true
       swarm.off('connection', onSwarmConnection)
-      connListeners.delete(pair)
+      connListeners.delete(onConnection)
     }
   }
 }

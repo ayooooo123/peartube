@@ -25,6 +25,7 @@ COPY worklet/crypto ./worklet/crypto
 COPY --from=deps /app/node_modules ./node_modules
 COPY --from=deps /app/prebuilds ./prebuilds
 COPY src ./src
+COPY spec ./spec
 COPY bin ./bin
 COPY web/assets ./web/assets
 # Load every native add-on the relay uses, so a dependency update that needs a library this base lacks (as

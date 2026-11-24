@@ -2,13 +2,17 @@
   "buffer": "bare-buffer",
   "crypto": "peartube-crypto",
   "dgram": "bare-dgram",
+  "dns": "bare-dns",
   "events": "bare-events",
+  "https": "bare-https",
   "net": "bare-net",
   "os": "bare-os",
   "node:buffer": "bare-buffer",
   "node:crypto": "peartube-crypto",
   "node:dgram": "bare-dgram",
+  "node:dns": "bare-dns",
   "node:events": "bare-events",
+  "node:https": "bare-https",
   "node:net": "bare-net",
   "node:os": "bare-os"
 }

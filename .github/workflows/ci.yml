@@ -35,6 +35,28 @@ jobs:
       - run: npm ci
       - run: node --test --test-force-exit --test-shard=${{ matrix.shard }}/3 test/*.test.js
 
+  proof:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Load the driver even for branches that predate it. It tests the two event SHAs.
+          fetch-depth: 0
+          filter: blob:none
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.x
+      - run: node scripts/ci-proof.mjs
+        env:
+          # A re-run replays the old event, even if the author corrected the PR description.
+          PROOF_BODY_TOKEN: ${{ github.run_attempt > 1 && github.token || '' }}
+
   cast:
     runs-on: ubuntu-latest
     timeout-minutes: 3

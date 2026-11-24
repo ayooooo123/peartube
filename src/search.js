@@ -35,10 +35,20 @@ const PER_NODE = 20 // queries per window for the whole node
 const sleep = ms => new Promise(resolve => { const t = setTimeout(resolve, ms); t.unref?.() })
 const hexOf = conn => conn.remotePublicKey ? b4a.toString(conn.remotePublicKey, 'hex') : ''
 
-// A query as words: lower case, split at spaces and ASCII punctuation, at most 8 words of 2 or more characters. No
-// RegExp is built from it. (No Unicode property escapes or Intl: the apps' worklet runs QuickJS.)
+// A query and a title fold the same way: case, width and the accents of Latin and Greek letters go; a mark stays
+// where its script uses it as a letter (Cyrillic й and ё, Indic, Arabic). Turkish has two i's; both fold to i,
+// and a Greek final sigma folds to σ. No Unicode property escapes: the apps' worklet runs QuickJS.
+const ACCENT_BASE = /[A-Za-z\u00C0-\u024F\u1E00-\u1EFF\u2C60-\u2C7F\uA720-\uA7FF\u0370-\u03FF\u1F00-\u1FFF]/
+function fold (s) {
+  return String(s || '').toLowerCase().normalize('NFKD')
+    .replace(/(.)[\u0300-\u036F]+/g, (all, base) => ACCENT_BASE.test(base) ? base : all)
+    .replace(/ı/g, 'i')
+    .replace(/ς/g, 'σ')
+}
+// A query as words: folded, split at spaces and ASCII punctuation, at most 8 words of 2 or more characters. No
+// RegExp is built from it.
 function words (q) {
-  return String(q || '').slice(0, MAX_QUERY).toLowerCase().split(/[\s!-/:-@[-`{-~]+/).filter(w => w.length >= 2).slice(0, MAX_WORDS)
+  return fold(q).slice(0, MAX_QUERY).split(/[\s!-/:-@[-`{-~]+/).filter(w => w.length >= 2).slice(0, MAX_WORDS)
 }
 const validId = mid => typeof mid === 'string' && mid.length <= 80 && ID.test(mid.toLowerCase()) ? mid.toLowerCase() : null
 
@@ -78,7 +88,7 @@ export function createGlobalSearch ({ swarm, peerConnections, connListeners, isP
       listAt = Date.now()
       list = publicEntries().then(entries => entries
         .filter(e => serving?.isMedia(`${e.blobs}:${e.blob.blockOffset}`))
-        .map(e => ({ entry: e, text: `${e.title} ${e.id}`.toLowerCase() })))
+        .map(e => ({ entry: e, text: fold(`${e.title} ${e.id}`) })))
       list.catch(() => { list = null })
     }
     return list

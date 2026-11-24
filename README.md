@@ -40,9 +40,9 @@ publishes; followers have read-only copies and still help seed the catalog and t
 
 - **Run a relay** on a server, NAS or VPS: import a link, a folder, a feed or another channel
   once, then serve it to everyone who asks.
-- **Watch in the browser.** The Library is a poster grid (All / Movies / Shows / Videos) that
-  lists each file once and plays MKV, AVI, MP4 and TS through `peartube-media` compiled to
-  WebAssembly — DTS, AC-3 and TrueHD surround, PGS/ASS/SRT subtitles — or casts to a TV.
+- **Watch in the browser.** Watch lists movies and series with posters, and clips in a wide grid.
+  Each title has its own page. Play MKV, AVI, MP4 and TS through `peartube-media` compiled to
+  WebAssembly — DTS, AC-3 and TrueHD surround, PGS/ASS/SRT subtitles — or cast to a TV.
   Browser playback waits for a cold peer's first Range slice (up to 30 s); simultaneous viewers
   share downloaded blocks rather than requiring separate full-file copies.
 - **Add without guessing.** Paste a direct file URL or a video page (YouTube, Vimeo and the
@@ -369,16 +369,28 @@ playlist. The node's blob server stays on loopback behind `/v1/blob`.
 Without `PEARTUBE_API_TOKEN` there is no auth, so run an open relay only on a network you trust:
 anyone on it can queue a download of any public URL.
 
-The UI has six tabs: **Library** (add and play video), **Music** (albums by artist, each with the
-cover its own FLAC files embed or a colour-and-initials sleeve, an album sheet to play from, and
-**Find music**, one search over Soulseek and YouTube), **Channels** (your channel and the ones you
-follow), **Sharing** (peers, kept copies, HiveRelays, Stremio and M3U addresses), **TV** (pair and
-control) and **Settings**. Plugins appear only as user intents.
+**Home** shows the albums and videos that you have not finished in this browser. **Listen**
+has albums, artists and a list of tracks. Open an album to see its tracks in disc order. An
+album without cover art gets a drawn sleeve. **Watch** has movies, series and clips. Open a
+series to choose a season or play the next episode. In either room, use **Saved here** to
+see what the relay already holds.
 
-Find music has a chip for each source (on, off, "Set up", or a warning), remembered in the browser.
+The small player stays on the page while you browse. Open it to see **Up next**. An album,
+an artist or a track can go next or last without stopping the current song. A video pauses
+music and keeps the list and its position. Close the video and press **Play** to resume
+music. If you start music while the video is open, the video closes and keeps its place.
+
+**Find** searches this library as you type. Press Enter to ask the sources and other
+relays that you selected. **Add to library** takes a link, a folder, a catalog or a channel.
+The owner pages are **Channels**, **Sharing**, **TV** and **Settings**. Each place has a
+link, such as `#listen/artists`, `#watch/clips`, `#find/blue%20train` or `#playing`.
+The old `#music` and `#library` links still work.
+
+Find has a chip for each source (on, off, "Set up", or a warning) and one for other relays, remembered
+in the browser.
 Results stay in one group per source, Soulseek first, and each group fills when its source
 answers, so YouTube's rows show in a few seconds while peers are still being asked. A Soulseek row
-is a peer's folder (Browse, Mirror). A YouTube row is one video with its picture (fetched through
+is a peer's folder. Browse it, save one track or save the album. A YouTube row is one video with its picture (fetched through
 the relay, never from YouTube by the browser), its length and the fixed label "YouTube · AAC 128
 kbps · lossy". When peers offered FLAC for the same search, the YouTube group says so. Ticked
 videos become the tracks of an album in the Save from YouTube dialog: artist, album and year are

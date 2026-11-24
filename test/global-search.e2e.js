@@ -66,6 +66,10 @@ test('global search finds, checks, plays and tears down', { timeout: 420_000 }, 
   junk[0] = 0x00
   const junkOp = await publish(relay, 'clip:stalkerjunk', 'Stalker 1979 notes', junk)
   const privateOp = await publish(relay, 'clip:stalkerprivate', 'Stalker 1979 private cut', mkv(600 * 1024), { private: true })
+  // Titles whose fold differs by script, for the searches below.
+  const yolkaOp = await publish(relay, 'clip:yolka', 'Ёлка (2024)', mkv(600 * 1024))
+  const odosOp = await publish(relay, 'clip:odos', 'Οδός (2020)', mkv(600 * 1024))
+  const isikOp = await publish(relay, 'clip:isik', 'IŞIK (2021)', mkv(600 * 1024))
   const other = await open()
   await publish(other, 'clip:stalkerelsewhere', 'Stalker 1979 elsewhere', mkv(700 * 1024))
   await relay.addSource({ key: other.status().channel, kind: 'channel', alias: 'other' })
@@ -73,13 +77,16 @@ test('global search finds, checks, plays and tears down', { timeout: 420_000 }, 
 
   const mirror = await createMirrorHost({ node: relay, storage: relayStorage, acquirer: null, mirrorChannel: false, mediaCheck: true, pollIntervalMs: 0 })
   closers.push(() => mirror.close())
-  await until(async () => (await mirror.run('media-check')).checked === 0 && mirror.list().find(p => p.name === 'media-check').checkedFiles >= 2, 30_000)
+  await until(async () => (await mirror.run('media-check')).checked === 0 && mirror.list().find(p => p.name === 'media-check').checkedFiles >= 5, 30_000)
   const checkedFile = join(relayStorage, 'media-checked.json')
   const checked = JSON.parse(readFileSync(checkedFile, 'utf8')).checked
   const keyOf = op => `${op.blobs}:${op.blob.blockOffset}`
   assert.equal(statSync(checkedFile).mode & 0o777, 0o600, 'media-checked.json is private')
   assert.equal(checked[keyOf(filmOp)], true, 'the film is media')
   assert.equal(checked[keyOf(junkOp)], false, 'the non-media file is not')
+  assert.equal(checked[keyOf(yolkaOp)], true, 'a Cyrillic title is media')
+  assert.equal(checked[keyOf(odosOp)], true, 'a Greek title is media')
+  assert.equal(checked[keyOf(isikOp)], true, 'a Turkish title is media')
   assert.equal(keyOf(privateOp) in checked, false, 'a private file is never read for search')
   result.mediaChecked = checked
   relay.serveSearch({ isMedia: key => mirror.isMedia(key) })
@@ -109,6 +116,21 @@ test('global search finds, checks, plays and tears down', { timeout: 420_000 }, 
   }, 60_000)
   result.lateHitMs = Date.now() - t1
   assert.deepEqual(late.map(r => r.id), ['imdb:tt0069293'], 'the same search finds the file published after it')
+
+  // Titles fold by script (src/search.js): Latin and Greek accents go, Turkish's two i's fold together, and a
+  // Cyrillic mark that is a letter is kept. Wait out the relay's 10 s query window first.
+  await sleep(10_000)
+  const folded = {
+    cyrMarked: await searcher.searchGlobal({ query: 'ёлка' }),
+    cyrPlain: await searcher.searchGlobal({ query: 'елка' }),
+    greek: await searcher.searchGlobal({ query: 'οδοσ' }),
+    turkish: await searcher.searchGlobal({ query: 'ışık' })
+  }
+  assert.deepEqual(folded.cyrMarked.map(r => r.id), ['clip:yolka'], 'a Cyrillic title finds its own mark')
+  assert.deepEqual(folded.cyrPlain.map(r => r.id), [], 'a Cyrillic mark is a letter, not an accent')
+  assert.deepEqual(folded.greek.map(r => r.id), ['clip:odos'], 'a Greek final sigma folds to sigma')
+  assert.deepEqual(folded.turkish.map(r => r.id), ['clip:isik'], "Turkish's two i's fold together")
+  result.fold = Object.fromEntries(Object.entries(folded).map(([name, rows]) => [name, rows.map(r => r.id)]))
 
   // It plays from the relay that answered.
   const played = await searcher.openUri(rows[0].magnetUrl)

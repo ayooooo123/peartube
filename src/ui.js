@@ -26,41 +26,104 @@ export const page = `<!doctype html>
      Brand: violet (#9147ff) — the Mac, Android and TV surfaces already wear it. */
   :root { color-scheme: dark; --bg:#08090c; --surface:#101218; --raised:#171a22; --line:#232733; --text:#f2f4f8; --dim:#98a0b3;
     --brand:#9147ff; --brand-hover:#a866ff; --brand-soft:rgba(145,71,255,.16); --ring:#b98bff; --on-brand:#fff;
-    --ok:#45d08a; --warn:#e8b45c; --bad:#ff7d7d; --focus:var(--ring); --live:#e11d48;
+    --ok:#45d08a; --warn:#e8b45c; --bad:#ff7d7d; --focus:var(--ring);
     --on-media:#f7f8fb; --on-media-dim:rgba(247,248,251,.74); --on-media-line:rgba(255,255,255,.3);
     --s1:4px; --s2:8px; --s3:12px; --s4:16px; --s5:24px; --s6:32px; --s7:48px;
     --r-control:10px; --r-card:14px; --r-panel:18px; --r-pill:999px;
     --t-fast:120ms; --t-base:160ms; --ease:cubic-bezier(.2,.8,.2,1); }
   html[data-theme='light'] { color-scheme: light; --bg:#f7f8fa; --surface:#fff; --raised:#eef1f6; --line:#e3e7ee; --text:#0d1016; --dim:#5b6475;
     --brand:#7c3aed; --brand-hover:#6d28d9; --brand-soft:rgba(124,58,237,.12); --ring:#7c3aed;
-    --ok:#127a48; --warn:#8a5200; --bad:#b3261e; --live:#be123c; }
+    --ok:#127a48; --warn:#8a5200; --bad:#b3261e; }
   @media (prefers-color-scheme: light) { html[data-theme='system'], html:not([data-theme]) { color-scheme: light; --bg:#f7f8fa; --surface:#fff; --raised:#eef1f6; --line:#e3e7ee; --text:#0d1016; --dim:#5b6475;
     --brand:#7c3aed; --brand-hover:#6d28d9; --brand-soft:rgba(124,58,237,.12); --ring:#7c3aed;
-    --ok:#127a48; --warn:#8a5200; --bad:#b3261e; --live:#be123c; } }
+    --ok:#127a48; --warn:#8a5200; --bad:#b3261e; } }
   * { box-sizing: border-box; }
   [hidden] { display: none !important; }
   body { margin: 0; font: 15px/1.5 system-ui, -apple-system, 'Segoe UI', sans-serif; letter-spacing: -0.005em; -webkit-font-smoothing: antialiased; background: var(--bg); color: var(--text); }
   a { color: var(--brand); }
-  .top { position: sticky; top: 0; z-index: 20; background: color-mix(in srgb, var(--bg) 82%, transparent); backdrop-filter: blur(18px) saturate(1.3); border-bottom: 1px solid var(--line); }
-  .bar { max-width: 1440px; margin: 0 auto; padding: 14px 28px 0; display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
-  .brand { display: flex; align-items: center; gap: 10px; font-weight: 700; font-size: 17px; letter-spacing: -0.02em; color: var(--text); text-decoration: none; }
-  .brand svg { width: 30px; height: 30px; border-radius: 9px; background: var(--brand); box-shadow: 0 6px 18px var(--brand-soft); }
+  /* ==== Places: the top bar with the rooms and the Find field; on a narrow screen the rooms are the row at the bottom.
+     One nav element per group serves both layouts. No blur and no shadow on the page's own chrome. ==== */
+  :root { --nav-h: 0px; }
+  .top { position: sticky; top: 0; z-index: 20; background: var(--bg); border-bottom: 1px solid var(--line); }
+  .bar { max-width: 1440px; margin: 0 auto; padding: 0 28px; min-height: 64px; display: flex; align-items: center; gap: 16px; }
+  .brand { flex: none; display: flex; align-items: center; gap: 10px; font-weight: 700; font-size: 17px; letter-spacing: -0.02em; color: var(--text); text-decoration: none; }
+  .brand svg { width: 28px; height: 28px; border-radius: 8px; background: var(--brand); }
   .brand svg rect { fill: transparent; }
   .brand svg path { fill: var(--on-brand); }
-  .pills { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
-  .bar-right { display: flex; align-items: center; gap: 8px; margin-left: auto; }
-  .theme-toggle { min-height: 34px; padding: 0 10px; color: var(--dim); }
-  .theme-toggle:hover:not(:disabled) { color: var(--text); }
+  .place-name { position: absolute; width: 1px; height: 1px; margin: 0; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; font-size: 20px; font-weight: 700; letter-spacing: -0.015em; }
+  .tabs { display: flex; align-items: center; }
+  .tabs a { position: relative; color: var(--dim); text-decoration: none; font-weight: 600; white-space: nowrap; transition: color var(--t-fast) var(--ease); }
+  .tabs a:hover, .tabs a[aria-current='page'] { color: var(--text); }
+  .rooms { gap: 26px; margin-left: 16px; }
+  .rooms a { font-size: 16px; line-height: 24px; padding: 20px 0; }
+  .rooms a[aria-current='page']::after { content: ''; position: absolute; left: 0; right: 0; bottom: 13px; height: 2px; background: var(--text); }
+  .rooms .ti, .rooms .narrow-only { display: none; }
+  .ti { fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+  .find-box { position: relative; flex: 1 1 320px; min-width: 160px; max-width: 420px; margin-left: auto; }
+  .find-box svg { position: absolute; left: 12px; top: 50%; width: 16px; height: 16px; margin-top: -8px; color: var(--dim); pointer-events: none; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; }
+  .find-box input[type=search] { min-height: 40px; padding-left: 36px; }
+  .pills { display: flex; gap: 6px; align-items: center; }
+  .bar-right { flex: none; display: flex; align-items: center; gap: 12px; }
+  .bar .add-link { min-height: 38px; gap: 6px; padding: 0 12px 0 10px; }
+  .add-link svg { flex: none; width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; }
+  .bar .add-link[aria-current='page'] { border-color: var(--dim); }
+  .more-wrap { position: relative; display: flex; align-items: center; }
+  .bar .more-btn { display: none; min-height: 38px; padding: 0 10px; }
+  .owner { gap: 18px; }
+  .owner a { font-size: 13.5px; line-height: 20px; padding: 8px 0; }
+  .owner a[aria-current='page']::after { content: ''; position: absolute; left: 0; right: 0; bottom: 3px; height: 2px; background: var(--text); }
+  .bar .theme-toggle { min-height: 34px; padding: 0 8px; gap: 10px; color: var(--dim); }
+  .bar .theme-toggle:hover:not(:disabled) { color: var(--text); }
+  .theme-word { display: none; }
+  @media (max-width: 1180px) {
+    .bar .more-btn { display: inline-flex; }
+    .owner { display: none; position: absolute; right: 0; top: calc(100% + 8px); z-index: 30; min-width: 220px; flex-direction: column; align-items: stretch; gap: 0; padding: 6px; background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-control); }
+    .owner.open { display: flex; }
+    .bar .owner a, .bar .owner .theme-toggle { display: flex; align-items: center; justify-content: flex-start; min-height: 44px; padding: 0 12px; border-radius: 8px; font-size: 15px; font-weight: 600; }
+    .bar .owner a:hover, .bar .owner .theme-toggle:hover:not(:disabled) { background: var(--raised); border-color: transparent; }
+    .owner a[aria-current='page']::after { left: 0; right: auto; top: 12px; bottom: 12px; width: 2px; height: auto; }
+    .theme-word { display: inline; }
+  }
+  @media (max-width: 900px) {
+    .bar .add-link { width: 40px; padding: 0; justify-content: center; }
+    .add-link span { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+  }
   .pill { font-size: 12px; font-weight: 500; padding: 4px 10px; border-radius: var(--r-pill); background: var(--raised); color: var(--dim); white-space: nowrap; }
   .pill b { color: var(--text); font-weight: 600; font-variant-numeric: tabular-nums; }
   .pill.warn { color: var(--warn); }
   button.pill { border: 0; font-family: inherit; cursor: pointer; }
   button.pill:disabled { opacity: .6; cursor: default; }
   .pill.ok::before { content: ''; display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--ok); margin-right: 6px; vertical-align: 1px; box-shadow: 0 0 0 3px color-mix(in srgb, var(--ok) 16%, transparent); }
-  .tabs { max-width: 1440px; margin: 0 auto; padding: 0 20px; display: flex; gap: 4px; overflow-x: auto; scrollbar-width: none; }
-  .tabs a { padding: 12px 14px 11px; color: var(--dim); text-decoration: none; font-size: 14px; font-weight: 600; border-bottom: 2px solid transparent; white-space: nowrap; transition: color var(--t-fast) var(--ease), border-color var(--t-fast) var(--ease); }
-  .tabs a:hover { color: var(--text); }
-  .tabs a[aria-current='page'] { color: var(--text); border-bottom-color: var(--brand); }
+  .page-title { font-size: 24px; font-weight: 700; letter-spacing: -0.02em; line-height: 1.2; margin: 8px 0 20px; }
+  .room-ctl { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; min-height: 34px; margin-bottom: 24px; }
+  .room-ctl > .count { margin-left: auto; color: var(--dim); font-size: 13px; font-variant-numeric: tabular-nums; }
+  .kinds { display: flex; gap: 8px; flex-wrap: wrap; margin-right: auto; }
+  /* Albums, artists or tracks: one of the three, and always one. */
+  .seg { display: inline-flex; gap: 2px; padding: 3px; border: 1px solid var(--line); border-radius: var(--r-pill); background: var(--surface); }
+  .seg-btn { min-height: 30px; padding: 0 14px; border: 0; border-radius: var(--r-pill); background: transparent; color: var(--dim); font: inherit; font-size: 13px; font-weight: 600; cursor: pointer; transition: background var(--t-fast) var(--ease), color var(--t-fast) var(--ease); }
+  .seg-btn:hover { color: var(--text); }
+  .seg-btn[aria-pressed='true'] { background: var(--raised); color: var(--text); }
+  .seg-btn:focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; }
+  .field.filter { max-width: 420px; margin: -8px 0 18px; }
+  .row-head { display: flex; align-items: baseline; gap: 12px; margin: 0 0 14px; }
+  .row-head h2, .row-head h3 { margin: 0; }
+  .row-head h3 { font-size: 17px; font-weight: 700; letter-spacing: -0.01em; }
+  .row-head .count { color: var(--dim); font-size: 13px; font-variant-numeric: tabular-nums; }
+  .row-all { margin-left: auto; padding: 6px 0; color: var(--dim); font-size: 13px; font-weight: 600; text-decoration: none; }
+  .row-all:hover { color: var(--text); }
+  .home-row { margin-bottom: 40px; }
+  .find-idle { color: var(--dim); margin: 8px 0 0; }
+  #findLib > h2:first-child { margin-top: 8px; }
+  .find-group { margin-bottom: 28px; }
+  .find-link { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; padding: 14px; margin-bottom: 20px; background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-card); }
+  .find-link span { flex: 1; min-width: 0; }
+  .find-tracks { display: flex; flex-direction: column; }
+  .find-track { display: flex; align-items: baseline; gap: 12px; min-height: 44px; padding: 10px; border: 0; border-bottom: 1px solid var(--line); background: none; color: inherit; font: inherit; text-align: left; cursor: pointer; }
+  .find-track:hover { background: var(--surface); }
+  .ft-name { min-width: 0; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .ft-of { flex: 0 1 50%; min-width: 0; margin-left: auto; color: var(--dim); font-size: 13px; text-align: right; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .src-in > .btn { margin-left: auto; }
+  /* ==== end Places ==== */
   main { max-width: 1440px; margin: 0 auto; padding: 24px 28px 96px; }
   h2 { font-size: 20px; font-weight: 700; letter-spacing: -0.015em; margin: 40px 0 16px; display: flex; align-items: baseline; gap: 10px; }
   h2 .count { color: var(--dim); font-weight: 500; font-size: 13px; font-variant-numeric: tabular-nums; }
@@ -78,6 +141,7 @@ export const page = `<!doctype html>
   .btn:hover:not(:disabled) { border-color: color-mix(in srgb, var(--dim) 45%, transparent); }
   .btn.primary { background: var(--brand); border-color: var(--brand); color: var(--on-brand); }
   .btn.primary:hover:not(:disabled) { background: var(--brand-hover); border-color: var(--brand-hover); }
+  :is(#tab-home, #tab-listen, #tab-watch, #tab-find, #tab-add, #detail) .btn.primary { background: var(--text); border-color: var(--text); color: var(--bg); }
   .btn.quiet { background: transparent; border-color: transparent; color: var(--dim); }
   .btn.quiet:hover:not(:disabled) { color: var(--text); border-color: var(--line); }
   .btn:disabled { opacity: .5; cursor: default; }
@@ -99,9 +163,6 @@ export const page = `<!doctype html>
   .acts { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
   .poster { width: 48px; height: 72px; border-radius: 8px; flex: none; background: var(--raised); object-fit: cover; display: flex; align-items: center; justify-content: center; color: var(--dim); font-weight: 700; font-size: 18px; overflow: hidden; }
   .thumb { width: 128px; height: 72px; }
-  .lib-tools { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; margin-bottom: 20px; }
-  .lib-tools .kinds { display: flex; gap: 6px; flex-wrap: wrap; }
-  .lib-tools input { flex: 1; min-width: 200px; width: auto; }
   .chip[aria-pressed='true'] { background: var(--text); color: var(--bg); border-color: var(--text); }
   .chip .count { opacity: .7; font-size: 12px; font-variant-numeric: tabular-nums; }
   .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(168px, 1fr)); gap: 24px 16px; }
@@ -118,46 +179,63 @@ export const page = `<!doctype html>
   .tile-progress { position: absolute; left: 8px; right: 8px; bottom: 8px; height: 3px; border-radius: 2px; background: rgba(255,255,255,.28); overflow: hidden; }
   .tile-progress > span { display: block; height: 100%; background: var(--brand); border-radius: 2px; }
   .more { grid-column: 1 / -1; display: flex; justify-content: center; padding: 12px; }
-  /* Browse face: one hero, landscape rails, posters underneath — Netflix shape, YouTube rows,
-     torrent truth kept in the meta line instead of the layout. */
-  #resumeWrap, #liveWrap { margin-bottom: 32px; }
-  #hero { position: relative; overflow: hidden; border-radius: var(--r-panel); border: 1px solid var(--line); min-height: 372px; display: flex; align-items: flex-end; margin-bottom: 4px; background: linear-gradient(135deg, var(--raised), var(--surface)); }
-  #hero.no-art { min-height: 236px; }
-  #hero.no-art .hero-scrim { background: none; }
-  .hero-art { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
-  .hero-scrim { position: absolute; inset: 0; background: linear-gradient(90deg, rgba(4,5,8,.95) 0%, rgba(4,5,8,.86) 34%, rgba(4,5,8,.16) 70%, rgba(4,5,8,.55) 100%); }
-  .hero-body { position: relative; padding: 32px; display: flex; flex-direction: column; gap: 12px; max-width: 640px; }
-  .hero-logo { max-width: 320px; max-height: 96px; object-fit: contain; object-position: left bottom; filter: drop-shadow(0 6px 24px rgba(0,0,0,.6)); margin-bottom: 2px; }
-  .hero-title { font-size: 40px; font-weight: 800; letter-spacing: -0.02em; line-height: 1.06; margin: 0; color: var(--on-media); }
-  .hero-meta { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; color: var(--on-media-dim); font-size: 13.5px; }
-  .hero-progress { display: flex; align-items: center; gap: 12px; max-width: 360px; }
-  .hero-progress .bar-track { flex: 1; margin-top: 0; background: rgba(255,255,255,.24); }
-  .hero-progress span { color: var(--on-media-dim); font-size: 12px; font-variant-numeric: tabular-nums; white-space: nowrap; }
-  .hero-actions { display: flex; gap: 10px; margin-top: 4px; }
-  #hero .eyebrow { font-size: 11px; font-weight: 700; letter-spacing: .1em; text-transform: uppercase; color: var(--on-media-dim); }
-  .hero-actions .btn.ghost { color: var(--on-media); border-color: var(--on-media-line); background: rgba(255,255,255,.10); }
-  .dot { width: 3px; height: 3px; border-radius: 50%; background: currentColor; opacity: .55; }
-  .rail { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 12px; }
-  .r-card { position: relative; display: block; padding: 0; border: 0; border-radius: var(--r-card); overflow: hidden; aspect-ratio: 16 / 9; background: var(--raised); box-shadow: 0 0 0 1px var(--line); cursor: pointer; text-align: left; color: inherit; font: inherit; transition: transform var(--t-base) var(--ease), box-shadow var(--t-base) var(--ease); }
-  .r-card > img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; opacity: .92; }
-  .r-card .wash { position: absolute; inset: 0; background: linear-gradient(0deg, rgba(4,5,8,.94) 0%, rgba(4,5,8,.18) 58%, rgba(4,5,8,0) 100%); }
-  .r-body { position: absolute; left: 0; right: 0; bottom: 0; padding: 10px 12px; display: flex; flex-direction: column; gap: 1px; }
-  .r-title { font-size: 13px; font-weight: 600; color: var(--on-media); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .r-meta { font-size: 11.5px; color: var(--on-media-dim); font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .r-track { position: absolute; left: 0; right: 0; bottom: 0; height: 3px; background: rgba(255,255,255,.22); }
-  .r-track > div { height: 100%; background: var(--brand); }
-  .r-card:hover { transform: translateY(-3px); box-shadow: 0 18px 36px rgba(0,0,0,.45), 0 0 0 1px color-mix(in srgb, var(--ring) 40%, transparent); }
-  .r-card:focus-visible { outline: 2px solid var(--ring); outline-offset: 3px; }
-  .badge.live { display: inline-flex; align-items: center; gap: 5px; background: var(--live); color: #fff; border: 0; align-self: flex-start; margin-bottom: 2px; }
-  .badge.live::before { content: ''; width: 5px; height: 5px; border-radius: 50%; background: #fff; }
-  .r-card.live .r-track { display: none; }
-  #detail, #ytSave { width: min(760px, calc(100% - 24px)); max-height: calc(100% - 48px); padding: 0; border: 1px solid var(--line); border-radius: var(--r-panel); background: var(--surface); color: var(--text); box-shadow: 0 40px 90px rgba(0,0,0,.5); }
-  #detail::backdrop, #ytSave::backdrop { background: color-mix(in srgb, #05060a 72%, transparent); backdrop-filter: blur(6px); }
-  #detail .bar { padding: 14px 14px 0 22px; justify-content: flex-end; }
-  #detailBody { padding: 0 22px 22px; }
-  .detail-head { display: flex; gap: 20px; align-items: flex-start; margin-bottom: 20px; }
-  .detail-head .poster { width: 128px; height: 192px; font-size: 40px; border-radius: var(--r-card); }
-  .detail-head h3 { font-size: 24px; font-weight: 700; letter-spacing: -0.015em; line-height: 1.2; margin: 2px 0 8px; }
+  /* ==== Keep playing: the newest unfinished thing large, the others beside it ==== */
+  #keepWrap { margin-bottom: 40px; }
+  .keep { display: grid; grid-template-columns: minmax(0, 620px) minmax(0, 1fr); gap: 24px; align-items: start; }
+  .keep.alone { grid-template-columns: minmax(0, 620px); }
+  .keep-big { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+  .keep-face { display: block; padding: 0; border: 0; background: none; cursor: pointer; border-radius: var(--r-panel); overflow: hidden; box-shadow: 0 0 0 1px var(--line); transition: box-shadow var(--t-base) var(--ease); }
+  .keep-face:hover { box-shadow: 0 22px 44px rgba(0,0,0,.45), 0 0 0 1px color-mix(in srgb, var(--ring) 40%, transparent); }
+  .keep-art { position: relative; display: block; width: 100%; aspect-ratio: 16 / 9; overflow: hidden; background: var(--raised); }
+  .keep-art.square { aspect-ratio: 1; }
+  .keep-art > img, .keep-art > .sleeve, .keep-art > .wide-art { position: absolute; inset: 0; width: 100%; height: 100%; border-radius: 0; }
+  .keep-big .sleeve-mono { font-size: 64px; }
+  .keep-foot { display: flex; align-items: center; gap: 12px; min-width: 0; }
+  .keep-name { font-weight: 650; font-size: 15px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .keep-sub { color: var(--dim); font-size: 12.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .keep-rows { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+  .keep-row { display: flex; align-items: center; gap: 12px; padding: 8px; border: 1px solid transparent; border-radius: var(--r-card); background: none; color: inherit; font: inherit; text-align: left; cursor: pointer; }
+  .keep-row:hover { background: var(--surface); border-color: var(--line); }
+  .keep-row .keep-art { flex: none; width: 128px; border-radius: 10px; }
+  .keep-row .keep-art.square { width: 72px; }
+  .keep-row .sleeve-mono { font-size: 24px; }
+  .keep-row .grow { display: flex; flex-direction: column; gap: 2px; }
+  /* ==== A page of its own: one album, one artist, one title. The art stays in view beside what it is about. ==== */
+  .page-bar { display: flex; margin: 0 0 10px -8px; }
+  .page { display: grid; grid-template-columns: 300px minmax(0, 860px); column-gap: 32px; align-items: start; }
+  .page-art { grid-column: 1; grid-row: 1 / span 3; position: sticky; top: 88px; }
+  .page-head, .page-acts, .page-body { grid-column: 2; min-width: 0; }
+  .page.wide { grid-template-columns: minmax(0, 1fr); }
+  .page.wide .page-head, .page.wide .page-acts, .page.wide .page-body { grid-column: 1; }
+  .page-acts { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin: 18px 0 6px; }
+  .page-acts .btn.primary { min-width: 128px; }
+  .page-body { padding-top: 14px; }
+  .eyebrow { font-size: 12px; font-weight: 700; color: var(--dim); margin-bottom: 6px; }
+  .page-title.big { font-size: 32px; line-height: 1.15; margin: 0 0 6px; }
+  .page-by { display: inline-block; margin-bottom: 6px; color: var(--text); font-weight: 600; font-size: 15px; text-decoration: none; }
+  .page-by:hover { text-decoration: underline; }
+  .page-by.dim { color: var(--dim); font-weight: 500; }
+  .facts { color: var(--dim); font-size: 13px; line-height: 1.5; }
+  .facts.quiet { font-size: 12.5px; }
+  .facts:empty { display: none; }
+  .tag-row { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
+  .sec-head { font-size: 15px; font-weight: 700; margin: 26px 0 8px; }
+  .page-body > .sec-head:first-child { margin-top: 0; }
+  .seasons { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 14px; }
+  .ep-name { color: var(--dim); font-weight: 500; margin-left: 10px; }
+  .btn.dots { min-width: 38px; padding: 0; font-size: 19px; line-height: 1; }
+  .menu.wide { min-width: 232px; }
+  .title-page .page-art .poster { width: 100%; height: auto; aspect-ratio: 2 / 3; font-size: 56px; border-radius: var(--r-panel); }
+  .wide-art { position: relative; display: flex; align-items: center; justify-content: center; width: 100%; aspect-ratio: 16 / 9; overflow: hidden; border-radius: var(--r-card); background: linear-gradient(160deg, var(--raised), var(--line)); }
+  .wide-art > img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+  .wide-art .letter { font-weight: 800; font-size: 34px; color: var(--dim); }
+  .wide-grid { grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); }
+  .tile.wide .wide-art { margin-bottom: 8px; transition: transform var(--t-base) var(--ease), box-shadow var(--t-base) var(--ease); }
+  .tile.wide:hover .wide-art { transform: translateY(-4px); box-shadow: 0 22px 44px rgba(0,0,0,.45); }
+  .tile.wide:focus-visible .wide-art { outline: 2px solid var(--ring); outline-offset: 3px; }
+  a.tile { color: inherit; text-decoration: none; }
+  #ytSave { width: min(760px, calc(100% - 24px)); max-height: calc(100% - 48px); padding: 0; border: 1px solid var(--line); border-radius: var(--r-panel); background: var(--surface); color: var(--text); box-shadow: 0 40px 90px rgba(0,0,0,.5); }
+  #ytSave::backdrop { background: color-mix(in srgb, #05060a 72%, transparent); backdrop-filter: blur(6px); }
   .rows { display: flex; flex-direction: column; }
   .row-item { display: flex; gap: 12px; align-items: center; padding: 12px 0; border-top: 1px solid var(--line); }
   #detail .meta, #ytSave .meta { white-space: normal; font-size: 13px; line-height: 1.5; }
@@ -203,37 +281,50 @@ export const page = `<!doctype html>
   .menu { position: absolute; right: 0; top: calc(100% + 4px); background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 6px; display: flex; flex-direction: column; min-width: 200px; z-index: 30; box-shadow: 0 8px 24px #0003; }
   .menu .btn { justify-content: flex-start; background: transparent; border-color: transparent; }
   .wrap-rel { position: relative; }
-  #castBar { position: fixed; left: 50%; transform: translateX(-50%); bottom: 16px; z-index: 40; background: var(--surface); border: 1px solid var(--line); border-radius: 14px; padding: 8px 10px 8px 16px; box-shadow: 0 8px 28px #0004; display: flex; align-items: center; gap: 8px; max-width: calc(100% - 24px); }
+  #castBar { position: fixed; left: 50%; transform: translateX(-50%); bottom: calc(16px + var(--nav-h)); z-index: 40; background: var(--surface); border: 1px solid var(--line); border-radius: 14px; padding: 8px 10px 8px 16px; box-shadow: 0 8px 28px #0004; display: flex; align-items: center; gap: 8px; max-width: calc(100% - 24px); }
   #castBar .name { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  #toast { position: fixed; left: 50%; transform: translateX(-50%); bottom: 84px; z-index: 50; background: var(--text); color: var(--bg); padding: 10px 16px; border-radius: 10px; font-size: 14px; max-width: calc(100% - 24px); }
+  #toast { position: fixed; left: 50%; transform: translateX(-50%); bottom: calc(84px + var(--nav-h)); z-index: 50; background: var(--text); color: var(--bg); padding: 10px 16px; border-radius: 10px; font-size: 14px; max-width: calc(100% - 24px); }
   .vh { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
-  @media (max-width: 1100px) { .rail { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
   @media (max-width: 640px) {
-    .bar { padding: 10px 16px 0; flex-wrap: nowrap; }
-    #hero { min-height: 300px; }
-    .hero-body { padding: 18px; gap: 8px; }
-    .hero-title { font-size: 26px; letter-spacing: -0.015em; }
-    .hero-logo { max-width: 190px; max-height: 58px; }
-    .hero-meta { font-size: 12px; gap: 7px; }
-    .rail { display: flex; overflow-x: auto; gap: 10px; scrollbar-width: none; padding-bottom: 2px; }
-    .rail .r-card { flex: 0 0 214px; }
-    .bar-right { min-width: 0; flex: 1; }
-    .pills { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; justify-content: flex-end; }
+    :root { --nav-h: calc(56px + env(safe-area-inset-bottom, 0px)); }
+    .bar { padding: 0 8px 0 16px; min-height: 56px; gap: 8px; }
+    .brand-name { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+    .place-name { position: static; width: auto; height: auto; clip: auto; flex: 0 1 auto; min-width: 0; text-overflow: ellipsis; }
+    .find-box { display: none; max-width: none; margin: 0; }
+    /* On Find the field takes the row, so what the bar has to say (a stopped relay, an album being added) goes under it. */
+    body.at-find .find-box { display: block; flex: 1 1 0; }
+    body.at-find .bar { flex-wrap: wrap; padding-top: 6px; padding-bottom: 6px; }
+    body.at-find .bar-right { display: contents; }
+    body.at-find .pills { order: 10; flex: 0 0 100%; justify-content: center; overflow-x: visible; }
+    body.at-find .pills:empty, body.at-find .place-name, body.at-find .add-link { display: none; }
+    .rooms { position: fixed; left: 0; right: 0; bottom: 0; z-index: 29; margin: 0; gap: 0; align-items: stretch; padding-bottom: env(safe-area-inset-bottom, 0px); background: var(--bg); border-top: 1px solid var(--line); }
+    .rooms a { flex: 1; min-height: 56px; padding: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px; font-size: 11px; line-height: 14px; }
+    .rooms a[aria-current='page']::after { display: none; }
+    .rooms .ti { display: block; width: 22px; height: 22px; }
+    .rooms .narrow-only { display: flex; }
+    .keep { grid-template-columns: minmax(0, 1fr); gap: 14px; }
+    .keep-row .keep-art { width: 112px; }
+    .keep-row .keep-art.square { width: 64px; }
+    .page { grid-template-columns: 112px minmax(0, 1fr); column-gap: 14px; }
+    .page-art { grid-row: 1; position: static; }
+    .page-acts, .page-body { grid-column: 1 / -1; }
+    .page-acts .btn.primary { flex: 1; }
+    .page-title.big { font-size: 22px; }
+    .wide-grid { grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); }
+    .bar-right { flex: 1 1 0; min-width: 0; gap: 4px; justify-content: flex-end; }
+    .pills { flex: 0 1 auto; min-width: 0; overflow-x: auto; scrollbar-width: none; }
     .pills::-webkit-scrollbar { display: none; }
     .pill { flex: none; }
-    .pill.rate { display: none; }
-    .tabs { padding: 0 6px; gap: 0; }
-    main { padding: 16px 16px 96px; }
+    main { padding: 16px 16px calc(96px + var(--nav-h)); }
     h2 { font-size: 18px; margin: 28px 0 12px; }
     .item { flex-wrap: wrap; }
     .item.job { flex-wrap: nowrap; }
     .item:not(.job) .acts { width: 100%; justify-content: flex-start; }
-    .tabs a { padding: 12px 8px 10px; }
     .thumb { width: 96px; height: 54px; }
     .setting .control { max-width: none; }
     .grid { grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 20px 10px; }
     .tile .poster { font-size: 28px; }
-    .detail-head .poster { width: 96px; height: 144px; font-size: 30px; }
+    .title-page .page-art .poster { font-size: 34px; }
     .p-top { flex-wrap: wrap; }
     #playerModal .p-head { flex-basis: 100%; }
     #playerModal .p-title { white-space: normal; }
@@ -250,7 +341,8 @@ export const page = `<!doctype html>
   .p-top { position: absolute; z-index: 2; top: 0; left: 0; right: 0; display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 16px 22px 32px; background: linear-gradient(180deg,rgba(0,0,0,.82),transparent); transition: opacity .2s; }
   .p-head { min-width: 0; flex: 1; }
   .p-title { font-size: 18px; font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .p-badge { font-size: 12px; color: var(--p-dim); font-variant-numeric: tabular-nums; }
+  .p-file-info { width: fit-content; font-size: 12px; color: var(--p-dim); font-variant-numeric: tabular-nums; }
+  .p-file-info summary { cursor: pointer; }
   .p-stage { position: relative; flex: 1; min-height: 0; display: flex; align-items: center; justify-content: center; background: #000; overflow: hidden; cursor: pointer; }
   #pBackdrop { position: absolute; inset: -32px; background: center / cover no-repeat; filter: blur(28px) brightness(.36); transform: scale(1.06); opacity: 0; transition: opacity .35s ease; pointer-events: none; }
   #pBackdrop.vis { opacity: 1; }
@@ -267,58 +359,93 @@ export const page = `<!doctype html>
   #pSeek { width: 100%; accent-color: var(--brand); padding: 0; cursor: pointer; }
   .clock { font-variant-numeric: tabular-nums; font-size: 12.5px; color: var(--p-dim); min-width: 96px; }
   #playerModal.chrome-hidden .p-top, #playerModal.chrome-hidden .p-bar { opacity: 0; pointer-events: none; }
-  /* Music: one bar along the bottom of every tab, and the queue it opens. The bar is the proof that sound is on. */
-  :root { --np-h: 76px; }
-  .np { position: fixed; left: 0; right: 0; bottom: 0; z-index: 30; min-height: var(--np-h); display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(200px, 1.5fr) auto; grid-template-areas: 'info ctl seek side'; align-items: center; gap: 6px 20px; padding: 10px 24px; background: color-mix(in srgb, var(--surface) 94%, transparent); backdrop-filter: blur(18px) saturate(1.3); border-top: 1px solid var(--line); box-shadow: 0 -10px 30px rgba(0,0,0,.16); }
-  body.np-on main { padding-bottom: calc(var(--np-h) + 56px); }
-  body.np-on #toast { bottom: calc(var(--np-h) + 16px); }
-  body.np-on #castBar { bottom: calc(var(--np-h) + 12px); }
-  .np-info { grid-area: info; display: flex; align-items: center; gap: 12px; min-width: 0; }
-  .np-art { flex: none; width: 48px; height: 48px; border-radius: 10px; border: 0; padding: 0; background: linear-gradient(150deg, var(--brand), color-mix(in srgb, var(--brand) 35%, var(--raised))); color: var(--on-brand); font: inherit; font-weight: 800; font-size: 20px; cursor: pointer; }
-  .np-art .sleeve { position: relative; width: 100%; height: 100%; border-radius: inherit; }
-  .np-art .sleeve-mono { font-size: 17px; }
-  .np-text { min-width: 0; display: flex; flex-direction: column; align-items: flex-start; }
-  .np-title { max-width: 100%; padding: 0; border: 0; background: none; color: var(--text); font: inherit; font-weight: 600; text-align: left; cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .np-title:hover { text-decoration: underline; }
-  .np-sub { max-width: 100%; color: var(--dim); font-size: 12.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  /* Music: a dock above the room links and a full view of the same track and list. */
+  :root { --np-h: 72px; }
+  .np { position: fixed; inset: auto 0 var(--nav-h); height: var(--np-h); z-index: 30; display: grid; grid-template-columns: minmax(0,1fr) auto minmax(0,1fr); align-items: center; gap: 16px; padding: 6px clamp(16px,3vw,48px) 4px; background: var(--surface); }
+  body.np-on main { padding-bottom: calc(var(--np-h) + var(--nav-h) + 36px); }
+  body.np-on #toast, body.np-on #castBar { bottom: calc(var(--np-h) + var(--nav-h) + 12px); }
+  body.np-on #playerModal.mini { bottom: calc(var(--np-h) + var(--nav-h) + 12px); }
+  .np-progress { position: absolute; inset: -6px 0 auto; height: 16px; display: flex; align-items: center; }
+  .np-progress::before, .np-progress::after { content: ''; position: absolute; left: 0; right: 0; top: 6px; height: 3px; pointer-events: none; background: var(--line); }
+  .np-progress::after { background: var(--brand); transform: scaleX(var(--played,0)); transform-origin: left; }
+  #npSeek { z-index: 1; appearance: none; width: 100%; height: 16px; margin: 0; padding: 0; background: transparent; cursor: pointer; accent-color: var(--brand); }
+  #npSeek::-webkit-slider-runnable-track { height: 3px; background: transparent; }
+  #npSeek::-webkit-slider-thumb { appearance: none; width: 10px; height: 10px; border-radius: 50%; margin-top: -4px; background: var(--ring); opacity: 0; }
+  #npSeek:hover::-webkit-slider-thumb, #npSeek:focus-visible::-webkit-slider-thumb { opacity: 1; }
+  .np-info, .np-ctl, .np-centre, .np-side, .np-vol, .nq-head, .fp-times { display: flex; align-items: center; }
+  .np-info { min-width: 0; gap: 12px; }
+  .np-art { display: block; flex: none; width: 46px; height: 46px; border-radius: 6px; overflow: hidden; }
+  .np-art .sleeve, .fp-art .sleeve { width: 100%; height: 100%; border-radius: inherit; box-shadow: none; }
+  .np-art .sleeve-mono { font-size: 18px; }
+  .np-text, .fp-caption, .fp-record, .fp-list { min-width: 0; }
+  .np-title, .np-sub { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .np-title, .music-link, .np-sub a, .np-action { color: inherit; text-decoration: none; }
+  .np-title { font-weight: 650; }
+  .music-link[href]:hover, .np-title:hover, .np-sub a:hover, .np-action:hover { text-decoration: underline; }
+  .np-sub, .np-times, .np-action, .np-vol, .fp-times, .fp-eyebrow, .nq-dur, .nq-num { color: var(--dim); font-size: 13px; }
   .np-sub.bad { color: var(--bad); }
-  .np-pos { display: none; }
-  .np-ctl { grid-area: ctl; display: flex; align-items: center; gap: 4px; }
-  .np-btn { flex: none; width: 40px; height: 40px; padding: 0; border-radius: 50%; border: 0; background: transparent; color: var(--text); display: inline-flex; align-items: center; justify-content: center; cursor: pointer; transition: background var(--t-fast) var(--ease), transform var(--t-fast) var(--ease); }
+  .np-centre { flex-direction: column; }
+  .np-times, .fp-times, .nq-dur { font-variant-numeric: tabular-nums; }
+  .np-times { font-size: 11px; }
+  .np-ctl, .np-vol { gap: 6px; }
+  .np-btn { width: 40px; height: 40px; display: inline-flex; flex: none; justify-content: center; align-items: center; border: 0; border-radius: 50%; color: var(--text); background: transparent; cursor: pointer; }
   .np-btn:hover:not(:disabled) { background: var(--raised); }
-  .np-btn:disabled { opacity: .35; cursor: default; }
-  .np-btn svg, .track-play svg, .np-q svg, .nq-num svg { width: 20px; height: 20px; fill: currentColor; }
-  .np-btn.np-play { width: 44px; height: 44px; background: var(--text); color: var(--bg); }
-  .np-btn.np-play:hover:not(:disabled) { background: var(--text); transform: scale(1.06); }
-  .i-pause { display: none; }
-  .on > .i-play { display: none; }
+  .np-btn[aria-pressed=true] { color: var(--ring); }
+  .np-btn:disabled { opacity: .4; cursor: default; }
+  .np-btn.np-play { background: var(--text); color: var(--bg); }
+  .np-btn.np-play:hover { background: var(--text); }
+  .np-btn svg, .track-play svg { width: 20px; height: 20px; fill: currentColor; }
+  .i-pause, .on > .i-play { display: none; }
   .on > .i-pause { display: block; }
   .btn-ic { display: inline-flex; }
   .btn-ic svg { width: 16px; height: 16px; fill: currentColor; }
-  .np-seek { grid-area: seek; display: flex; align-items: center; gap: 10px; color: var(--dim); font-size: 12px; font-variant-numeric: tabular-nums; }
-  .np-seek span { flex: none; min-width: 38px; }
-  .np-seek span:first-child { text-align: right; }
-  #npSeek { flex: 1; min-width: 0; margin: 0; accent-color: var(--brand); cursor: pointer; }
-  #npSeek:disabled { cursor: default; }
-  .np-side { grid-area: side; display: flex; align-items: center; gap: 10px; color: var(--dim); }
-  .np-q { min-height: 36px; padding: 0 12px; font-variant-numeric: tabular-nums; }
-  .np-q[aria-expanded='true'] { color: var(--text); border-color: var(--line); background: var(--raised); }
-  .np-vol { display: flex; align-items: center; gap: 6px; }
-  .np-vol svg { width: 18px; height: 18px; fill: currentColor; flex: none; }
-  #npVol { width: 92px; margin: 0; accent-color: var(--brand); cursor: pointer; }
-  .np-queue { position: fixed; right: 16px; bottom: calc(var(--np-h) + 10px); z-index: 31; width: min(400px, calc(100vw - 24px)); max-height: min(62vh, 540px); display: flex; flex-direction: column; background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-panel); box-shadow: 0 24px 60px rgba(0,0,0,.35); overflow: hidden; }
-  .nq-head { display: flex; align-items: center; gap: 8px; padding: 12px 10px 8px 18px; border-bottom: 1px solid var(--line); }
-  .nq-head .grow h3 { margin: 0; }
-  .nq-list { list-style: none; margin: 0; padding: 6px; overflow-y: auto; }
-  .nq-list button { width: 100%; display: grid; grid-template-columns: 28px minmax(0, 1fr) auto; align-items: center; gap: 10px; padding: 8px 10px; border: 0; border-radius: var(--r-control); background: none; color: var(--text); font: inherit; font-size: 14px; text-align: left; cursor: pointer; }
-  .nq-list button:hover { background: var(--raised); }
-  .nq-num { color: var(--dim); font-size: 12.5px; font-variant-numeric: tabular-nums; text-align: center; display: flex; justify-content: center; }
-  .nq-num svg { width: 16px; height: 16px; }
-  .nq-name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .nq-dur { color: var(--dim); font-size: 12.5px; font-variant-numeric: tabular-nums; }
-  .nq-list .done button { color: var(--dim); }
-  .nq-list .now button { background: var(--brand-soft); font-weight: 600; }
-  .nq-list .now .nq-num { color: var(--ring); }
+  .np-side { justify-content: end; gap: 6px; }
+  .np-action { padding: 8px; white-space: nowrap; }
+  #npQText { display: block; font-size: 11px; text-align: center; }
+  .np-vol input { width: 68px; padding: 0; accent-color: var(--text); }
+  .fp-close { margin: 0 0 16px; }
+  .fp-layout { display: grid; grid-template-columns: minmax(240px, min(34%,420px)) minmax(0,1fr); gap: clamp(24px,5vw,72px); }
+  .fp-record { align-self: start; }
+  .fp-art { aspect-ratio: 1; width: 100%; overflow: hidden; border-radius: var(--r-control); }
+  .fp-art .sleeve-mono { font-size: clamp(32px,9vw,120px); }
+  .fp-caption { margin: 16px 0; }
+  .fp-caption h2, .fp-head h2 { margin: 4px 0; line-height: 1.15; overflow-wrap: anywhere; }
+  .fp-head h2 { font-size: clamp(26px,4vw,48px); }
+  .fp-caption .meta:empty { display: none; }
+  #fpSeek { width: 100%; margin: 8px 0 0; accent-color: var(--text); }
+  .fp-times { justify-content: space-between; }
+  #fpControls { margin: 12px 0; justify-content: center; gap: clamp(4px,1vw,16px); }
+  #fpPlay { width: 54px; height: 54px; }
+  .nq-head { margin: 20px 0 6px; gap: 8px; flex-wrap: wrap; }
+  .nq-head h3 { margin: 0 auto 0 0; }
+  .nq-list { list-style: none; margin: 0; padding: 0; }
+  .nq-list li { display: flex; align-items: center; border-bottom: 1px solid var(--line); }
+  .nq-list li.now { background: var(--raised); }
+  .nq-list li.now .nq-name { color: var(--ring); font-weight: 650; }
+  .nq-list li.done { color: var(--dim); }
+  .nq-choice { min-width: 0; flex: 1; display: grid; grid-template-columns: 26px minmax(0,1fr) auto; gap: 8px; align-items: center; min-height: 46px; padding: 6px 12px; text-align: left; color: inherit; font: inherit; background: none; border: 0; cursor: pointer; }
+  .nq-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .nq-then { padding: 20px 12px 6px; color: var(--dim); font-size: 13px; }
+  .nq-remove { margin-right: 4px; font-size: 18px; }
+  @media (max-width: 980px) { .np-side .np-vol { display: none; } }
+  @media (min-width: 641px) { .fp-record { position: sticky; top: 82px; } }
+  @media (max-width: 640px) {
+    :root { --np-h: 64px; }
+    .np { grid-template-columns: minmax(0,1fr) auto; padding: 6px 12px; gap: 6px; }
+    .np .np-side, .np-times, #npPrev { display: none; }
+    .np-art { width: 42px; height: 42px; }
+    .np-ctl .np-btn { width: 44px; height: 44px; }
+    body.at-playing .top { display: none; }
+    body.at-playing main { padding: 16px 16px calc(24px + env(safe-area-inset-bottom,0px)); }
+    .fp-layout { grid-template-columns: minmax(0,1fr); gap: 16px; }
+    .fp-record { display: grid; grid-template-columns: minmax(90px,36%) minmax(0,1fr); gap: 12px; align-items: center; }
+    .fp-caption { margin: 0; }
+    .fp-caption h2 { font-size: 22px; }
+    .fp-transport { grid-column: 1 / -1; }
+    .fp-times { font-size: 12px; }
+    .fp-head { margin-top: 8px; }
+    .fp-head h2 { font-size: 22px; }
+  }
   .rows .row-item.now { background: var(--brand-soft); border-radius: var(--r-control); padding-left: 10px; padding-right: 10px; }
   .rows .row-item.now + .row-item { border-top-color: transparent; }
   .row-item.now .label { color: var(--ring); }
@@ -330,25 +457,13 @@ export const page = `<!doctype html>
   .pill.busy::before { content: ''; display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--brand); margin-right: 6px; vertical-align: 1px; animation: npPulse 1.2s ease-in-out infinite; }
   @keyframes npPulse { 50% { opacity: .25; } }
   @media (prefers-reduced-motion: reduce) { .pill.busy::before { animation: none; } }
-  @media (max-width: 640px) {
-    :root { --np-h: 104px; }
-    .np { grid-template-columns: minmax(0, 1fr) auto auto; grid-template-areas: 'info ctl side' 'seek seek seek'; gap: 2px 4px; padding: 8px 10px 10px 14px; }
-    .np-art, .np-vol, .np-qtext { display: none; }
-    .np-pos { display: inline; }
-    .np-pos::after { content: ' · '; }
-    .np-btn { width: 38px; height: 38px; }
-    .np-btn.np-play { width: 42px; height: 42px; }
-    .np-q { min-height: 38px; width: 38px; padding: 0; }
-    .np-seek { gap: 8px; }
-    .np-queue { left: 8px; right: 8px; width: auto; bottom: calc(var(--np-h) + 8px); }
-  }
 .p-mini-controls, #pMiniRestore { display: none; }
   #playerModal.mini { inset: auto 18px 18px auto; width: min(380px, calc(100vw - 24px)); height: 280px; border-radius: 16px;
     border: 1px solid rgba(255,255,255,.18); box-shadow: 0 18px 65px rgba(0,0,0,.7); }
   #playerModal.mini .p-stage { flex: 1; }
   #playerModal.mini .p-top { padding: 10px 12px 26px; }
   #playerModal.mini .p-title { font-size: 14px; }
-  #playerModal.mini .p-badge, #playerModal.mini #pRawLink, #playerModal.mini #pFsBtn, #playerModal.mini #pMiniBtn, #playerModal.mini .p-bar > #pSeek, #playerModal.mini .p-bar > .row { display: none; }
+  #playerModal.mini .p-file-info, #playerModal.mini #pRawLink, #playerModal.mini #pFsBtn, #playerModal.mini #pMiniBtn, #playerModal.mini .p-bar > #pSeek, #playerModal.mini .p-bar > .row { display: none; }
   #playerModal.mini #pMiniRestore, #playerModal.mini .p-mini-controls { display: flex; }
   #playerModal.mini .p-bar { padding: 24px 12px 10px; }
   #playerModal.mini .p-mini-controls { flex-direction: column; gap: 3px; }
@@ -364,42 +479,45 @@ export const page = `<!doctype html>
     #playerModal:not(.mini) #pRawLink, #playerModal:not(.mini) #pDownloadBtn, #playerModal:not(.mini) #pVol { display: none; }
     #playerModal:not(.mini) .p-bar > .row { flex-wrap: wrap; }
     #playerModal:not(.mini) .p-bar select { max-width: 42vw; }
-    #playerModal.mini { right: 12px; bottom: 12px; }
+    #playerModal.mini { right: 12px; bottom: calc(12px + var(--nav-h)); }
   }
-  /* ==== Music library ==== */
+  /* ==== Music: sleeves, the album grid, artists and track rows ==== */
   .sleeve { position: relative; flex: none; width: 64px; height: 64px; border-radius: 8px; display: flex; align-items: center; justify-content: center; overflow: hidden; color: rgba(255,255,255,.95); box-shadow: inset 0 0 0 1px rgba(255,255,255,.1), 0 1px 3px rgba(0,0,0,.18); }
   .sleeve-mono { font-weight: 800; font-size: 24px; letter-spacing: -0.03em; line-height: 1; text-shadow: 0 2px 12px rgba(0,0,0,.28); }
   .sleeve-img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
   .shelf { display: flex; flex-direction: column; gap: 28px; }
   .shelf > .empty { padding: 24px 0; }
-  .artist-head { display: flex; align-items: baseline; gap: 10px; margin-bottom: 12px; }
-  .artist-head h3 { font-size: 17px; font-weight: 700; letter-spacing: -0.01em; margin: 0; }
-  .artist-head .count { color: var(--dim); font-size: 13px; font-variant-numeric: tabular-nums; }
-  .album-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 10px; }
-  .album-card { display: flex; align-items: center; gap: 10px; padding: 10px 14px 10px 10px; background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-card); transition: border-color var(--t-fast) var(--ease); }
-  .album-card:hover { border-color: color-mix(in srgb, var(--dim) 40%, transparent); }
-  .album-open { flex: 1; min-width: 0; display: flex; align-items: center; gap: 14px; padding: 0; border: 0; background: none; color: inherit; font: inherit; text-align: left; cursor: pointer; border-radius: 8px; }
-  .album-open .sleeve { width: 72px; height: 72px; }
-  .album-text { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
-  .album-name { font-weight: 650; font-size: 15px; line-height: 1.25; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .album-meta { color: var(--dim); font-size: 12.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .album-meta:empty { display: none; }
-  .album-play { flex: none; width: 40px; height: 40px; padding: 0; border-radius: 50%; border: 1px solid var(--line); background: var(--raised); color: var(--text); display: inline-flex; align-items: center; justify-content: center; cursor: pointer; transition: background var(--t-fast) var(--ease), color var(--t-fast) var(--ease), transform var(--t-fast) var(--ease); }
+  .album-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(168px, 1fr)); gap: 24px 16px; }
+  .album-card { position: relative; display: flex; flex-direction: column; min-width: 0; }
+  .album-open { display: flex; flex-direction: column; gap: 2px; min-width: 0; color: inherit; text-decoration: none; }
+  .album-open .sleeve { width: 100%; height: auto; aspect-ratio: 1; border-radius: var(--r-card); margin-bottom: 8px; transition: transform var(--t-base) var(--ease), box-shadow var(--t-base) var(--ease); }
+  .album-open .sleeve-mono { font-size: 44px; }
+  .album-open:hover .sleeve { transform: translateY(-4px); box-shadow: inset 0 0 0 1px rgba(255,255,255,.1), 0 22px 44px rgba(0,0,0,.45); }
+  .album-open:focus-visible { outline: none; }
+  .album-open:focus-visible .sleeve { outline: 2px solid var(--ring); outline-offset: 3px; }
+  .album-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+  .album-name { font-weight: 600; font-size: 14px; line-height: 1.3; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .album-artist { color: var(--dim); font-size: 12.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  /* The cover is square, so its height is the card's own width. A percentage top margin resolves against that
+     width, which hangs the play button over the bottom of the art without measuring anything. */
+  .album-play { position: absolute; right: 8px; top: 0; margin-top: calc(100% - 52px); width: 40px; height: 40px; padding: 0; border-radius: 50%; border: 1px solid var(--line); background: var(--raised); color: var(--text); display: inline-flex; align-items: center; justify-content: center; cursor: pointer; opacity: 0; transition: opacity var(--t-fast) var(--ease), background var(--t-fast) var(--ease), color var(--t-fast) var(--ease); }
   .album-play .btn-ic svg { width: 18px; height: 18px; }
+  .album-card:hover .album-play, .album-play:focus-visible, .album-play:has(.btn-ic.on) { opacity: 1; }
   .album-play:hover, .album-play:has(.btn-ic.on) { background: var(--brand); border-color: var(--brand); color: var(--on-brand); }
-  .album-play:hover { transform: scale(1.06); }
-  .detail-head.album-head { display: grid; grid-template-columns: auto minmax(0, 1fr); grid-template-rows: 1fr auto auto; grid-template-areas: 'art title' 'art meta' 'art acts'; column-gap: 20px; row-gap: 0; align-items: end; }
-  .album-head > .sleeve { grid-area: art; }
-  .ah-title { grid-area: title; min-width: 0; }
-  .ah-meta { grid-area: meta; min-width: 0; }
-  .album-head > .album-acts { grid-area: acts; }
-  .sleeve.sleeve-lg { width: 168px; height: 168px; border-radius: var(--r-card); box-shadow: inset 0 0 0 1px rgba(255,255,255,.1), 0 18px 40px rgba(0,0,0,.28); }
-  .sleeve-lg .sleeve-mono { font-size: 64px; }
-  .detail-head.album-head h3 { font-size: 28px; margin: 0 0 4px; }
-  .album-by { font-weight: 600; font-size: 15px; margin-bottom: 4px; }
-  .album-acts { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 14px; }
-  .album-acts .btn.primary { min-width: 116px; }
-  .disc-head { font-size: 12px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; color: var(--dim); margin: 18px 0 6px; }
+  @media (hover: none) { .album-play { opacity: 1; } }
+  .artist-card { display: flex; flex-direction: column; gap: 2px; min-width: 0; color: inherit; text-decoration: none; }
+  .stack { position: relative; display: block; width: 100%; aspect-ratio: 1; margin-bottom: 8px; }
+  .stack .sleeve { position: absolute; width: 84%; height: 84%; border-radius: var(--r-card); transition: transform var(--t-base) var(--ease); }
+  .stack .sleeve-mono { font-size: 34px; }
+  .stack .l0 { left: 0; bottom: 0; z-index: 3; }
+  .stack .l1 { left: 8%; bottom: 8%; z-index: 2; opacity: .78; }
+  .stack .l2 { left: 16%; bottom: 16%; z-index: 1; opacity: .56; }
+  .artist-card:hover .l0 { transform: translateY(-4px); }
+  .artist-card:focus-visible { outline: none; }
+  .artist-card:focus-visible .stack { outline: 2px solid var(--ring); outline-offset: 3px; border-radius: var(--r-card); }
+  .sleeve.xl { width: 100%; height: auto; aspect-ratio: 1; border-radius: var(--r-panel); box-shadow: inset 0 0 0 1px rgba(255,255,255,.1), 0 24px 50px rgba(0,0,0,.34); }
+  .sleeve.xl .sleeve-mono { font-size: 84px; }
+  .disc-head { font-size: 12px; font-weight: 700; color: var(--dim); margin: 18px 0 6px; }
   .rows.tracks .row-item { gap: 12px; padding: 6px 8px; border-top: 0; border-radius: var(--r-control); cursor: pointer; }
   .rows.tracks .row-item:hover { background: var(--raised); }
   .rows.tracks .row-item.now { background: var(--brand-soft); padding: 6px 8px; }
@@ -413,6 +531,18 @@ export const page = `<!doctype html>
   .rows.tracks .track-play.on .i-pause { display: block; }
   .rows.tracks .row-item:hover .track-play, .rows.tracks .row-item.now .track-play { color: var(--text); background: transparent; }
   .rows.tracks .row-item.now .track-play { color: var(--ring); }
+  /* A track away from its album: the name is the button, and the play sign stands quietly in front of it. */
+  .rows.tracks.flat .row-item { display: grid; grid-template-columns: minmax(0, 2.2fr) minmax(0, 1fr) minmax(0, 1.2fr) auto; gap: 12px; align-items: center; padding: 0 8px; }
+  .rows.tracks .track-play.flat { width: auto; height: auto; min-height: 42px; justify-content: flex-start; gap: 10px; padding: 0; color: var(--text); font-size: 14.5px; }
+  .rows.tracks .track-play.flat svg { flex: none; }
+  .rows.tracks.flat .track-play .i-play { display: block; opacity: .5; }
+  .rows.tracks.flat .row-item:hover .track-play .i-play, .rows.tracks.flat .row-item.now .track-play .i-play { opacity: 1; }
+  .rows.tracks.flat .track-play.on .i-play { display: none; }
+  .rows.tracks.flat .track-play.on .i-pause { display: block; }
+  .track-name { min-width: 0; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .track-by { color: var(--dim); font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .track-of { color: var(--dim); font-size: 13px; text-decoration: none; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .track-of:hover { color: var(--text); text-decoration: underline; }
   .track-dur { flex: none; min-width: 42px; text-align: right; color: var(--dim); font-size: 13px; font-variant-numeric: tabular-nums; }
   .track-dl { flex: none; width: 32px; height: 32px; display: inline-flex; align-items: center; justify-content: center; border-radius: 8px; color: var(--dim); opacity: 0; transition: opacity var(--t-fast) var(--ease); }
   .track-dl svg { width: 18px; height: 18px; }
@@ -420,17 +550,43 @@ export const page = `<!doctype html>
   .track-dl:hover { color: var(--text); background: var(--surface); }
   @media (hover: none) { .track-dl { opacity: 1; } }
   @media (max-width: 640px) {
-    .album-list { grid-template-columns: minmax(0, 1fr); gap: 8px; }
-    .album-open .sleeve { width: 56px; height: 56px; }
-    .album-open .sleeve-mono { font-size: 20px; }
-    .detail-head.album-head { grid-template-columns: 108px minmax(0, 1fr); grid-template-rows: auto auto auto; grid-template-areas: 'art title' 'meta meta' 'acts acts'; column-gap: 14px; }
-    .album-head > .sleeve { margin-bottom: 12px; }
-    .ah-title { align-self: center; margin-bottom: 12px; }
-    .sleeve.sleeve-lg { width: 108px; height: 108px; }
-    .sleeve-lg .sleeve-mono { font-size: 40px; }
-    .detail-head.album-head h3 { font-size: 21px; }
-    .album-acts .btn.primary { flex: 1; }
+    .album-grid { grid-template-columns: repeat(auto-fill, minmax(132px, 1fr)); gap: 18px 10px; }
+    .album-open .sleeve-mono { font-size: 34px; }
+    .sleeve.xl { border-radius: var(--r-card); }
+    .sleeve.xl .sleeve-mono { font-size: 40px; }
     .rows.tracks .row-item { gap: 8px; padding: 6px 4px; }
+    .rows.tracks.flat .row-item { grid-template-columns: minmax(0, 1fr) minmax(0, .8fr) auto; padding: 0 4px; }
+    .rows.tracks.flat .track-by { display: none; }
+  }
+  /* Home shows one line of each room: the tiles that do not fit are left out, not wrapped or cut. These rules
+     come after every grid they narrow, and name both classes, so neither order nor weight can undo them. */
+  .grid.row-grid, .album-grid.row-grid { grid-template-columns: repeat(7, minmax(0, 1fr)); }
+  .row-grid > :nth-child(n+8) { display: none; }
+  .wide-grid.row-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+  .wide-grid.row-grid > :nth-child(n+5) { display: none; }
+  @media (max-width: 1279px) {
+    .grid.row-grid, .album-grid.row-grid { grid-template-columns: repeat(6, minmax(0, 1fr)); }
+    .row-grid > :nth-child(n+7) { display: none; }
+  }
+  @media (max-width: 1023px) {
+    .grid.row-grid, .album-grid.row-grid { grid-template-columns: repeat(5, minmax(0, 1fr)); }
+    .row-grid > :nth-child(n+6) { display: none; }
+    .wide-grid.row-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+    .wide-grid.row-grid > :nth-child(n+4) { display: none; }
+  }
+  @media (max-width: 799px) {
+    .grid.row-grid, .album-grid.row-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+    .row-grid > :nth-child(n+5) { display: none; }
+    .wide-grid.row-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .wide-grid.row-grid > :nth-child(n+3) { display: none; }
+  }
+  /* Narrow: the row scrolls sideways instead, and every tile of it stays. */
+  @media (max-width: 640px) {
+    .home-row { margin-bottom: 28px; }
+    .grid.row-grid, .album-grid.row-grid, .wide-grid.row-grid { grid-template-columns: none; grid-auto-flow: column; grid-auto-columns: 132px; margin: 0 -16px; padding: 0 16px; scroll-padding-left: 16px; overflow-x: auto; scrollbar-width: none; scroll-snap-type: x proximity; }
+    .wide-grid.row-grid { grid-auto-columns: 220px; }
+    .row-grid::-webkit-scrollbar { display: none; }
+    .row-grid > :nth-child(n) { display: flex; scroll-snap-align: start; }
   }
   /* ==== Sources: Soulseek and YouTube search, save and progress ==== */
   .slsk-port { margin-top: 12px; font-size: 13px; color: var(--dim); line-height: 1.45; overflow-wrap: anywhere; }
@@ -513,8 +669,8 @@ export const page = `<!doctype html>
   .yt-thumb.sm .yt-ph { border-left-width: 9px; border-top-width: 6px; border-bottom-width: 6px; }
   .yt-thumb img { z-index: 1; }
   .yt-dur { position: absolute; z-index: 2; right: 4px; bottom: 4px; padding: 1px 5px; border-radius: 4px; background: rgba(0,0,0,.72); color: var(--on-media); font-size: 11px; font-weight: 600; font-variant-numeric: tabular-nums; }
-  .yt-pick { position: sticky; bottom: 12px; z-index: 5; display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: center; margin-top: 12px; padding: 10px 12px; background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-card); box-shadow: 0 10px 30px rgba(0,0,0,.25); }
-  body.np-on .yt-pick { bottom: calc(var(--np-h) + 12px); }
+  .yt-pick { position: sticky; bottom: calc(12px + var(--nav-h)); z-index: 5; display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: center; margin-top: 12px; padding: 10px 12px; background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-card); box-shadow: 0 10px 30px rgba(0,0,0,.25); }
+  body.np-on .yt-pick { bottom: calc(var(--np-h) + 12px + var(--nav-h)); }
   .yt-pick .grow { flex: 1 1 140px; min-width: 0; font-weight: 600; font-size: 14px; overflow-wrap: anywhere; }
   #ytSaveClose { position: absolute; top: 14px; right: 14px; }
   .yt-save { padding: 22px; }
@@ -541,9 +697,6 @@ export const page = `<!doctype html>
   .why summary { cursor: pointer; width: max-content; max-width: 100%; }
   .why > div { margin-top: 4px; overflow-wrap: anywhere; }
   .yt-save-acts { position: sticky; bottom: 0; z-index: 2; margin: 12px -22px -22px; padding: 12px 22px 22px; background: var(--surface); border-top: 1px solid var(--line); }
-  .album-meta[data-aq]:not(:empty) { display: flex; }
-  .album-meta .aq-main { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
-  .album-meta .aq-yt { flex: none; white-space: pre; }
   .track-alt-del { display: inline-block; margin-top: 2px; padding: 2px 0; border: 0; background: transparent; color: var(--dim); font: inherit; font-size: 12.5px; text-decoration: underline; text-underline-offset: 2px; cursor: pointer; }
   .track-alt-del:hover { color: var(--text); }
   .track-alt-del.armed { color: var(--bad); }
@@ -592,22 +745,35 @@ export const page = `<!doctype html>
 <body>
 <header class="top">
   <div class="bar">
-    <a class="brand" href="#library"><svg viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" rx="8"/><path d="M12 9l12 7-12 7z"/></svg>PearTube</a>
+    <a class="brand" href="#home"><svg viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" rx="8"/><path d="M12 9l12 7-12 7z"/></svg><span class="brand-name">PearTube</span></a>
+    <h1 class="place-name" id="placeName">Home</h1>
+    <nav class="tabs rooms" aria-label="Rooms">
+      <a href="#home" data-tab="home"><svg class="ti" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 11.5 12 4l8 7.5V20h-5.5v-5.5h-5V20H4z"/></svg>Home</a>
+      <a href="#listen" data-tab="listen"><svg class="ti" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 18V6l10-2v12"/><circle cx="6.5" cy="18" r="2.5"/><circle cx="16.5" cy="16" r="2.5"/></svg>Listen</a>
+      <a href="#watch" data-tab="watch"><svg class="ti" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="2.5"/><path d="M10.5 9.5v5l4-2.5z"/></svg>Watch</a>
+      <a href="#find" data-tab="find" class="narrow-only"><svg class="ti" viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6.5"/><path d="M16 16l4.5 4.5"/></svg>Find</a>
+    </nav>
+    <div class="find-box">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6.5"/><path d="M16 16l4.5 4.5"/></svg>
+      <input id="srcInput" form="srcForm" type="search" aria-label="Find" spellcheck="false" autocomplete="off" placeholder="Blue Train" required>
+    </div>
     <div class="bar-right">
       <div class="pills" id="pills"></div>
-      <button class="btn quiet theme-toggle" id="themeToggle" type="button" aria-label="Theme" title="Theme">
-        <svg width="16" height="16" viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="10" r="6.6" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M10 3.4a6.6 6.6 0 010 13.2z" fill="currentColor"/></svg>
-      </button>
+      <a class="btn add-link" id="addLink" href="#add" data-tab="add" title="Add to library"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg><span>Add to library</span></a>
+      <div class="more-wrap">
+        <button class="btn quiet more-btn" id="moreBtn" type="button" aria-expanded="false" aria-controls="ownerNav">More</button>
+        <nav class="tabs owner" id="ownerNav" aria-label="This relay">
+          <a href="#channels" data-tab="channels">Channels</a>
+          <a href="#sharing" data-tab="sharing">Sharing</a>
+          <a href="#tv" data-tab="tv">TV</a>
+          <a href="#settings" data-tab="settings">Settings</a>
+          <button class="btn quiet theme-toggle" id="themeToggle" type="button" aria-label="Theme" title="Theme">
+            <svg width="16" height="16" viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="10" r="6.6" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M10 3.4a6.6 6.6 0 010 13.2z" fill="currentColor"/></svg><span class="theme-word">Theme</span>
+          </button>
+        </nav>
+      </div>
     </div>
   </div>
-  <nav class="tabs" aria-label="Sections">
-    <a href="#library" data-tab="library">Library</a>
-    <a href="#music" data-tab="music">Music</a>
-    <a href="#channels" data-tab="channels">Channels</a>
-    <a href="#sharing" data-tab="sharing">Sharing</a>
-    <a href="#tv" data-tab="tv">TV</a>
-    <a href="#settings" data-tab="settings">Settings</a>
-  </nav>
 </header>
 <main>
   <form id="authForm" class="card" hidden>
@@ -619,14 +785,80 @@ export const page = `<!doctype html>
     <div class="msg err" id="authMsg" role="alert"></div>
   </form>
 
-  <section id="tab-library" data-panel="library">
-    <section id="hero" hidden></section>
-    <div id="resumeWrap" hidden><h2>Continue watching <span class="count" id="resumeCount"></span></h2><div class="rail" id="resume"></div></div>
-    <div id="liveWrap" hidden><h2>Live <span class="count" id="liveCount"></span></h2><div class="rail" id="live"></div></div>
+  <!-- ==== Home: what is not finished, then a row of music and a row of video ==== -->
+  <section id="tab-home" data-panel="home">
+    <section id="keepWrap" hidden>
+      <div class="row-head"><h2>Keep playing</h2></div>
+      <div class="keep" id="keep"></div>
+    </section>
+    <div id="homeRows"></div>
+  </section>
+
+  <!-- ==== Listen: the music room ==== -->
+  <section id="tab-listen" data-panel="listen" hidden>
+    <div class="room-ctl" id="listenCtl" hidden>
+      <div class="seg" id="listenSeg" role="group" aria-label="Show"></div>
+      <span class="count" id="musicCount"></span>
+      <button class="chip" type="button" id="listenSaved" aria-pressed="false">Saved here</button>
+    </div>
+    <div class="field filter" id="trackFilterWrap" hidden>
+      <label for="trackFilter">Filter tracks</label>
+      <input id="trackFilter" type="search" autocomplete="off" spellcheck="false" placeholder="blue in green">
+    </div>
+    <div class="shelf" id="albums"></div>
+  </section>
+
+  <!-- ==== Watch: the video room ==== -->
+  <section id="tab-watch" data-panel="watch" hidden>
+    <div class="room-ctl" id="watchCtl" hidden>
+      <div class="kinds" id="libKinds" role="group" aria-label="Show"></div>
+      <button class="chip" type="button" id="watchSaved" aria-pressed="false">Saved here</button>
+    </div>
+    <div id="entries"></div>
+  </section>
+
+  <!-- ==== One album, one artist, one title: a page of its own, under the room it belongs to ==== -->
+  <section id="detail" data-panel="detail" aria-labelledby="detailTitle" hidden>
+    <div class="page-bar"><button class="btn quiet" id="detailClose" type="button">Back</button></div>
+    <div id="detailBody"></div>
+  </section>
+
+  <!-- ==== Find: one field in the top bar; the library first, then what is outside it ==== -->
+  <section id="tab-find" data-panel="find" hidden>
+    <div id="findLib"></div>
+    <h2>Not in your library</h2>
+    <!-- ==== Sources: one search over Soulseek, YouTube and other relays ==== -->
+    <form id="srcForm" class="card">
+      <div class="src-in" id="srcIn"><span class="label" id="srcInLabel">Search in</span><div class="chips" id="srcChips" role="group" aria-labelledby="srcInLabel"></div><button class="btn primary" type="submit" id="srcBtn">Search</button></div>
+      <span class="hint" id="srcHint">Finds albums on peers and mirrors them here.</span>
+      <div class="meta wrap" id="srcNote" hidden></div>
+      <div class="slsk-port" id="slskPort" role="note" hidden></div>
+      <div class="list src-jobs" id="srcJobs" aria-label="Adding" hidden></div>
+      <div class="msg" id="srcMsg" role="status"></div>
+      <nav class="src-summary" id="srcSummary" aria-label="Results by source" hidden></nav>
+      <div id="srcGroups"></div>
+      <div id="globalWrap" hidden>
+        <h3 class="src-head" id="globalHead" tabindex="-1">On other relays</h3>
+        <div class="msg" id="globalMsg" role="status"></div>
+        <div class="list" id="globalResults"></div>
+      </div>
+      <div class="yt-pick" id="ytPick" role="region" aria-label="Selected videos" hidden>
+        <span class="grow" id="ytPickText"></span>
+        <button class="btn primary" type="button" id="ytPickSave">Save track</button>
+        <button class="btn quiet" type="button" id="ytPickClear">Clear</button>
+      </div>
+    </form>
+    <div class="card slsk-browse" id="slskBrowse" hidden></div>
+    <!-- ==== end Sources ==== -->
+  </section>
+
+  <!-- ==== Add to library: links, pages, folders, catalogs and channels ==== -->
+  <section id="tab-add" data-panel="add" hidden>
+    <h2 class="page-title">Add to library</h2>
     <div class="card">
       <form id="addForm">
         <div class="field" style="margin:0">
-          <label for="addInput">Add a video or channel</label>
+          <label for="addInput">Link to a video, a page or a channel</label>
           <div class="row"><input class="grow" id="addInput" type="text" inputmode="url" autocomplete="off" spellcheck="false" placeholder="https://www.youtube.com/watch?v=aqz-KE-bpKQ"><button class="btn primary" type="submit" id="addBtn">Add</button></div>
         </div>
       </form>
@@ -658,53 +890,6 @@ export const page = `<!doctype html>
       <div class="msg" id="addMsg" role="status"></div>
     </div>
     <div id="jobsWrap" hidden><h2>Adding <span class="count" id="jobCount"></span></h2><div class="list" id="jobs"></div></div>
-    <h2>Library <span class="count" id="libCount"></span></h2>
-    <div class="lib-tools" id="libTools" hidden>
-      <div class="kinds" id="libKinds" role="group" aria-label="Show"></div>
-      <input id="libFilter" type="search" aria-label="Search library" placeholder="Big Buck Bunny">
-    </div>
-    <div class="grid" id="entries"></div>
-    <h2>Search all relays</h2>
-    <form id="globalForm" class="card">
-      <div class="field">
-        <label for="globalInput">Title or IMDb id</label>
-        <div class="row"><input class="grow" id="globalInput" type="search" spellcheck="false" placeholder="Stalker 1979" required><button class="btn primary" type="submit" id="globalBtn">Search</button></div>
-        <span class="hint">Asks relays you do not follow; results play from them.</span>
-      </div>
-      <div class="msg" id="globalMsg" role="status"></div>
-      <div class="list" id="globalResults"></div>
-    </form>
-  </section>
-
-  <section id="tab-music" data-panel="music" hidden>
-    <h2>Music <span class="count" id="musicCount"></span></h2>
-    <div class="lib-tools" id="musicTools" hidden>
-      <input id="musicFilter" type="search" aria-label="Search music" placeholder="Chop Suey!">
-    </div>
-    <div class="shelf" id="albums"></div>
-    <h2>Find music</h2>
-    <!-- ==== Sources: one search over Soulseek and YouTube ==== -->
-    <form id="srcForm" class="card">
-      <div class="field">
-        <label for="srcInput">Artist or album</label>
-        <div class="row"><input class="grow" id="srcInput" type="search" spellcheck="false" placeholder="John Coltrane Blue Train" required><button class="btn primary" type="submit" id="srcBtn">Search</button></div>
-        <div class="src-in" id="srcIn" hidden><span class="label" id="srcInLabel">Search in</span><div class="chips" id="srcChips" role="group" aria-labelledby="srcInLabel"></div></div>
-        <span class="hint" id="srcHint">Finds albums on peers and mirrors them here.</span>
-        <div class="meta wrap" id="srcNote" hidden></div>
-      </div>
-      <div class="slsk-port" id="slskPort" role="note" hidden></div>
-      <div class="list src-jobs" id="srcJobs" aria-label="Adding" hidden></div>
-      <div class="msg" id="srcMsg" role="status"></div>
-      <nav class="src-summary" id="srcSummary" aria-label="Results by source" hidden></nav>
-      <div id="srcGroups"></div>
-      <div class="yt-pick" id="ytPick" role="region" aria-label="Selected videos" hidden>
-        <span class="grow" id="ytPickText"></span>
-        <button class="btn primary" type="button" id="ytPickSave">Save track</button>
-        <button class="btn quiet" type="button" id="ytPickClear">Clear</button>
-      </div>
-    </form>
-    <div class="card slsk-browse" id="slskBrowse" hidden></div>
-    <!-- ==== end Sources ==== -->
   </section>
 
   <section id="tab-channels" data-panel="channels" hidden>
@@ -803,11 +988,28 @@ export const page = `<!doctype html>
   <section id="tab-settings" data-panel="settings" hidden>
     <div id="settingsBody"></div>
   </section>
+  <section id="tab-playing" data-panel="playing" aria-label="Music player" hidden>
+    <button class="btn quiet fp-close" type="button" id="fpClose">Close player</button>
+    <div class="empty" id="fpEmpty">Nothing is playing. <a href="#listen">Listen</a></div>
+    <div class="fp-layout" id="fpBody" hidden>
+      <div class="fp-record">
+        <div id="fpArt" class="fp-art"></div>
+        <div class="fp-caption"><h2 id="fpName"></h2><a class="music-link" id="fpArtist"></a><div id="fpQuality" class="meta"></div><div id="fpStatus" class="meta" role="status"></div></div>
+        <div class="fp-transport">
+          <input type="range" id="fpSeek" min="0" max="0" step="any" value="0" aria-label="Seek" disabled>
+          <div class="fp-times"><span id="fpAt">0:00</span><span id="fpDur"></span></div>
+          <div class="np-ctl" id="fpControls"></div>
+          <label class="np-vol fp-volume">Volume <input type="range" id="fpVol" min="0" max="100" value="100" aria-label="Volume"></label>
+        </div>
+      </div>
+      <div class="fp-list" id="npQueue" aria-label="Up next">
+        <div class="fp-head"><div class="fp-eyebrow">Playing from</div><h2><a class="music-link" id="fpFrom"></a></h2></div>
+        <div class="nq-head"><h3>Up next</h3><button class="btn quiet" type="button" id="npClear">Clear</button><button class="btn quiet" type="button" id="npStop">Stop music</button></div>
+        <ol class="nq-list" id="npList"></ol>
+      </div>
+    </div>
+  </section>
 </main>
-<dialog id="detail" aria-labelledby="detailTitle">
-  <div class="bar"><button class="btn quiet" id="detailClose" type="button">Close</button></div>
-  <div id="detailBody"></div>
-</dialog>
 <dialog id="ytSave" aria-labelledby="ytSaveTitle">
   <form id="ytSaveForm" class="yt-save" novalidate>
     <h3 id="ytSaveTitle" tabindex="-1">Save from YouTube</h3>
@@ -826,42 +1028,20 @@ export const page = `<!doctype html>
 </dialog>
 <div id="castBar" hidden></div>
 <div class="np" id="np" role="region" aria-label="Music player" hidden>
+  <div class="np-progress"><input type="range" id="npSeek" min="0" max="0" step="any" value="0" aria-label="Seek" disabled></div>
   <div class="np-info">
-    <button class="np-art" id="npArt" type="button" aria-label="Open album"></button>
-    <div class="np-text">
-      <button class="np-title" id="npTitle" type="button"></button>
-      <div class="np-sub" aria-live="polite"><span class="np-pos" id="npPos"></span><span id="npMeta"></span></div>
-    </div>
+    <a class="np-art" id="npArt" href="#playing" aria-label="Open player" title="Open player"></a>
+    <div class="np-text"><a class="np-title" id="npTitle" href="#playing"></a><div class="np-sub" id="npMeta" aria-live="polite"></div></div>
   </div>
-  <div class="np-ctl">
-    <button class="np-btn" id="npPrev" type="button" aria-label="Previous track"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="5.5" width="2.6" height="13" rx="1"/><path d="M19 6.4v11.2a1 1 0 0 1-1.55.83L9.6 13.2a1.4 1.4 0 0 1 0-2.4l7.85-5.23A1 1 0 0 1 19 6.4z"/></svg></button>
-    <button class="np-btn np-play" id="npPlay" type="button" aria-label="Play"><svg class="i-play" viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5.5v13a1 1 0 0 0 1.5.86l10.2-6.5a1 1 0 0 0 0-1.72L9.5 4.64A1 1 0 0 0 8 5.5z"/></svg><svg class="i-pause" viewBox="0 0 24 24" aria-hidden="true"><rect x="6.5" y="5" width="4" height="14" rx="1.2"/><rect x="13.5" y="5" width="4" height="14" rx="1.2"/></svg></button>
-    <button class="np-btn" id="npNext" type="button" aria-label="Next track"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="16.4" y="5.5" width="2.6" height="13" rx="1"/><path d="M5 6.4v11.2a1 1 0 0 0 1.55.83l7.85-5.23a1.4 1.4 0 0 0 0-2.4L6.55 5.57A1 1 0 0 0 5 6.4z"/></svg></button>
-  </div>
-  <div class="np-seek">
-    <span id="npAt">0:00</span>
-    <input type="range" id="npSeek" min="0" max="0" step="any" value="0" aria-label="Seek" disabled>
-    <span id="npLeft">--:--</span>
-  </div>
-  <div class="np-side">
-    <button class="btn quiet np-q" id="npQueueBtn" type="button" aria-expanded="false" aria-controls="npQueue"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="6" width="12" height="2" rx="1"/><rect x="3" y="11" width="12" height="2" rx="1"/><rect x="3" y="16" width="8" height="2" rx="1"/><path d="M15.5 13.6v6.3a.6.6 0 0 0 .92.5l4.6-3.15a.6.6 0 0 0 0-1l-4.6-3.15a.6.6 0 0 0-.92.5z"/></svg><span class="np-qtext" id="npQText"></span></button>
-    <label class="np-vol"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9.5h3.2L12 5.6v12.8l-4.8-3.9H4z"/><path d="M15.2 8.6a5 5 0 0 1 0 6.8l-1.1-1.1a3.4 3.4 0 0 0 0-4.6zM17.6 6.2a8.4 8.4 0 0 1 0 11.6l-1.1-1.1a6.8 6.8 0 0 0 0-9.4z"/></svg><input type="range" id="npVol" min="0" max="100" step="1" value="100" aria-label="Volume"></label>
-  </div>
+  <div class="np-centre"><div class="np-ctl" id="npControls"></div><div class="np-times"><span id="npAt">0:00</span> / <span id="npLeft"></span></div></div>
+  <div class="np-side"><span class="np-ctl" id="npModes"></span><a class="np-action" id="npQueueBtn" href="#playing" title="Up next">Up next <span id="npQText"></span></a><label class="np-vol">Volume <input type="range" id="npVol" min="0" max="100" value="100" aria-label="Volume"></label><a class="np-btn" id="npOpen" href="#playing" title="Open player" aria-label="Open player"></a></div>
 </div>
-<section class="np-queue" id="npQueue" aria-label="Queue" hidden>
-  <div class="nq-head">
-    <div class="grow"><h3>Queue</h3><div class="meta" id="npQueueMeta"></div></div>
-    <button class="btn quiet" id="npClear" type="button">Stop</button>
-    <button class="btn quiet" id="npQueueClose" type="button">Close</button>
-  </div>
-  <ol class="nq-list" id="npList"></ol>
-</section>
 <div id="toast" role="status" hidden></div>
 <div id="playerModal" role="dialog" aria-modal="true" aria-labelledby="pTitle">
   <div class="p-top">
     <div class="p-head">
       <div class="p-title" id="pTitle"></div>
-      <div class="p-badge" id="pBadge">Loading player…</div>
+      <details class="p-file-info" id="pFileInfo"><summary>File info</summary><div id="pBadge">Loading player…</div></details>
     </div>
     <div class="row">
       <a class="btn" id="pRawLink" target="_blank" rel="noopener">Open file</a>
@@ -890,7 +1070,7 @@ export const page = `<!doctype html>
         <span class="clock" id="pClock">0:00 / 0:00</span>
       </div>
       <div class="row">
-        <select id="pAudioSel" aria-label="Audio track"></select>
+        <select id="pAudioSel" aria-label="Audio"></select>
         <select id="pSubSel" aria-label="Subtitles"></select>
         <a class="btn" id="pDownloadBtn" href="#" download>Download</a>
         <button class="btn" id="pMuteBtn" type="button">Mute</button>
@@ -954,7 +1134,7 @@ async function api (path, { method, body } = {}) {
   let data = null
   try { data = await res.json() } catch {}
   if (res.status === 401) throw signInFirst()
-  if (!res.ok) throw new Error((data && data.error) || 'The relay answered ' + res.status)
+  if (!res.ok) throw Object.assign(new Error((data && data.error) || 'The relay answered ' + res.status), { status: res.status })
   return data
 }
 
@@ -1046,18 +1226,100 @@ const isYt = e => String((e && e.id) || '').startsWith('yt:')
 const setting = key => S.settings && S.settings.settings[key]
 const sval = key => setting(key) ? setting(key).value : undefined
 
-// ---- Tabs
-let tab = 'library'
+// ---- Places. The address names the place: the rooms (Home, Listen, Watch), the page of one album, artist or
+// title, Find, Add to library and the relay's own pages. An old link keeps working: #library is Home and #music is
+// Listen. With no place in the address the page opens the room this browser was in last, and Home on a first visit.
+const PLACES = { home: 'Home', listen: 'Listen', watch: 'Watch', album: 'Album', artist: 'Artist', title: 'Title', find: 'Find', add: 'Add to library', playing: 'Music player', channels: 'Channels', sharing: 'Sharing', tv: 'TV', settings: 'Settings' }
+const OLD_PLACES = { library: 'home', music: 'listen' }
+const ROOMS = ['home', 'listen', 'watch']
+// A page of its own belongs to a room: the room stays lit in the bar, and leaving the page returns to it.
+const DETAIL_ROOM = { album: 'listen', artist: 'listen', title: 'watch' }
+const ROOM_KEY = 'peartube-room'
+let tab = 'home'
+let placeArg = ''
+let cameFrom = ''
+function readPlace () {
+  const raw = location.hash.slice(1)
+  const cut = raw.indexOf('/')
+  const named = cut < 0 ? raw : raw.slice(0, cut)
+  const name = OLD_PLACES[named] || named
+  let arg = ''
+  try { arg = cut < 0 ? '' : decodeURIComponent(raw.slice(cut + 1)) } catch {}
+  if (Object.hasOwn(PLACES, name)) return { name, arg }
+  let last = ''
+  try { last = localStorage.getItem(ROOM_KEY) || '' } catch {}
+  return { name: ROOMS.includes(last) ? last : 'home', arg: '' }
+}
+// A place opens at its top, and Back or Forward returns to where the reader was. Each history entry gets a number
+// the first time it is shown; the last scroll position seen under that number is kept while the page lives.
+const scrollAt = new Map()
+const placeBase = Date.now()
+let placeSeq = 0
+let placeId = 0
+if ('scrollRestoration' in history) history.scrollRestoration = 'manual'
+addEventListener('scroll', () => { if (placeId) scrollAt.set(placeId, scrollY) }, { passive: true })
+function enterPlace () {
+  const st = history.state
+  let id = st && st.place
+  const back = typeof id === 'number' && scrollAt.has(id)
+  if (typeof id !== 'number') {
+    id = placeBase + ++placeSeq
+    history.replaceState({ ...st, place: id }, '')
+  }
+  placeId = id
+  return back ? scrollAt.get(id) : 0
+}
+// Go to a place and do something there once it is drawn (scroll to a card, focus a field).
+let afterPlace = null
+function goPlace (hash, then) {
+  if (location.hash === hash) { if (then) then(); return }
+  afterPlace = then || null
+  location.hash = hash
+}
 function showTab () {
-  const want = location.hash.slice(1)
-  tab = ['library', 'music', 'channels', 'sharing', 'tv', 'settings'].includes(want) ? want : 'library'
-  for (const a of document.querySelectorAll('.tabs a')) a.setAttribute('aria-current', a.dataset.tab === tab ? 'page' : 'false')
-  for (const s of document.querySelectorAll('[data-panel]')) s.hidden = s.dataset.panel !== tab
+  const place = readPlace()
+  cameFrom = tab
+  tab = place.name
+  placeArg = place.arg
+  const room = DETAIL_ROOM[tab] || (tab === 'playing' ? 'listen' : tab)
+  if (ROOMS.includes(room)) { try { localStorage.setItem(ROOM_KEY, room) } catch {} }
+  const top = enterPlace()
+  for (const a of document.querySelectorAll('[data-tab]')) a.setAttribute('aria-current', a.dataset.tab === room ? 'page' : 'false')
+  for (const s of document.querySelectorAll('[data-panel]')) s.hidden = s.dataset.panel !== (DETAIL_ROOM[tab] ? 'detail' : tab)
+  $('placeName').textContent = PLACES[tab]
+  document.body.classList.toggle('at-find', tab === 'find')
+  setMore(false)
+  showFindWords(place.arg)
+  // A page says how well the files it lists stream here, and asks again every 3 s while it is open. Leaving it
+  // stops the asking: nothing polls a page nobody is looking at.
+  if (DETAIL_ROOM[tab]) { if (!infoTimer) infoTimer = setInterval(pollInfo, 3000) }
+  else { clearInterval(infoTimer); infoTimer = 0; infoShown.clear(); infoWatched.clear() }
   if (tab === 'tv') loadCast()
   if (tab === 'settings') renderSettings()
   render()
+  paintBar()
+  scrollTo(0, top)
+  const then = afterPlace
+  afterPlace = null
+  if (then) then()
 }
 addEventListener('hashchange', showTab)
+
+// ---- More: the relay's own pages fold into a menu when the bar has no room for them in a row.
+function setMore (open) {
+  $('ownerNav').classList.toggle('open', open)
+  $('moreBtn').setAttribute('aria-expanded', String(open))
+}
+$('moreBtn').onclick = () => setMore($('moreBtn').getAttribute('aria-expanded') !== 'true')
+addEventListener('click', ev => { if (!ev.target.closest('.more-wrap')) setMore(false) })
+// Escape closes the menu and gives the button its focus back. The key counts as used, so a page under the menu
+// stays where it is.
+addEventListener('keydown', ev => {
+  if (ev.key !== 'Escape' || $('moreBtn').getAttribute('aria-expanded') !== 'true') return
+  ev.preventDefault()
+  setMore(false)
+  $('moreBtn').focus()
+})
 
 // ---- Loading
 async function refresh () {
@@ -1109,23 +1371,22 @@ const soon = () => { clearTimeout(refreshTimer); refreshTimer = setTimeout(refre
 
 function render () {
   renderPills()
-  if (tab === 'library') renderLibrary()
-  if (tab === 'music') renderMusic()
+  if (tab === 'home') renderHome()
+  if (tab === 'listen') renderMusic()
+  if (tab === 'watch') renderLibrary()
+  if (DETAIL_ROOM[tab]) renderDetail()
+  if (tab === 'find') renderFind()
+  if (tab === 'add') renderAdd()
   if (tab === 'channels') renderChannels()
   if (tab === 'sharing') renderSharing()
   if (tab === 'tv') renderCast()
   renderCastBar()
 }
 
-// ---- Header
+// ---- Header: only what needs the reader now. Peer counts and rates are on the Sharing page.
 function renderPills () {
-  const st = S.status
   const pills = []
   if (S.offline) pills.push(h('span', { class: 'pill warn' }, 'Relay unreachable'))
-  else {
-    pills.push(h('span', { class: 'pill' + (st.peers || st.lanPeers ? ' ok' : '') }, h('b', null, String((st.peers || 0))), ' ', (st.peers === 1 ? 'peer' : 'peers'), st.lanPeers ? ' · ' + st.lanPeers + ' nearby' : ''))
-    pills.push(h('span', { class: 'pill rate' }, '↓ ', h('b', null, rate(st.downBps)), ' ↑ ', h('b', null, rate(st.upBps))))
-  }
   // An album being added runs for minutes; the header says so on every tab, and a press goes to its progress. A
   // percentage only when every running job knows its total (a YouTube save never does).
   const adding = S.jobs.filter(srcActive)
@@ -1133,7 +1394,7 @@ function renderPills () {
     const total = adding.every(j => j.total > 0) ? adding.reduce((n, j) => n + j.total, 0) : 0
     const pct = total ? Math.min(99, Math.floor(adding.reduce((n, j) => n + (j.bytes || 0), 0) / total * 100)) : null
     const btn = h('button', { class: 'pill busy', type: 'button' }, 'Adding' + (adding.length > 1 ? ' ' + adding.length + ' albums' : '') + (pct != null ? ' ' + pct + '%' : ''))
-    btn.onclick = () => { location.hash = '#music'; setTimeout(() => $('srcJobs').scrollIntoView({ block: 'center' }), 0) }
+    btn.onclick = () => goPlace('#find', () => $('srcJobs').scrollIntoView({ block: 'center' }))
     pills.push(btn)
   }
   const restart = S.settings ? S.settings.restartNeeded.length : 0
@@ -1193,11 +1454,11 @@ $('addForm').onsubmit = async ev => {
     }, 'addMsg')
   }
   if (HEX.test(val)) {
-    location.hash = '#channels'
-    $('followInput').value = val
-    $('followInput').dispatchEvent(new Event('input'))
-    $('followName').focus()
-    return
+    return goPlace('#channels', () => {
+      $('followInput').value = val
+      $('followInput').dispatchEvent(new Event('input'))
+      $('followName').focus()
+    })
   }
   if (!/^https?:[/][/]/i.test(val)) return say('addMsg', 'That is not a link. Links start with https://', true)
   await act($('addBtn'), async () => {
@@ -1328,13 +1589,25 @@ function renderJobs () {
 // numbered from the id, since their titles are usually just the show's name.
 // A replica that has every block holds the file as fully as its owner does.
 const saved = e => e.local || e.cachedBytes >= e.size
+const playable = e => Boolean(e?.streamUrl && !e.locked)
+const readableHere = e => playable(e) && !e.private && saved(e)
 const where = e => saved(e) ? 'Saved here' : e.cachedBytes ? 'Partly saved' : 'On the network'
 function sourceName (key) {
   const s = (S.sources.sources || []).find(x => x.key === key)
   if (!s || s.writable) return ''
   return s.alias || (s.kind === 'channel' ? 'Channel ' : 'Tracker ') + short(s.key)
 }
+// Grouping every entry is the most expensive thing this page does, and Home, both rooms, Find, the music bar and
+// every page ask for it many times in one frame. The answer stands until a refresh replaces the entries themselves.
+let tilesFrom = null
+let tilesCache = []
 function libraryTiles () {
+  if (tilesFrom === S.entries) return tilesCache
+  tilesFrom = S.entries
+  tilesCache = buildTiles()
+  return tilesCache
+}
+function buildTiles () {
   const tiles = new Map()
   for (const e of S.entries) {
     const m = e.id.match(/^imdb:(tt[0-9]+)(?::s([0-9]+)e([0-9]+))?$/)
@@ -1355,13 +1628,22 @@ function libraryTiles () {
     t.partial = t.items.some(i => !saved(i.e) && i.e.cachedBytes)
   }
   for (const t of mergeAlbums(tiles)) tiles.set(t.key, t)
-  return [...tiles.values()].sort((a, b) => a.title.localeCompare(b.title))
+  return [...tiles.values()].sort((a, b) => (a.album || a.title).localeCompare(b.album || b.title) || a.title.localeCompare(b.title))
 }
 // An album is its artist and its name, not its release id: a peer that tagged by release group and another that
 // tagged by release announce the same album under two ids, and both land here as one tile. A track held twice is one
 // row, playing the copy saved here (or the larger one). The album's name is what most of its tracks' titles say, so
 // one badly tagged track ("Untitled album") neither renames the album nor splits it off.
-const fold = s => String(s || '').toLowerCase().normalize('NFKD').replace(/[^\\p{L}\\p{N}]+/gu, ' ').trim()
+// Case, width and punctuation fold away; so do the accents of Latin and Greek letters. A mark stays where its
+// script uses it as a letter: Cyrillic й and ё, and the marks of Indic, Arabic and other scripts. Turkish has two
+// i's; both fold to i, and a Greek final sigma folds to σ.
+const ACCENT_BASE = /[A-Za-z\\u00C0-\\u024F\\u1E00-\\u1EFF\\u2C60-\\u2C7F\\uA720-\\uA7FF\\u0370-\\u03FF\\u1F00-\\u1FFF]/
+const fold = s => String(s || '').toLowerCase().normalize('NFKD')
+  .replace(/(.)[\\u0300-\\u036F]+/gu, (all, base) => ACCENT_BASE.test(base) ? base : all)
+  .replace(/ı/g, 'i')
+  .replace(/ς/g, 'σ')
+  .replace(/[^\\p{L}\\p{N}\\p{M}]+/gu, ' ')
+  .trim()
 function mergeAlbums (tiles) {
   const groups = new Map()
   for (const t of [...tiles.values()]) {
@@ -1453,11 +1735,11 @@ function tileLine (t) {
   if (t.kind === 'album') {
     const discs = new Set(t.items.map(i => i.season)).size
     // Size, not length: a length is known only once every track's header is read, and a shelf where some cards
-    // say minutes and others megabytes reads as noise. The sheet says both.
+    // say minutes and others megabytes reads as noise. The album's own page says both.
     return [(discs > 1 ? plural(discs, 'disc', 'discs') + ' · ' : '') + plural(n, 'track', 'tracks'), size(t.items.reduce((sum, i) => sum + (i.e.size || 0), 0))].join(' · ')
   }
   const e = t.items[0].e
-  return [t.kind === 'movie' ? 'Movie' : 'Video', n > 1 ? n + ' versions' : size(e.size)].join(' · ')
+  return [t.kind === 'movie' ? 'Movie' : 'Clip', n > 1 ? n + ' versions' : size(e.size)].join(' · ')
 }
 function tileState (t) {
   if (t.saved === t.items.length) return ['Saved here', 'ok']
@@ -1507,14 +1789,12 @@ function albumArt (t, cls) {
   albumCover(t).then(src => { if (src) box.append(h('img', { class: 'sleeve-img', alt: '', src })) })
   return box
 }
-// The first front cover (or, failing one, the first picture) among the album's first few saved tracks. Only files
-// held here are read, so looking for a picture never asks the network for a title; four tracks bound the cost of an
-// album that carries none to four small reads.
+// Try four public files that this relay holds. A missing cover is not a reason to open a private or remote file.
 const covers = new Map() // tile key -> Promise of an object URL or null
 function albumCover (t) {
   if (!covers.has(t.key)) {
     covers.set(t.key, (async () => {
-      for (const i of t.items.filter(x => saved(x.e) && x.e.streamUrl).slice(0, 4)) {
+      for (const i of t.items.filter(x => readableHere(x.e)).slice(0, 4)) {
         const src = await flacPicture(i.e).catch(() => null)
         if (src) return src
       }
@@ -1569,7 +1849,7 @@ async function flacPicture (e) {
   if (!/^image[/](jpeg|png|webp|gif)$/.test(mime) || p + 4 + length > pick.length) return null
   return URL.createObjectURL(new Blob([pick.subarray(p + 4, p + 4 + length)], { type: mime }))
 }
-// The album's running time, once every track's header has been read (the sheet reads them all); 0 until then.
+// The album's running time, once every track's header has been read (its page reads them all); 0 until then.
 function albumSecs (t) {
   let secs = 0
   for (const i of t.items) {
@@ -1580,74 +1860,64 @@ function albumSecs (t) {
   return secs
 }
 // What a copy of the album is: "FLAC 24-bit 44.1 kHz". The full verdict (bitrate, "lossless container") is the
-// album sheet's; this is the one fact a listener sorts a shelf by. The shelf reads one track's header per album,
-// and once a sheet has read them all it says what most tracks are.
+// album page's; this is the one fact a listener sorts a shelf by. The shelf reads one track's header per album,
+// and once a page has read them all it says what most tracks are.
 function shortQuality (d) {
   const a = d && d.media && (d.media.audio || [])[0]
   if (!a) return ''
   return [a.codec, a.depth ? a.depth + '-bit' : '', a.rate ? (a.rate / 1000) + ' kHz' : ''].filter(Boolean).join(' ')
 }
-// What a copy is, for the shelf, the sheet and a track's line: a YouTube copy is named by where it came from.
+// What a copy is, for a card, an album's page and a track's line: a YouTube copy is named by where it came from.
 const copyQuality = (e, d) => isYt(e) ? YT_LABEL : shortQuality(d)
 // An album that holds a YouTube copy beside another one (rows playing it, or kept as a second copy of a row).
 const hasYt = t => t.items.some(i => isYt(i.e) || (i.alts || []).some(isYt))
 const allYt = t => t.items.every(i => isYt(i.e) && !(i.alts || []).some(a => !isYt(a)))
-// One read per album at a time: the card is painted when it lands, and asked again on a later draw if it did not.
-const qualityAsked = new Set()
-function albumQuality (t) {
-  const e = (t.items.find(i => !isYt(i.e)) || t.items[0]).e
-  if (isYt(e) || infoData.has(e.key)) return commonQuality(t)
-  if (qualityAsked.has(e.key)) return ''
-  qualityAsked.add(e.key)
-  infoEntries.set(e.key, e)
-  loadInfo(e.key).then(() => {
-    qualityAsked.delete(e.key)
-    if (!infoData.has(e.key)) return
-    for (const line of document.querySelectorAll('[data-aq]')) if (line.dataset.aq === t.key) line.replaceChildren(...albumLine(t))
-  })
-  return ''
-}
-// Saved here is the normal state of a mirrored album, so it is said only when it is not true. An album that also
-// holds a YouTube copy says so after what most of it is; on a narrow card the quality is cut, never "also YouTube".
-function albumLine (t) {
-  const [state, tone] = tileState(t)
-  const q = albumQuality(t)
-  const main = [tone === 'ok' ? '' : state, q].filter(Boolean).join(' · ')
-  const yt = hasYt(t) && !allYt(t) && q !== YT_LABEL ? 'also YouTube' : ''
-  return [main ? h('span', { class: 'aq-main' }, main) : null, yt ? h('span', { class: 'aq-yt' }, (main ? ' · ' : '') + yt) : null].filter(Boolean)
+function toggleAlbum (t) {
+  if (tileOf(queue[queueIndex])?.key === t.key) musicToggle()
+  else startQueue(albumTracks(t), null, t.title)
 }
 function albumPlayBtn (t) {
-  const list = t.items.map(i => i.e).filter(e => !e.locked)
-  if (!list.length) return null
-  const b = h('button', { class: 'album-play', 'data-album': t.key, 'aria-label': 'Play ' + t.album, onclick: () => (queue.length && (tileOf(queue[queueIndex]) || {}).key === t.key) ? musicToggle() : startQueue(list, list[0], t.title) })
+  if (!t.items.some(i => canQueue(i.e))) return null
+  const label = 'Play ' + t.album
+  const b = h('button', { class: 'album-play', 'data-album': t.key, 'aria-label': label, title: label, onclick: () => toggleAlbum(t) })
   const ic = h('span', { class: 'btn-ic' })
   ic.innerHTML = ICON_PLAY + ICON_PAUSE
   b.append(ic)
   return b
 }
-// The Music view is a shelf per artist, not a wall of posters: albums are square, read left to right as name, size
-// and copy, and play from where they sit. Rows fill the width four to a line on a desktop and stack on a phone.
-function renderAlbums (list) {
-  const byArtist = new Map()
-  for (const t of list) {
-    const k = t.artist || 'Unknown artist'
-    if (!byArtist.has(k)) byArtist.set(k, [])
-    byArtist.get(k).push(t)
-  }
-  return [...byArtist].sort((a, b) => a[0].localeCompare(b[0])).map(([artist, albums]) => h('section', { class: 'artist-group' },
-    h('div', { class: 'artist-head' },
-      h('h3', null, artist),
-      h('span', { class: 'count' }, plural(albums.length, 'album', 'albums') + ' · ' + plural(albums.reduce((n, t) => n + t.items.length, 0), 'track', 'tracks'))),
-    h('div', { class: 'album-list' }, albums.sort((a, b) => a.album.localeCompare(b.album)).map(t => h('div', { class: 'album-card', 'data-tile': t.key },
-      h('button', { class: 'album-open', onclick: () => openDetail(t.key) },
-        albumArt(t),
-        h('span', { class: 'album-text' },
-          h('span', { class: 'album-name' }, t.album),
-          h('span', { class: 'album-meta' }, tileLine(t)),
-          h('span', { class: 'album-meta', 'data-aq': t.key }, ...albumLine(t)))),
-      albumPlayBtn(t))))))
+// One card: the album's own cover, its name and who made it. The same card stands in the Listen grid, in a Home
+// row and in Find. What a copy is made of belongs on the album's page, not on sixty cards: a shelf that read one
+// file header per album asked the relay for sixty headers to draw a wall of small print nobody reads.
+function albumCard (t) {
+  return h('div', { class: 'album-card', 'data-tile': t.key },
+    h('a', { class: 'album-open', href: '#album/' + encodeURIComponent(t.key) },
+      albumArt(t),
+      h('span', { class: 'album-text' },
+        h('span', { class: 'album-name' }, t.album),
+        h('span', { class: 'album-artist' }, t.artist || 'Unknown artist'))),
+    albumPlayBtn(t))
 }
-const albumMatches = (t, q) => t.title.toLowerCase().includes(q) || t.items.some(i => trackName(i.e).toLowerCase().includes(q))
+// An artist wears the sleeves of up to three of their albums, stacked. Nothing in the system holds a picture of a
+// person, and this page never asks a stranger for one.
+function artistCard (a) {
+  return h('a', { class: 'artist-card', href: '#artist/' + encodeURIComponent(a.name) },
+    h('span', { class: 'stack' }, a.albums.slice(0, 3).map((t, n) => albumArt(t, 'l' + n))),
+    h('span', { class: 'album-text' },
+      h('span', { class: 'album-name' }, a.name),
+      h('span', { class: 'album-artist' }, plural(a.albums.length, 'album', 'albums'))))
+}
+function artistList (albums) {
+  const by = new Map()
+  for (const t of albums) {
+    const name = t.artist || 'Unknown artist'
+    const k = fold(name)
+    if (!by.has(k)) by.set(k, { name, albums: [] })
+    by.get(k).albums.push(t)
+  }
+  return [...by.values()].sort((a, b) => a.name.localeCompare(b.name))
+}
+const albumTracksList = albums => albums.flatMap(t => t.items.map(i => ({ t, i })))
+  .sort((a, b) => trackName(a.i.e).localeCompare(trackName(b.i.e)))
 // Continue watching: where this browser stopped, remembered locally. No protocol change,
 // no relay state; a different browser starts its own list.
 const WATCH_KEY = 'peartube-watch'
@@ -1684,71 +1954,250 @@ function artImg (t, kind, cls) {
   }
   return img
 }
-function playLabel (t, i, w) {
-  const ep = t.kind === 'show' && i.season ? 'S' + i.season + 'E' + String(i.episode).padStart(2, '0') + ' · ' : ''
-  return ep + fmtClock(Math.max(0, w.dur - w.at)) + ' left'
+// Time left, in words: "1 h 36 min left", "31 min left". A clock reading 1:36:12 is a position, not a length.
+function timeLeft (secs) {
+  const m = Math.max(1, Math.round(Math.max(0, secs) / 60))
+  const hrs = Math.floor(m / 60)
+  const mins = m % 60
+  return (hrs ? hrs + ' h' + (mins ? ' ' + mins + ' min' : '') : mins + ' min') + ' left'
 }
-function renderHero (list) {
-  const hero = $('hero')
-  const pick = list[0]
-  if (!pick) { hero.hidden = true; hero.replaceChildren(); return }
-  const { t, i, w, pct } = pick
-  hero.hidden = false
-  hero.classList.toggle('no-art', !t.imdb)
-  const from = sourceName(i.e.source)
-  hero.replaceChildren(
-    artImg(t, 'backdrop', 'hero-art'),
-    h('div', { class: 'hero-scrim' }),
-    h('div', { class: 'hero-body' },
-      h('span', { class: 'eyebrow' }, 'Continue watching · ' + Math.round(pct * 100) + '%'),
-      h('h2', { class: 'hero-title' }, t.title),
-      h('div', { class: 'hero-meta' },
-        h('span', null, tileLine(t)), h('span', { class: 'dot' }), h('span', null, tileState(t)[0]),
-        from ? h('span', { class: 'dot' }) : null, from ? h('span', null, 'From ' + from) : null,
-        h('span', { class: 'dot' }), h('span', null, playLabel(t, i, w))),
-      h('div', { class: 'hero-progress' },
-        h('div', { class: 'bar-track' }, h('div', { style: 'width:' + Math.round(pct * 100) + '%' })),
-        h('span', null, Math.round(pct * 100) + '%')),
-      h('div', { class: 'hero-actions' },
-        h('button', { class: 'btn primary', onclick: () => play(i.e) },
-          h('svg', { width: '13', height: '13', viewBox: '0 0 16 16', 'aria-hidden': 'true' }, h('path', { d: 'M4 2.4l9 5.6-9 5.6z', fill: 'currentColor' })),
-          'Resume'),
-        h('button', { class: 'btn ghost', onclick: () => openDetail(t.key) }, 'Details')))
-  )
+// A wide picture for a title: the backdrop IMDb has for it, or the first letter of its name when it has none.
+function wideArt (t) {
+  return h('span', { class: 'wide-art' }, t.imdb ? artImg(t, 'backdrop') : h('span', { class: 'letter' }, monogram(t.title).slice(0, 1)))
 }
-function renderResume (list) {
-  // With a single title the hero already carries it; a one-card rail is noise.
-  const show = list.length > 1
-  $('resumeWrap').hidden = !show
-  $('resumeCount').textContent = show ? String(list.length) : ''
-  if (!show) { $('resume').replaceChildren(); return }
-  $('resume').replaceChildren(...list.map(({ t, i, w, pct }) => h('button', { class: 'r-card', onclick: () => play(i.e) },
-    artImg(t, 'backdrop'),
-    h('div', { class: 'wash' }),
-    h('div', { class: 'r-body' }, h('span', { class: 'r-title' }, t.title), h('span', { class: 'r-meta' }, playLabel(t, i, w))),
-    h('div', { class: 'r-track' }, h('div', { style: 'width:' + Math.round(pct * 100) + '%' }))
-  )))
+function progressBar (pct) {
+  return pct ? h('span', { class: 'tile-progress' }, h('span', { style: 'width:' + Math.round(pct * 100) + '%' })) : null
 }
-// Live channels land with the streaming pipeline: this is the slot and the card shape they will fill.
-function renderLive () {
-  const items = Array.isArray(S.live) ? S.live.slice(0, 6) : []
-  $('liveWrap').hidden = !items.length
-  $('liveCount').textContent = items.length ? String(items.length) : ''
-  if (!items.length) { $('live').replaceChildren(); return }
-  $('live').replaceChildren(...items.map(l => h('button', { class: 'r-card live', onclick: () => l.key && openDetail(l.key) },
-    l.imdb ? artImg({ imdb: l.imdb }, 'backdrop') : null,
-    h('div', { class: 'wash' }),
-    h('div', { class: 'r-body' },
-      h('span', { class: 'badge live' }, 'LIVE'),
-      h('span', { class: 'r-title' }, l.title || 'Live'),
-      h('span', { class: 'r-meta' }, (l.channel ? l.channel + ' · ' : '') + (l.viewers != null ? l.viewers + ' watching' : ''))))))
+// A clip has no poster, and a half-watched title is found by its picture sooner than by its name: both are wide
+// tiles, with what is left of them drawn on the picture.
+function wideTile (t, line, pct, onclick) {
+  return h('button', { class: 'tile wide', 'data-tile': t.key, onclick },
+    h('span', { class: 'tile-art' }, wideArt(t), progressBar(pct)),
+    h('span', { class: 'tile-title' }, t.title),
+    h('span', { class: 'tile-meta' }, line))
 }
 
-let libKind = 'all'
 let libShown = 60
 let libSignature = ''
-const KINDS = [['all', 'All'], ['movie', 'Movies'], ['show', 'Shows'], ['video', 'Videos']]
+let watchSaved = false
+const KINDS = [['all', 'All', ''], ['movie', 'Movies', 'movies'], ['show', 'Series', 'series'], ['video', 'Clips', 'clips']]
+// One poster of the video grid: what it is, where it comes from, and whether a copy is saved here.
+function videoTile (t) {
+  const [state, tone] = tileState(t)
+  return h('a', { class: 'tile', 'data-tile': t.key, href: '#title/' + encodeURIComponent(t.key) },
+    posterBox(t.imdb ? '/v1/poster/' + t.imdb : null, t.title),
+    h('span', { class: 'tile-title' }, t.title),
+    h('span', { class: 'tile-meta' }, [tileLine(t), sourceName(t.items[0].e.source)].filter(Boolean).join(' · ')),
+    h('span', { class: 'tile-meta' + (tone ? ' ' + tone : '') }, state))
+}
+// What an empty place says: why it is empty, then the way to fill it.
+function emptyNote (text) {
+  if (S.offline) return h('div', { class: 'empty' }, 'Can’t reach the relay.')
+  if (!S.loaded && !needsToken) return h('div', { class: 'empty' }, 'Loading the library…')
+  return h('div', { class: 'empty' }, text, h('div', { class: 'empty-acts' }, h('a', { class: 'btn primary', href: '#add' }, 'Add to library')))
+}
+
+// ---- Home: what is not finished first, then the start of each room. One line of each; the room holds the rest.
+// Keep playing holds video and music in one list, newest first. A video counts while it is between a fiftieth and
+// nineteen twentieths watched; the music counts while a queue is loaded and not finished. Newest means when a
+// person last moved one of them on, never when this page restored it.
+const KEEP_MAX = 4
+const HOME_ALBUMS = 8
+const HOME_VIDEOS = 8
+let homeSignature = ''
+function keepPlaying (videos) {
+  const items = resumeTiles(videos).map(({ t, i, w, pct }) => ({
+    key: 'v:' + watchId(i.e),
+    when: w.t || 0,
+    pct,
+    title: t.kind === 'show' && i.season ? t.title + ' · ' + epWords(i) : t.title,
+    sub: timeLeft(w.dur - w.at),
+    art: () => wideArt(t),
+    go: () => play(i.e)
+  }))
+  const cur = queue.length ? queue[queueIndex] : null
+  const album = cur && npState !== 'done' && (musicActivity || musicPosition() > 0 || queueIndex > 0) ? tileOf(cur) : null
+  if (album) {
+    items.push({
+      key: 'a:' + album.key,
+      when: Number(musicStore.t) || 0,
+      pct: 0,
+      title: album.album,
+      sub: 'Track ' + (queueIndex + 1) + ' of ' + queue.length,
+      art: () => albumArt(album),
+      go: () => musicToggle(),
+      album: album.key
+    })
+  }
+  return items.sort((a, b) => b.when - a.when).slice(0, KEEP_MAX)
+}
+const keepArt = k => h('span', { class: 'keep-art' + (k.album ? ' square' : ''), 'aria-hidden': 'true' }, k.art(), progressBar(k.pct))
+const keepLabel = k => (k.album ? 'Play ' : 'Resume ') + k.title
+function renderKeep (list) {
+  $('keepWrap').hidden = !list.length
+  if (!list.length) { $('keep').replaceChildren(); return }
+  const first = list[0]
+  const rest = list.slice(1)
+  $('keep').className = 'keep' + (rest.length ? '' : ' alone')
+  $('keep').replaceChildren(...[
+    h('div', { class: 'keep-big' },
+      h('button', { class: 'keep-face', 'aria-label': keepLabel(first), onclick: first.go }, keepArt(first)),
+      h('div', { class: 'keep-foot' },
+        h('div', { class: 'grow' },
+          h('div', { class: 'keep-name' }, first.title),
+          h('div', { class: 'keep-sub' }, first.sub)),
+        first.album
+          ? h('button', { class: 'btn primary', 'data-album': first.album, onclick: first.go }, playIcons(), h('span', null, 'Resume'))
+          : h('button', { class: 'btn primary', onclick: first.go }, playIcon(), h('span', null, 'Resume')))),
+    rest.length
+      ? h('div', { class: 'keep-rows' }, rest.map(k => h('button', { class: 'keep-row', 'aria-label': keepLabel(k), onclick: k.go },
+        keepArt(k),
+        h('span', { class: 'grow' },
+          h('span', { class: 'keep-name' }, k.title),
+          h('span', { class: 'keep-sub' }, k.sub)))))
+      : null
+  ].filter(Boolean))
+}
+function homeRow (title, all, href, body) {
+  return h('section', { class: 'home-row' },
+    h('div', { class: 'row-head' }, h('h2', null, title), all ? h('a', { class: 'row-all', href }, all) : null),
+    body)
+}
+function renderHome (force) {
+  const tiles = libraryTiles()
+  const albums = tiles.filter(t => t.kind === 'album')
+  const videos = tiles.filter(t => t.kind !== 'album')
+  const keep = keepPlaying(videos)
+  // With no movie and no series the video row is the clips, so a library of clips does not leave Home bare.
+  const films = videos.filter(t => t.kind !== 'video')
+  const row = (films.length ? films : videos).slice(0, HOME_VIDEOS)
+  const first = albums.slice(0, HOME_ALBUMS)
+  const signature = [S.offline, S.loaded, needsToken, albums.length, videos.length,
+    ...keep.map(k => k.key + Math.round(k.pct * 100) + k.sub),
+    ...[...first, ...row].map(t => t.key + tileState(t)[0] + t.items.length + '/' + (t.keys || []).length)].join('|')
+  if (!force && signature === homeSignature) return
+  homeSignature = signature
+  renderKeep(keep)
+  const rows = []
+  if (first.length) rows.push(homeRow('Albums', 'All albums', '#listen', h('div', { class: 'album-grid row-grid' }, first.map(albumCard))))
+  if (row.length) rows.push(films.length
+    ? homeRow('Movies and series', 'All video', '#watch', h('div', { class: 'grid row-grid' }, row.map(videoTile)))
+    : homeRow('Clips', 'All clips', '#watch/clips', h('div', { class: 'grid wide-grid row-grid' }, row.map(t => wideTile(t, tileLine(t), 0, () => openDetail(t.key))))))
+  if (!rows.length && !keep.length) rows.push(emptyNote('Nothing in your library yet.'))
+  $('homeRows').replaceChildren(...rows)
+  paintRows()
+}
+
+// ---- Watch: the video room. Movies, series and clips; albums are in Listen. The chip that is on is part of the
+// address (#watch/series), and a chip press replaces the address, so Back leaves the room in one step.
+const libKind = () => (KINDS.find(k => k[2] && k[2] === placeArg) || KINDS[0])[0]
 function renderLibrary (force) {
+  const tiles = libraryTiles()
+  const every = tiles.filter(t => t.kind !== 'album')
+  const all = watchSaved ? every.filter(t => t.saved === t.items.length) : every
+  const kind = libKind()
+  const list = all.filter(t => kind === 'all' || t.kind === kind)
+  const keep = kind === 'all' ? resumeTiles(all) : []
+  // Progress polls arrive every few seconds; redraw only when what the room shows has changed.
+  const signature = [kind, libShown, watchSaved, S.offline, S.loaded, needsToken, tiles.length - every.length,
+    ...keep.map(k => k.i.e.key + Math.round(k.pct * 100)),
+    ...list.slice(0, libShown).map(t => t.key + tileState(t)[0] + t.items.length)].join('|')
+  if (!force && signature === libSignature) return
+  libSignature = signature
+  $('watchCtl').hidden = every.length < 2
+  $('libKinds').replaceChildren(...KINDS.map(([k, label, view]) => {
+    const n = k === 'all' ? all.length : all.filter(t => t.kind === k).length
+    return n || k === 'all' ? h('button', { class: 'chip', 'aria-pressed': String(kind === k), onclick: () => { libShown = 60; location.replace('#watch' + (view ? '/' + view : '')) } }, label + ' ', h('span', { class: 'count' }, String(n))) : null
+  }).filter(Boolean))
+  $('watchSaved').setAttribute('aria-pressed', String(watchSaved))
+  if (!every.length) {
+    $('entries').replaceChildren(emptyNote(tiles.length ? 'No video yet. Your albums are in Listen.' : 'Nothing in your library yet.'))
+    return
+  }
+  if (!list.length) {
+    $('entries').replaceChildren(h('div', { class: 'empty' }, watchSaved ? 'Nothing here is saved on this relay.' : 'Nothing in this view.'))
+    return
+  }
+  const films = list.filter(t => t.kind !== 'video')
+  const clips = list.filter(t => t.kind === 'video')
+  const main = kind === 'all' ? (films.length ? films : clips) : list
+  const wide = main.every(t => t.kind === 'video')
+  const shown = main.slice(0, libShown)
+  const grid = h('div', { class: 'grid' + (wide ? ' wide-grid' : '') },
+    ...shown.map(t => wide ? wideTile(t, tileLine(t), 0, () => openDetail(t.key)) : videoTile(t)),
+    ...(main.length > libShown ? [h('div', { class: 'more', id: 'libMore' }, h('button', { class: 'btn', onclick: showMore }, 'Show more'))] : []))
+  const parts = []
+  if (keep.length) parts.push(homeRow('Keep watching', '', '', h('div', { class: 'grid wide-grid' }, keep.map(k => wideTile(k.t, timeLeft(k.w.dur - k.w.at), k.pct, () => play(k.i.e))))))
+  const extra = kind === 'all' && films.length ? clips : []
+  parts.push(keep.length || extra.length ? homeRow(wide ? 'Clips' : 'Movies and series', '', '', grid) : grid)
+  if (extra.length) parts.push(homeRow('Clips', 'All clips', '#watch/clips', h('div', { class: 'grid wide-grid' }, extra.slice(0, 12).map(t => wideTile(t, tileLine(t), 0, () => openDetail(t.key))))))
+  $('entries').replaceChildren(...parts)
+  const more = $('libMore')
+  if (more && 'IntersectionObserver' in window) {
+    const io = new IntersectionObserver(entries => { if (entries.some(x => x.isIntersecting)) { io.disconnect(); showMore() } }, { rootMargin: '600px' })
+    io.observe(more)
+  }
+}
+function showMore () { libShown += 60; renderLibrary() }
+$('watchSaved').onclick = () => { watchSaved = !watchSaved; libShown = 60; renderLibrary(true) }
+
+// ---- Listen: the music room. Albums, artists or tracks, each part of the address (#listen/artists); a press
+// replaces the address, so Back leaves the room in one step. An album's page is where listening starts.
+const LISTEN_VIEWS = [['albums', 'Albums', ''], ['artists', 'Artists', 'artists'], ['tracks', 'Tracks', 'tracks']]
+const listenView = () => (LISTEN_VIEWS.find(v => v[2] && v[2] === placeArg) || LISTEN_VIEWS[0])[0]
+const TRACKS_PAGE = 200
+let musicSignature = ''
+let listenSaved = false
+let trackWords = ''
+let tracksShown = TRACKS_PAGE
+function renderMusic (force) {
+  const every = libraryTiles().filter(t => t.kind === 'album')
+  const all = listenSaved ? every.filter(t => t.saved === t.items.length) : every
+  const view = listenView()
+  const artists = view === 'artists' ? artistList(all) : []
+  const tracks = view === 'tracks' ? albumTracksList(all) : []
+  // The copy count is in it too: removing one copy of a track leaves the rows alone but changes what the page says.
+  const signature = [view, listenSaved, trackWords, tracksShown, S.offline, S.loaded, needsToken,
+    ...all.map(t => t.key + tileState(t)[0] + t.items.length + '/' + (t.keys || []).length)].join('|')
+  if (!force && signature === musicSignature) return
+  musicSignature = signature
+  $('listenCtl').hidden = !every.length
+  $('listenSeg').replaceChildren(...LISTEN_VIEWS.map(([name, label, arg]) => h('button', {
+    class: 'seg-btn',
+    'aria-pressed': String(view === name),
+    onclick: () => { tracksShown = TRACKS_PAGE; location.replace('#listen' + (arg ? '/' + arg : '')) }
+  }, label)))
+  $('listenSaved').setAttribute('aria-pressed', String(listenSaved))
+  $('trackFilterWrap').hidden = view !== 'tracks'
+  $('musicCount').textContent = view === 'artists' ? plural(artists.length, 'artist', 'artists')
+    : view === 'tracks' ? plural(tracks.length, 'track', 'tracks')
+    : plural(all.length, 'album', 'albums')
+  if (!every.length) { $('albums').replaceChildren(emptyNote('No albums yet. Use Find to save one, or add a folder.')); return }
+  if (!all.length) { $('albums').replaceChildren(h('div', { class: 'empty' }, 'No album here is saved on this relay.')); return }
+  if (view === 'artists') $('albums').replaceChildren(h('div', { class: 'album-grid' }, artists.map(artistCard)))
+  else if (view === 'tracks') {
+    const has = findIn(trackWords)
+    const rows = trackWords ? tracks.filter(p => has.track(trackName(p.i.e), p.t.title + ' ' + ((p.i.e.music && p.i.e.music.artist) || ''))) : tracks
+    $('albums').replaceChildren(...[
+      rows.length
+        ? h('div', { class: 'rows tracks flat' }, rows.slice(0, tracksShown).map(p => songRow(p.t, p.i)))
+        : h('div', { class: 'empty' }, 'No track here matches those words.'),
+      rows.length > tracksShown
+        ? h('div', { class: 'more' }, h('button', { class: 'btn', onclick: () => { tracksShown += TRACKS_PAGE; renderMusic(true) } }, 'Show more'))
+        : null
+    ].filter(Boolean))
+  } else $('albums').replaceChildren(h('div', { class: 'album-grid' }, all.map(albumCard)))
+  paintRows()
+}
+$('listenSaved').onclick = () => { listenSaved = !listenSaved; renderMusic(true) }
+$('trackFilter').addEventListener('input', () => {
+  trackWords = $('trackFilter').value.trim()
+  tracksShown = TRACKS_PAGE
+  renderMusic(true)
+})
+
+// ---- Add to library: the add box and what is being added now.
+function renderAdd () {
   renderJobs()
   // The scan is offered only on a relay whose host set an import folder.
   const watching = Boolean(plugin('watch-dir').watching)
@@ -1757,96 +2206,129 @@ function renderLibrary (force) {
     $('folderForm').hidden = true
     $('folderChip').setAttribute('aria-expanded', 'false')
   }
-  // Albums live under Music: the film grid and its posters are the wrong shape for them.
-  const tiles = libraryTiles()
-  const all = tiles.filter(t => t.kind !== 'album')
-  const resume = resumeTiles(all)
-  renderHero(resume)
-  renderResume(resume)
-  renderLive()
-  const q = $('libFilter').value.trim().toLowerCase()
-  const list = all.filter(t => (libKind === 'all' || t.kind === libKind) && (!q || t.title.toLowerCase().includes(q)))
-  // Progress polls arrive every few seconds; redraw only when what the grid shows has changed.
-  const signature = [libKind, q, libShown, S.offline, S.loaded, tiles.length - all.length, ...list.slice(0, libShown).map(t => t.key + tileState(t)[0] + t.items.length)].join('|')
-  if (!force && signature === libSignature) return
-  libSignature = signature
-  $('libCount').textContent = all.length ? String(all.length) : ''
-  $('libTools').hidden = all.length < 2
-  $('libKinds').replaceChildren(...KINDS.map(([k, label]) => {
-    const n = k === 'all' ? all.length : all.filter(t => t.kind === k).length
-    return n || k === 'all' ? h('button', { class: 'chip', 'aria-pressed': String(libKind === k), onclick: () => { libKind = k; libShown = 60; renderLibrary() } }, label + ' ', h('span', { class: 'count' }, String(n))) : null
-  }).filter(Boolean))
-  if (!all.length) {
-    $('entries').replaceChildren(h('div', { class: 'empty' }, S.offline ? 'Can’t reach the relay.' : !S.loaded && !needsToken ? 'Loading the library…' : tiles.length ? 'No videos yet. Your albums are under Music.' : 'Nothing here yet. Paste a link above to add a video.'))
-    return
-  }
-  if (!list.length) {
-    $('entries').replaceChildren(h('div', { class: 'empty' }, q ? 'No titles match “' + q + '”.' : 'Nothing in this view.'))
-    return
-  }
-  $('entries').replaceChildren(...list.slice(0, libShown).map(t => {
-    const [state, tone] = tileState(t)
-    return h('button', { class: 'tile', 'data-tile': t.key, onclick: () => openDetail(t.key) },
-      posterBox(t.imdb ? '/v1/poster/' + t.imdb : null, t.title),
-      h('span', { class: 'tile-title' }, t.title),
-      h('span', { class: 'tile-meta' }, [tileLine(t), sourceName(t.items[0].e.source)].filter(Boolean).join(' · ')),
-      h('span', { class: 'tile-meta' + (tone ? ' ' + tone : '') }, state))
-  }), ...(list.length > libShown ? [h('div', { class: 'more', id: 'libMore' }, h('button', { class: 'btn', onclick: showMore }, 'Show more'))] : []))
-  const more = $('libMore')
-  if (more && 'IntersectionObserver' in window) {
-    const io = new IntersectionObserver(entries => { if (entries.some(x => x.isIntersecting)) { io.disconnect(); showMore() } }, { rootMargin: '600px' })
-    io.observe(more)
-  }
-  if ($('detail').open) renderDetail()
 }
-function showMore () { libShown += 60; renderLibrary() }
-$('libFilter').oninput = () => { libShown = 60; renderLibrary() }
 
-// ---- Music: the albums tab. Its own surface, not a filter on the film grid: a shelf per artist, the album sheet
-// as the place to listen, and the Soulseek search below it as the way to add more.
-let musicSignature = ''
-function renderMusic (force) {
+// ---- Find: one field, in the top bar, for everything. Typing narrows the library at once and asks nobody. Enter
+// (or Search) also asks outside the library: the sources that are on, and other relays. The words are part of the
+// address (#find/blue train), so Back returns to them and a reload keeps them.
+const FIND_SHOWN = 12
+const LINK_WORDS = /^(https?|peartube|magnet):[^ ]+$/i
+const findWords = () => $('srcInput').value.trim()
+function showFindWords (words) {
+  const box = $('srcInput')
+  if (tab !== 'find') { box.value = ''; return }
+  // A bare #find returns to the last search outside, so its results never stand under an empty field.
+  if (!words && srcRun) {
+    words = srcRun.query
+    history.replaceState(history.state, '', '#find/' + encodeURIComponent(words))
+  }
+  if (box.value.trim() !== words.trim()) box.value = words
+}
+$('srcInput').addEventListener('input', () => {
+  const words = findWords()
+  const to = '#find' + (words ? '/' + encodeURIComponent(words) : '')
+  if (readPlace().name !== 'find') { location.hash = to; return }
+  history.replaceState(history.state, '', to)
+  if (tab === 'find') renderFind()
+})
+// Every word must be in the text, in any order; case, width, punctuation and the accents of Latin and Greek
+// letters do not count. A mark that is a letter (Cyrillic й and ё) still counts. fold() keeps each mark with its
+// letter, so a word with an accent inside it stays one word.
+function findIn (words) {
+  const need = fold(words).split(' ').filter(Boolean)
+  const has = text => { const t = fold(text); return need.length > 0 && need.every(w => t.includes(w)) }
+  // A track is found by its own name, alone or beside its artist or album: one of the words must be in the name.
+  has.track = (name, of) => { const n = fold(name); return need.some(w => n.includes(w)) && has(name + ' ' + of) }
+  return has
+}
+function findGroup (title, n, body) {
+  return h('section', { class: 'find-group' },
+    h('div', { class: 'row-head' }, h('h3', null, title), h('span', { class: 'count' }, n > FIND_SHOWN ? FIND_SHOWN + ' of ' + n : String(n))),
+    body,
+    n > FIND_SHOWN ? h('div', { class: 'hint' }, 'Type more words to narrow these.') : null)
+}
+function findTrack ({ t, e }) {
+  return h('button', { class: 'find-track', 'data-find-track': e.key, onclick: () => openDetail(t.key) },
+    h('span', { class: 'ft-name' }, trackName(e)),
+    h('span', { class: 'ft-of' }, t.title))
+}
+let findSignature = ''
+function renderFind (force) {
   renderSourcesStatus()
-  const all = libraryTiles().filter(t => t.kind === 'album')
-  const q = $('musicFilter').value.trim().toLowerCase()
-  const list = all.filter(t => !q || albumMatches(t, q))
-  // The copy count is in it too: removing one copy of a track leaves the rows alone but changes the card's line.
-  const signature = [q, S.offline, S.loaded, sourcesOn().join(), ...list.map(t => t.key + tileState(t)[0] + t.items.length + '/' + (t.keys || []).length)].join('|')
-  if (!force && signature === musicSignature) return
-  musicSignature = signature
-  $('musicCount').textContent = all.length ? String(all.length) : ''
-  $('musicTools').hidden = all.length < 2
-  if (!all.length) {
-    $('albums').replaceChildren(h('div', { class: 'empty' }, S.offline ? 'Can’t reach the relay.' : !S.loaded && !needsToken ? 'Loading albums…' : 'No albums yet. Find one below.'))
-  } else if (!list.length) {
-    // A miss in the library is a reason to look further: one press runs the same words through Find music.
-    const words = $('musicFilter').value.trim()
-    const on = sourcesOn()
-    const look = on.length ? h('div', null, h('button', { class: 'btn', onclick: () => {
-      $('srcInput').value = words
-      $('srcForm').scrollIntoView({ block: 'start', behavior: 'smooth' })
-      $('srcForm').requestSubmit()
-    } }, 'Search ' + on.map(sourceLabel).join(' and ') + ' for “' + words + '”')) : null
-    $('albums').replaceChildren(h('div', { class: 'empty' }, 'No album, artist or track matches “' + q + '”.', look))
-  } else {
-    $('albums').replaceChildren(...renderAlbums(list))
-    paintRows()
+  const words = findWords()
+  const box = $('findLib')
+  if (!words) {
+    if (!force && findSignature === 'idle') return
+    findSignature = 'idle'
+    box.replaceChildren(h('p', { class: 'find-idle' }, 'Type a title or artist, or paste a link.'))
+    return
   }
-  if ($('detail').open) renderDetail()
+  const tiles = libraryTiles()
+  const has = findIn(words)
+  const albums = tiles.filter(t => t.kind === 'album' && has(t.title))
+  const tracks = tiles.filter(t => t.kind === 'album').flatMap(t => t.items.filter(i => has.track(trackName(i.e), t.title)).map(i => ({ t, e: i.e })))
+  const films = tiles.filter(t => (t.kind === 'movie' || t.kind === 'show') && has(t.title))
+  const clips = tiles.filter(t => t.kind === 'video' && has(t.title))
+  const link = LINK_WORDS.test(words)
+  const shown = [...albums.slice(0, FIND_SHOWN), ...films.slice(0, FIND_SHOWN), ...clips.slice(0, FIND_SHOWN)]
+  const signature = [words, S.offline, S.loaded, needsToken, albums.length, tracks.length, films.length, clips.length,
+    ...shown.map(t => t.key + tileState(t)[0] + t.items.length + '/' + (t.keys || []).length), ...tracks.slice(0, FIND_SHOWN).map(r => r.e.key)].join('|')
+  if (!force && signature === findSignature) return
+  findSignature = signature
+  const parts = [h('h2', null, 'In your library')]
+  if (link) {
+    parts.push(h('div', { class: 'find-link' }, h('span', null, 'This is a link.'), h('button', { class: 'btn primary', onclick: () => goPlace('#add', () => {
+      $('addInput').value = words
+      $('addInput').focus()
+    }) }, 'Add to library')))
+  }
+  if (albums.length) parts.push(findGroup('Albums', albums.length, h('div', { class: 'album-grid' }, albums.slice(0, FIND_SHOWN).map(albumCard))))
+  if (tracks.length) parts.push(findGroup('Tracks', tracks.length, h('div', { class: 'find-tracks' }, tracks.slice(0, FIND_SHOWN).map(findTrack))))
+  if (films.length) parts.push(findGroup('Movies and series', films.length, h('div', { class: 'grid' }, films.slice(0, FIND_SHOWN).map(videoTile))))
+  if (clips.length) parts.push(findGroup('Clips', clips.length, h('div', { class: 'grid wide-grid' }, clips.slice(0, FIND_SHOWN).map(t => wideTile(t, tileLine(t), 0, () => openDetail(t.key))))))
+  if (!link && !albums.length && !tracks.length && !films.length && !clips.length) {
+    parts.push(h('div', { class: 'empty' }, S.offline ? 'Can’t reach the relay.' : !S.loaded && !needsToken ? 'Loading the library…' : 'Nothing in your library matches “' + words + '”.'))
+  }
+  box.replaceChildren(...parts)
+  paintRows()
 }
-$('musicFilter').oninput = () => renderMusic()
 
-// ---- Library: search all relays (POST /v1/search/global). Answers that arrive later come with an update event,
-// which asks the same query again for 60 s.
-let globalAsk = null
+// ---- Other relays (POST /v1/search/global): asked beside the sources, with the same words, while its chip is on.
+// Answers that arrive later come with an update event, which asks the same query again for 60 s. A result plays
+// from the relay that holds it; nothing is saved here. The relay takes new words from one address every 3 s and
+// refuses them before that, so new words wait their turn here: the reader sees "Asking relays…", never the refusal.
+const RELAYS = 'relays'
+const relaysCan = () => !S.status.privateRouting
+const relaysOn = () => relaysCan() && !sourcesOff().includes(RELAYS)
+const RELAYS_PACE = 3100
+let globalAsk = null // { body, at, sent }
+let globalNew = { key: '', at: 0 }
+let globalTimer = 0
 function globalBody (val) {
   const tt = val.toLowerCase().match(/^(imdb:)?(tt[0-9]+)$/)
   return tt ? { id: 'imdb:' + tt[2] } : { query: val }
 }
 async function askGlobal () {
-  if (!globalAsk || Date.now() - globalAsk.at > 60000) return
-  const r = await api('/v1/search/global', { body: globalAsk.body })
-  renderGlobal(r.results || [])
+  const ask = globalAsk
+  if (!ask || !ask.sent || Date.now() - ask.at > 60000) return
+  const r = await api('/v1/search/global', { body: ask.body })
+  if (ask === globalAsk) renderGlobal(r.results || [])
+}
+function sendGlobal (ask, again) {
+  if (ask !== globalAsk) return
+  ask.sent = true
+  const key = JSON.stringify(ask.body)
+  if (key !== globalNew.key) globalNew = { key, at: Date.now() }
+  askGlobal().catch(err => {
+    if (ask !== globalAsk) return
+    // Another tab, or this page before a reload, asked other words just before: these go once the relay takes them.
+    if (err.status === 429 && !again) {
+      ask.sent = false
+      globalTimer = setTimeout(sendGlobal, RELAYS_PACE, ask, true)
+      return
+    }
+    say('globalMsg', err.message, true)
+  })
 }
 function renderGlobal (rows) {
   say('globalMsg', rows.length ? '' : 'No relay has it yet. Answers can take a few seconds.')
@@ -1862,12 +2344,28 @@ function renderGlobal (rows) {
       }, 'globalMsg') }, 'Play'),
       copyBtn('Copy link', row.magnetUrl)))))
 }
-$('globalForm').onsubmit = ev => {
-  ev.preventDefault()
-  const val = $('globalInput').value.trim()
-  globalAsk = { body: globalBody(val), at: Date.now() }
+function searchRelays (words) {
+  clearTimeout(globalTimer)
+  const on = relaysOn() && Boolean(words)
+  globalAsk = null
+  $('globalWrap').hidden = !on
+  $('globalResults').replaceChildren()
+  if (!on) return
+  // The relays match whole words of two characters or more.
+  if (!fold(words).split(' ').some(w => w.length >= 2)) { say('globalMsg', 'Type at least 2 letters.'); return }
+  const ask = globalAsk = { body: globalBody(words), at: Date.now(), sent: false }
   say('globalMsg', 'Asking relays…')
-  act($('globalBtn'), askGlobal, 'globalMsg')
+  const wait = JSON.stringify(ask.body) === globalNew.key ? 0 : Math.max(0, globalNew.at + RELAYS_PACE - Date.now())
+  globalTimer = setTimeout(sendGlobal, wait, ask)
+}
+function relaysChip () {
+  if (!relaysCan()) return h('button', { class: 'chip', 'data-src': RELAYS, 'aria-disabled': 'true' }, 'Other relays · ', h('span', { class: 'st' }, 'Off with private routing'))
+  const on = relaysOn()
+  return h('button', { class: 'chip', 'data-src': RELAYS, 'aria-pressed': String(on), 'aria-label': 'Search other relays', onclick: () => {
+    setSourceOff(RELAYS, on)
+    renderSourcesStatus()
+    searchRelays(srcRun ? srcRun.query : '')
+  } }, on ? '✓ ' : '', 'Other relays')
 }
 
 // ==== Sources: one search over Soulseek and YouTube, browse a peer's folders, save, port and job legibility ====
@@ -1962,13 +2460,14 @@ function sourceState (name) {
 const sourcesHere = () => SOURCES.map(s => s[0]).filter(n => sourceState(n))
 const sourcesOn = () => sourcesHere().filter(n => sourceState(n).state === 'on')
 function openSourceSetup () {
-  location.hash = '#settings'
-  const until = Date.now() + 3000
-  const find = () => {
-    const card = document.querySelector('.card[data-group="Sources"]')
-    if (card) { card.scrollIntoView({ block: 'start' }); const f = card.querySelector('input'); if (f) f.focus({ preventScroll: true }) } else if (Date.now() < until) setTimeout(find, 100)
-  }
-  setTimeout(find, 0)
+  goPlace('#settings', () => {
+    const until = Date.now() + 3000
+    const find = () => {
+      const card = document.querySelector('.card[data-group="Sources"]')
+      if (card) { card.scrollIntoView({ block: 'start' }); const f = card.querySelector('input'); if (f) f.focus({ preventScroll: true }) } else if (Date.now() < until) setTimeout(find, 100)
+    }
+    find()
+  })
 }
 function sourceChip (name) {
   const st = sourceState(name)
@@ -1993,8 +2492,7 @@ function renderSourceChips () {
   const here = sourcesHere()
   const box = $('srcChips')
   const focused = box.contains(document.activeElement) ? document.activeElement.dataset.src : ''
-  $('srcIn').hidden = here.length < 2
-  box.replaceChildren(...here.map(sourceChip))
+  box.replaceChildren(...here.map(sourceChip), relaysChip())
   // Redrawn every second while a mirror runs: focus comes back without scrolling, or the page jumps to the chips.
   if (focused) { const again = box.querySelector('[data-src="' + focused + '"]'); if (again) again.focus({ preventScroll: true }) }
   const on = sourcesOn()
@@ -2002,8 +2500,9 @@ function renderSourceChips () {
   $('srcHint').textContent = on.length === 2 ? 'Finds albums on peers and tracks on YouTube.'
     : on[0] === 'soulseek' ? 'Finds albums on peers and mirrors them here.'
       : on[0] === 'youtube' ? 'Finds YouTube videos and saves their audio here.'
-        : usable.length ? 'Pick a source to search.'
-          : here.some(n => sourceState(n).state === 'setup') ? 'Set up a source in Settings to search.' : 'No search source works on this device.'
+        : relaysOn() ? 'Finds titles that other relays hold.'
+          : usable.length ? 'Pick a source to search.'
+            : here.some(n => sourceState(n).state === 'setup') ? 'Set up a source in Settings to search.' : 'No search source works on this device.'
   const notes = here.map(n => sourceState(n).note).filter(Boolean)
   $('srcNote').hidden = !notes.length
   $('srcNote').replaceChildren(...notes.map(t => h('div', null, t)))
@@ -2049,7 +2548,7 @@ async function searchSources (query, names) {
   }
   const run = srcRun
   const list = names || sourcesOn()
-  if (!list.length) { say('srcMsg', 'Pick a source to search.', true); renderSrcGroups(); return }
+  if (!list.length) { say('srcMsg', relaysOn() ? '' : 'Pick a source to search.', !relaysOn()); renderSrcGroups(); return }
   const ask = ++srcAsks
   for (const n of list) run.groups.set(n, { state: 'pending', started: Date.now(), ask, results: [], truncated: false, error: null })
   renderSrcGroups(list, [run, 'Searching ' + list.map(sourceLabel).join(' and ') + ' for “' + query + '”.'])
@@ -2116,12 +2615,11 @@ function srcTick () {
 }
 $('srcForm').onsubmit = ev => {
   ev.preventDefault()
-  const query = $('srcInput').value.trim()
+  const query = findWords()
   if (!query) return
-  try { localStorage.setItem('peartube.srcQuery', query) } catch {}
   searchSources(query)
+  searchRelays(query)
 }
-try { $('srcInput').value = localStorage.getItem('peartube.srcQuery') || '' } catch {}
 
 // ---- Groups: one section per source in SOURCES order; only the named ones are redrawn, so a row being pressed in
 // one group is not rebuilt when the other answers. An answer that lands while a press is in progress waits for it to
@@ -2271,7 +2769,7 @@ function renderSlskResults (part) {
           h('div', { class: 'meta wrap' }, ready + ' · from ' + g.username)),
         h('div', { class: 'acts' },
           h('button', { class: 'btn', 'aria-label': 'Browse ' + g.username + '’s ' + g.title, onclick: () => openSlskBrowse(g.username, g.dir) }, 'Browse'),
-          slskMirrorBtn(g, () => g.files, g.files.length === 1 ? 'Mirror track' : 'Mirror', 'srcMsg', (g.files.length === 1 ? 'Mirror track ' + slskLeaf(slskPath(g.files[0].filename)) : 'Mirror ' + g.title) + ' from ' + g.username)))
+          slskMirrorBtn(g, () => g.files, g.files.length === 1 ? 'Save track' : 'Save album', 'srcMsg', (g.files.length === 1 ? 'Save track ' + slskLeaf(slskPath(g.files[0].filename)) : 'Save album ' + g.title) + ' from ' + g.username)))
     }))]
 }
 // The FLAC-like format peers offered for this search, if any: the reason to look above before saving a lossy copy.
@@ -2816,7 +3314,7 @@ function slskFolderItem (g) {
   const picked = () => g.files.filter(f => !off.has(f.filename))
   const label = () => {
     const n = picked().length
-    return n === g.files.length ? 'Mirror folder' : n ? 'Mirror ' + plural(n, 'track', 'tracks') : 'None selected'
+    return n === g.files.length ? 'Save folder' : n ? 'Save ' + plural(n, 'track', 'tracks') : 'None selected'
   }
   const mirror = slskMirrorBtn(g, picked, label(), 'slskBrowseMsg')
   // Nothing picked keeps the button off, also when a finished mirror gives it back.
@@ -2828,9 +3326,9 @@ function slskFolderItem (g) {
   // Each file can be mirrored on its own: it lands in its album's folder as a track of that album (the relay reads
   // its tags, else this folder's name, and says so on the job), and is followed live like a folder mirror.
   const one = f => {
-    const b = slskMirrorBtn({ key: slskKey(g.username, f.filename), username: g.username, title: '', files: [f] }, () => [f], 'Mirror track', 'slskBrowseMsg')
+    const b = slskMirrorBtn({ key: slskKey(g.username, f.filename), username: g.username, title: '', files: [f] }, () => [f], 'Save track', 'slskBrowseMsg')
     b.className = 'btn quiet slsk-one'
-    b.setAttribute('aria-label', 'Mirror track ' + slskLeaf(slskPath(f.filename)))
+    b.setAttribute('aria-label', 'Save track ' + slskLeaf(slskPath(f.filename)))
     return b
   }
   const files = open
@@ -2989,7 +3487,7 @@ function srcSyncButton (b) {
     b.disabled = b.hasAttribute('data-none')
     return
   }
-  b.textContent = j ? jobState(j).short : key.startsWith('y:') ? 'Waiting' : 'Mirroring'
+  b.textContent = j ? jobState(j).short : key.startsWith('y:') ? 'Waiting' : 'Saving'
   b.disabled = true
 }
 function renderSrcJobs () {
@@ -3012,7 +3510,7 @@ function renderSrcJobs () {
 }
 function renderMirrors () {
   renderPills()
-  if (tab === 'music') renderSourcesStatus()
+  if (tab === 'find') renderSourcesStatus()
 }
 // Cheap and independent of the full refresh, which holds still while a film plays. When the last mirror ends, one
 // full refresh loads the new album's tracks so its card can open it.
@@ -3057,15 +3555,15 @@ function renderSourcesStatus () {
 }
 // ==== end Sources ====
 
-// ---- Library: details sheet (play, cast, copy; a show's episodes by season)
-let detailKey = null
+// ---- Library: a title, an album and an artist are places of their own. This opens one from anywhere — a tile, the
+// music bar, a finished job — without the caller having to know which kind it is.
+let detailArg = null
 let detailSeason = null
 function openDetail (key, season = null) {
-  detailKey = key
+  const t = libraryTiles().find(x => x.key === key)
+  detailArg = key
   detailSeason = season
-  renderDetail()
-  if (!$('detail').open) $('detail').showModal()
-  if (!infoTimer) infoTimer = setInterval(pollInfo, 3000)
+  goPlace((t && t.kind === 'album' ? '#album/' : '#title/') + encodeURIComponent(key))
 }
 function castButton (e) {
   const tvs = (S.cast && S.cast.receivers) || []
@@ -3087,7 +3585,7 @@ const resumeAtFor = e => {
   return w && w.dur > 0 && w.at / w.dur < 0.95 ? w.at : 0
 }
 function play (e, at) {
-  $('detail').close()
+  if (!playable(e)) return toast('This file is not available to play.')
   openPlayer(e, at == null ? resumeAtFor(e) : at)
 }
 function downloadHref (e, nameOverride) {
@@ -3181,23 +3679,24 @@ function albumDeleteBtn (t) {
     // The tile's key list spans every release folded into it; its items collapse duplicate copies to one row and
     // would leave the dropped copy's announce behind (mergeAlbums keeps only the first). Fall back to rows we have.
     const keys = Array.isArray(t.keys) && t.keys.length ? t.keys : own.map(i => i.e.key)
-    return removeEntries({ keys }, () => $('detail').close())
+    return removeEntries({ keys }, () => leaveDetail())
   })
   return [b, ask]
 }
 // ---- end Delete
-function fileRow (label, e, withHealth) {
+function fileRow (label, e, withHealth, labelText) {
+  const text = labelText || (typeof label === 'string' ? label : '')
   const from = sourceName(e.source)
-  const dlName = /^S\\d+E\\d+$/i.test(label) && e.title && !/s\\d+e\\d+/i.test(e.title) ? e.title + ' ' + label : (e.title || label)
+  const dlName = /^S\\d+E\\d+$/i.test(text) && e.title && !/s\\d+e\\d+/i.test(e.title) ? e.title + ' ' + text : (e.title || text)
   const accessNote = e.locked ? 'Subscriber pass needed' : (e.private ? 'Subscribers only' : '')
   const shown = infoShown.has(e.key)
   return h('div', null, h('div', { class: 'row-item' },
     h('div', { class: 'grow' }, h('div', { class: 'label' }, label, withHealth ? healthTag(e) : null), h('div', { class: 'meta' }, [size(e.size), where(e), accessNote, from && 'from ' + from].filter(Boolean).join(' · '))),
     h('div', { class: 'acts' },
-      e.locked ? null : h('button', { class: 'btn primary', 'data-play': true, onclick: () => play(e) }, 'Play'),
+      !playable(e) ? null : h('button', { class: 'btn primary', 'data-play': true, onclick: () => play(e) }, 'Play'),
       e.locked ? null : castButton(e),
       e.locked ? null : downloadBtn(e, true, dlName),
-      h('button', { class: 'btn quiet', title: e.magnetUrl, onclick: () => copyText(e.magnetUrl) }, 'Copy link'),
+      h('button', { class: 'btn quiet', onclick: () => copyText(e.magnetUrl) }, 'Copy link'),
       h('button', { class: 'btn quiet', 'aria-expanded': String(shown), onclick: () => { shown ? infoShown.delete(e.key) : infoShown.add(e.key); renderDetail() } }, 'File info'),
       deleteBtn(e, true))),
   shown ? infoPanel(e) : null)
@@ -3230,8 +3729,8 @@ function qualityOf (e, d) {
 }
 // A row's second line says only what sets the track apart: an artist who is not the album's, a copy that is not
 // what the rest of the album is (one 16-bit track on a 24-bit album, a YouTube copy on a FLAC album), not saved here
-// yet, or held twice. On a clean album every row is one line. The full verdict ("lossless container", bitrate) is
-// the line's tooltip, and the album's own is the sheet's header.
+// yet, or held twice. On a clean album every row is one line. The tooltip keeps the full verdict. The album page
+// gives the common codec, depth and rate once, above the track list.
 function trackMeta (i, d, albumArtist, common) {
   const e = i.e
   const artist = e.music && e.music.artist
@@ -3255,9 +3754,9 @@ function trackRow (i, t, common) {
   const e = i.e
   const d = infoData.get(e.key)
   infoEntries.set(e.key, e)
-  if (!d) loadInfo(e.key)
-  const go = () => isCurrent(e) ? musicToggle() : startQueue(t.items.map(x => x.e), e, t.title)
-  const btn = h('button', { class: 'track-play', 'aria-label': 'Play ' + trackName(e), onclick: ev => { ev.stopPropagation(); go() } }, h('span', { class: 'tn' }, String(i.episode)))
+  if (!d && readableHere(e)) loadInfo(e.key)
+  const go = () => { if (canQueue(e)) isCurrent(e) ? musicToggle() : startQueue(albumTracks(t), e, t.title) }
+  const btn = h('button', { class: 'track-play', disabled: !canQueue(e), 'aria-label': 'Play ' + trackName(e), onclick: ev => { ev.stopPropagation(); go() } }, h('span', { class: 'tn' }, String(i.episode)))
   btn.insertAdjacentHTML('beforeend', ICON_PLAY + ICON_PAUSE)
   const dl = e.streamUrl ? h('a', { class: 'track-dl', href: downloadHref(e, (trackNo(e) ? trackNo(e) + ' ' : '') + trackName(e) + ' — ' + t.title), download: '', title: 'Download', 'aria-label': 'Download ' + trackName(e) }) : null
   if (dl) dl.innerHTML = ICON_DOWNLOAD
@@ -3269,19 +3768,12 @@ function trackRow (i, t, common) {
       trackYtDeleteBtn(i)),
     h('span', { class: 'track-dur', 'data-dur': e.key }, duration(trackSecs(d))),
     dl,
+    moreMenu('More', queueOptions([e], t.title)),
     trackDeleteBtn(i))
-}
-// The sheet's header: how much and how long (once every header is read) and where it lives; then what the copy is.
-function albumHeadLine (t) {
-  const secs = albumSecs(t)
-  return [plural(t.items.length, 'track', 'tracks'), secs ? Math.round(secs / 60) + ' min' : '', size(t.items.reduce((n, i) => n + (i.e.size || 0), 0)),
-    tileState(t)[0], t.releases > 1 ? 'from ' + t.releases + ' releases' : ''].filter(Boolean).join(' · ')
 }
 function albumVerdict (t) {
   const common = commonQuality(t)
-  if (common === YT_LABEL) return 'From ' + YT_LABEL
-  const i = t.items.find(x => !isYt(x.e) && shortQuality(infoData.get(x.e.key)) === common) || t.items.find(x => !isYt(x.e)) || t.items[0]
-  return qualityOf(i.e, infoData.get(i.e.key))
+  return common === YT_LABEL ? 'From ' + YT_LABEL : common
 }
 // Under the verdict, only when an album mixes a YouTube copy with another: which one plays, and what exists only
 // on YouTube.
@@ -3298,14 +3790,14 @@ function albumAlso (t) {
   if (only) lines.push(plural(only, 'track', 'tracks') + ' only from ' + YT_LABEL + '.')
   return lines.join(' ')
 }
-// Headers land one by one after the sheet opens; each redraws the lines that depend on them, never the rows.
-function paintAlbumSheet (t) {
+// Headers land one by one after the page opens; each redraws the lines that depend on them, never the rows.
+function paintAlbumPage (t) {
   const box = $('detailBody')
   const common = commonQuality(t)
   const am = box.querySelector('[data-am]')
-  if (am) am.textContent = albumHeadLine(t)
-  const av = box.querySelector('[data-av]')
-  if (av) av.textContent = albumVerdict(t)
+  if (am) am.textContent = albumFacts(t)
+  const aq = box.querySelector('[data-aq]')
+  if (aq) aq.replaceChildren(...albumQuietLine(t))
   const ay = box.querySelector('[data-ay]')
   if (ay) { ay.textContent = albumAlso(t); ay.hidden = !ay.textContent }
   for (const i of t.items) {
@@ -3323,34 +3815,6 @@ function paintAlbumSheet (t) {
       b.setAttribute('aria-label', label)
     }
   }
-}
-function albumHead (t) {
-  const list = t.items.map(i => i.e).filter(e => !e.locked)
-  const del = albumDeleteBtn(t)
-  const icons = h('span', { class: 'btn-ic' })
-  icons.innerHTML = ICON_PLAY + ICON_PAUSE
-  const shuffled = () => {
-    const pool = list.slice()
-    for (let i = pool.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [pool[i], pool[j]] = [pool[j], pool[i]] }
-    return pool
-  }
-  // Flat children on a grid: beside the sleeve on a desktop; on a phone the name sits beside it and the facts and
-  // buttons take the full width under it, so Play and Shuffle stay on one line.
-  return h('div', { class: 'detail-head album-head' },
-    albumArt(t, 'sleeve-lg'),
-    h('div', { class: 'ah-title' },
-      h('h3', { id: 'detailTitle' }, t.album),
-      h('div', { class: 'album-by' }, t.artist || 'Unknown artist')),
-    h('div', { class: 'ah-meta' },
-      h('div', { class: 'meta', 'data-am': t.key }, albumHeadLine(t)),
-      h('div', { class: 'meta', 'data-av': t.key }, albumVerdict(t)),
-      h('div', { class: 'meta', 'data-ay': t.key, hidden: !albumAlso(t) }, albumAlso(t))),
-    list.length || del
-      ? h('div', { class: 'album-acts' },
-        list.length ? h('button', { class: 'btn primary', 'data-album': t.key, onclick: () => queue.length && (tileOf(queue[queueIndex]) || {}).key === t.key ? musicToggle() : startQueue(list, list[0], t.title) }, icons, h('span', null, 'Play')) : null,
-        list.length > 1 ? h('button', { class: 'btn quiet', onclick: () => startQueue(shuffled(), null, t.title, 'Shuffling') }, 'Shuffle') : null,
-        del)
-      : null)
 }
 
 // ---- Music: one queue, one audio element, one bar along the bottom of every tab
@@ -3380,6 +3844,7 @@ function npLoading () {
 let seekDragging = false
 let lastMusicSave = 0
 let musicRestored = false
+let playedSince = false // sound has come out since this queue was last saved: a pause after that is a person's
 const albumName = title => String(title || '').split(' · ').pop()
 const isCurrent = e => queue.length > 0 && queue[queueIndex].key === e.key
 const clock = s => duration(s) || '0:00'
@@ -3395,14 +3860,22 @@ function musicAudio () {
   a.volume = Number.isFinite(musicStore.vol) ? Math.min(1, Math.max(0, musicStore.vol)) : 1
   document.body.append(a)
   a.addEventListener('playing', () => {
+    if (a.paused || heldForVideo) return
     npState = 'playing'
+    playedSince = true
     if (npAnnounce) { toast(npAnnounce); npAnnounce = '' }
     paintBar()
   })
   a.addEventListener('waiting', () => { if (!a.paused) { npLoading(); paintBar() } })
-  a.addEventListener('pause', () => { if (npState !== 'done' && npState !== 'error') npState = 'paused'; paintBar(); saveMusic(true) })
+  a.addEventListener('pause', () => {
+    if (!a.paused) return
+    if (npState !== 'done' && npState !== 'error') npState = 'paused'
+    paintBar()
+    saveMusic(true, playedSince && !heldForVideo)
+    playedSince = false
+  })
   a.addEventListener('ended', trackEnded)
-  a.addEventListener('timeupdate', () => { paintTime(); saveMusic() })
+  a.addEventListener('timeupdate', () => { paintTime(); saveMusic(false, !a.paused) })
   a.addEventListener('durationchange', paintTime)
   a.addEventListener('error', async () => {
     const src = a.getAttribute('src')
@@ -3439,35 +3912,75 @@ function setMediaSession (e) {
   if (!navigator.mediaSession || typeof MediaMetadata !== 'function') return
   try { navigator.mediaSession.metadata = new MediaMetadata({ title: trackName(e), artist: (e.music && e.music.artist) || '', album: albumName(e.title) }) } catch {}
 }
-// Starts a list from one of its tracks (the first when none is named) and says so once the sound starts.
+// The two players use one list of occurrences, one current index and one audio element. The boundary marks
+// where songs added after the original list begin. An entry key can occur more than once.
+let queueBoundary = 0
+let queueRevision = 0
+let repeatList = musicStore.repeat === true
+let heldForVideo = false
+let parkedAt = 0
+let musicActivity = Number(musicStore.t) || 0
+const canQueue = e => playable(e) && e.season != null && e.episode != null && !String(e.id).startsWith('imdb:')
+const musicPosition = () => audioEl && audioEl.getAttribute('src') ? audioEl.currentTime || 0 : parkedAt
+const musicLength = () => Number.isFinite(audioEl?.duration) ? audioEl.duration : trackSecs(infoData.get(queue[queueIndex]?.key))
 function startQueue (list, start, title, verb = 'Playing') {
-  const q = list.filter(e => !e.locked)
+  const q = list.filter(canQueue)
   if (!q.length) return
   queue = q
+  queueBoundary = q.length
+  queueRevision++
   queueTitle = title || q[0].title
-  $('detail').close()
   const i = Math.max(0, q.indexOf(start))
   playAt(i, i === 0 && q.length > 1 ? verb + ' “' + albumName(queueTitle) + '”, ' + plural(q.length, 'track', 'tracks') : nowLine(verb, i))
-  loadQueueInfo()
 }
-// Track lengths for the queue panel come from the same header read as the sheet's rows.
-function loadQueueInfo () {
-  for (const e of queue) if (!infoData.has(e.key)) { infoEntries.set(e.key, e); loadInfo(e.key) }
+function addToQueue (list, next, title) {
+  const added = list.filter(canQueue)
+  if (!added.length) return
+  if (!queue.length) {
+    // Adding is not Play: a fresh list waits on its first song without starting a sound or opening a file.
+    queue = added
+    queueIndex = 0
+    queueBoundary = added.length
+    queueTitle = title || added[0].title
+    parkedAt = 0
+    npState = 'paused'
+    musicAudio()
+    setMediaSession(added[0])
+  } else {
+    const at = next ? queueIndex + 1 : queue.length
+    queue = queue.slice(0, at).concat(added, queue.slice(at))
+    if (next && at < queueBoundary) queueBoundary += added.length
+  }
+  queueRevision++
+  saveMusic(true)
+  paintBar()
+  toast('Added ' + plural(added.length, 'track', 'tracks') + ' to Up next')
 }
-function playAt (i, announce) {
-  const a = musicAudio()
-  // A track has no picture, so it never opens the video player; one that is open is closed, not left half-running.
-  closePlayer()
-  queueIndex = i
+function queueOptions (list, title) {
+  if (!list.some(canQueue)) return []
+  return [['Play next', true], ['Play last', false]].map(([label, next]) => h('button', { class: 'btn quiet', onclick: ev => {
+    ev.currentTarget.closest('.menu')?.remove()
+    addToQueue(list, next, title)
+  } }, label))
+}
+function playAt (i, announce, offset = 0) {
   const e = queue[i]
+  if (!e) return
+  closePlayer()
+  heldForVideo = false
+  queueIndex = i
+  parkedAt = 0
   npAnnounce = announce || ''
+  npError = ''
   npLoading()
+  const a = musicAudio()
   a.preload = 'auto'
   a.src = resolveStreamUrl(e.streamUrl)
+  if (offset > 0) a.currentTime = offset
   a.play().catch(err => {
-    // A browser that wants a click first refuses here; the bar then offers play instead of a spinner that never ends.
-    if (err && err.name === 'NotAllowedError' && queue[queueIndex] === e) { npState = 'paused'; npAnnounce = ''; paintBar() }
+    if (err.name === 'NotAllowedError' && queue[queueIndex] === e) { npState = 'paused'; npAnnounce = ''; paintBar() }
   })
+  musicActivity = Date.now()
   setMediaSession(e)
   saveMusic(true)
   paintBar()
@@ -3476,115 +3989,256 @@ function musicToggle () {
   const a = audioEl
   if (!a || !queue.length) return
   if (npState === 'done') playAt(0, nowLine('Playing', 0))
-  else if (npState === 'error') playAt(queueIndex)
-  else if (a.paused) a.play().catch(() => {})
-  else a.pause()
+  else if (npState === 'error' || !a.getAttribute('src')) playAt(queueIndex, '', parkedAt)
+  else if (a.paused) {
+    closePlayer()
+    heldForVideo = false
+    a.play().catch(() => { npState = 'paused'; paintBar() })
+    saveMusic(true, true)
+    paintBar()
+  } else a.pause()
+}
+// Previous and Next are not Play. When a video holds the sound, choose the track without opening it.
+function skipMusic (i) {
+  if (!heldForVideo) { playAt(i); return }
+  queueIndex = i
+  parkedAt = 0
+  audioEl.removeAttribute('src')
+  audioEl.load()
+  npState = 'paused'
+  setMediaSession(queue[i])
+  saveMusic(true)
+  paintBar()
 }
 function musicNext () {
-  if (queueIndex + 1 < queue.length) playAt(queueIndex + 1)
+  if (queueIndex + 1 < queue.length) skipMusic(queueIndex + 1)
+  else if (repeatList && queue.length) skipMusic(0)
 }
 function musicPrev () {
   if (!queue.length) return
-  // Like every player: back restarts the track, and only a second press near its start goes to the one before.
-  if (queueIndex === 0 || (audioEl && audioEl.currentTime > 3 && npState !== 'error')) musicSeek(0)
-  else playAt(queueIndex - 1)
+  if (queueIndex === 0 || (musicPosition() > 3 && npState !== 'error')) musicSeek(0)
+  else skipMusic(queueIndex - 1)
 }
 function musicSeek (secs) {
-  const a = audioEl
-  if (!a || !Number.isFinite(a.duration)) return
-  a.currentTime = Math.max(0, Math.min(a.duration, secs))
+  if (!queue.length || !Number.isFinite(secs)) return
+  const to = Math.max(0, Math.min(musicLength() || secs, secs))
+  if (audioEl?.getAttribute('src')) audioEl.currentTime = to
+  else parkedAt = to
+  saveMusic(true)
   paintTime()
 }
+function shuffleUpcoming () {
+  const first = queueIndex + 1
+  if (queue.length - first < 2) return
+  let changed = false
+  for (let i = queue.length - 1; i > first; i--) {
+    const j = first + Math.floor(Math.random() * (i - first + 1))
+    if (j !== i) { [queue[i], queue[j]] = [queue[j], queue[i]]; changed = true }
+  }
+  if (!changed) [queue[first], queue[first + 1]] = [queue[first + 1], queue[first]]
+  // The order is now the listener's shuffle, not the order of the album and its later additions.
+  queueBoundary = first
+  queueRevision++
+  saveMusic(true)
+  paintBar()
+}
+function removeUpcoming (i, clear) {
+  if (i <= queueIndex || i >= queue.length) return
+  queue.splice(i, clear ? queue.length - i : 1)
+  queueBoundary = clear ? Math.min(queueBoundary, i) : queueBoundary - Number(i < queueBoundary)
+  queueRevision++
+  saveMusic(true)
+  paintBar()
+}
 function trackEnded () {
-  if (queueIndex + 1 < queue.length) { playAt(queueIndex + 1, nowLine('Now playing', queueIndex + 1)); return }
+  if (!audioEl?.ended || heldForVideo || player || !queue.length) return
+  if (queueIndex + 1 < queue.length || repeatList) { musicNext(); return }
   npState = 'done'
   toast('Finished “' + albumName(queueTitle) + '”')
+  saveMusic(true)
   paintBar()
 }
 function musicStop () {
   queue = []
-  queueIndex = 0
+  queueTitle = ''
+  queueIndex = queueBoundary = parkedAt = musicActivity = 0
+  queueRevision++
+  heldForVideo = false
   npState = 'idle'
+  clearTimeout(npSlowTimer)
   if (audioEl) { audioEl.pause(); audioEl.removeAttribute('src'); audioEl.load() }
   saveMusic(true)
   paintBar()
 }
-function saveMusic (now) {
-  if (!now && Date.now() - lastMusicSave < 5000) return
-  lastMusicSave = Date.now()
+function saveMusic (now, active = false) {
+  const stamp = Date.now()
+  if (!now && stamp - lastMusicSave < 5000) return
+  lastMusicSave = stamp
+  if (active || (!now && audioEl && !audioEl.paused && !heldForVideo)) musicActivity = stamp
   const vol = audioEl ? audioEl.volume : 1
-  musicStore = queue.length ? { keys: queue.map(x => x.key), i: queueIndex, at: (audioEl && audioEl.currentTime) || 0, title: queueTitle, vol } : { vol }
+  musicStore = queue.length ? { keys: queue.map(e => e.key), i: queueIndex, at: musicPosition(), title: queueTitle, t: musicActivity, boundary: queueBoundary, repeat: repeatList, video: heldForVideo, finished: npState === 'done', vol } : { vol, repeat: repeatList }
   try { localStorage.setItem(MUSIC_KEY, JSON.stringify(musicStore)) } catch {}
+  if (now && tab === 'home') renderHome()
 }
-// After the first load: the queue this browser left comes back on the same track, paused where it was.
+// Restore the same occurrence, even when a song appears twice or a song before it has left the library. Do not
+// assign the stream to an audio element until Play: even a metadata preload could fetch a remote song on a visit.
 function restoreMusic () {
   if (musicRestored || !S.entries.length) return
   musicRestored = true
   const m = musicStore
-  if (queue.length || !Array.isArray(m.keys)) return
-  const byKey = new Map(S.entries.map(e => [e.key, e]))
+  if (queue.length || !Array.isArray(m.keys) || !Number.isInteger(m.i)) return
+  const byKey = new Map(S.entries.filter(canQueue).map(e => [e.key, e]))
   const cur = byKey.get(m.keys[m.i])
   if (!cur) return
-  queue = m.keys.map(k => byKey.get(k)).filter(Boolean)
-  queueIndex = queue.indexOf(cur)
+  queue = []
+  queueBoundary = 0
+  for (let n = 0; n < m.keys.length; n++) {
+    const e = byKey.get(m.keys[n])
+    if (!e) continue
+    if (n === m.i) queueIndex = queue.length
+    if (n < (Number.isInteger(m.boundary) ? m.boundary : m.keys.length)) queueBoundary++
+    queue.push(e)
+  }
+  queueRevision++
   queueTitle = m.title || cur.title
-  const a = musicAudio()
-  a.preload = 'metadata'
-  a.src = resolveStreamUrl(cur.streamUrl)
-  if (m.at > 0) a.addEventListener('loadedmetadata', () => { if (queue[queueIndex] === cur && m.at < a.duration) a.currentTime = m.at }, { once: true })
-  npState = 'paused'
+  parkedAt = Number.isFinite(m.at) ? Math.max(0, m.at) : 0
+  heldForVideo = m.video === true
+  npState = m.finished ? 'done' : 'paused'
+  musicAudio()
   setMediaSession(cur)
-  loadQueueInfo()
   paintBar()
 }
-
+// All controls write through the same transport. The list redraws only when its order or current index changes.
+const musicHref = (place, value) => '#' + place + '/' + encodeURIComponent(value)
+const musicText = (node, value) => { if (node.textContent !== value) node.textContent = value }
+function musicArt (id, t, e) {
+  const box = $(id)
+  if (box.dataset.key === e.key) return
+  box.dataset.key = e.key
+  box.replaceChildren(t ? albumArt(t) : albumName(e.title).charAt(0))
+}
+const queueCells = new Map()
+let queueDrawn = ''
+const lengthObserver = new IntersectionObserver(rows => {
+  for (const { isIntersecting, target } of rows) {
+    if (!isIntersecting) continue
+    lengthObserver.unobserve(target)
+    const e = infoEntries.get(target.dataset.length)
+    if (e && !infoData.has(e.key)) loadInfo(e.key)
+  }
+}, { rootMargin: '150px' })
+function queueLengthReady (key) {
+  const secs = trackSecs(infoData.get(key))
+  for (const cell of queueCells.get(key) || []) musicText(cell, secs ? duration(secs) : '')
+  const e = queue[queueIndex]
+  if (tab === 'playing' && e?.key === key) { musicText($('fpQuality'), copyQuality(e, infoData.get(key))); paintTime() }
+}
+function renderQueue () {
+  const full = tab === 'playing' && Boolean(queue.length)
+  const sig = full ? queueRevision + ':' + queueIndex : ''
+  if (queueDrawn === sig) return
+  queueDrawn = sig
+  lengthObserver.disconnect()
+  queueCells.clear()
+  const list = $('npList')
+  if (!full) { list.replaceChildren(); return }
+  const rows = document.createDocumentFragment()
+  for (let i = 0; i < queue.length; i++) {
+    const e = queue[i]
+    if (i === queueBoundary || (i > queueBoundary && queue[i - 1].title !== e.title)) rows.append(h('li', { class: 'nq-then' }, 'Then · ' + albumName(e.title)))
+    const now = i === queueIndex
+    const secs = trackSecs(infoData.get(e.key))
+    const cell = h('span', { class: 'nq-dur', 'data-length': e.key }, secs ? duration(secs) : '')
+    if (!secs && readableHere(e) && !infoData.has(e.key)) {
+      if (!queueCells.has(e.key)) queueCells.set(e.key, [])
+      queueCells.get(e.key).push(cell)
+      infoEntries.set(e.key, e)
+      lengthObserver.observe(cell)
+    }
+    const choice = h('button', { class: 'nq-choice', 'aria-current': now ? 'true' : null, onclick: () => now ? musicToggle() : playAt(i) },
+      h('span', { class: 'nq-num' }, String(i + 1)), h('span', { class: 'nq-name' }, trackName(e)), cell)
+    const remove = i > queueIndex ? h('button', { class: 'np-btn nq-remove', title: 'Remove', 'aria-label': 'Remove ' + trackName(e), onclick: () => removeUpcoming(i, false) }, '×') : null
+    rows.append(h('li', { class: now ? 'now' : i < queueIndex ? 'done' : '' }, choice, remove))
+  }
+  list.replaceChildren(rows)
+}
 function paintBar () {
   const e = queue[queueIndex]
-  $('np').hidden = !e
-  document.body.classList.toggle('np-on', Boolean(e))
+  const full = tab === 'playing'
+  $('np').hidden = !e || full
+  document.body.classList.toggle('at-playing', full)
+  document.body.classList.toggle('np-on', Boolean(e) && !full)
+  $('fpEmpty').hidden = Boolean(e)
+  $('fpBody').hidden = !e
+  renderQueue()
   paintRows()
   if (!e) {
-    toggleQueue(false)
     document.title = 'PearTube'
     if (navigator.mediaSession) navigator.mediaSession.metadata = null
     return
   }
-  const playing = Boolean(audioEl && !audioEl.paused)
-  $('npPlay').classList.toggle('on', playing)
-  $('npPlay').setAttribute('aria-label', playing ? 'Pause' : 'Play')
-  // The bar wears the album's own sleeve, so the tile and the bar read as the same record.
-  const art = $('npArt')
-  if (art.dataset.key !== e.key) {
-    const t = tileOf(e)
-    art.dataset.key = e.key
-    art.replaceChildren(t && t.album ? albumArt(t) : albumName(e.title).trim().charAt(0).toUpperCase() || '?')
+  const playing = Boolean(audioEl && !audioEl.paused && !heldForVideo)
+  const label = playing ? 'Pause' : 'Play'
+  const t = tileOf(e)
+  const name = e.music?.artist || t?.artist || 'Unknown artist'
+  const album = t?.album || albumName(e.title)
+  const albumLink = t ? musicHref('album', t.key) : '#listen'
+  const artistLink = musicHref('artist', t?.artist || name)
+  const status = heldForVideo ? 'Paused for a video' : npState === 'loading' ? (npSlow ? 'Still looking for this file on the network…' : 'Loading…') : npState === 'error' ? npError : npState === 'done' ? 'Finished' : ''
+  const last = queueIndex + 1 === queue.length
+  for (const prefix of ['np', 'fp']) {
+    const play = $(prefix + 'Play')
+    play.classList.toggle('on', playing)
+    play.setAttribute('aria-label', label)
+    play.title = label
+    $(prefix + 'Repeat').setAttribute('aria-pressed', String(repeatList))
+    $(prefix + 'Shuffle').disabled = queue.length - queueIndex < 3
+    $(prefix + 'Next').disabled = last && !repeatList
+    $(prefix + 'Vol').value = String(Math.round((audioEl?.volume ?? 1) * 100))
   }
-  $('npArt').setAttribute('aria-label', 'Open ' + albumName(e.title))
-  $('npTitle').textContent = trackName(e)
-  const status = npState === 'loading' ? (npSlow ? 'Still looking for this file on the network…' : 'Loading…') : npState === 'error' ? npError : npState === 'done' ? 'Finished' : ''
-  $('npMeta').textContent = status || [e.music && e.music.artist, albumName(e.title)].filter(Boolean).join(' · ')
-  $('npMeta').parentNode.classList.toggle('bad', npState === 'error')
-  const pos = (queueIndex + 1) + ' of ' + queue.length
-  $('npPos').textContent = pos
-  $('npQText').textContent = pos
-  $('npQueueBtn').setAttribute('aria-label', 'Queue, track ' + pos)
-  $('npNext').disabled = queueIndex + 1 >= queue.length
-  document.title = trackName(e) + ' · ' + albumName(e.title)
+  musicArt('npArt', t, e)
+  musicText($('npTitle'), trackName(e))
+  musicText($('npQText'), (queueIndex + 1) + ' of ' + queue.length)
+  const meta = $('npMeta')
+  if (status) { musicText(meta, status); delete meta.dataset.track }
+  else if (meta.dataset.track !== e.key) {
+    meta.replaceChildren(h('a', { href: artistLink }, t?.artist || name), ' · ', h('a', { href: albumLink }, album))
+    meta.dataset.track = e.key
+  }
+  meta.classList.toggle('bad', npState === 'error')
+  if (full) {
+    musicArt('fpArt', t, e)
+    musicText($('fpName'), trackName(e))
+    musicText($('fpArtist'), name)
+    $('fpArtist').href = artistLink
+    musicText($('fpQuality'), copyQuality(e, infoData.get(e.key)))
+    musicText($('fpStatus'), status)
+    const first = tileOf(queue[0])
+    musicText($('fpFrom'), albumName(queueTitle))
+    $('fpFrom').href = first && queueTitle === first.title ? musicHref('album', first.key) : musicHref('artist', first?.artist || name)
+    $('npClear').disabled = last
+  }
+  document.title = trackName(e) + ' · ' + album
   paintTime()
-  if (!$('npQueue').hidden) renderQueue()
 }
 function paintTime () {
-  const a = audioEl
-  if (!a || !queue.length) return
-  const dur = Number.isFinite(a.duration) ? a.duration : 0
-  const seek = $('npSeek')
-  const at = seekDragging ? Number(seek.value) : (a.currentTime || 0)
-  $('npAt').textContent = clock(at)
-  $('npLeft').textContent = dur ? '-' + clock(dur - at) : '--:--'
-  seek.disabled = !dur
-  if (!seekDragging) { seek.max = String(dur); seek.value = String(at) }
-  seek.setAttribute('aria-valuetext', clock(at) + ' of ' + clock(dur))
+  if (!queue.length) return
+  const dur = musicLength() || 0
+  const at = seekDragging ? Number(seekDragging.value) : musicPosition()
+  const here = clock(at)
+  const end = dur ? clock(dur) : '–:––'
+  musicText($('npAt'), here)
+  musicText($('npLeft'), end)
+  if (tab === 'playing') { musicText($('fpAt'), here); musicText($('fpDur'), end) }
+  for (const id of ['npSeek', 'fpSeek']) {
+    const s = $(id)
+    s.disabled = !dur
+    if (s !== seekDragging) { s.max = String(dur); s.value = String(at) }
+    s.setAttribute('aria-valuetext', dur ? here + ' of ' + end : here)
+  }
+  $('np').style.setProperty('--played', String(dur ? Math.min(1, at / dur) : 0))
 }
+
 // Every row and album button that names a track says whether it is the one playing, wherever it is drawn, without
 // redrawing anything under the pointer: rows carry data-track, album buttons data-album with the tile key.
 function paintRows () {
@@ -3611,70 +4265,75 @@ function paintRows () {
     const mine = Boolean(curTile) && btn.dataset.album === curTile
     const icons = btn.querySelector('.btn-ic')
     if (icons) icons.classList.toggle('on', mine && playing)
-    if (btn.lastChild !== icons) btn.lastChild.textContent = !mine ? 'Play' : playing ? 'Pause' : 'Resume'
+    const action = !mine ? 'Play' : playing ? 'Pause' : 'Resume'
+    if (btn.lastChild !== icons) musicText(btn.lastChild, action)
+    else {
+      const label = action + ' ' + btn.closest('.album-card').querySelector('.album-name').textContent
+      if (btn.title !== label) { btn.title = label; btn.setAttribute('aria-label', label) }
+    }
   }
 }
-function toggleQueue (open) {
-  const panel = $('npQueue')
-  panel.hidden = !(open ?? panel.hidden) || !queue.length
-  $('npQueueBtn').setAttribute('aria-expanded', String(!panel.hidden))
-  if (panel.hidden) return
-  renderQueue()
-  const cur = $('npList').querySelector('.now')
-  if (cur) cur.scrollIntoView({ block: 'nearest' })
+// Use the same commands and the same labels for the dock, full player and media keys. Only fixed icon paths go
+// through innerHTML. Names from files and channels always go through textContent or h().
+const transportIcon = {
+  Play: ICON_PLAY + ICON_PAUSE,
+  Prev: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 5h3v14H5zm14 0v14l-10-7z"/></svg>',
+  Next: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M16 5h3v14h-3zM5 5l10 7-10 7z"/></svg>',
+  Shuffle: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 6h2c4 0 6 12 11 12h4m-3-3 3 3-3 3M3 18h2c2 0 3-2 5-5m3-4c1-2 2-3 4-3h3m-3-3 3 3-3 3" fill="none" stroke="currentColor" stroke-width="1.8"/></svg>',
+  Repeat: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m16 2 4 4-4 4M3 11V9a3 3 0 0 1 3-3h14M8 22l-4-4 4-4m13-1v2a3 3 0 0 1-3 3H4" fill="none" stroke="currentColor" stroke-width="1.8"/></svg>'
 }
-function renderQueue () {
-  const playing = Boolean(audioEl && !audioEl.paused)
-  $('npQueueMeta').textContent = albumName(queueTitle) + ' · ' + plural(queue.length, 'track', 'tracks')
-  $('npList').replaceChildren(...queue.map((e, i) => {
-    const now = i === queueIndex
-    const d = infoData.get(e.key)
-    const secs = d && d.media && d.media.duration
-    const num = h('span', { class: 'nq-num' + (now && playing ? ' on' : '') }, now ? '' : String(i + 1))
-    if (now) num.innerHTML = ICON_PLAY + ICON_PAUSE
-    return h('li', { class: now ? 'now' : i < queueIndex ? 'done' : '' },
-      h('button', { 'aria-current': now ? 'true' : false, onclick: () => now ? musicToggle() : playAt(i) },
-        num, h('span', { class: 'nq-name' }, trackName(e)), h('span', { class: 'nq-dur' }, secs ? duration(secs) : '')))
-  }))
+const tileOf = e => e && libraryTiles().find(t => t.kind === 'album' && t.items.some(i => i.e.key === e.key || i.alts.some(a => a.key === e.key)))
+const transportAction = { Prev: musicPrev, Next: musicNext, Play: musicToggle, Shuffle: shuffleUpcoming, Repeat: () => { repeatList = !repeatList; saveMusic(true); paintBar() } }
+function transportButton (prefix, name) {
+  const label = name === 'Prev' ? 'Previous' : name
+  const b = h('button', { id: prefix + name, class: 'np-btn' + (name === 'Play' ? ' np-play' : ''), title: label, 'aria-label': label, onclick: transportAction[name] })
+  b.innerHTML = transportIcon[name]
+  return b
 }
-// The library tile that holds a track, whatever its grouping key is, as the copy a row plays or a second copy of it.
-const tileOf = e => libraryTiles().find(t => t.items.some(i => i.e.key === e.key || (i.alts || []).some(a => a.key === e.key)))
-const openAlbum = () => { const e = queue[queueIndex]; const t = e && tileOf(e); if (t) openDetail(t.key, e.season) }
-$('npArt').onclick = openAlbum
-$('npTitle').onclick = openAlbum
-$('npPlay').onclick = musicToggle
-$('npPrev').onclick = musicPrev
-$('npNext').onclick = musicNext
-$('npQueueBtn').onclick = () => toggleQueue()
-$('npQueueClose').onclick = () => { toggleQueue(false); $('npQueueBtn').focus() }
-$('npClear').onclick = musicStop
-$('npSeek').addEventListener('input', () => { seekDragging = true; paintTime() })
-$('npSeek').addEventListener('change', () => { seekDragging = false; musicSeek(Number($('npSeek').value)) })
-$('npVol').value = String(Math.round((Number.isFinite(musicStore.vol) ? musicStore.vol : 1) * 100))
-$('npVol').addEventListener('input', () => { musicAudio().volume = Number($('npVol').value) / 100; saveMusic(true) })
-addEventListener('pointerdown', ev => { if (!$('npQueue').hidden && !ev.target.closest('#npQueue, #npQueueBtn')) toggleQueue(false) })
-// Music keys, whenever a typed key would not land in a text field or a control: space plays or pauses, the arrows
-// step 10 s. A focused button or link keeps Space for itself, so a chip or a checkbox never pauses the music.
+for (const [id, prefix, names] of [['npControls', 'np', ['Prev', 'Play', 'Next']], ['npModes', 'np', ['Shuffle', 'Repeat']], ['fpControls', 'fp', ['Shuffle', 'Prev', 'Play', 'Next', 'Repeat']]]) {
+  $(id).append(...names.map(name => transportButton(prefix, name)))
+}
+$('npOpen').innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 4h18v14h-6v-2h4V6H5v10h4v2H3zM7 21l5-7 5 7z"/></svg>'
+for (const id of ['npQueueBtn', 'npTitle', 'npArt', 'npOpen']) $(id).onclick = ev => {
+  if (ev.ctrlKey || ev.metaKey || ev.shiftKey || ev.altKey) return
+  ev.preventDefault()
+  goPlace('#playing', () => {
+    history.replaceState({ ...history.state, fromDock: true }, '')
+    const target = id === 'npQueueBtn' && $('npList').querySelector('[aria-current=true]')
+    ;(target || $('fpClose')).focus({ preventScroll: true })
+  })
+}
+const closeMusicView = () => history.state?.fromDock ? history.back() : goPlace('#listen')
+$('fpClose').onclick = closeMusicView
+$('npClear').onclick = () => removeUpcoming(queueIndex + 1, true)
+$('npStop').onclick = musicStop
+for (const prefix of ['np', 'fp']) {
+  const seek = $(prefix + 'Seek'), vol = $(prefix + 'Vol')
+  seek.oninput = () => { seekDragging = seek; paintTime() }
+  seek.onchange = () => { seekDragging = false; musicSeek(Number(seek.value)) }
+  seek.onpointercancel = () => { seekDragging = false; paintTime() }
+  vol.oninput = () => { if (audioEl) { audioEl.volume = Number(vol.value) / 100; $('npVol').value = $('fpVol').value = vol.value; saveMusic(true) } }
+}
 addEventListener('keydown', ev => {
-  if (!queue.length || player || ev.altKey || ev.ctrlKey || ev.metaKey || ev.defaultPrevented) return
-  const t = ev.target
-  const range = t.tagName === 'INPUT' && t.type === 'range'
-  if ((!range && /^(INPUT|SELECT|TEXTAREA)$/.test(t.tagName)) || t.isContentEditable) return
-  if (ev.key === 'Escape' && !$('npQueue').hidden) { ev.preventDefault(); toggleQueue(false); $('npQueueBtn').focus() }
-  else if (/^(BUTTON|A)$/.test(t.tagName)) return
-  else if (ev.key === ' ') { ev.preventDefault(); musicToggle() }
-  else if (!range && (ev.key === 'ArrowLeft' || ev.key === 'ArrowRight')) { ev.preventDefault(); musicSeek(audioEl.currentTime + (ev.key === 'ArrowLeft' ? -10 : 10)) }
+  if (ev.defaultPrevented || ev.altKey || ev.ctrlKey || ev.metaKey || player) return
+  if (ev.key === 'Escape' && tab === 'playing') { closeMusicView(); ev.preventDefault(); return }
+  if (!queue.length || ev.target.isContentEditable || ev.target.closest('input, select, textarea, button, a, summary, dialog[open]')) return
+  if (ev.key === ' ') { ev.preventDefault(); musicToggle() }
+  else if (ev.key === 'ArrowLeft' || ev.key === 'ArrowRight') { ev.preventDefault(); musicSeek(musicPosition() + (ev.key === 'ArrowLeft' ? -10 : 10)) }
 })
+// Only a queue that this page holds may be written here: a page that could not restore one (the library had not
+// arrived, or its song had left) holds nothing, and must not erase the queue that a reload still has to bring back.
+addEventListener('pagehide', () => { if (queue.length) saveMusic(true) })
 
 // ---- Library: what a file holds and how well it streams here now (GET /v1/entries/info), redrawn every 3 s while
-// the sheet is open. Episodes and versions open theirs with File info; a single file shows it at once, and each
+// a page is open. Episodes and versions open theirs with File info; a single file shows it at once, and each
 // version of a film carries its verdict on its row. The relay reads a header only for files it holds or has open;
 // for any other, Check sources asks the network on purpose, which tells peers the title is wanted, as Play does.
 const infoData = new Map() // entry key -> last reply, or { error }
 const infoEntries = new Map() // entry key -> the entry it describes
 const infoBusy = new Set()
 const infoShown = new Set()
-const infoWatched = new Set() // entry keys polled while the sheet is open: open panels and a film's versions
+const infoWatched = new Set() // entry keys polled while a page is open: open panels and a film's versions
 let infoTimer = 0
 const CHANNELS = { 1: 'Mono', 2: 'Stereo', 6: '5.1', 8: '7.1' }
 function langName (code) {
@@ -3704,7 +4363,7 @@ function verdict (e, d) {
 }
 function healthTag (e) {
   infoEntries.set(e.key, e)
-  infoWatched.add(e.key)
+  if (readableHere(e)) infoWatched.add(e.key)
   const tag = h('span', { class: 'tag', 'data-health': e.key, style: 'margin-left:8px' })
   paintTag(tag, e, infoData.get(e.key))
   if (!infoData.has(e.key)) loadInfo(e.key)
@@ -3715,7 +4374,9 @@ function paintTag (tag, e, d) {
   tag.hidden = !v
   if (v) { tag.textContent = v[0]; tag.className = 'tag' + (v[1] ? ' ' + v[1] : '') }
 }
+const checkFile = e => h('button', { class: 'btn quiet', style: 'margin-left:8px', title: 'Tells peers this title is wanted, as Play does', onclick: ev => act(ev.currentTarget, () => loadInfo(e.key, true)) }, 'Check sources')
 function infoRows (e, d) {
+  if (!d && !readableHere(e)) return [h('div', { class: 'meta' }, 'File details have not been read.', S.settings && playable(e) ? checkFile(e) : null)]
   if (!d) return [h('div', { class: 'meta' }, 'Reading file details…')]
   if (d.error) return [h('div', { class: 'meta err' }, d.error)]
   const rows = []
@@ -3723,7 +4384,7 @@ function infoRows (e, d) {
   const m = d.media
   if (d.mediaDeferred) {
     row('Format', 'Not read yet: this relay does not hold the file',
-      d.health ? h('button', { class: 'btn quiet', style: 'margin-left:8px', title: 'Tells peers this title is wanted, as Play does', onclick: ev => act(ev.currentTarget, () => loadInfo(e.key, true)) }, 'Check sources') : null)
+      d.health && !e.locked ? checkFile(e) : null)
   } else if (m === undefined) row('Format', 'Reading the file header…')
   else if (!m) row('Format', 'Not recognised')
   else {
@@ -3744,7 +4405,7 @@ function infoRows (e, d) {
 }
 function infoPanel (e) {
   infoEntries.set(e.key, e)
-  infoWatched.add(e.key)
+  if (readableHere(e)) infoWatched.add(e.key)
   const box = h('div', { class: 'file-info', 'data-info': e.key }, infoRows(e, infoData.get(e.key)))
   if (!infoData.has(e.key)) loadInfo(e.key)
   return box
@@ -3752,6 +4413,7 @@ function infoPanel (e) {
 // A read already in flight is shared, so a caller waiting on it (the shelf's quality line) hears when it lands.
 const infoPending = new Map()
 function loadInfo (key, read) {
+  if (!read && !readableHere(infoEntries.get(key))) return
   if (infoBusy.has(key) && !read) return infoPending.get(key)
   const p = readInfo(key, read)
   infoPending.set(key, p)
@@ -3774,65 +4436,262 @@ async function readInfo (key, read) {
   for (const tag of $('detailBody').querySelectorAll('[data-health]')) {
     if (tag.dataset.health === key) paintTag(tag, e, infoData.get(key))
   }
-  // An album sheet's rows and header are built from these reads, so they are redrawn as each header lands.
+  // An album page's facts and rows are built from these reads, so they are redrawn as each header lands, and so
+  // are a film's version labels.
   const am = $('detailBody').querySelector('[data-am]')
   const at = am && libraryTiles().find(x => x.key === am.dataset.am)
-  if (at && at.items.some(i => i.e.key === key)) paintAlbumSheet(at)
-  if (!$('npQueue').hidden && queue.some(x => x.key === key)) renderQueue()
+  if (at && at.items.some(i => i.e.key === key)) paintAlbumPage(at)
+  for (const lab of $('detailBody').querySelectorAll('[data-vlabel]')) {
+    if (lab.dataset.vlabel === key) lab.textContent = versionLabel(e, Number(lab.dataset.vnum) || 1)
+  }
+  queueLengthReady(key)
 }
 function pollInfo () {
   if (document.hidden) return
   for (const key of infoWatched) loadInfo(key)
 }
+// ---- A title, an album and an artist are places of their own (#title/…, #album/…, #artist/…), drawn into one
+// region under the top bar. Leaving one returns to the room it came from, so Back lands on the same grid in the
+// same place.
+// What a page says when what it was about has gone. It carries the region's label, so the page keeps a name.
+const goneNote = what => h('div', { class: 'empty', id: 'detailTitle' }, !S.loaded && !needsToken ? 'Loading the library…' : 'This ' + what + ' is no longer in the library.')
+const playIcons = () => { const ic = h('span', { class: 'btn-ic' }); ic.innerHTML = ICON_PLAY + ICON_PAUSE; return ic }
+const playIcon = () => { const ic = h('span', { class: 'btn-ic' }); ic.innerHTML = ICON_PLAY; return ic }
+// What a page can do beyond its two main actions. Real actions only: with none, there is no button.
+function moreMenu (label, items) {
+  const real = items.flat().filter(Boolean)
+  if (!real.length) return null
+  const wrap = h('span', { class: 'wrap-rel' })
+  wrap.append(h('button', {
+    class: 'btn dots',
+    'aria-haspopup': 'menu',
+    'aria-label': label,
+    title: label,
+    onclick: () => {
+      const open = wrap.querySelector('.menu')
+      if (open) return open.remove()
+      wrap.append(h('div', { class: 'menu wide', role: 'menu' }, real))
+    }
+  }, '…'))
+  return wrap
+}
+function shuffled (list) {
+  const pool = list.slice()
+  for (let n = pool.length - 1; n > 0; n--) {
+    const j = Math.floor(Math.random() * (n + 1))
+    const swap = pool[n]
+    pool[n] = pool[j]
+    pool[j] = swap
+  }
+  return pool
+}
 function renderDetail () {
-  const t = libraryTiles().find(x => x.key === detailKey)
   const box = $('detailBody')
   infoWatched.clear()
-  if (!t) { box.replaceChildren(h('div', { class: 'empty' }, 'This title is no longer in the library.')); return }
-  const head = t.kind === 'album'
-    ? albumHead(t)
-    : h('div', { class: 'detail-head' },
-      posterBox(t.imdb ? '/v1/poster/' + t.imdb : null, t.title),
-      h('div', { class: 'grow' }, h('h3', { id: 'detailTitle' }, t.title), h('div', { class: 'meta' }, tileLine(t) + ' · ' + tileState(t)[0])))
-  let body
-  if (t.kind === 'album') {
-    // Every track on one page, in disc and track order, with a heading per disc when there is more than one: a
-    // disc picker hid half an album behind a select for no gain.
-    const discs = [...new Set(t.items.map(i => i.season))].sort((a, b) => a - b)
-    const common = commonQuality(t)
-    body = discs.map(d => [
-      discs.length > 1 ? h('h4', { class: 'disc-head' }, 'Disc ' + d) : null,
-      h('div', { class: 'rows tracks' }, t.items.filter(i => i.season === d).map(i => trackRow(i, t, common)))]).flat()
-  } else if (t.kind === 'show') {
-    const seasons = [...new Set(t.items.map(i => i.season))]
-    if (detailSeason == null || !seasons.includes(detailSeason)) detailSeason = seasons[0]
-    const pick = seasons.length > 1
-      ? h('div', { class: 'field' }, h('label', { for: 'seasonPick' }, 'Season'), h('select', { id: 'seasonPick', onchange: ev => { detailSeason = Number(ev.target.value); renderDetail() } },
-        seasons.map(s => h('option', { value: String(s), selected: s === detailSeason }, 'Season ' + s + ' (' + t.items.filter(i => i.season === s).length + ')'))))
-      : null
-    body = [pick, h('div', { class: 'rows' }, t.items.filter(i => i.season === detailSeason).map(i => fileRow('S' + String(i.season).padStart(2, '0') + 'E' + String(i.episode).padStart(2, '0'), i.e)))]
-  } else if (t.items.length > 1) {
-    // A film's versions are few, so each row shows its verdict; a show's episodes check only under File info.
-    body = [h('div', { class: 'rows' }, t.items.map((i, n) => fileRow('Version ' + (n + 1), i.e, n < 8)))]
-  } else {
-    const e = t.items[0].e
-    const from = sourceName(e.source)
-    const accessNote = e.locked ? 'Subscriber pass needed' : (e.private ? 'Subscribers only' : '')
-    body = [h('div', { class: 'meta' }, [where(e), accessNote, from && 'from ' + from].filter(Boolean).join(' · ')),
-      h('div', { class: 'row', style: 'margin-top:14px;flex-wrap:wrap' },
-        e.locked ? null : h('button', { class: 'btn primary', 'data-play': true, onclick: () => play(e) }, 'Play'),
-        e.locked ? null : castButton(e),
-        e.locked ? null : downloadBtn(e),
-        copyBtn('Copy link', e.magnetUrl),
-        deleteBtn(e, false)),
-      infoPanel(e)]
+  if (detailArg !== placeArg) { detailArg = placeArg; detailSeason = null; artistAll = false }
+  if (tab === 'artist') renderArtistPage(box, placeArg)
+  else {
+    const t = libraryTiles().find(x => x.key === placeArg)
+    if (!t) { $('placeName').textContent = PLACES[tab]; box.replaceChildren(goneNote(tab === 'album' ? 'album' : 'title')) }
+    else if (t.kind === 'album') renderAlbumPage(box, t)
+    else renderTitlePage(box, t)
   }
-  box.replaceChildren(head, ...body.filter(Boolean))
   paintRows()
 }
-$('detailClose').onclick = () => $('detail').close()
-$('detail').addEventListener('click', ev => { if (ev.target === $('detail')) $('detail').close() })
-$('detail').addEventListener('close', () => { clearInterval(infoTimer); infoTimer = 0; infoShown.clear(); infoWatched.clear() })
+
+// ---- An album: its cover stays in view beside the tracks, and what the album is sits above them. What it holds
+// is one line of facts; how it sounds and where it is sit under it, quieter.
+const albumTracks = t => t.items.map(i => i.e).filter(canQueue)
+function albumFacts (t) {
+  const secs = albumSecs(t)
+  return [plural(t.items.length, 'track', 'tracks'), secs ? Math.round(secs / 60) + ' min' : ''].filter(Boolean).join(' · ')
+}
+function albumQuietLine (t) {
+  const bytes = t.items.reduce((n, i) => n + (i.e.size || 0), 0)
+  const verdict = albumVerdict(t)
+  const rest = [bytes ? size(bytes) : '', tileState(t)[0], t.releases > 1 ? 'from ' + t.releases + ' releases' : ''].filter(Boolean).join(' · ')
+  return [h('span', { 'data-av': t.key }, verdict), h('span', null, (verdict && rest ? ' · ' : '') + rest)]
+}
+function renderAlbumPage (box, t) {
+  $('placeName').textContent = t.album
+  const list = albumTracks(t)
+  const common = commonQuality(t)
+  const discs = [...new Set(t.items.map(i => i.season))].sort((a, b) => a - b)
+  const also = albumAlso(t)
+  const more = t.artist ? libraryTiles().filter(x => x.kind === 'album' && x.key !== t.key && fold(x.artist || '') === fold(t.artist)) : []
+  box.replaceChildren(h('div', { class: 'page' },
+    h('div', { class: 'page-art' }, albumArt(t, 'xl')),
+    h('div', { class: 'page-head' },
+      h('div', { class: 'eyebrow' }, 'Album'),
+      h('h2', { id: 'detailTitle', class: 'page-title big' }, t.album),
+      t.artist
+        ? h('a', { class: 'page-by', href: '#artist/' + encodeURIComponent(t.artist) }, t.artist)
+        : h('div', { class: 'page-by dim' }, 'Unknown artist'),
+      h('div', { class: 'facts', 'data-am': t.key }, albumFacts(t)),
+      h('div', { class: 'facts quiet', 'data-aq': t.key }, albumQuietLine(t)),
+      allYt(t) ? h('div', { class: 'tag-row' }, h('span', { class: 'tag' }, 'Lossy')) : null,
+      h('div', { class: 'facts quiet', 'data-ay': t.key, hidden: !also }, also)),
+    h('div', { class: 'page-acts' },
+      list.length ? h('button', { class: 'btn primary', 'data-album': t.key, onclick: () => toggleAlbum(t) }, playIcons(), h('span', null, 'Play')) : null,
+      list.length > 1 ? h('button', { class: 'btn', onclick: () => startQueue(shuffled(list), null, t.title) }, 'Shuffle') : null,
+      moreMenu('More', [...queueOptions(list, t.title), albumDeleteBtn(t)])),
+    h('div', { class: 'page-body' },
+      discs.map(d => [
+        discs.length > 1 ? h('h4', { class: 'disc-head' }, 'Disc ' + d) : null,
+        h('div', { class: 'rows tracks' }, t.items.filter(i => i.season === d).map(i => trackRow(i, t, common)))]).flat(),
+      more.length ? h('h3', { class: 'sec-head' }, 'More by ' + t.artist) : null,
+      more.length ? h('div', { class: 'album-grid' }, more.sort((a, b) => a.album.localeCompare(b.album)).map(albumCard)) : null)))
+}
+
+// ---- An artist: their albums, then their tracks. Nothing in the system holds a picture of a person, so the work
+// itself is the page.
+const ARTIST_TRACKS = 8
+let artistAll = false
+function renderArtistPage (box, name) {
+  const albums = libraryTiles().filter(t => t.kind === 'album' && fold(t.artist || 'Unknown artist') === fold(name || ''))
+    .sort((a, b) => a.album.localeCompare(b.album))
+  $('placeName').textContent = name || 'Artist'
+  if (!albums.length) { box.replaceChildren(goneNote('artist')); return }
+  const label = albums[0].artist || 'Unknown artist'
+  const pairs = albums.flatMap(t => t.items.map(i => ({ t, i })))
+  const list = pairs.map(p => p.i.e).filter(canQueue)
+  const shown = artistAll ? pairs : pairs.slice(0, ARTIST_TRACKS)
+  box.replaceChildren(h('div', { class: 'page wide' },
+    h('div', { class: 'page-head' },
+      h('div', { class: 'eyebrow' }, 'Artist'),
+      h('h2', { id: 'detailTitle', class: 'page-title big' }, label),
+      h('div', { class: 'facts' }, [plural(albums.length, 'album', 'albums'), plural(pairs.length, 'track', 'tracks')].join(' · '))),
+    h('div', { class: 'page-acts' },
+      list.length ? h('button', { class: 'btn primary', onclick: () => startQueue(list, list[0], label) }, playIcon(), h('span', null, 'Play')) : null,
+      list.length > 1 ? h('button', { class: 'btn', onclick: () => startQueue(shuffled(list), null, label) }, 'Shuffle') : null,
+      moreMenu('More', queueOptions(list, label))),
+    h('div', { class: 'page-body' },
+      h('h3', { class: 'sec-head' }, 'Albums'),
+      h('div', { class: 'album-grid' }, albums.map(albumCard)),
+      h('h3', { class: 'sec-head' }, 'Tracks'),
+      h('div', { class: 'rows tracks flat' }, shown.map(p => songRow(p.t, p.i))),
+      !artistAll && pairs.length > ARTIST_TRACKS
+        ? h('div', { class: 'more' }, h('button', { class: 'btn', onclick: () => { artistAll = true; renderDetail() } }, 'Show all ' + pairs.length))
+        : null)))
+}
+// One track away from its album: its name, who plays it and which album it is on. No length and no file header,
+// because a list of every track would read a header for each one.
+function songRow (t, i) {
+  const e = i.e
+  const by = (e.music && e.music.artist) || t.artist || ''
+  const btn = h('button', { class: 'track-play flat', disabled: !canQueue(e), 'aria-label': 'Play ' + trackName(e), onclick: () => isCurrent(e) ? musicToggle() : startQueue(albumTracks(t), e, t.title) })
+  btn.insertAdjacentHTML('beforeend', ICON_PLAY + ICON_PAUSE)
+  btn.append(h('span', { class: 'track-name' }, trackName(e)))
+  return h('div', { class: 'row-item', 'data-track': e.key, 'data-name': trackName(e) },
+    btn,
+    h('span', { class: 'track-by' }, by),
+    h('a', { class: 'track-of', href: '#album/' + encodeURIComponent(t.key) }, t.album),
+    moreMenu('More', queueOptions([e], t.title)))
+}
+
+// ---- A title: what it is, how to start it, and the files under it. A film lists its versions, a series its
+// episodes a season at a time, a clip just itself.
+const pad2 = n => String(n).padStart(2, '0')
+const epCode = i => 'S' + pad2(i.season) + 'E' + pad2(i.episode)
+const epWords = i => 'S' + i.season + ' E' + i.episode
+const RES_TIERS = [[3840, '2160p'], [2560, '1440p'], [1920, '1080p'], [1280, '720p'], [854, '480p']]
+function resLabel (v) {
+  if (!v || !v.width) return ''
+  for (const tier of RES_TIERS) if (v.width >= tier[0]) return tier[1]
+  return v.height ? v.height + 'p' : ''
+}
+// A version is chosen by its picture and its sound, not by a number. The number stands in until a header is read;
+// nothing here asks for one, the row's own health check is what reads it.
+function versionLabel (e, n) {
+  const m = (infoData.get(e.key) || {}).media || {}
+  const v = (m.video || [])[0]
+  const a = (m.audio || [])[0]
+  const sound = a ? [langName(a.language), CHANNELS[a.channels] || '', a.codec].filter(Boolean).join(' ') : ''
+  return [resLabel(v), v && v.hdr ? v.hdr : '', sound].filter(Boolean).join(' · ') || 'Version ' + n
+}
+// Where a title is: the file left part way, else the one after the last finished, else the first.
+function nextUp (t) {
+  let part = null
+  let done = -1
+  t.items.forEach((i, n) => {
+    const w = watchStore[watchId(i.e)]
+    if (!w || !(w.dur > 0)) return
+    const pct = w.at / w.dur
+    if (pct >= 0.02 && pct <= 0.95) { if (!part || (w.t || 0) > (part.w.t || 0)) part = { i, w, verb: 'Resume' } }
+    else if (pct > 0.95) done = Math.max(done, n)
+  })
+  if (part) return part
+  if (t.kind === 'show' && done >= 0 && done + 1 < t.items.length) return { i: t.items[done + 1], w: null, verb: 'Next episode' }
+  return { i: t.items[0], w: null, verb: 'Play' }
+}
+function renderTitlePage (box, t) {
+  $('placeName').textContent = t.title
+  const kindWord = t.kind === 'movie' ? 'Movie' : t.kind === 'show' ? 'Series' : 'Clip'
+  const up = nextUp(t)
+  const e = up.i.e
+  const from = sourceName(t.items[0].e.source)
+  const accessNote = e.locked ? 'Subscriber pass needed' : (e.private ? 'Subscribers only' : '')
+  box.replaceChildren(h('div', { class: 'page title-page' },
+    h('div', { class: 'page-art' }, posterBox(t.imdb ? '/v1/poster/' + t.imdb : null, t.title)),
+    h('div', { class: 'page-head' },
+      h('div', { class: 'eyebrow' }, kindWord),
+      h('h2', { id: 'detailTitle', class: 'page-title big' }, t.title),
+      h('div', { class: 'facts' }, [tileLine(t), tileState(t)[0], accessNote, from && 'from ' + from].filter(Boolean).join(' · '))),
+    h('div', { class: 'page-acts' },
+      !playable(e)
+        ? h('span', { class: 'tag warn' }, e.locked ? 'Subscriber pass needed' : 'No playable file')
+        : h('button', { class: 'btn primary', 'data-play': true, onclick: () => play(e) }, playIcon(),
+          h('span', null, up.verb + (t.kind === 'show' ? ' ' + epWords(up.i) : ''))),
+      up.w ? h('span', { class: 'facts quiet' }, timeLeft(up.w.dur - up.w.at)) : null,
+      e.locked ? null : castButton(e),
+      e.locked ? null : downloadBtn(e),
+      moreMenu('More actions', [copyBtn('Copy link', e.magnetUrl), deleteBtn(e, false)])),
+    h('div', { class: 'page-body' }, titleBody(t))))
+}
+function titleBody (t) {
+  if (t.kind === 'show') {
+    const seasons = [...new Set(t.items.map(i => i.season))]
+    if (detailSeason == null || !seasons.includes(detailSeason)) detailSeason = seasons[0]
+    return [
+      seasons.length > 1
+        ? h('div', { class: 'seasons', role: 'group', 'aria-label': 'Season' }, seasons.map(s => h('button', {
+          class: 'chip',
+          'aria-pressed': String(s === detailSeason),
+          onclick: () => { detailSeason = s; renderDetail() }
+        }, 'Season ' + s)))
+        : null,
+      h('h3', { class: 'sec-head' }, plural(t.items.filter(i => i.season === detailSeason).length, 'episode', 'episodes')),
+      h('div', { class: 'rows' }, t.items.filter(i => i.season === detailSeason)
+        .map(i => fileRow(epLabel(i, t), i.e, false, epCode(i))))]
+  }
+  if (t.items.length > 1) {
+    // A film's versions are few, so each row shows its verdict; a show's episodes check only under File info.
+    return [h('h3', { class: 'sec-head' }, plural(t.items.length, 'version', 'versions')),
+      h('div', { class: 'rows' }, t.items.map((i, n) => fileRow(
+        h('span', { 'data-vlabel': i.e.key, 'data-vnum': String(n + 1) }, versionLabel(i.e, n + 1)), i.e, n < 8, 'Version ' + (n + 1))))]
+  }
+  return [infoPanel(t.items[0].e)]
+}
+// An episode row names the number and then the file, unless the file only repeats the series.
+function epLabel (i, t) {
+  const title = i.e.title || ''
+  const extra = title && fold(title) !== fold(t.title) && fold(title) !== fold(epCode(i)) ? title : ''
+  return extra ? h('span', null, epCode(i), h('span', { class: 'ep-name' }, extra)) : epCode(i)
+}
+function leaveDetail () {
+  const room = '#' + (DETAIL_ROOM[tab] || 'home')
+  if (cameFrom === DETAIL_ROOM[tab]) history.back()
+  else location.hash = room
+}
+$('detailClose').onclick = leaveDetail
+// Escape leaves a page, the way Back does. Anything else that is open takes the key first.
+addEventListener('keydown', ev => {
+  if (ev.key !== 'Escape' || ev.defaultPrevented || !DETAIL_ROOM[tab]) return
+  if (document.querySelector('dialog[open], .menu')) return
+  if ($('playerModal').classList.contains('open')) return
+  if ($('moreBtn').getAttribute('aria-expanded') === 'true') return
+  leaveDetail()
+})
 
 // ---- Channels
 $('followForm').onsubmit = async ev => {
@@ -3972,7 +4831,8 @@ function renderSharing () {
       stat(String(st.lanPeers || 0), lan ? 'nearby on ' + lan.host : 'nearby'),
       stat(st.privateRouting ? String((routes.private && routes.private.peers) || 0) : 'Off', 'private routing'),
       stat(st.privateGuard ? String(st.privateGuard.activeCircuits || 0) : 'Off', 'guard circuits'),
-      stat(rate(st.upBps), 'sending now')),
+      stat(rate(st.upBps), 'sending now'),
+      stat(rate(st.downBps), 'receiving now')),
     S.settings ? h('div', { style: 'margin-top:12px' }, switchRow('Find peers on this network', sval('lan'), on => saveSettings({ lan: on }), { note: envNote('lan') })) : null)
 
   const rep = plugin('p2p-replicate')
@@ -4532,6 +5392,7 @@ function closePlayer () {
   $('playerModal').setAttribute('aria-modal', 'true')
   seekTarget = null
   const p = player
+  if (p.primed && p.duration > 0 && !p.seeking) saveResume(p.entry, p.ended ? p.duration : p.currentMediaTime(), p.duration)
   player = null
   $('playerModal').classList.remove('open')
   cancelAnimationFrame(p.raf)
@@ -4558,12 +5419,19 @@ function closePlayer () {
 function openPlayer (entry, at = 0) {
   closePlayer()
   // One sound at a time: a film or a clip pauses the album, which stays on its bar to resume after.
-  if (audioEl && !audioEl.paused) audioEl.pause()
+  if (audioEl && !audioEl.paused) {
+    heldForVideo = true
+    npAnnounce = ''
+    audioEl.pause()
+    saveMusic(true)
+    paintBar()
+  }
   playerEntry = entry
   const streamUrl = resolveStreamUrl(entry.streamUrl)
   const worker = getWorker()
   $('pTitle').textContent = entry.title || entry.id
   $('pDownloadBtn').href = downloadHref(entry)
+  $('pFileInfo').open = false
   $('pBadge').textContent = workerWarm ? 'Opening…' : 'Loading player…'
   $('pRawLink').href = streamUrl
   showStatus(workerWarm ? 'Opening stream…' : 'Loading player…')
@@ -5073,6 +5941,7 @@ function openPlayer (entry, at = 0) {
     }
     if (m.type === 'manifest') {
       if (m.streamBlock) streamBlockBytes = m.streamBlock
+      p.fileBlocks = Math.ceil(m.byteLength / streamBlockBytes)
       const mf = m.manifest
       p.manifest = mf
       p.duration = mf.duration || 0
@@ -5260,7 +6129,9 @@ function openPlayer (entry, at = 0) {
       }
     }
     const maxInFlight = p.prefetchMaxInFlight || p.manifest?.rules?.prefetchInFlight || 6
-    const endBlock = typeof p.prefetchEndBlock === 'number' ? p.prefetchEndBlock : (base + (p.manifest?.rules?.prefetchLookahead ?? 24) + 1)
+    // The first read after open can precede the worker's next plan. Stop at the length its Range probe measured.
+    const windowEnd = p.prefetchEndBlock ?? (base + (p.manifest?.rules?.prefetchLookahead ?? 24) + 1)
+    const endBlock = Math.min(windowEnd, p.fileBlocks ?? p.prefetchEndBlock ?? 0)
     for (let idx = base; idx < endBlock; idx++) {
       if (p.prefetchInFlight.size >= maxInFlight) break
       if (idx < 0) continue
@@ -5754,6 +6625,7 @@ function applyTheme (mode) {
   if (!t) return
   t.setAttribute('aria-label', themeLabel(mode))
   t.title = themeLabel(mode) + ' — click to change'
+  t.querySelector('.theme-word').textContent = themeLabel(mode)
 }
 applyTheme(document.documentElement.dataset.theme || 'system')
 $('themeToggle').onclick = () => {

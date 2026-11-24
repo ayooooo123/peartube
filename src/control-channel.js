@@ -236,7 +236,7 @@ function createChannel (conn, { spec, label, handlers = {}, events = {}, onOpen 
       return junk()
     }
     // Run inline, in wire order; a promise it returns may reject without a listener anywhere else.
-    try { Promise.resolve(handler(input, control)).catch(() => {}) } catch {}
+    try { Promise.resolve(handler(input, control)).catch(() => {}) } catch { return }
   }
 
   return control

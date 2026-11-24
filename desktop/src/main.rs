@@ -4,6 +4,7 @@
 
 #![forbid(unsafe_code)]
 
+mod api;
 mod app;
 mod cast_screen;
 mod catalog;

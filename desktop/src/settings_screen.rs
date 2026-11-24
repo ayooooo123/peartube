@@ -14,9 +14,10 @@ use peartube::soundfont;
 use peartube::worker::worker;
 use serde_json::json;
 
+use crate::api::run_blocking;
 use crate::app::{PearTube, Screen};
 use crate::list::{column, format_bytes};
-use crate::theme::{CARD, DANGER, DIM, LINE};
+use crate::theme::{ACCENT, CARD, DANGER, DIM, LINE};
 
 pub struct SettingsForm {
     tracker: Entity<InputState>,
@@ -24,6 +25,14 @@ pub struct SettingsForm {
     sources: Entity<TextareaState>,
     relays: Entity<TextareaState>,
     bootstrap: Entity<TextareaState>,
+    slsk_user: Entity<InputState>,
+    slsk_password: Entity<InputState>,
+    slsk_password_set: bool,
+    slsk_share: bool,
+    slsk_uses_slsk_keys: bool,
+    slsk_busy: bool,
+    slsk_notice: Option<SharedString>,
+    slsk_error: Option<SharedString>,
     lan: bool,
     private_routing: bool,
     cache_max_gb: u32,
@@ -44,6 +53,14 @@ impl SettingsForm {
             sources: cx.new(|cx| TextareaState::new(window, cx).rows(4).placeholder("One peartube://channel/… link per line").default_value(settings.format_sources())),
             relays: cx.new(|cx| TextareaState::new(window, cx).rows(2).default_value(settings.relay_through.join(", "))),
             bootstrap: cx.new(|cx| TextareaState::new(window, cx).rows(2).default_value(settings.bootstrap.join(", "))),
+            slsk_user: cx.new(|cx| InputState::new(window, cx).placeholder("Soulseek username")),
+            slsk_password: cx.new(|cx| InputState::new(window, cx).placeholder("Soulseek password")),
+            slsk_password_set: false,
+            slsk_share: false,
+            slsk_uses_slsk_keys: false,
+            slsk_busy: false,
+            slsk_notice: None,
+            slsk_error: None,
             lan: settings.lan_discovery,
             private_routing: settings.private_routing,
             cache_max_gb: settings.cache_max_gb,
@@ -154,6 +171,63 @@ impl PearTube {
                                                         .on_click(cx.listener(|this, _, _, cx| this.clear_soundfont(cx))),
                                                 )
                                             }),
+                                    ),
+                            ))
+                        })
+                        .when(!first_run, |this| {
+                            this.child(card_section(
+                                "Soulseek",
+                                "Connect this Mac as its own independent Soulseek peer to search and save lossless albums.",
+                                v_flex()
+                                    .gap_3()
+                                    .when_some(form.slsk_error.clone(), |t, err| t.child(inline_error(err)))
+                                    .when_some(form.slsk_notice.clone(), |t, msg| {
+                                        t.child(div().text_xs().text_color(rgb(ACCENT)).child(msg))
+                                    })
+                                    .child(
+                                        v_flex()
+                                            .gap_1()
+                                            .child(div().text_xs().font_weight(FontWeight::MEDIUM).text_color(rgb(DIM)).child("Username"))
+                                            .child(Input::new(&form.slsk_user).cleanable(true)),
+                                    )
+                                    .child(
+                                        v_flex()
+                                            .gap_1()
+                                            .child(
+                                                div()
+                                                    .text_xs()
+                                                    .font_weight(FontWeight::MEDIUM)
+                                                    .text_color(rgb(DIM))
+                                                    .child(if form.slsk_password_set {
+                                                        "Password (saved — leave blank to keep)"
+                                                    } else {
+                                                        "Password"
+                                                    }),
+                                            )
+                                            .child(Input::new(&form.slsk_password).cleanable(true)),
+                                    )
+                                    .child(
+                                        Checkbox::new("soulseek-share")
+                                            .checked(form.slsk_share)
+                                            .label("Share public music")
+                                            .on_click(cx.listener(|this, checked: &bool, _, cx| {
+                                                if let Screen::Settings(f) = &mut this.screen {
+                                                    f.slsk_share = *checked;
+                                                    cx.notify();
+                                                }
+                                            })),
+                                    )
+                                    .child(
+                                        h_flex().child(
+                                            Button::new("save-soulseek-settings")
+                                                .small()
+                                                .primary()
+                                                .disabled(form.slsk_busy)
+                                                .label(if form.slsk_busy { "Saving…" } else { "Save Soulseek settings" })
+                                                .on_click(cx.listener(|this, _, window, cx| {
+                                                    this.save_soulseek_settings(window, cx);
+                                                })),
+                                        ),
                                     ),
                             ))
                         })
@@ -344,5 +418,93 @@ impl PearTube {
         self.bank.error = soundfont::clear().err().map(Into::into);
         self.bank.selected = soundfont::path().is_some();
         cx.notify();
+    }
+
+    pub fn load_soulseek_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(client) = self.api_client() else {
+            return;
+        };
+        cx.spawn_in(window, async move |this, cx| {
+            let res = run_blocking(move || client.get_soulseek_settings()).await;
+            let Ok(Ok(slsk)) = res else {
+                return;
+            };
+            let _ = this.update_in(cx, |this, window, cx| {
+                if let Screen::Settings(form) = &mut this.screen {
+                    if !slsk.user.is_empty() {
+                        form.slsk_user
+                            .update(cx, |inp, cx| inp.set_value(slsk.user.clone(), window, cx));
+                    }
+                    form.slsk_password_set = slsk.password_set;
+                    form.slsk_share = slsk.share;
+                    form.slsk_uses_slsk_keys = slsk.uses_slsk_keys;
+                    cx.notify();
+                }
+            });
+        })
+        .detach();
+    }
+
+    pub fn save_soulseek_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(client) = self.api_client() else {
+            if let Screen::Settings(form) = &mut self.screen {
+                form.slsk_error = Some("Local engine is still starting — wait a moment and try again.".into());
+                cx.notify();
+            }
+            return;
+        };
+        let (user, password, share, uses_legacy) = {
+            let Screen::Settings(form) = &mut self.screen else {
+                return;
+            };
+            let user = form.slsk_user.read(cx).value().trim().to_string();
+            let raw_pass = form.slsk_password.read(cx).value().to_string();
+            let password = if raw_pass.is_empty() && form.slsk_password_set {
+                None
+            } else {
+                Some(raw_pass)
+            };
+            let share = form.slsk_share;
+            let uses_legacy = form.slsk_uses_slsk_keys;
+            form.slsk_busy = true;
+            form.slsk_error = None;
+            form.slsk_notice = None;
+            (user, password, share, uses_legacy)
+        };
+        cx.notify();
+
+        let sent_password = password.as_ref().is_some_and(|p| !p.is_empty());
+        cx.spawn_in(window, async move |this, cx| {
+            let res = run_blocking(move || {
+                client.save_soulseek_settings(&user, password.as_deref(), share, uses_legacy)
+            })
+            .await;
+            let outcome = match res {
+                Ok(inner) => inner,
+                Err(err) => Err(err),
+            };
+            let _ = this.update_in(cx, |this, window, cx| {
+                if let Screen::Settings(form) = &mut this.screen {
+                    form.slsk_busy = false;
+                    match outcome {
+                        Ok(updated) => {
+                            form.slsk_password_set = updated.password_set || sent_password;
+                            form.slsk_share = updated.share;
+                            form.slsk_uses_slsk_keys = updated.uses_slsk_keys;
+                            form.slsk_password
+                                .update(cx, |inp, cx| inp.set_value("", window, cx));
+                            form.slsk_error = None;
+                            form.slsk_notice = Some("Soulseek settings saved.".into());
+                        }
+                        Err(err) => {
+                            form.slsk_error = Some(err.into());
+                            form.slsk_notice = None;
+                        }
+                    }
+                    cx.notify();
+                }
+            });
+        })
+        .detach();
     }
 }

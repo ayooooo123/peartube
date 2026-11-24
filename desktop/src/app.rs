@@ -28,6 +28,12 @@ use player::{Event as PlayerEvent, State as PlayerState};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
+use crate::api::{
+    ALL_SOURCES, AcquireJob, AcquireRequest, ApiClient, PluginInfo, RumbleCandidate,
+    SoulseekCandidate, SoulseekShelf, SoundcloudCandidate, SourceSearchResult, VisitedShelf,
+    YoutubeCandidate, extract_shared_url, is_web_url, load_visited_shelves, record_visited_shelf,
+    run_blocking, save_visited_shelves, unwrap_peartube_add,
+};
 use crate::cast_screen::CastSheetForm;
 use crate::catalog::{Catalog, build_catalog, is_music_entry};
 use crate::list::AddModalForm;
@@ -65,6 +71,7 @@ pub enum DetailView {
     Album(String),
     Artist(String),
     Title(String),
+    Shelf(String),
     Playing,
 }
 
@@ -122,6 +129,39 @@ pub struct GlobalSearch {
     pub asked_at: Option<Instant>,
 }
 
+/// Unified search across local source providers (`Soulseek`, `YouTube`, `SoundCloud`, `Rumble`).
+pub struct SourceSearchState {
+    pub query: String,
+    pub enabled: HashSet<String>,
+    pub busy: bool,
+    pub result: Option<SourceSearchResult>,
+    pub error: Option<SharedString>,
+    pub plugins: Vec<PluginInfo>,
+}
+
+impl Default for SourceSearchState {
+    fn default() -> Self {
+        let enabled = ALL_SOURCES.iter().map(|(id, _)| (*id).to_string()).collect();
+        SourceSearchState {
+            query: String::new(),
+            enabled,
+            busy: false,
+            result: None,
+            error: None,
+            plugins: Vec::new(),
+        }
+    }
+}
+
+/// Active Soulseek peer shelf browse state (`DetailView::Shelf`).
+#[derive(Default)]
+pub struct ShelfState {
+    pub peer: String,
+    pub busy: bool,
+    pub data: Option<SoulseekShelf>,
+    pub error: Option<SharedString>,
+}
+
 pub struct PearTube {
     pub settings: Settings,
     pub status: Option<Status>,
@@ -150,6 +190,10 @@ pub struct PearTube {
     pub downloads: HashMap<String, ActiveDownload>,
     pub notice: Option<DownloadNotice>,
     pub global: GlobalSearch,
+    pub source_search: SourceSearchState,
+    pub shelf: ShelfState,
+    pub visited_shelves: Vec<VisitedShelf>,
+    pub jobs: Vec<AcquireJob>,
     pub music_queue: MusicQueue,
     pub music_audio: MusicAudio,
     pub music_state: PlayerState,
@@ -158,6 +202,9 @@ pub struct PearTube {
     music_tick: Option<Task<()>>,
     last_music_saved: Instant,
     pending_watch: Option<(Entry, u64)>,
+    pending_add_url: Option<String>,
+    jobs_poll: Option<Task<()>>,
+    had_active_jobs: bool,
     start: Option<Task<()>>,
     player_events: Option<Subscription>,
     _worker: Task<()>,
@@ -188,6 +235,7 @@ impl PearTube {
     pub fn new(url_rx: UnboundedReceiver<String>, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let settings = Settings::load();
         let watch_history = load_watch_history();
+        let visited_shelves = load_visited_shelves();
         let music_queue = MusicQueue::load();
 
         let search = cx.new(|cx| InputState::new(window, cx).placeholder("Search — e.g. Blue Train"));
@@ -203,15 +251,26 @@ impl PearTube {
             InputEvent::PressEnter { .. } => {
                 let raw = state.read(cx).value().to_string();
                 let trimmed = raw.trim();
-                let is_key = trimmed.len() == 64 && trimmed.bytes().all(|b| b.is_ascii_hexdigit());
-                if trimmed.to_ascii_lowercase().starts_with("peartube:") || is_key {
-                    let uri = trimmed.to_string();
+                if let Some(target) = unwrap_peartube_add(trimmed) {
                     state.update(cx, |inp, cx| inp.set_value("", window, cx));
-                    this.open_uri_or_key(uri, cx);
-                } else if !trimmed.is_empty() {
-                    this.detail = None;
-                    this.room = Room::Search;
-                    this.search_global(trimmed.to_string(), cx);
+                    this.open_add_modal_with_url(target, window, cx);
+                } else if is_web_url(trimmed) {
+                    let url = trimmed.to_string();
+                    state.update(cx, |inp, cx| inp.set_value("", window, cx));
+                    this.open_add_modal_with_url(url, window, cx);
+                } else {
+                    let is_key = trimmed.len() == 64 && trimmed.bytes().all(|b| b.is_ascii_hexdigit());
+                    if trimmed.to_ascii_lowercase().starts_with("peartube:") || is_key {
+                        let uri = trimmed.to_string();
+                        state.update(cx, |inp, cx| inp.set_value("", window, cx));
+                        this.open_uri_or_key(uri, cx);
+                    } else if !trimmed.is_empty() {
+                        this.detail = None;
+                        this.room = Room::Search;
+                        let q = trimmed.to_string();
+                        this.search_global(q.clone(), cx);
+                        this.search_sources(q, cx);
+                    }
                 }
             }
             _ => {}
@@ -263,6 +322,10 @@ impl PearTube {
             downloads: HashMap::new(),
             notice: None,
             global: GlobalSearch::default(),
+            source_search: SourceSearchState::default(),
+            shelf: ShelfState::default(),
+            visited_shelves,
+            jobs: Vec::new(),
             music_queue,
             music_audio: MusicAudio::default(),
             music_state: PlayerState::default(),
@@ -271,6 +334,9 @@ impl PearTube {
             music_tick: None,
             last_music_saved: Instant::now(),
             pending_watch: None,
+            pending_add_url: None,
+            jobs_poll: None,
+            had_active_jobs: false,
             start: None,
             player_events: None,
             _worker: cx.spawn(async move |this, cx| follow(this, cx).await),
@@ -286,8 +352,21 @@ impl PearTube {
             | Some(DetailView::Artist(_))
             | Some(DetailView::Playing) => Room::Listen(ListenTab::Albums),
             Some(DetailView::Title(_)) => Room::Watch(WatchKind::All),
+            Some(DetailView::Shelf(_)) => Room::Discover,
             None => self.room.clone(),
         }
+    }
+
+    pub fn api_client(&self) -> Option<ApiClient> {
+        self.status
+            .as_ref()
+            .and_then(|s| s.api_url.as_ref())
+            .filter(|u| !u.is_empty())
+            .map(|u| ApiClient::new(u.clone()))
+    }
+
+    pub fn active_job_count(&self) -> usize {
+        self.jobs.iter().filter(|j| j.is_active()).count()
     }
 
     pub fn open_room(&mut self, room: Room, cx: &mut Context<Self>) {
@@ -323,7 +402,8 @@ impl PearTube {
         self.detail = None;
         self.room = Room::Search;
         self.search.update(cx, |inp, cx| inp.set_value(q.clone(), window, cx));
-        self.search_global(q, cx);
+        self.search_global(q.clone(), cx);
+        self.search_sources(q, cx);
         cx.notify();
     }
 
@@ -333,6 +413,22 @@ impl PearTube {
         let form = AddModalForm::new(window, cx);
         window.focus(&form.input.read(cx).focus_handle(cx), cx);
         self.add_modal = Some(form);
+        self.refresh_jobs(cx);
+        cx.notify();
+    }
+
+    pub fn open_add_modal_with_url(&mut self, url: String, window: &mut Window, cx: &mut Context<Self>) {
+        self.hood_open = false;
+        self.cast_modal = None;
+        let clean = extract_shared_url(&url).unwrap_or_else(|| url.trim().to_string());
+        let form = AddModalForm::new(window, cx);
+        form.input.update(cx, |inp, cx| inp.set_value(clean.clone(), window, cx));
+        window.focus(&form.input.read(cx).focus_handle(cx), cx);
+        self.add_modal = Some(form);
+        self.refresh_jobs(cx);
+        if is_web_url(&clean) {
+            self.identify_add_url(clean, cx);
+        }
         cx.notify();
     }
 
@@ -341,21 +437,280 @@ impl PearTube {
         cx.notify();
     }
 
+    pub fn toggle_add_audio_only(&mut self, checked: bool, cx: &mut Context<Self>) {
+        if let Some(form) = &mut self.add_modal {
+            form.audio_only = checked;
+            cx.notify();
+        }
+    }
+
+    pub fn identify_add_url(&mut self, url: String, cx: &mut Context<Self>) {
+        let trimmed = url.trim().to_string();
+        if !is_web_url(&trimmed) {
+            return;
+        }
+        let Some(client) = self.api_client() else {
+            if let Some(form) = &mut self.add_modal {
+                form.identifying = false;
+                form.identified = None;
+                form.identified_url = Some(trimmed);
+                form.error = Some("Local engine is still starting — wait a moment and try again.".into());
+            }
+            cx.notify();
+            return;
+        };
+        if let Some(form) = &mut self.add_modal {
+            form.identified_url = Some(trimmed.clone());
+            form.identifying = true;
+            form.identified = None;
+            form.error = None;
+        }
+        cx.notify();
+
+        let target = trimmed.clone();
+        cx.spawn(async move |this, cx| {
+            let res = run_blocking(move || client.identify(&target)).await;
+            let outcome = match res {
+                Ok(inner) => inner,
+                Err(err) => Err(err),
+            };
+            let _ = this.update(cx, |this, cx| {
+                let Some(form) = &mut this.add_modal else {
+                    return;
+                };
+                if form.identified_url.as_deref() != Some(trimmed.as_str()) {
+                    return;
+                }
+                form.identifying = false;
+                match outcome {
+                    Ok(info) => {
+                        form.audio_only = info.default_audio_only(&trimmed);
+                        form.identified = Some(info);
+                        form.error = None;
+                    }
+                    Err(err) => {
+                        form.identified = None;
+                        form.error = Some(err.into());
+                    }
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    pub fn acquire_identified_url(&mut self, cx: &mut Context<Self>) {
+        let Some(client) = self.api_client() else {
+            if let Some(form) = &mut self.add_modal {
+                form.error = Some("Local engine is not ready yet.".into());
+            }
+            cx.notify();
+            return;
+        };
+        let (url, info, audio_only) = {
+            let Some(form) = &mut self.add_modal else {
+                return;
+            };
+            let Some(url) = form.identified_url.clone() else {
+                return;
+            };
+            let Some(info) = form.identified.clone() else {
+                return;
+            };
+            if form.acquiring {
+                return;
+            }
+            form.acquiring = true;
+            form.error = None;
+            (url, info, form.audio_only)
+        };
+        cx.notify();
+
+        let title = info.effective_title(&url);
+        let id = info.effective_id(&url);
+        let page = info.is_page();
+        let music = info.music_meta(audio_only, &url);
+        let req = AcquireRequest {
+            id,
+            title: title.clone(),
+            url,
+            page,
+            audio: audio_only,
+            music,
+        };
+
+        cx.spawn(async move |this, cx| {
+            let res = run_blocking(move || client.acquire(&req)).await;
+            let outcome = match res {
+                Ok(inner) => inner,
+                Err(err) => Err(err),
+            };
+            let _ = this.update(cx, |this, cx| {
+                match outcome {
+                    Ok(job) => {
+                        if let Some(form) = &mut this.add_modal {
+                            form.acquiring = false;
+                            form.identified = None;
+                            form.identified_url = None;
+                            form.identifying = false;
+                            form.error = None;
+                        }
+                        this.jobs.retain(|j| j.job_id != job.job_id);
+                        this.jobs.insert(0, job);
+                        this.had_active_jobs = true;
+                        this.ensure_jobs_poller(cx);
+                        this.show_notice(format!("Saving “{title}” to your library…").into(), cx);
+                    }
+                    Err(err) => {
+                        if let Some(form) = &mut this.add_modal {
+                            form.acquiring = false;
+                            form.error = Some(err.into());
+                        } else {
+                            this.fail(err, cx);
+                        }
+                        cx.notify();
+                    }
+                }
+            });
+        })
+        .detach();
+    }
+
     pub fn submit_add_modal(&mut self, cx: &mut Context<Self>) {
         let raw = self
             .add_modal
             .as_ref()
             .map(|f| f.input.read(cx).value().trim().to_string())
             .unwrap_or_default();
-        if raw.is_empty() {
+        let Some(extracted) = extract_shared_url(&raw) else {
             if let Some(f) = &mut self.add_modal {
-                f.error = Some("Paste a peartube:// link or 64-character key.".into());
+                f.error = Some("Paste a YouTube, SoundCloud, Rumble, Bandcamp, media, or peartube:// link.".into());
             }
             cx.notify();
             return;
+        };
+        if is_web_url(&extracted) {
+            let already_ready = self.add_modal.as_ref().is_some_and(|f| {
+                f.identified_url.as_deref() == Some(extracted.as_str()) && f.identified.is_some()
+            });
+            if already_ready {
+                self.acquire_identified_url(cx);
+            } else {
+                self.identify_add_url(extracted, cx);
+            }
+            return;
         }
         self.add_modal = None;
-        self.open_uri_or_key(raw, cx);
+        self.open_uri_or_key(extracted, cx);
+    }
+
+    pub fn refresh_jobs(&mut self, cx: &mut Context<Self>) {
+        let Some(client) = self.api_client() else {
+            return;
+        };
+        cx.spawn(async move |this, cx| {
+            let res = run_blocking(move || client.list_jobs()).await;
+            let Ok(Ok(mut jobs)) = res else {
+                return;
+            };
+            jobs.sort_by_key(|j| std::cmp::Reverse(j.created.unwrap_or(0)));
+            let mut should_refresh_library = false;
+            let _ = this.update(cx, |this, cx| {
+                let prev_done: HashSet<String> = this
+                    .jobs
+                    .iter()
+                    .filter(|j| j.is_done())
+                    .map(|j| j.job_id.clone())
+                    .collect();
+                let newly_done = jobs
+                    .iter()
+                    .any(|j| j.is_done() && !prev_done.contains(&j.job_id));
+                let active_now = jobs.iter().any(AcquireJob::is_active);
+                if newly_done || (this.had_active_jobs && !active_now) {
+                    should_refresh_library = true;
+                }
+                this.had_active_jobs = active_now;
+                this.jobs = jobs;
+                if active_now {
+                    this.ensure_jobs_poller(cx);
+                } else {
+                    this.jobs_poll = None;
+                }
+                cx.notify();
+            });
+            if should_refresh_library {
+                refresh(&this, cx).await;
+            }
+        })
+        .detach();
+    }
+
+    pub fn ensure_jobs_poller(&mut self, cx: &mut Context<Self>) {
+        if self.jobs_poll.is_some() {
+            return;
+        }
+        self.jobs_poll = Some(cx.spawn(async move |this, cx| {
+            loop {
+                cx.background_executor().timer(Duration::from_secs(2)).await;
+                let client = this
+                    .read_with(cx, |this, _| this.api_client())
+                    .ok()
+                    .flatten();
+                let Some(client) = client else {
+                    break;
+                };
+                let res = run_blocking(move || client.list_jobs()).await;
+                let Ok(Ok(mut jobs)) = res else {
+                    continue;
+                };
+                jobs.sort_by_key(|j| std::cmp::Reverse(j.created.unwrap_or(0)));
+                let mut should_refresh_library = false;
+                let mut keep_polling = false;
+                let updated = this.update(cx, |this, cx| {
+                    let prev_done: HashSet<String> = this
+                        .jobs
+                        .iter()
+                        .filter(|j| j.is_done())
+                        .map(|j| j.job_id.clone())
+                        .collect();
+                    let newly_done = jobs
+                        .iter()
+                        .any(|j| j.is_done() && !prev_done.contains(&j.job_id));
+                    let active_now = jobs.iter().any(AcquireJob::is_active);
+                    if newly_done || (this.had_active_jobs && !active_now) {
+                        should_refresh_library = true;
+                    }
+                    this.had_active_jobs = active_now;
+                    this.jobs = jobs;
+                    keep_polling = active_now;
+                    if !active_now {
+                        this.jobs_poll = None;
+                    }
+                    cx.notify();
+                });
+                if should_refresh_library {
+                    refresh(&this, cx).await;
+                }
+                if updated.is_err() || !keep_polling {
+                    break;
+                }
+            }
+        }));
+    }
+
+    pub fn cancel_or_dismiss_job(&mut self, job_id: String, cx: &mut Context<Self>) {
+        let Some(client) = self.api_client() else {
+            return;
+        };
+        cx.spawn(async move |this, cx| {
+            let id_clone = job_id.clone();
+            let _ = run_blocking(move || client.cancel_job(&id_clone)).await;
+            let _ = this.update(cx, |this, cx| {
+                this.jobs.retain(|j| j.job_id != job_id || j.is_active());
+                this.refresh_jobs(cx);
+            });
+        })
+        .detach();
     }
 
     pub fn show_notice(&mut self, message: SharedString, cx: &mut Context<Self>) {
@@ -385,6 +740,9 @@ impl PearTube {
             match started {
                 Ok(()) => {
                     refresh(&this, cx).await;
+                    let _ = this.update(cx, |this, cx| {
+                        this.refresh_jobs(cx);
+                    });
                     peartube::worker::release_unused_memory();
                 }
                 Err(err) => {
@@ -767,6 +1125,16 @@ impl PearTube {
         if trimmed.is_empty() {
             return;
         }
+        if let Some(target) = unwrap_peartube_add(&trimmed) {
+            self.pending_add_url = Some(target);
+            cx.notify();
+            return;
+        }
+        if is_web_url(&trimmed) {
+            self.pending_add_url = Some(trimmed);
+            cx.notify();
+            return;
+        }
         let pending_cast = self.cast_modal.as_ref().and_then(|f| f.pending_entry.clone());
         cx.spawn(async move |this, cx| {
             let Ok(w) = worker() else { return };
@@ -876,6 +1244,271 @@ impl PearTube {
                 .is_some_and(|at| at.elapsed() < Duration::from_secs(60))
     }
 
+    // ---- Unified source search & Soulseek shelf browser ----
+
+    pub fn toggle_source_chip(&mut self, source: String, cx: &mut Context<Self>) {
+        if self.source_search.enabled.contains(&source) {
+            if self.source_search.enabled.len() > 1 {
+                self.source_search.enabled.remove(&source);
+            }
+        } else {
+            self.source_search.enabled.insert(source);
+        }
+        let active_query = self.search.read(cx).value().trim().to_string();
+        if active_query.chars().count() >= 2 && self.source_search.query == active_query {
+            self.search_sources(active_query, cx);
+        } else {
+            cx.notify();
+        }
+    }
+
+    pub fn search_sources(&mut self, query: String, cx: &mut Context<Self>) {
+        let query = query.trim().to_string();
+        if query.chars().count() < 2 {
+            return;
+        }
+        let Some(client) = self.api_client() else {
+            self.source_search.query = query;
+            self.source_search.busy = false;
+            self.source_search.error = Some("Local engine is still starting.".into());
+            cx.notify();
+            return;
+        };
+        let sources: Vec<String> = ALL_SOURCES
+            .iter()
+            .map(|(id, _)| (*id).to_string())
+            .filter(|id| self.source_search.enabled.contains(id))
+            .collect();
+        if sources.is_empty() {
+            return;
+        }
+        let need_plugins = self.source_search.plugins.is_empty();
+        self.source_search.query = query.clone();
+        self.source_search.busy = true;
+        self.source_search.error = None;
+        cx.notify();
+
+        let req_query = query.clone();
+        cx.spawn(async move |this, cx| {
+            let res = run_blocking(move || {
+                let plugins = if need_plugins {
+                    client.list_plugins().ok()
+                } else {
+                    None
+                };
+                let search = client.search_sources(&req_query, &sources);
+                (plugins, search)
+            })
+            .await;
+
+            let _ = this.update(cx, |this, cx| {
+                if this.source_search.query != query {
+                    return;
+                }
+                this.source_search.busy = false;
+                match res {
+                    Ok((plugins, Ok(result))) => {
+                        if let Some(p) = plugins {
+                            this.source_search.plugins = p;
+                        }
+                        this.source_search.result = Some(result);
+                        this.source_search.error = None;
+                    }
+                    Ok((plugins, Err(err))) => {
+                        if let Some(p) = plugins {
+                            this.source_search.plugins = p;
+                        }
+                        this.source_search.error = Some(err.into());
+                    }
+                    Err(err) => {
+                        this.source_search.error = Some(err.into());
+                    }
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    pub fn mirror_soulseek_files(
+        &mut self,
+        peer: String,
+        files: Vec<SoulseekCandidate>,
+        title: Option<String>,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(client) = self.api_client() else {
+            self.fail("Local engine is not ready yet.".into(), cx);
+            return;
+        };
+        let label = title.clone().unwrap_or_else(|| format!("files from {peer}"));
+        self.show_notice(format!("Queuing “{label}” from {peer}…").into(), cx);
+        cx.spawn(async move |this, cx| {
+            let res = run_blocking(move || client.mirror_soulseek(&peer, &files, title.as_deref())).await;
+            let outcome = match res {
+                Ok(inner) => inner,
+                Err(err) => Err(err),
+            };
+            let _ = this.update(cx, |this, cx| match outcome {
+                Ok(_) => {
+                    this.had_active_jobs = true;
+                    this.refresh_jobs(cx);
+                    this.ensure_jobs_poller(cx);
+                    this.show_notice(format!("Saving “{label}” to your library…").into(), cx);
+                }
+                Err(err) => this.fail(err, cx),
+            });
+        })
+        .detach();
+    }
+
+    pub fn mirror_youtube_candidate(&mut self, cand: YoutubeCandidate, cx: &mut Context<Self>) {
+        let Some(client) = self.api_client() else {
+            self.fail("Local engine is not ready yet.".into(), cx);
+            return;
+        };
+        let fallback_artist = self.source_search.query.clone();
+        let label = cand.title.clone();
+        self.show_notice(format!("Saving “{label}” from YouTube…").into(), cx);
+        cx.spawn(async move |this, cx| {
+            let res = run_blocking(move || client.mirror_youtube(&cand, &fallback_artist)).await;
+            let outcome = match res {
+                Ok(inner) => inner,
+                Err(err) => Err(err),
+            };
+            let _ = this.update(cx, |this, cx| match outcome {
+                Ok(_) => {
+                    this.had_active_jobs = true;
+                    this.refresh_jobs(cx);
+                    this.ensure_jobs_poller(cx);
+                    this.show_notice(format!("Saving “{label}” to your library…").into(), cx);
+                }
+                Err(err) => this.fail(err, cx),
+            });
+        })
+        .detach();
+    }
+
+    pub fn mirror_soundcloud_candidate(&mut self, cand: SoundcloudCandidate, cx: &mut Context<Self>) {
+        let Some(client) = self.api_client() else {
+            self.fail("Local engine is not ready yet.".into(), cx);
+            return;
+        };
+        let fallback_artist = self.source_search.query.clone();
+        let label = cand.title.clone();
+        self.show_notice(format!("Saving “{label}” from SoundCloud…").into(), cx);
+        cx.spawn(async move |this, cx| {
+            let res = run_blocking(move || client.mirror_soundcloud(&cand, &fallback_artist)).await;
+            let outcome = match res {
+                Ok(inner) => inner,
+                Err(err) => Err(err),
+            };
+            let _ = this.update(cx, |this, cx| match outcome {
+                Ok(_) => {
+                    this.had_active_jobs = true;
+                    this.refresh_jobs(cx);
+                    this.ensure_jobs_poller(cx);
+                    this.show_notice(format!("Saving “{label}” to your library…").into(), cx);
+                }
+                Err(err) => this.fail(err, cx),
+            });
+        })
+        .detach();
+    }
+
+    pub fn mirror_rumble_candidate(&mut self, cand: RumbleCandidate, audio_only: bool, cx: &mut Context<Self>) {
+        let Some(client) = self.api_client() else {
+            self.fail("Local engine is not ready yet.".into(), cx);
+            return;
+        };
+        let fallback_artist = self.source_search.query.clone();
+        let label = cand.title.clone();
+        let kind = if audio_only { "audio" } else { "video" };
+        self.show_notice(format!("Saving {kind} “{label}” from Rumble…").into(), cx);
+        cx.spawn(async move |this, cx| {
+            let res = run_blocking(move || client.mirror_rumble(&cand, audio_only, &fallback_artist)).await;
+            let outcome = match res {
+                Ok(inner) => inner,
+                Err(err) => Err(err),
+            };
+            let _ = this.update(cx, |this, cx| match outcome {
+                Ok(_) => {
+                    this.had_active_jobs = true;
+                    this.refresh_jobs(cx);
+                    this.ensure_jobs_poller(cx);
+                    this.show_notice(format!("Saving “{label}” to your library…").into(), cx);
+                }
+                Err(err) => this.fail(err, cx),
+            });
+        })
+        .detach();
+    }
+
+    pub fn open_shelf(&mut self, peer: String, refresh_remote: bool, cx: &mut Context<Self>) {
+        let clean = peer.trim().to_string();
+        if clean.is_empty() {
+            return;
+        }
+        self.detail = Some(DetailView::Shelf(clean.clone()));
+        self.screen = Screen::List;
+        let Some(client) = self.api_client() else {
+            self.shelf = ShelfState {
+                peer: clean,
+                busy: false,
+                data: None,
+                error: Some("Local engine is still starting.".into()),
+            };
+            cx.notify();
+            return;
+        };
+        let keep_data = if self.shelf.peer == clean && !refresh_remote {
+            self.shelf.data.clone()
+        } else {
+            None
+        };
+        self.shelf = ShelfState {
+            peer: clean.clone(),
+            busy: true,
+            data: keep_data,
+            error: None,
+        };
+        cx.notify();
+
+        let target = clean.clone();
+        cx.spawn(async move |this, cx| {
+            let res = run_blocking(move || client.browse_soulseek(&target, refresh_remote)).await;
+            let outcome = match res {
+                Ok(inner) => inner,
+                Err(err) => Err(err),
+            };
+            let _ = this.update(cx, |this, cx| {
+                if this.shelf.peer != clean {
+                    return;
+                }
+                this.shelf.busy = false;
+                match outcome {
+                    Ok(shelf) => {
+                        record_visited_shelf(&mut this.visited_shelves, &shelf.peer, shelf.tracks, shelf.size);
+                        this.shelf.data = Some(shelf);
+                        this.shelf.error = None;
+                    }
+                    Err(err) => {
+                        this.shelf.error = Some(err.into());
+                    }
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    pub fn remove_visited_shelf(&mut self, peer: String, cx: &mut Context<Self>) {
+        self.visited_shelves
+            .retain(|s| !s.peer.eq_ignore_ascii_case(&peer));
+        save_visited_shelves(&self.visited_shelves);
+        cx.notify();
+    }
+
     pub fn clear_cache(&mut self, key: Option<String>, cx: &mut Context<Self>) {
         cx.spawn(async move |this, cx| {
             if let Ok(w) = worker() {
@@ -970,6 +1603,7 @@ impl PearTube {
         self.cast_modal = None;
         self.add_modal = None;
         self.screen = Screen::Settings(SettingsForm::new(&self.settings, window, cx));
+        self.load_soulseek_settings(window, cx);
         cx.notify();
     }
 
@@ -1682,6 +2316,9 @@ impl Render for PearTube {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         if let Some((entry, pos)) = self.pending_watch.take() {
             self.activate_entry(entry, Some(pos), window, cx);
+        }
+        if let Some(url) = self.pending_add_url.take() {
+            self.open_add_modal_with_url(url, window, cx);
         }
         let is_video = matches!(self.screen, Screen::Play(_));
         let is_list = matches!(self.screen, Screen::List);

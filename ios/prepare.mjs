@@ -43,9 +43,17 @@ if (!existsSync(stampPath) || readFileSync(stampPath, 'utf8') !== stamp) {
   writeFileSync(stampPath, stamp)
 }
 const cargoHome = resolve(root, process.env.CARGO_HOME || join(homedir(), '.cargo'))
-const pathFlag = JSON.stringify(`--remap-path-prefix=${cargoHome}=cargo`)
-run('cargo', ['build', '--config', `target.${target}.rustflags=[${pathFlag}]`, '--manifest-path', 'ios/native/Cargo.toml', '--target', target, '--release'], {
-  env: { ...process.env, CARGO_TARGET_DIR: join(ios, 'build/cargo'), IPHONEOS_DEPLOYMENT_TARGET: '17.0' }
+const home = homedir()
+const rustflags = [
+  '-Cllvm-args=-vectorize-loops',
+  '-Cllvm-args=-vectorize-slp',
+  '-Cforce-unwind-tables=no',
+  `--remap-path-prefix=${cargoHome}=cargo`,
+  `--remap-path-prefix=${root}=peartube`,
+  `--remap-path-prefix=${home}=~`
+].join('\x1f')
+run('cargo', ['build', '--manifest-path', 'ios/native/Cargo.toml', '--target', target, '--release'], {
+  env: { ...process.env, CARGO_ENCODED_RUSTFLAGS: rustflags, CARGO_TARGET_DIR: join(ios, 'build/cargo'), IPHONEOS_DEPLOYMENT_TARGET: '17.0' }
 })
 cpSync(join(ios, 'build/cargo', target, 'release/libpeartube_ios.a'), join(out, 'libpeartube_ios.a'))
 console.log(`Prepared ${host} worklet, addons, and shared Rust player in ${out}`)

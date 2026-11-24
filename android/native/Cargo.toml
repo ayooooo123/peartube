@@ -38,7 +38,7 @@ codegen-units = 1
 # vectorization for all of it. peartube-media's root Cargo.toml carries the
 # same lists; keep the two in step.
 [profile.release.package."*"]
-opt-level = "s"
+opt-level = "z"
 [profile.release.package.oxideav-core]
 opt-level = 3
 [profile.release.package.oxideav-pixfmt]

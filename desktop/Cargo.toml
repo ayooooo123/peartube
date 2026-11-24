@@ -28,6 +28,10 @@ futures-channel = "0.3"
 # GPUI ships no HTTP client of its own; this one fetches artwork (and follows redirects).
 futures-util = "0.3"
 libc = "0.2"
+# Low-fragmentation global allocator for Rust/GPUI/decoder heaps; macOS xzone
+# leaves ~47% fragmentation across GPUI frame churn. Default features avoid
+# overriding C malloc so Bare/QuickJS/ObjC keep Apple's system zone.
+mimalloc = { version = "0.1.52", default-features = false }
 parking_lot = "0.12"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -50,10 +54,55 @@ todo = "deny"
 dbg_macro = "deny"
 await_holding_lock = "deny"
 
-# Optimised for speed, not size: everything at opt-level 3. Unwinding stays
-# on: the player catches decoder panics.
+# Stripped, fat LTO, one codegen unit. Cold dependencies build for size ("z");
+# the hot media decoders and player engine keep opt-level = 3 (matching
+# android/native/Cargo.toml and peartube-media/Cargo.toml). Unwinding stays on:
+# the player catches decoder panics.
 [profile.release]
 strip = true
+lto = "fat"
+codegen-units = 1
+
+[profile.release.package."*"]
+opt-level = "z"
+[profile.release.package.oxideav-core]
+opt-level = 3
+[profile.release.package.oxideav-pixfmt]
+opt-level = 3
+[profile.release.package.player]
+opt-level = 3
+[profile.release.package.oxideav-h264]
+opt-level = 3
+[profile.release.package.oxideav-h265]
+opt-level = 3
+[profile.release.package.oxideav-av1]
+opt-level = 3
+[profile.release.package.oxideav-vp8]
+opt-level = 3
+[profile.release.package.oxideav-vp9]
+opt-level = 3
+[profile.release.package.oxideav-mpeg12video]
+opt-level = 3
+[profile.release.package.oxideav-mpeg4video]
+opt-level = 3
+[profile.release.package.codec-wmv]
+opt-level = 3
+[profile.release.package.oxideav-aac]
+opt-level = 3
+[profile.release.package.oxideav-mp3]
+opt-level = 3
+[profile.release.package.codec-dca]
+opt-level = 3
+[profile.release.package.codec-mlp]
+opt-level = 3
+[profile.release.package.oxideav-flac]
+opt-level = 3
+[profile.release.package.subs-cc]
+opt-level = 3
+[profile.release.package.codec-dv]
+opt-level = 3
+[profile.release.package.oxideav-ogg]
+opt-level = 3
 
 # Video decoding unoptimized is too slow to watch; keep the app's own code
 # quick to rebuild.

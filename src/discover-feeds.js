@@ -18,7 +18,10 @@ const CLIENT_ID_PATTERNS = [
 ]
 
 export const sha256Hex = s => createHash('sha256').update(String(s)).digest('hex')
-export const asText = body => (typeof body === 'string' ? body : body ? b4a.toString(body, 'utf8') : '')
+export function asText (body) {
+  if (typeof body === 'string') return body
+  return body ? b4a.toString(body, 'utf8') : ''
+}
 export const normText = s => String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim()
 
 export function decodeEntities (raw) {
@@ -215,6 +218,12 @@ export function buildLibraryMatcher (entries) {
   }
 }
 
+function sourceFallbackName (source) {
+  if (source === 'youtube') return 'YouTube'
+  if (source === 'soundcloud') return 'SoundCloud'
+  return 'Rumble'
+}
+
 export function browseRowToItem (row, inLib, soundcloudSiteBase) {
   const source = row.source
   const url = String(row.url || '')
@@ -231,12 +240,12 @@ export function browseRowToItem (row, inLib, soundcloudSiteBase) {
         if (!creatorName) creatorName = seg
       }
     } catch {
-      // Ignore malformed URLs when deriving creator profile path.
+      creatorUrl = ''
     }
   } else if (source === 'youtube' && url) {
     creatorUrl = url
   }
-  const fallbackName = source === 'youtube' ? 'YouTube' : source === 'soundcloud' ? 'SoundCloud' : 'Rumble'
+  const fallbackName = sourceFallbackName(source)
   const item = {
     id: `${source}:${itemId}`,
     source,

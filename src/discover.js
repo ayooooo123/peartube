@@ -193,7 +193,7 @@ export function createDiscover ({
           if (parsed.feedTitle) name = parsed.feedTitle
         }
       } catch {
-        // Fallback to handle or channelId when feed lookup fails during follow.
+        name = handle || channelId
       }
     }
     return {
@@ -247,7 +247,7 @@ export function createDiscover ({
           avatarUrl = metaContent(html, 'og:image') || ''
         }
       } catch {
-        // Rumble may answer 403; still save the creator so the user can retry later.
+        avatarUrl = ''
       }
     }
     return {
@@ -314,7 +314,9 @@ export function createDiscover ({
 
   async function fetchSoundcloudItems (creator) {
     const data = await scApiGet(`/users/${encodeURIComponent(creator.channelId)}/tracks?limit=12`)
-    const list = Array.isArray(data?.collection) ? data.collection : (Array.isArray(data) ? data : [])
+    let list = []
+    if (Array.isArray(data?.collection)) list = data.collection
+    else if (Array.isArray(data)) list = data
     const items = []
     for (const e of list) {
       const trackId = String(e?.id ?? '').trim()

@@ -4387,7 +4387,7 @@ function renderDiscoverV2 (force) {
     return
   }
   if (!isBrowse && !discState.creators.length) {
-    gridWrap.replaceChildren(h('p', { class: 'disc-empty' }, 'Follow a YouTube, SoundCloud, or Rumble creator above, or pick a topic to browse.'))
+    gridWrap.replaceChildren(h('p', { class: 'disc-empty' }, 'Follow a creator above or pick a topic to browse.'))
     return
   }
   if (!visibleItems.length) {

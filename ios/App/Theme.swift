@@ -49,6 +49,93 @@ extension Color {
     }
 }
 
+/// High-contrast white primary button inside atmospheric hero panels.
+struct PTHeroPrimaryButtonStyle: ButtonStyle {
+    var compact = false
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .font(compact ? .subheadline.weight(.bold) : .callout.weight(.bold))
+            .foregroundStyle(Color(hex: 0x111111))
+            .padding(.horizontal, compact ? 14 : 18)
+            .padding(.vertical, compact ? 9 : 11)
+            .background(
+                Color.white.opacity(configuration.isPressed ? 0.84 : 1.0),
+                in: RoundedRectangle(cornerRadius: compact ? PTRadius.control : 12)
+            )
+    }
+}
+
+/// Translucent frosted secondary button inside atmospheric hero panels.
+struct PTHeroSecondaryButtonStyle: ButtonStyle {
+    var compact = false
+    func makeBody(configuration: Configuration) -> some View {
+        let radius: CGFloat = compact ? PTRadius.control : 12
+        configuration.label
+            .font(compact ? .subheadline.weight(.semibold) : .callout.weight(.semibold))
+            .foregroundStyle(Color.white)
+            .padding(.horizontal, compact ? 13 : 16)
+            .padding(.vertical, compact ? 9 : 11)
+            .background {
+                ZStack {
+                    RoundedRectangle(cornerRadius: radius)
+                        .fill(.ultraThinMaterial)
+                        .opacity(0.32)
+                    RoundedRectangle(cornerRadius: radius)
+                        .fill(Color.white.opacity(configuration.isPressed ? 0.34 : 0.16))
+                }
+            }
+            .overlay(
+                RoundedRectangle(cornerRadius: radius)
+                    .strokeBorder(Color.white.opacity(0.28), lineWidth: 1)
+            )
+    }
+}
+
+/// Wrapping horizontal layout for hero action rows so buttons never truncate on narrow screens.
+struct PTWrapLayout: Layout {
+    var spacing: CGFloat = 8
+    var rowSpacing: CGFloat = 8
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let maxWidth = proposal.width ?? .infinity
+        var x: CGFloat = 0
+        var y: CGFloat = 0
+        var rowHeight: CGFloat = 0
+        var usedWidth: CGFloat = 0
+
+        for subview in subviews {
+            let size = subview.sizeThatFits(.unspecified)
+            if x > 0 && x + size.width > maxWidth {
+                x = 0
+                y += rowHeight + rowSpacing
+                rowHeight = 0
+            }
+            usedWidth = max(usedWidth, x + size.width)
+            rowHeight = max(rowHeight, size.height)
+            x += size.width + spacing
+        }
+        return CGSize(width: min(maxWidth, usedWidth), height: y + rowHeight)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        var x = bounds.minX
+        var y = bounds.minY
+        var rowHeight: CGFloat = 0
+
+        for subview in subviews {
+            let size = subview.sizeThatFits(.unspecified)
+            if x > bounds.minX && x + size.width > bounds.maxX {
+                x = bounds.minX
+                y += rowHeight + rowSpacing
+                rowHeight = 0
+            }
+            subview.place(at: CGPoint(x: x, y: y), proposal: ProposedViewSize(size))
+            rowHeight = max(rowHeight, size.height)
+            x += size.width + spacing
+        }
+    }
+}
+
 /// Primary action button: light fill on dark background, matching `design/unified-library.md`.
 struct PTPrimaryButtonStyle: ButtonStyle {
     var compact = false

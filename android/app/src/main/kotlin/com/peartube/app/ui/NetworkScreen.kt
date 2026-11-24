@@ -6,6 +6,7 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -37,6 +38,7 @@ import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
@@ -62,6 +64,7 @@ import com.peartube.app.formatRate
 import com.peartube.shared.formatBytes
 import kotlin.math.PI
 import kotlin.math.cos
+import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.roundToInt
 import kotlin.math.sin
@@ -205,127 +208,194 @@ fun NetworkScreen(
             }
         }
 
-        LazyColumn(
-            modifier = Modifier.weight(1f).fillMaxWidth(),
-            contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 28.dp),
-            verticalArrangement = Arrangement.spacedBy(14.dp),
-        ) {
-            item(key = "scene") {
-                Column(
-                    Modifier
-                        .fillMaxWidth()
-                        .clip(CardShape)
-                        .background(CardBg)
-                        .border(1.dp, Line, CardShape)
-                        .padding(14.dp),
-                    verticalArrangement = Arrangement.spacedBy(10.dp),
-                ) {
-                    Box(
-                        Modifier
-                            .fillMaxWidth()
-                            .height(250.dp)
-                            .semantics { contentDescription = sceneDesc },
-                    ) {
-                        when (mode) {
-                            NetworkMode.Globe -> GlobeCanvas(
-                                routes = routeList,
-                                spin = { spin },
-                                turns = { k -> when (k) { 0 -> turn0; 1 -> turn1; else -> turn2 } },
-                                modifier = Modifier.fillMaxSize(),
-                            )
-                            NetworkMode.Swarm -> SwarmCanvas(
-                                routes = routeList,
-                                turns = { k -> when (k) { 0 -> turn0; 1 -> turn1; else -> turn2 } },
-                                modifier = Modifier.fillMaxSize(),
-                            )
-                            NetworkMode.Flow -> FlowScene(
-                                routes = routeList,
-                                cachedBytes = cachedBytes,
-                                cacheMaxBytes = cacheMaxBytes,
-                                dashPhase = { dashPhase },
-                                modifier = Modifier.fillMaxSize(),
-                            )
-                        }
-                    }
+        val caption = when {
+            totalPeers == 0L -> "No peers now. Your library still plays from this device."
+            mode == NetworkMode.Flow -> "Width is speed."
+            else -> "Connections, not locations"
+        }
 
-                    // Legend key
-                    Row(
-                        Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(12.dp, Alignment.CenterHorizontally),
-                        verticalAlignment = Alignment.CenterVertically,
+        BoxWithConstraints(Modifier.weight(1f).fillMaxWidth()) {
+            if (maxWidth >= 720.dp) {
+                Row(
+                    Modifier
+                        .fillMaxSize()
+                        .padding(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 16.dp),
+                    horizontalArrangement = Arrangement.spacedBy(16.dp),
+                    verticalAlignment = Alignment.Top,
+                ) {
+                    NetworkSceneCard(
+                        mode = mode,
+                        routes = routeList,
+                        cachedBytes = cachedBytes,
+                        cacheMaxBytes = cacheMaxBytes,
+                        spin = { spin },
+                        turns = { k -> when (k) { 0 -> turn0; 1 -> turn1; else -> turn2 } },
+                        dashPhase = { dashPhase },
+                        sceneDesc = sceneDesc,
+                        caption = caption,
+                        modifier = Modifier.weight(1.35f).height(340.dp),
+                    )
+                    LazyColumn(
+                        modifier = Modifier.weight(1f).fillMaxHeight(),
+                        contentPadding = PaddingValues(bottom = 16.dp),
+                        verticalArrangement = Arrangement.spacedBy(14.dp),
                     ) {
-                        routeList.forEach { r ->
-                            val active = r.traffic.peers > 0L
+                        item(key = "rates") {
                             Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(5.dp),
+                                Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(12.dp),
                             ) {
-                                Box(
-                                    Modifier
-                                        .size(7.dp)
-                                        .clip(CircleShape)
-                                        .background(if (active) r.color else Dim.copy(alpha = 0.4f)),
+                                RateSparkCard(
+                                    label = "Receiving",
+                                    rateText = formatRate(downBps),
+                                    samples = history.down,
+                                    accentColor = BrandHover,
+                                    modifier = Modifier.weight(1f),
                                 )
-                                Text(
-                                    text = "${r.label} · ${r.traffic.peers}",
-                                    color = if (active) Ink else Dim,
-                                    fontSize = 11.sp,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis,
+                                RateSparkCard(
+                                    label = "Sharing",
+                                    rateText = formatRate(upBps),
+                                    samples = history.up,
+                                    accentColor = Accent,
+                                    modifier = Modifier.weight(1f),
                                 )
                             }
                         }
+                        item(key = "reciprocity") {
+                            ReciprocityCard(rxBytes = rxBytes, txBytes = txBytes, ratio = ratio)
+                        }
+                        item(key = "routes") {
+                            RoutesCard(
+                                routes = routeList,
+                                cachedBytes = cachedBytes,
+                                cacheMaxBytes = cacheMaxBytes,
+                            )
+                        }
                     }
-
-                    val caption = when {
-                        totalPeers == 0L -> "No peers now. Your library still plays from this device."
-                        mode == NetworkMode.Flow -> "Width is speed."
-                        else -> "Connections, not locations"
-                    }
-                    Text(
-                        text = caption,
-                        color = Dim,
-                        fontSize = 12.sp,
-                        textAlign = TextAlign.Center,
-                        modifier = Modifier.fillMaxWidth(),
-                    )
                 }
-            }
-
-            item(key = "rates") {
-                Row(
-                    Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+            } else {
+                LazyColumn(
+                    modifier = Modifier.fillMaxSize(),
+                    contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 28.dp),
+                    verticalArrangement = Arrangement.spacedBy(14.dp),
                 ) {
-                    RateSparkCard(
-                        label = "Receiving",
-                        rateText = formatRate(downBps),
-                        samples = history.down,
-                        accentColor = Accent,
-                        modifier = Modifier.weight(1f),
-                    )
-                    RateSparkCard(
-                        label = "Sharing",
-                        rateText = formatRate(upBps),
-                        samples = history.up,
-                        accentColor = BrandHover,
-                        modifier = Modifier.weight(1f),
-                    )
+                    item(key = "scene") {
+                        NetworkSceneCard(
+                            mode = mode,
+                            routes = routeList,
+                            cachedBytes = cachedBytes,
+                            cacheMaxBytes = cacheMaxBytes,
+                            spin = { spin },
+                            turns = { k -> when (k) { 0 -> turn0; 1 -> turn1; else -> turn2 } },
+                            dashPhase = { dashPhase },
+                            sceneDesc = sceneDesc,
+                            caption = caption,
+                            modifier = Modifier.fillMaxWidth().height(276.dp),
+                        )
+                    }
+
+                    item(key = "rates") {
+                        Row(
+                            Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(12.dp),
+                        ) {
+                            RateSparkCard(
+                                label = "Receiving",
+                                rateText = formatRate(downBps),
+                                samples = history.down,
+                                accentColor = BrandHover,
+                                modifier = Modifier.weight(1f),
+                            )
+                            RateSparkCard(
+                                label = "Sharing",
+                                rateText = formatRate(upBps),
+                                samples = history.up,
+                                accentColor = Accent,
+                                modifier = Modifier.weight(1f),
+                            )
+                        }
+                    }
+
+                    item(key = "reciprocity") {
+                        ReciprocityCard(rxBytes = rxBytes, txBytes = txBytes, ratio = ratio)
+                    }
+
+                    item(key = "routes") {
+                        RoutesCard(
+                            routes = routeList,
+                            cachedBytes = cachedBytes,
+                            cacheMaxBytes = cacheMaxBytes,
+                        )
+                    }
                 }
-            }
-
-            item(key = "reciprocity") {
-                ReciprocityCard(rxBytes = rxBytes, txBytes = txBytes, ratio = ratio)
-            }
-
-            item(key = "routes") {
-                RoutesCard(
-                    routes = routeList,
-                    cachedBytes = cachedBytes,
-                    cacheMaxBytes = cacheMaxBytes,
-                )
             }
         }
+    }
+}
+
+@Composable
+private fun NetworkSceneCard(
+    mode: NetworkMode,
+    routes: List<RouteMeta>,
+    cachedBytes: Long,
+    cacheMaxBytes: Long,
+    spin: () -> Float,
+    turns: (Int) -> Float,
+    dashPhase: () -> Float,
+    sceneDesc: String,
+    caption: String,
+    modifier: Modifier = Modifier,
+) {
+    Box(
+        modifier = modifier
+            .clip(HeroShape)
+            .drawBehind {
+                drawRect(CardBg)
+                drawRect(
+                    brush = Brush.radialGradient(
+                        colors = listOf(Brand.copy(alpha = 0.18f), Color.Transparent),
+                        center = Offset(size.width * 0.5f, size.height * 0.42f),
+                        radius = max(size.width, size.height) * 0.62f,
+                    ),
+                )
+            }
+            .border(1.dp, Line, HeroShape)
+            .semantics { contentDescription = sceneDesc },
+    ) {
+        when (mode) {
+            NetworkMode.Globe -> GlobeCanvas(
+                routes = routes,
+                spin = spin,
+                turns = turns,
+                modifier = Modifier.fillMaxSize(),
+            )
+            NetworkMode.Swarm -> SwarmCanvas(
+                routes = routes,
+                turns = turns,
+                modifier = Modifier.fillMaxSize(),
+            )
+            NetworkMode.Flow -> FlowScene(
+                routes = routes,
+                cachedBytes = cachedBytes,
+                cacheMaxBytes = cacheMaxBytes,
+                dashPhase = dashPhase,
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(start = 12.dp, end = 12.dp, top = 12.dp, bottom = 32.dp),
+            )
+        }
+
+        Text(
+            text = caption,
+            color = Dim,
+            fontSize = 12.sp,
+            fontWeight = FontWeight.SemiBold,
+            textAlign = TextAlign.Center,
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .fillMaxWidth()
+                .padding(start = 16.dp, end = 16.dp, bottom = 12.dp),
+        )
     }
 }
 
@@ -351,8 +421,8 @@ private fun GlobeCanvas(
         val w = size.width
         val h = size.height
         val cx = w * 0.5f
-        val cy = h * 0.48f
-        val radius = min(w, h * 1.25f) * 0.21f
+        val cy = h * 0.44f
+        val radius = min(w, h * 1.25f) * 0.20f
         val squash = 0.36f
         val twoPi = (2.0 * PI).toFloat()
 
@@ -455,8 +525,8 @@ private fun SwarmCanvas(
 
     Canvas(modifier) {
         val cx = size.width * 0.5f
-        val cy = size.height * 0.5f
-        val maxR = min(size.width, size.height) * 0.44f
+        val cy = size.height * 0.45f
+        val maxR = min(size.width, size.height) * 0.39f
         val twoPi = (2.0 * PI).toFloat()
 
         for (k in 2 downTo 0) {
@@ -842,7 +912,7 @@ private fun ReciprocityCard(
                     Modifier
                         .weight(shareFrac.coerceAtLeast(0.01f))
                         .fillMaxHeight()
-                        .background(BrandHover),
+                        .background(Accent),
                 )
             }
             if (recvFrac > 0f) {
@@ -850,13 +920,13 @@ private fun ReciprocityCard(
                     Modifier
                         .weight(recvFrac.coerceAtLeast(0.01f))
                         .fillMaxHeight()
-                        .background(Accent),
+                        .background(BrandHover),
                 )
             }
         }
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-            Text("Shared ${formatBytes(txBytes)}", color = BrandHover, fontSize = 12.sp, fontWeight = FontWeight.Medium)
-            Text("Received ${formatBytes(rxBytes)}", color = Accent, fontSize = 12.sp, fontWeight = FontWeight.Medium)
+            Text("Shared ${formatBytes(txBytes)}", color = Accent, fontSize = 12.sp, fontWeight = FontWeight.Medium)
+            Text("Received ${formatBytes(rxBytes)}", color = BrandHover, fontSize = 12.sp, fontWeight = FontWeight.Medium)
         }
     }
 }

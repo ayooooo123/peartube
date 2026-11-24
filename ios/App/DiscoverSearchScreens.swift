@@ -923,10 +923,10 @@ struct SearchScreen: View {
             Button { onNavigate(.title(tile.key)) } label: {
                 HStack(spacing: 12) {
                     if tile.kind == .clip {
-                        WideArtView(title: tile.title, backdropURL: nil, posterURL: nil, cornerRadius: 6)
+                        WideArtView(title: tile.title, kind: tile.kind, backdropURL: nil, posterURL: nil, cornerRadius: 6)
                             .frame(width: 64)
                     } else {
-                        PosterView(title: tile.title, year: tile.year, url: model.posterURL(imdb: tile.imdb), cornerRadius: 6)
+                        PosterView(title: tile.title, year: tile.year, kind: tile.kind, url: model.posterURL(imdb: tile.imdb), cornerRadius: 6)
                             .frame(width: 38)
                     }
                     VStack(alignment: .leading, spacing: 2) {
@@ -1815,7 +1815,8 @@ struct AddToLibrarySheet: View {
     }
 
     private func applyPreview(_ preview: IdentifyResult) {
-        editTitle = preview.match?.title.isEmpty == false ? preview.match!.title : (preview.music?.title ?? preview.title)
+        let matchedTitle = preview.match.flatMap { $0.title.isEmpty ? nil : $0.title }
+        editTitle = matchedTitle ?? preview.music?.title ?? preview.title
         editArtist = preview.music?.artist ?? preview.author
         audioOnly = preview.audioOnly
     }

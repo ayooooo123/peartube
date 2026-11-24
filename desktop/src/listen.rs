@@ -113,6 +113,45 @@ fn sort_track_rows<'a>(
 
 impl PearTube {
     pub fn render_listen(&self, tab: ListenTab, cx: &mut Context<Self>) -> impl IntoElement {
+        let has_any_music = !self.catalog.albums.is_empty() || !self.catalog.tracks.is_empty();
+        if !has_any_music {
+            return column()
+                .py_6()
+                .gap_5()
+                .child(div().text_2xl().font_weight(FontWeight::BOLD).child("Listen"))
+                .child(
+                    v_flex()
+                        .py_16()
+                        .gap_3()
+                        .items_center()
+                        .text_center()
+                        .child(div().text_lg().font_weight(FontWeight::BOLD).child("No music yet"))
+                        .child(
+                            div()
+                                .text_sm()
+                                .text_color(rgb(DIM))
+                                .child("Add a folder, a link, or search your sources."),
+                        )
+                        .child(
+                            h_flex()
+                                .pt_2()
+                                .gap_2()
+                                .child(
+                                    Button::new("listen-empty-add")
+                                        .primary()
+                                        .label("Add music")
+                                        .on_click(cx.listener(|this, _, window, cx| this.open_add_modal(window, cx))),
+                                )
+                                .child(
+                                    Button::new("listen-empty-discover")
+                                        .label("Discover")
+                                        .on_click(cx.listener(|this, _, _, cx| this.open_room(Room::Discover, cx))),
+                                ),
+                        ),
+                )
+                .into_any_element();
+        }
+
         let saved_only = self.listen_saved_only;
         let albums: Vec<&AlbumTile> = self
             .catalog
@@ -134,9 +173,13 @@ impl PearTube {
             .collect();
 
         let (sort_col, asc) = self.track_sort;
+        let query = if tab == ListenTab::Tracks {
+            self.track_filter.read(cx).value().to_string()
+        } else {
+            String::new()
+        };
         let tracks_sorted = if tab == ListenTab::Tracks {
-            let q = self.track_filter.read(cx).value().to_string();
-            sort_track_rows(&tracks_all, &q, sort_col, asc, &self.track_durations)
+            sort_track_rows(&tracks_all, &query, sort_col, asc, &self.track_durations)
         } else {
             tracks_all.clone()
         };
@@ -154,10 +197,12 @@ impl PearTube {
         let body: AnyElement = match tab {
             ListenTab::Albums => self.render_albums_grid(&albums, cx).into_any_element(),
             ListenTab::Artists => self.render_artists_grid(&artists, cx).into_any_element(),
-            ListenTab::Tracks => self.render_tracks_table(&tracks_sorted, cx).into_any_element(),
+            ListenTab::Tracks => self
+                .render_tracks_table(&tracks_sorted, !tracks_all.is_empty(), !query.trim().is_empty(), cx)
+                .into_any_element(),
         };
 
-        column().py_6().gap_5().child(header).child(body)
+        column().py_6().gap_5().child(header).child(body).into_any_element()
     }
 
     fn render_listen_header(
@@ -202,6 +247,7 @@ impl PearTube {
                     .items_center()
                     .flex_wrap()
                     .gap_3()
+                    .child(div().text_2xl().font_weight(FontWeight::BOLD).child("Listen"))
                     .when(has_tracks || waiting, |row| {
                         let primary_btn = if waiting {
                             Button::new("listen-top-play")
@@ -246,6 +292,21 @@ impl PearTube {
                             )
                         })
                     })
+                    .child(div().text_sm().text_color(rgb(DIM)).child(count_text.to_string())),
+            )
+            .child(
+                h_flex()
+                    .items_center()
+                    .gap_3()
+                    .child(
+                        Checkbox::new("listen-saved-only")
+                            .checked(saved_only)
+                            .label("Saved here")
+                            .on_click(cx.listener(|this, checked: &bool, _, cx| {
+                                this.listen_saved_only = *checked;
+                                cx.notify();
+                            })),
+                    )
                     .child(
                         h_flex()
                             .p_1()
@@ -257,17 +318,7 @@ impl PearTube {
                             .child(seg("listen-tab-albums", "Albums", ListenTab::Albums, cx))
                             .child(seg("listen-tab-artists", "Artists", ListenTab::Artists, cx))
                             .child(seg("listen-tab-tracks", "Tracks", ListenTab::Tracks, cx)),
-                    )
-                    .child(div().text_sm().text_color(rgb(DIM)).child(count_text.to_string())),
-            )
-            .child(
-                Checkbox::new("listen-saved-only")
-                    .checked(saved_only)
-                    .label("Saved here")
-                    .on_click(cx.listener(|this, checked: &bool, _, cx| {
-                        this.listen_saved_only = *checked;
-                        cx.notify();
-                    })),
+                    ),
             )
     }
 
@@ -350,7 +401,11 @@ impl PearTube {
                 .py_16()
                 .text_center()
                 .text_color(rgb(DIM))
-                .child("No artists in your library yet.")
+                .child(if self.listen_saved_only {
+                    "No artists saved on this Mac yet."
+                } else {
+                    "No artists in your library yet."
+                })
                 .into_any_element();
         }
         h_flex()
@@ -378,7 +433,13 @@ impl PearTube {
             .into_any_element()
     }
 
-    fn render_tracks_table(&self, rows: &[&TrackRow], cx: &mut Context<Self>) -> impl IntoElement {
+    fn render_tracks_table(
+        &self,
+        rows: &[&TrackRow],
+        has_unfiltered_tracks: bool,
+        has_query: bool,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
         let (sort_col, asc) = self.track_sort;
         let queue_snapshot: Vec<TrackItem> = rows.iter().map(|r| TrackItem::from_track_row(r)).collect();
         let current_key = self.music_queue.current().map(|c| c.entry.key.clone());
@@ -412,17 +473,27 @@ impl PearTube {
                 .when_some(arrow, |d, sym| d.child(div().text_color(rgb(BRAND)).child(sym)))
         };
 
+        let empty_msg = if has_query {
+            "No tracks match that filter."
+        } else if self.listen_saved_only {
+            "No tracks saved on this Mac yet."
+        } else {
+            "No tracks in your library yet."
+        };
+
         v_flex()
             .gap_3()
-            .child(
-                div().max_w(px(340.)).child(
-                    Input::new(&self.track_filter)
-                        .prefix(Icon::new(Lucide::Search).text_color(rgb(DIM)))
-                        .cleanable(true),
-                ),
-            )
+            .when(has_unfiltered_tracks, |this| {
+                this.child(
+                    div().max_w(px(340.)).child(
+                        Input::new(&self.track_filter)
+                            .prefix(Icon::new(Lucide::Search).text_color(rgb(DIM)))
+                            .cleanable(true),
+                    ),
+                )
+            })
             .when(rows.is_empty(), |this| {
-                this.child(div().py_12().text_center().text_color(rgb(DIM)).child("No tracks match that filter."))
+                this.child(div().py_12().text_center().text_color(rgb(DIM)).child(empty_msg))
             })
             .when(!rows.is_empty(), |this| {
                 this.child(

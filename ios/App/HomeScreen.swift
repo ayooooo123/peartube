@@ -39,13 +39,6 @@ struct HomeScreen: View {
     private var hasAlbums: Bool { !model.catalog.albums.isEmpty }
     private var hasVideos: Bool { !model.catalog.allVideos.isEmpty }
 
-    private var musicPrimary: Bool {
-        guard hasAlbums else { return false }
-        guard let latestVideo = model.continueVideos.first else { return true }
-        if music.isPlaying { return true }
-        return music.canContinueOnHome && music.updatedAt >= latestVideo.progress.updatedAt
-    }
-
     var body: some View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 26) {
@@ -79,19 +72,22 @@ struct HomeScreen: View {
     @ViewBuilder
     private var heroPairSection: some View {
         if sizeClass == .regular && hasAlbums && hasVideos {
-            HStack(alignment: .top, spacing: 12) {
+            HStack(alignment: .top, spacing: 14) {
                 listenHeroCard
-                    .frame(maxWidth: .infinity)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
                 watchHeroCard
-                    .frame(maxWidth: .infinity)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
+            .fixedSize(horizontal: false, vertical: true)
         } else {
-            VStack(spacing: 12) {
+            VStack(spacing: 14) {
                 if hasAlbums {
                     listenHeroCard
+                        .frame(maxWidth: .infinity)
                 }
                 if hasVideos {
                     watchHeroCard
+                        .frame(maxWidth: .infinity)
                 }
             }
         }
@@ -100,6 +96,7 @@ struct HomeScreen: View {
     private var listenHeroCard: some View {
         let cur = music.currentTrack
         let collageAlbums = Array(model.catalog.albums.prefix(4))
+        let heroHue = Double(cur?.hue ?? collageAlbums.first?.hue ?? 258)
         let headline = cur?.title ?? plural(model.catalog.tracks.count, "track", "tracks")
         let facts: String = {
             if let cur {
@@ -108,31 +105,63 @@ struct HomeScreen: View {
             return plural(model.catalog.albums.count, "album", "albums")
         }()
 
-        return HStack(alignment: .center, spacing: 12) {
+        return ZStack(alignment: .bottomLeading) {
+            PTHeroBackground(hue: heroHue, showOrb: false)
+
+            if !collageAlbums.isEmpty {
+                VStack {
+                    HStack {
+                        Spacer(minLength: 0)
+                        albumCollage(collageAlbums)
+                            .rotationEffect(.degrees(6))
+                            .padding(.top, 14)
+                            .padding(.trailing, 14)
+                    }
+                    Spacer(minLength: 0)
+                }
+                .accessibilityHidden(true)
+
+                // Readability scrim so the tilted sleeve collage never obscures the display text
+                LinearGradient(
+                    stops: [
+                        .init(color: Color.black.opacity(0.56), location: 0.0),
+                        .init(color: Color.black.opacity(0.28), location: 0.58),
+                        .init(color: .clear, location: 1.0)
+                    ],
+                    startPoint: .bottomLeading,
+                    endPoint: .topTrailing
+                )
+                .allowsHitTesting(false)
+            }
+
             VStack(alignment: .leading, spacing: 8) {
                 Text("Listen")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(PTColor.brandRing)
+                    .font(.caption2.weight(.bold))
+                    .tracking(1.4)
+                    .foregroundStyle(Color.white.opacity(0.80))
                     .textCase(.uppercase)
 
                 Text(headline)
-                    .font(.title3.weight(.bold))
-                    .foregroundStyle(PTColor.ink)
+                    .font(.title2.weight(.heavy))
+                    .tracking(-0.4)
+                    .textCase(.uppercase)
+                    .foregroundStyle(Color.white)
                     .lineLimit(2)
+                    .padding(.trailing, collageAlbums.isEmpty ? 0 : 96)
 
                 Text(facts)
-                    .font(.caption)
-                    .foregroundStyle(music.pausedForVideo ? PTColor.warn : PTColor.dim)
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(music.pausedForVideo ? PTColor.warn : Color.white.opacity(0.88))
                     .lineLimit(1)
 
-                HStack(spacing: 8) {
+                PTWrapLayout(spacing: 8, rowSpacing: 8) {
                     if let cur {
                         let playLabel = music.isPlaying ? "Pause" : "Resume"
                         let playIcon = music.isPlaying ? "pause.fill" : "play.fill"
                         heroActionButton(
                             title: playLabel,
                             icon: playIcon,
-                            primary: musicPrimary,
+                            primary: true,
                             accessibilityLabel: "\(playLabel) \(cur.title)",
                             identifier: "home.hero.listen.play"
                         ) {
@@ -142,7 +171,7 @@ struct HomeScreen: View {
                         heroActionButton(
                             title: "Play all",
                             icon: "play.fill",
-                            primary: musicPrimary,
+                            primary: true,
                             accessibilityLabel: "Play all music",
                             identifier: "home.hero.listen.play"
                         ) {
@@ -160,65 +189,66 @@ struct HomeScreen: View {
                         music.playTrackList(model.catalog.tracks, startIndex: nil, sourceLabel: "Library", shuffleOn: true)
                     }
                 }
-                .padding(.top, 2)
+                .padding(.top, 4)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
-
-            if !collageAlbums.isEmpty {
-                albumCollage(collageAlbums)
-                    .frame(width: 74, height: 74)
-                    .accessibilityHidden(true)
-            }
+            .padding(18)
         }
-        .padding(14)
-        .background(
-            LinearGradient(
-                colors: [Color.hsl(hue: 258, saturation: 0.42, lightness: 0.16), PTColor.surface],
-                startPoint: .topLeading,
-                endPoint: .bottomTrailing
-            ),
-            in: RoundedRectangle(cornerRadius: PTRadius.card)
-        )
+        .frame(maxWidth: .infinity, minHeight: 208, alignment: .bottomLeading)
+        .clipShape(RoundedRectangle(cornerRadius: 20))
         .overlay(
-            RoundedRectangle(cornerRadius: PTRadius.card)
-                .strokeBorder(PTColor.line, lineWidth: 1)
+            RoundedRectangle(cornerRadius: 20)
+                .strokeBorder(Color.white.opacity(0.10), lineWidth: 1)
         )
     }
 
     @ViewBuilder
     private func albumCollage(_ albums: [LibraryTile]) -> some View {
         if albums.count == 1, let first = albums.first {
-            SleeveView(hue: first.hue, seed: first.seed, monogram: first.monogramText, cornerRadius: 8)
+            SleeveView(hue: first.hue, seed: first.seed, monogram: first.monogramText, cornerRadius: 10)
+                .frame(width: 82, height: 82)
+                .shadow(color: .black.opacity(0.45), radius: 10, y: 6)
         } else {
             let tiles = Array(albums.prefix(4))
-            VStack(spacing: 3) {
-                HStack(spacing: 3) {
+            let side: CGFloat = sizeClass == .regular ? 64 : 54
+            VStack(spacing: 6) {
+                HStack(spacing: 6) {
                     if tiles.indices.contains(0) {
-                        SleeveView(hue: tiles[0].hue, seed: tiles[0].seed, monogram: tiles[0].monogramText, cornerRadius: 5)
+                        SleeveView(hue: tiles[0].hue, seed: tiles[0].seed, monogram: tiles[0].monogramText, cornerRadius: 8)
+                            .frame(width: side, height: side)
+                            .shadow(color: .black.opacity(0.42), radius: 8, y: 5)
                     }
                     if tiles.indices.contains(1) {
-                        SleeveView(hue: tiles[1].hue, seed: tiles[1].seed, monogram: tiles[1].monogramText, cornerRadius: 5)
+                        SleeveView(hue: tiles[1].hue, seed: tiles[1].seed, monogram: tiles[1].monogramText, cornerRadius: 8)
+                            .frame(width: side, height: side)
+                            .shadow(color: .black.opacity(0.42), radius: 8, y: 5)
                     }
                 }
                 if tiles.count > 2 {
-                    HStack(spacing: 3) {
+                    HStack(spacing: 6) {
                         if tiles.indices.contains(2) {
-                            SleeveView(hue: tiles[2].hue, seed: tiles[2].seed, monogram: tiles[2].monogramText, cornerRadius: 5)
+                            SleeveView(hue: tiles[2].hue, seed: tiles[2].seed, monogram: tiles[2].monogramText, cornerRadius: 8)
+                                .frame(width: side, height: side)
+                                .shadow(color: .black.opacity(0.42), radius: 8, y: 5)
                         }
                         if tiles.indices.contains(3) {
-                            SleeveView(hue: tiles[3].hue, seed: tiles[3].seed, monogram: tiles[3].monogramText, cornerRadius: 5)
+                            SleeveView(hue: tiles[3].hue, seed: tiles[3].seed, monogram: tiles[3].monogramText, cornerRadius: 8)
+                                .frame(width: side, height: side)
+                                .shadow(color: .black.opacity(0.42), radius: 8, y: 5)
                         } else {
-                            Color.clear
+                            Color.clear.frame(width: side, height: side)
                         }
                     }
                 }
             }
+            .opacity(0.94)
         }
     }
 
     private var watchHeroCard: some View {
         let featured = model.continueVideos.first
-        let hue = featured.map { Double(CatalogText.sleeveHash($0.tile.title) % 360) } ?? 20.0
+        let hueSource = featured?.tile.title ?? model.catalog.allVideos.first?.title
+        let hue = hueSource.map { Double(CatalogText.sleeveHash($0) % 360) } ?? 20.0
         let headline = featured?.tile.title ?? plural(model.catalog.allVideos.count, "title", "titles")
         let facts: String = {
             if let f = featured {
@@ -231,72 +261,74 @@ struct HomeScreen: View {
             return "Films, series and clips"
         }()
 
-        return VStack(alignment: .leading, spacing: 8) {
-            Text("Watch")
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(PTColor.dim)
-                .textCase(.uppercase)
+        return ZStack(alignment: .bottomLeading) {
+            PTHeroBackground(hue: hue, showOrb: true)
 
-            Text(headline)
-                .font(.title3.weight(.bold))
-                .foregroundStyle(PTColor.ink)
-                .lineLimit(2)
+            VStack(alignment: .leading, spacing: 8) {
+                Text(featured != nil ? "Continue watching" : "Watch")
+                    .font(.caption2.weight(.bold))
+                    .tracking(1.4)
+                    .foregroundStyle(Color.white.opacity(0.80))
+                    .textCase(.uppercase)
 
-            Text(facts)
-                .font(.caption)
-                .foregroundStyle(PTColor.dim)
-                .lineLimit(1)
+                Text(headline)
+                    .font(.title2.weight(.heavy))
+                    .tracking(-0.4)
+                    .textCase(.uppercase)
+                    .foregroundStyle(Color.white)
+                    .lineLimit(2)
 
-            if let f = featured, f.progress.fraction > 0 {
-                GeometryReader { geo in
-                    ZStack(alignment: .leading) {
-                        Capsule().fill(PTColor.line)
-                        Capsule()
-                            .fill(PTColor.brand)
-                            .frame(width: geo.size.width * max(0.03, min(1, f.progress.fraction)))
+                Text(facts)
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(Color.white.opacity(0.88))
+                    .lineLimit(1)
+
+                if let f = featured, f.progress.fraction > 0 {
+                    GeometryReader { geo in
+                        ZStack(alignment: .leading) {
+                            Capsule().fill(Color.white.opacity(0.30))
+                            Capsule()
+                                .fill(PTColor.brandHover)
+                                .frame(width: geo.size.width * max(0.03, min(1, f.progress.fraction)))
+                        }
                     }
+                    .frame(height: 4)
+                    .frame(maxWidth: 320)
                 }
-                .frame(height: 4)
-            }
 
-            HStack(spacing: 8) {
-                if let f = featured {
+                PTWrapLayout(spacing: 8, rowSpacing: 8) {
+                    if let f = featured {
+                        heroActionButton(
+                            title: "Continue",
+                            icon: "play.fill",
+                            primary: true,
+                            accessibilityLabel: "Continue \(f.tile.title)",
+                            identifier: "home.hero.watch.continue"
+                        ) {
+                            model.play(f.entry)
+                        }
+                    }
+
                     heroActionButton(
-                        title: "Continue",
-                        icon: "play.fill",
-                        primary: !musicPrimary,
-                        accessibilityLabel: "Continue \(f.tile.title)",
-                        identifier: "home.hero.watch.continue"
+                        title: "Play something",
+                        icon: "die.face.5",
+                        primary: featured == nil,
+                        accessibilityLabel: "Play a random video",
+                        identifier: "home.hero.watch.surprise"
                     ) {
-                        model.play(f.entry)
+                        model.playRandomVideo()
                     }
                 }
-
-                heroActionButton(
-                    title: "Play something",
-                    icon: "die.face.5",
-                    primary: featured == nil && !musicPrimary,
-                    accessibilityLabel: "Play a random video",
-                    identifier: "home.hero.watch.surprise"
-                ) {
-                    model.playRandomVideo()
-                }
+                .padding(.top, 4)
             }
-            .padding(.top, 2)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(18)
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(14)
-        .background(
-            LinearGradient(
-                colors: [Color.hsl(hue: hue, saturation: 0.36, lightness: 0.15), PTColor.surface],
-                startPoint: .topLeading,
-                endPoint: .bottomTrailing
-            ),
-            in: RoundedRectangle(cornerRadius: PTRadius.card)
-        )
+        .frame(maxWidth: .infinity, minHeight: 208, alignment: .bottomLeading)
+        .clipShape(RoundedRectangle(cornerRadius: 20))
         .overlay(
-            RoundedRectangle(cornerRadius: PTRadius.card)
-                .strokeBorder(PTColor.line, lineWidth: 1)
+            RoundedRectangle(cornerRadius: 20)
+                .strokeBorder(Color.white.opacity(0.10), lineWidth: 1)
         )
     }
 
@@ -313,14 +345,14 @@ struct HomeScreen: View {
             Button(action: action) {
                 Label(title, systemImage: icon)
             }
-            .buttonStyle(PTPrimaryButtonStyle(compact: true))
+            .buttonStyle(PTHeroPrimaryButtonStyle(compact: true))
             .accessibilityLabel(accessibilityLabel)
             .accessibilityIdentifier(identifier)
         } else {
             Button(action: action) {
                 Label(title, systemImage: icon)
             }
-            .buttonStyle(PTQuietButtonStyle(compact: true))
+            .buttonStyle(PTHeroSecondaryButtonStyle(compact: true))
             .accessibilityLabel(accessibilityLabel)
             .accessibilityIdentifier(identifier)
         }
@@ -380,6 +412,7 @@ struct HomeScreen: View {
             VStack(alignment: .leading, spacing: 8) {
                 WideArtView(
                     title: tile.title,
+                    kind: tile.kind,
                     backdropURL: model.backdropURL(imdb: tile.imdb),
                     posterURL: model.posterURL(imdb: tile.imdb),
                     progress: progress.fraction

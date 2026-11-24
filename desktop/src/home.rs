@@ -9,16 +9,18 @@ use std::collections::BTreeSet;
 
 use gpui_kit::assets::IconName as Lucide;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
-use gpui_kit::component::{Icon, Sizable as _, h_flex, v_flex};
+use gpui_kit::component::{Sizable as _, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use peartube::worker::Entry;
 
 use crate::app::{DetailView, ListenTab, PearTube, Room, WatchKind};
-use crate::catalog::{AlbumTile, VideoTile, format_time_left, is_music_entry, plural, sleeve_hash};
+use crate::catalog::{AlbumTile, VideoKind, VideoTile, format_time_left, is_music_entry, plural, sleeve_hash};
 use crate::list::{column, format_bytes, label};
 use crate::music::TrackItem;
-use crate::sleeves::{album_sleeve, video_art};
+use crate::sleeves::{
+    album_sleeve, hero_primary_btn, hero_progress_bar, hero_secondary_btn, hero_surface, video_art,
+};
 use crate::theme::{BRAND, CARD, CARD_ELEVATED, DIM, INK, LINE};
 
 pub struct ResumeVideo {
@@ -146,17 +148,25 @@ impl PearTube {
         let has_music = !self.catalog.albums.is_empty() || !self.catalog.tracks.is_empty();
         let total_videos = self.catalog.movies.len() + self.catalog.series.len() + self.catalog.clips.len();
         let has_video = total_videos > 0;
-        let music_first = has_music && (resume_videos.is_empty() || !self.last_room_was_watch);
+        let single_card = has_music != has_video;
+        let music_first = has_music && (!has_video || resume_videos.is_empty() || !self.last_room_was_watch);
 
         h_flex()
+            .w_full()
             .gap_4()
-            .flex_wrap()
+            .when(!single_card, |row| row.flex_wrap())
             .items_stretch()
             .when(has_music, |row| {
-                row.child(self.render_home_listen_hero(saved_music, music_first, cx))
+                row.child(self.render_home_listen_hero(saved_music, music_first, single_card, cx))
             })
             .when(has_video, |row| {
-                row.child(self.render_home_watch_hero(resume_videos.first(), total_videos, !music_first, cx))
+                row.child(self.render_home_watch_hero(
+                    resume_videos.first(),
+                    total_videos,
+                    !music_first,
+                    single_card,
+                    cx,
+                ))
             })
     }
 
@@ -164,6 +174,7 @@ impl PearTube {
         &self,
         saved_music: Option<&TrackItem>,
         is_primary: bool,
+        single_card: bool,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let collage_albums: Vec<AlbumTile> = self.catalog.albums.iter().take(4).cloned().collect();
@@ -186,74 +197,107 @@ impl PearTube {
             )
         };
 
-        let primary_btn = if saved_music.is_some() {
+        let title_px = if title.chars().count() > 22 { 22. } else { 30. };
+        let display_title = title.to_uppercase();
+
+        let primary_btn: AnyElement = if saved_music.is_some() {
             let lbl = if playing { "Pause" } else { "Resume" };
             let ic = if playing { Lucide::Pause } else { Lucide::Play };
-            let btn = Button::new("home-hero-listen-play")
-                .icon(Icon::new(ic))
-                .label(lbl)
-                .on_click(cx.listener(|this, _, window, cx| this.toggle_music_play(window, cx)));
-            if is_primary { btn.primary() } else { btn }
+            let on_click = cx.listener(|this, _, window, cx| this.toggle_music_play(window, cx));
+            if is_primary {
+                hero_primary_btn("home-hero-listen-play", Some(ic), lbl)
+                    .on_click(on_click)
+                    .into_any_element()
+            } else {
+                hero_secondary_btn("home-hero-listen-play", Some(ic), lbl)
+                    .on_click(on_click)
+                    .into_any_element()
+            }
         } else {
-            let btn = Button::new("home-hero-listen-play")
-                .icon(Icon::new(Lucide::Play))
-                .label("Play all")
-                .on_click(cx.listener(move |this, _, window, cx| {
-                    this.play_music_list(play_tracks.clone(), 0, "Library".to_string(), Some(false), window, cx);
-                }));
-            if is_primary { btn.primary() } else { btn }
+            let on_click = cx.listener(move |this, _, window, cx| {
+                this.play_music_list(play_tracks.clone(), 0, "Library".to_string(), Some(false), window, cx);
+            });
+            if is_primary {
+                hero_primary_btn("home-hero-listen-play", Some(Lucide::Play), "Play all")
+                    .on_click(on_click)
+                    .into_any_element()
+            } else {
+                hero_secondary_btn("home-hero-listen-play", Some(Lucide::Play), "Play all")
+                    .on_click(on_click)
+                    .into_any_element()
+            }
         };
 
-        let tint = hsla(258.0 / 360.0, 0.45, 0.16, 0.45);
-        h_flex()
+        let shuffle_btn = hero_secondary_btn("home-hero-listen-shuffle", Some(Lucide::Shuffle), "Shuffle")
+            .on_click(cx.listener(move |this, _, window, cx| {
+                this.play_music_list(
+                    shuffle_tracks.clone(),
+                    0,
+                    "Library".to_string(),
+                    Some(true),
+                    window,
+                    cx,
+                );
+            }));
+
+        let has_collage = !collage_albums.is_empty();
+
+        hero_surface(258, false)
             .id("home-hero-listen")
             .flex_1()
-            .min_w(px(340.))
-            .p_5()
-            .gap_4()
-            .items_center()
-            .justify_between()
-            .rounded(px(16.))
-            .bg(rgb(CARD))
-            .border_1()
-            .border_color(rgb(LINE))
-            .relative()
-            .overflow_hidden()
-            .child(div().absolute().top_0().left_0().right_0().h(px(3.)).bg(tint))
+            .when(single_card, |card| card.w_full())
+            .when(!single_card, |card| card.min_w(px(340.)))
+            .min_h(px(264.))
+            .p_6()
+            .justify_end()
+            .when(has_collage, |card| {
+                card.child(
+                    div()
+                        .absolute()
+                        .top(px(18.))
+                        .right(px(18.))
+                        .child(render_sleeve_collage(&collage_albums)),
+                )
+            })
             .child(
                 v_flex()
-                    .flex_1()
-                    .min_w_0()
+                    .relative()
+                    .w_full()
                     .gap_2()
-                    .child(div().text_xs().font_weight(FontWeight::SEMIBOLD).text_color(rgb(DIM)).child("Listen"))
-                    .child(div().text_xl().font_weight(FontWeight::BOLD).truncate().child(title))
-                    .child(div().text_sm().text_color(rgb(DIM)).truncate().child(sub))
+                    .when(has_collage, |col| col.pr(px(170.)))
+                    .child(
+                        div()
+                            .text_xs()
+                            .font_weight(FontWeight::BOLD)
+                            .text_color(hsla(0., 0., 1., 0.80))
+                            .child("LISTEN"),
+                    )
+                    .child(
+                        div()
+                            .text_size(px(title_px))
+                            .line_height(relative(0.98))
+                            .font_weight(FontWeight::EXTRA_BOLD)
+                            .text_color(rgb(0xffffff))
+                            .truncate()
+                            .child(display_title),
+                    )
+                    .child(
+                        div()
+                            .text_sm()
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .text_color(hsla(0., 0., 1., 0.88))
+                            .truncate()
+                            .child(sub),
+                    )
                     .child(
                         h_flex()
                             .pt_2()
-                            .gap_2()
+                            .gap_2p5()
                             .flex_wrap()
                             .child(primary_btn)
-                            .child(
-                                Button::new("home-hero-listen-shuffle")
-                                    .icon(Icon::new(Lucide::Shuffle))
-                                    .label("Shuffle")
-                                    .on_click(cx.listener(move |this, _, window, cx| {
-                                        this.play_music_list(
-                                            shuffle_tracks.clone(),
-                                            0,
-                                            "Library".to_string(),
-                                            Some(true),
-                                            window,
-                                            cx,
-                                        );
-                                    })),
-                            ),
+                            .child(shuffle_btn),
                     ),
             )
-            .when(!collage_albums.is_empty(), |card| {
-                card.child(render_sleeve_collage(&collage_albums))
-            })
     }
 
     fn render_home_watch_hero(
@@ -261,6 +305,7 @@ impl PearTube {
         unfinished: Option<&ResumeVideo>,
         total_videos: usize,
         is_primary: bool,
+        single_card: bool,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let (title, facts, ratio, hue_deg, resume_target) = if let Some(first) = unfinished {
@@ -275,7 +320,7 @@ impl PearTube {
         } else {
             (
                 plural(total_videos, "title", "titles"),
-                "Movies, series and clips".to_string(),
+                "Films, series and clips".to_string(),
                 None,
                 20u32,
                 None,
@@ -283,63 +328,82 @@ impl PearTube {
         };
 
         let has_resume = resume_target.is_some();
-        let tint = hsla(hue_deg as f32 / 360.0, 0.55, 0.45, 0.55);
+        let title_px = if title.chars().count() > 22 { 22. } else { 30. };
+        let display_title = title.to_uppercase();
 
-        let surprise_btn = {
-            let btn = Button::new("home-hero-watch-surprise")
-                .icon(Icon::new(Lucide::Sparkles))
-                .label("Play something")
-                .on_click(cx.listener(|this, _, window, cx| this.play_something(window, cx)));
-            if !has_resume && is_primary { btn.primary() } else { btn }
+        let surprise_btn: AnyElement = {
+            let on_click = cx.listener(|this, _, window, cx| this.play_something(window, cx));
+            if !has_resume && is_primary {
+                hero_primary_btn("home-hero-watch-surprise", Some(Lucide::Sparkles), "Play something")
+                    .on_click(on_click)
+                    .into_any_element()
+            } else {
+                hero_secondary_btn("home-hero-watch-surprise", Some(Lucide::Sparkles), "Play something")
+                    .on_click(on_click)
+                    .into_any_element()
+            }
         };
 
-        v_flex()
+        hero_surface(hue_deg, true)
             .id("home-hero-watch")
             .flex_1()
-            .min_w(px(340.))
-            .p_5()
-            .gap_2()
-            .justify_between()
-            .rounded(px(16.))
-            .bg(rgb(CARD))
-            .border_1()
-            .border_color(rgb(LINE))
-            .relative()
-            .overflow_hidden()
-            .child(div().absolute().top_0().left_0().right_0().h(px(3.)).bg(tint))
+            .when(single_card, |card| card.w_full())
+            .when(!single_card, |card| card.min_w(px(340.)))
+            .min_h(px(264.))
+            .p_6()
+            .justify_end()
             .child(
                 v_flex()
+                    .relative()
+                    .w_full()
                     .gap_2()
-                    .child(div().text_xs().font_weight(FontWeight::SEMIBOLD).text_color(rgb(DIM)).child("Watch"))
-                    .child(div().text_xl().font_weight(FontWeight::BOLD).truncate().child(title))
-                    .child(div().text_sm().text_color(rgb(DIM)).truncate().child(facts))
-                    .when_some(ratio, |col, r| {
-                        col.child(
-                            div()
-                                .mt_1()
-                                .h(px(3.))
-                                .w_full()
-                                .rounded(px(2.))
-                                .bg(hsla(0., 0., 1., 0.08))
-                                .child(div().h_full().rounded(px(2.)).w(relative(r)).bg(rgb(BRAND))),
-                        )
-                    }),
-            )
-            .child(
-                h_flex()
-                    .pt_2()
-                    .gap_2()
-                    .flex_wrap()
-                    .when_some(resume_target, |row, (entry, pos)| {
-                        let btn = Button::new("home-hero-watch-continue")
-                            .icon(Icon::new(Lucide::Play))
-                            .label("Continue")
-                            .on_click(cx.listener(move |this, _, window, cx| {
-                                this.activate_entry(entry.clone(), Some(pos), window, cx);
-                            }));
-                        row.child(if is_primary { btn.primary() } else { btn })
-                    })
-                    .child(surprise_btn),
+                    .child(
+                        div()
+                            .text_xs()
+                            .font_weight(FontWeight::BOLD)
+                            .text_color(hsla(0., 0., 1., 0.80))
+                            .child("WATCH"),
+                    )
+                    .child(
+                        div()
+                            .text_size(px(title_px))
+                            .line_height(relative(0.98))
+                            .font_weight(FontWeight::EXTRA_BOLD)
+                            .text_color(rgb(0xffffff))
+                            .truncate()
+                            .child(display_title),
+                    )
+                    .child(
+                        div()
+                            .text_sm()
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .text_color(hsla(0., 0., 1., 0.88))
+                            .truncate()
+                            .child(facts),
+                    )
+                    .when_some(ratio, |col, r| col.child(hero_progress_bar(r)))
+                    .child(
+                        h_flex()
+                            .pt_2()
+                            .gap_2p5()
+                            .flex_wrap()
+                            .when_some(resume_target, |row, (entry, pos)| {
+                                let on_click = cx.listener(move |this, _, window, cx| {
+                                    this.activate_entry(entry.clone(), Some(pos), window, cx);
+                                });
+                                let btn: AnyElement = if is_primary {
+                                    hero_primary_btn("home-hero-watch-continue", Some(Lucide::Play), "Continue")
+                                        .on_click(on_click)
+                                        .into_any_element()
+                                } else {
+                                    hero_secondary_btn("home-hero-watch-continue", Some(Lucide::Play), "Continue")
+                                        .on_click(on_click)
+                                        .into_any_element()
+                                };
+                                row.child(btn)
+                            })
+                            .child(surprise_btn),
+                    ),
             )
     }
 
@@ -454,7 +518,11 @@ impl PearTube {
                         let w = if show_clips_instead { 216. } else { 142. };
                         let h = if show_clips_instead { 122. } else { 210. };
                         let sub = tile.subtitle_line(format_bytes);
-                        let badge = if show_clips_instead { Some("Clip") } else { None };
+                        let badge = match tile.kind {
+                            VideoKind::Series => Some("Series"),
+                            VideoKind::Movie => Some("Film"),
+                            VideoKind::Clip => Some("Clip"),
+                        };
                         v_flex()
                             .id(SharedString::from(format!("home-vid-{}", tile.key)))
                             .w(px(w))
@@ -667,15 +735,17 @@ impl PearTube {
 /// 2x2 album sleeve collage for the Home `Listen` hero card.
 fn render_sleeve_collage(albums: &[AlbumTile]) -> Div {
     let tile_at = |idx: usize| -> Div {
-        if let Some(a) = albums.get(idx).or_else(|| albums.first()) {
-            album_sleeve(a.hue, a.seed, &a.monogram, 44.)
+        let tile = if let Some(a) = albums.get(idx).or_else(|| albums.first()) {
+            album_sleeve(a.hue, a.seed, &a.monogram, 72.)
         } else {
-            div().size(px(44.)).rounded(px(6.)).bg(rgb(CARD_ELEVATED))
-        }
+            div().size(px(72.)).rounded(px(10.)).bg(rgb(CARD_ELEVATED))
+        };
+        tile.shadow_lg()
     };
     v_flex()
         .flex_none()
-        .gap_1()
-        .child(h_flex().gap_1().child(tile_at(0)).child(tile_at(1)))
-        .child(h_flex().gap_1().child(tile_at(2)).child(tile_at(3)))
+        .gap_2()
+        .opacity(0.95)
+        .child(h_flex().gap_2().child(tile_at(0)).child(tile_at(1)))
+        .child(h_flex().gap_2().child(tile_at(2)).child(tile_at(3)))
 }

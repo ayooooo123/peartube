@@ -515,7 +515,7 @@ impl PearTube {
                 .size_full()
                 .object_fit(ObjectFit::Cover)
                 .into_any_element(),
-            None => video_art(&item.title, None, width, height).into_any_element(),
+            None => video_art(&item.title, Some("Clip"), width, height).into_any_element(),
         };
 
         div()
@@ -1109,7 +1109,16 @@ impl PearTube {
                                                 .on_click(cx.listener(move |this, _, _, cx| {
                                                     this.open_detail(DetailView::Title(tk.clone()), cx);
                                                 }))
-                                                .child(video_art(&tile.title, tile.year.as_deref(), 136., 200.))
+                                                .child(video_art(
+                                                    &tile.title,
+                                                    Some(match tile.kind {
+                                                        crate::catalog::VideoKind::Series => "Series",
+                                                        crate::catalog::VideoKind::Movie => "Film",
+                                                        crate::catalog::VideoKind::Clip => "Clip",
+                                                    }),
+                                                    136.,
+                                                    200.,
+                                                ))
                                                 .child(div().text_sm().font_weight(FontWeight::SEMIBOLD).truncate().child(tile.title.clone()))
                                                 .child(div().text_xs().text_color(rgb(DIM)).truncate().child(sub))
                                         })),

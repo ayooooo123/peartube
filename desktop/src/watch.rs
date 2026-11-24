@@ -21,7 +21,9 @@ use crate::app::{DetailView, PearTube, Room, WatchKind, WatchProgress, WatchView
 use crate::catalog::{VideoKind, VideoTile, format_time_left, is_saved, monogram, plural, sleeve_hash};
 use crate::home::ResumeVideo;
 use crate::list::{column, format_bytes, label};
-use crate::sleeves::video_art;
+use crate::sleeves::{
+    held_dot, hero_primary_btn, hero_progress_bar, hero_secondary_btn, hero_surface, video_art,
+};
 use crate::theme::{ACCENT, BRAND, CARD, CARD_ELEVATED, DIM, INK, LINE};
 
 const FALLBACK_EP_SECS: u64 = 42 * 60;
@@ -164,6 +166,67 @@ fn build_channel_schedule(
     })
 }
 
+type FeaturedHeroTuple = (
+    &'static str,
+    String,
+    String,
+    (usize, usize, bool),
+    String,
+    Option<f32>,
+    Option<(Entry, Option<u64>, bool)>,
+    Option<String>,
+);
+
+fn featured_hero_data(resume: Option<&ResumeVideo>, tile: Option<VideoTile>) -> Option<FeaturedHeroTuple> {
+    if let Some(r) = resume {
+        let name = if !r.entry.base_title.is_empty() {
+            r.entry.base_title.clone()
+        } else {
+            r.entry.title.clone()
+        };
+        let line = format!("{} · {}", label(&r.entry), format_time_left(r.remaining_ms));
+        let (saved, total, partial, state) = if let Some(t) = &tile {
+            (t.saved, t.items.len(), t.partial, t.state_label())
+        } else {
+            let s = usize::from(is_saved(&r.entry));
+            let p = r.entry.cached_bytes > 0 && s == 0;
+            let st = if s > 0 {
+                "Saved here"
+            } else if p {
+                "Partly saved"
+            } else {
+                "On the network"
+            };
+            (s, 1, p, st.to_string())
+        };
+        return Some((
+            "CONTINUE",
+            name,
+            line,
+            (saved, total, partial),
+            state,
+            Some(r.ratio),
+            Some((r.entry.clone(), Some(r.position_ms), true)),
+            tile.map(|t| t.key),
+        ));
+    }
+    let t = tile?;
+    let play_entry = t.items.first().map(|i| (i.entry.clone(), None, false));
+    let eye = if t.saved > 0 { "ON THIS RELAY" } else { "IN YOUR LIBRARY" };
+    let line = t.subtitle_line(format_bytes);
+    let state = t.state_label();
+    Some((
+        eye,
+        t.title.clone(),
+        line,
+        (t.saved, t.items.len(), t.partial),
+        state,
+        None,
+        play_entry,
+        Some(t.key),
+    ))
+}
+
 fn item_duration_secs(entry: &Entry, kind: VideoKind, history: &HashMap<String, WatchProgress>) -> u64 {
     if let Some(h) = history.get(&entry.id)
         && h.duration_ms >= 60_000
@@ -228,6 +291,8 @@ impl PearTube {
                 .child(lbl)
         };
 
+        let show_top_surprise = has_videos && matches!(mode, WatchViewMode::Store | WatchViewMode::Channels);
+
         h_flex()
             .justify_between()
             .items_center()
@@ -238,7 +303,7 @@ impl PearTube {
                     .items_center()
                     .gap_3()
                     .child(div().text_2xl().font_weight(FontWeight::BOLD).child(title))
-                    .when(has_videos, |row| {
+                    .when(show_top_surprise, |row| {
                         row.child(
                             Button::new("watch-play-something")
                                 .small()
@@ -248,19 +313,21 @@ impl PearTube {
                         )
                     }),
             )
-            .child(
-                h_flex()
-                    .p_1()
-                    .gap_1()
-                    .rounded(px(10.))
-                    .bg(rgb(CARD))
-                    .border_1()
-                    .border_color(rgb(LINE))
-                    .child(seg("watch-mode-rows", "Rows", WatchViewMode::Rows, cx))
-                    .child(seg("watch-mode-tonight", "Tonight", WatchViewMode::Tonight, cx))
-                    .child(seg("watch-mode-store", "Store", WatchViewMode::Store, cx))
-                    .child(seg("watch-mode-channels", "Channels", WatchViewMode::Channels, cx)),
-            )
+            .when(has_videos, |bar| {
+                bar.child(
+                    h_flex()
+                        .p_1()
+                        .gap_1()
+                        .rounded(px(10.))
+                        .bg(rgb(CARD))
+                        .border_1()
+                        .border_color(rgb(LINE))
+                        .child(seg("watch-mode-rows", "Rows", WatchViewMode::Rows, cx))
+                        .child(seg("watch-mode-tonight", "Tonight", WatchViewMode::Tonight, cx))
+                        .child(seg("watch-mode-store", "Store", WatchViewMode::Store, cx))
+                        .child(seg("watch-mode-channels", "Channels", WatchViewMode::Channels, cx)),
+                )
+            })
     }
 
     fn render_watch_rows(&self, kind: WatchKind, cx: &mut Context<Self>) -> impl IntoElement {
@@ -282,10 +349,17 @@ impl PearTube {
         let mut ms_combined: Vec<&VideoTile> = movies.iter().chain(series.iter()).copied().collect();
         ms_combined.sort_by_key(|a| a.title.to_lowercase());
 
+        let featured_hero = if kind == WatchKind::All {
+            self.render_watch_featured_hero(&keep_watching, &ms_combined, &clips, cx)
+        } else {
+            None
+        };
+
         v_flex()
             .gap_6()
+            .when_some(featured_hero, |this, hero| this.child(hero))
             .child(self.render_watch_row_filters(&kind, all_count, movies.len(), series.len(), clips.len(), cx))
-            .when(kind == WatchKind::All && !keep_watching.is_empty(), |this| {
+            .when(kind == WatchKind::All && keep_watching.len() > 1, |this| {
                 this.child(self.render_keep_watching_rail(keep_watching, cx))
             })
             .when(kind == WatchKind::All, |this| {
@@ -320,6 +394,115 @@ impl PearTube {
                     this.child(self.render_clips_grid("Clips", &clips, cx))
                 }
             })
+    }
+
+    fn render_watch_featured_hero(
+        &self,
+        keep_watching: &[ResumeVideo],
+        ms_combined: &[&VideoTile],
+        clips: &[&VideoTile],
+        cx: &mut Context<Self>,
+    ) -> Option<Div> {
+        let resume = keep_watching.first();
+        let tile = if let Some(r) = resume {
+            self.catalog
+                .movies
+                .iter()
+                .chain(self.catalog.series.iter())
+                .chain(self.catalog.clips.iter())
+                .find(|t| t.items.iter().any(|i| i.entry.key == r.entry.key || i.entry.id == r.entry.id))
+                .cloned()
+        } else {
+            ms_combined
+                .iter()
+                .copied()
+                .find(|t| t.saved > 0)
+                .or_else(|| ms_combined.first().copied())
+                .or_else(|| clips.iter().copied().find(|t| t.saved > 0))
+                .or_else(|| clips.first().copied())
+                .cloned()
+        };
+
+        let (eyebrow, title, facts, saved_counts, state_txt, ratio, primary_play, details_key) =
+            featured_hero_data(resume, tile)?;
+
+        let hue_deg = sleeve_hash(&title) % 360;
+        let title_px = if title.chars().count() > 26 { 28. } else { 40. };
+        let display_title = title.to_uppercase();
+
+        Some(
+            hero_surface(hue_deg, true)
+                .w_full()
+                .min_h(px(300.))
+                .p_7()
+                .justify_end()
+                .child(
+                    v_flex()
+                        .relative()
+                        .w_full()
+                        .gap_3()
+                        .child(
+                            div()
+                                .text_xs()
+                                .font_weight(FontWeight::BOLD)
+                                .text_color(hsla(0., 0., 1., 0.80))
+                                .child(eyebrow),
+                        )
+                        .child(
+                            div()
+                                .max_w(px(640.))
+                                .text_size(px(title_px))
+                                .line_height(relative(0.96))
+                                .font_weight(FontWeight::EXTRA_BOLD)
+                                .text_color(rgb(0xffffff))
+                                .child(display_title),
+                        )
+                        .child(
+                            h_flex()
+                                .items_center()
+                                .flex_wrap()
+                                .gap_2p5()
+                                .text_sm()
+                                .font_weight(FontWeight::SEMIBOLD)
+                                .text_color(hsla(0., 0., 1., 0.90))
+                                .child(facts)
+                                .child(held_dot(saved_counts.0, saved_counts.1, saved_counts.2))
+                                .child(state_txt),
+                        )
+                        .when_some(ratio, |col, r| col.child(hero_progress_bar(r)))
+                        .child(
+                            h_flex()
+                                .pt_1()
+                                .gap_2p5()
+                                .flex_wrap()
+                                .when_some(primary_play, |row, (entry, pos, is_resume)| {
+                                    let lbl = if is_resume { "Continue" } else { "Play" };
+                                    row.child(
+                                        hero_primary_btn("watch-hero-play", Some(Lucide::Play), lbl)
+                                            .on_click(cx.listener(move |this, _, window, cx| {
+                                                this.activate_entry(entry.clone(), pos, window, cx);
+                                            })),
+                                    )
+                                })
+                                .child(
+                                    hero_secondary_btn(
+                                        "watch-hero-surprise",
+                                        Some(Lucide::Sparkles),
+                                        "Play something",
+                                    )
+                                    .on_click(cx.listener(|this, _, window, cx| this.play_something(window, cx))),
+                                )
+                                .when_some(details_key, |row, tk| {
+                                    row.child(
+                                        hero_secondary_btn("watch-hero-details", None, "Details")
+                                            .on_click(cx.listener(move |this, _, _, cx| {
+                                                this.open_detail(DetailView::Title(tk.clone()), cx);
+                                            })),
+                                    )
+                                }),
+                        ),
+                ),
+        )
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -413,7 +596,8 @@ impl PearTube {
                             } else if src.primary {
                                 "Main channel".to_string()
                             } else {
-                                format!("{}…", &src.key[..6.min(src.key.len())])
+                                let short: String = src.key.chars().take(6).collect();
+                                format!("{short}…")
                             };
                             div()
                                 .id(SharedString::from(format!("watch-src-{}", src.key)))
@@ -564,49 +748,32 @@ impl PearTube {
         let pos = item.position_ms;
         let title = if !entry.base_title.is_empty() { entry.base_title.clone() } else { entry.title.clone() };
         let sub = format!("{} · {}", label(&entry), format_time_left(item.remaining_ms));
-        let tint = hsla((sleeve_hash(&title) % 360) as f32 / 360.0, 0.55, 0.45, 0.6);
+        let hue_deg = sleeve_hash(&title) % 360;
+        let display_title = title.to_uppercase();
 
-        v_flex()
+        hero_surface(hue_deg, true)
             .id("tonight-continue")
             .flex_1()
             .min_w(px(260.))
-            .p_4()
-            .gap_2()
-            .justify_between()
-            .rounded(px(14.))
-            .bg(rgb(CARD))
-            .border_1()
-            .border_color(rgb(LINE))
-            .relative()
-            .overflow_hidden()
-            .child(div().absolute().top_0().left_0().right_0().h(px(3.)).bg(tint))
+            .min_h(px(236.))
+            .p_5()
+            .justify_end()
             .child(
                 v_flex()
-                    .gap_1p5()
-                    .child(div().text_xs().font_weight(FontWeight::SEMIBOLD).text_color(rgb(DIM)).child("Continue"))
-                    .child(div().text_lg().font_weight(FontWeight::BOLD).truncate().child(title))
-                    .child(div().text_xs().text_color(rgb(DIM)).truncate().child(sub))
+                    .relative()
+                    .gap_2()
+                    .child(div().text_xs().font_weight(FontWeight::BOLD).text_color(hsla(0., 0., 1., 0.80)).child("CONTINUE"))
+                    .child(div().text_xl().font_weight(FontWeight::EXTRA_BOLD).text_color(rgb(0xffffff)).truncate().child(display_title))
+                    .child(div().text_xs().font_weight(FontWeight::SEMIBOLD).text_color(hsla(0., 0., 1., 0.88)).truncate().child(sub))
+                    .child(hero_progress_bar(item.ratio))
                     .child(
-                        div()
-                            .mt_1()
-                            .h(px(3.))
-                            .w_full()
-                            .rounded(px(2.))
-                            .bg(hsla(0., 0., 1., 0.08))
-                            .child(div().h_full().rounded(px(2.)).w(relative(item.ratio)).bg(rgb(BRAND))),
+                        h_flex().pt_2().child(
+                            hero_primary_btn("tonight-continue-play", Some(Lucide::Play), "Play")
+                                .on_click(cx.listener(move |this, _, window, cx| {
+                                    this.activate_entry(entry.clone(), Some(pos), window, cx);
+                                })),
+                        ),
                     ),
-            )
-            .child(
-                h_flex().pt_2().child(
-                    Button::new("tonight-continue-play")
-                        .primary()
-                        .small()
-                        .icon(Icon::new(Lucide::Play))
-                        .label("Play")
-                        .on_click(cx.listener(move |this, _, window, cx| {
-                            this.activate_entry(entry.clone(), Some(pos), window, cx);
-                        })),
-                ),
             )
     }
 
@@ -618,86 +785,83 @@ impl PearTube {
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let sub = format!("{} · {}", label(&ep), format_bytes(ep.size));
-        let tint = hsla((sleeve_hash(&title_name) % 360) as f32 / 360.0, 0.55, 0.45, 0.6);
-        let btn = Button::new("tonight-next-play")
-            .small()
-            .icon(Icon::new(Lucide::Play))
-            .label("Play")
-            .on_click(cx.listener(move |this, _, window, cx| {
-                this.activate_entry(ep.clone(), None, window, cx);
-            }));
+        let hue_deg = sleeve_hash(&title_name) % 360;
+        let display_title = title_name.to_uppercase();
+        let on_click = cx.listener(move |this, _, window, cx| {
+            this.activate_entry(ep.clone(), None, window, cx);
+        });
+        let play_btn: AnyElement = if primary {
+            hero_primary_btn("tonight-next-play", Some(Lucide::Play), "Play")
+                .on_click(on_click)
+                .into_any_element()
+        } else {
+            hero_secondary_btn("tonight-next-play", Some(Lucide::Play), "Play")
+                .on_click(on_click)
+                .into_any_element()
+        };
 
-        v_flex()
+        hero_surface(hue_deg, true)
             .id("tonight-next-ep")
             .flex_1()
             .min_w(px(260.))
-            .p_4()
-            .gap_2()
-            .justify_between()
-            .rounded(px(14.))
-            .bg(rgb(CARD))
-            .border_1()
-            .border_color(rgb(LINE))
-            .relative()
-            .overflow_hidden()
-            .child(div().absolute().top_0().left_0().right_0().h(px(3.)).bg(tint))
+            .min_h(px(236.))
+            .p_5()
+            .justify_end()
             .child(
                 v_flex()
-                    .gap_1p5()
-                    .child(div().text_xs().font_weight(FontWeight::SEMIBOLD).text_color(rgb(DIM)).child("Next episode"))
-                    .child(div().text_lg().font_weight(FontWeight::BOLD).truncate().child(title_name))
-                    .child(div().text_xs().text_color(rgb(DIM)).truncate().child(sub)),
+                    .relative()
+                    .gap_2()
+                    .child(div().text_xs().font_weight(FontWeight::BOLD).text_color(hsla(0., 0., 1., 0.80)).child("NEXT EPISODE"))
+                    .child(div().text_xl().font_weight(FontWeight::EXTRA_BOLD).text_color(rgb(0xffffff)).truncate().child(display_title))
+                    .child(div().text_xs().font_weight(FontWeight::SEMIBOLD).text_color(hsla(0., 0., 1., 0.88)).truncate().child(sub))
+                    .child(h_flex().pt_2().child(play_btn)),
             )
-            .child(h_flex().pt_2().child(if primary { btn.primary() } else { btn }))
     }
 
     fn render_tonight_surprise_card(&self, tile: VideoTile, primary: bool, cx: &mut Context<Self>) -> impl IntoElement {
         let play_entry = tile.items.first().map(|i| i.entry.clone());
         let sub = format!("{} · {}", tile.subtitle_line(format_bytes), tile.state_label());
-        let tint = hsla((sleeve_hash(&tile.title) % 360) as f32 / 360.0, 0.55, 0.45, 0.6);
+        let hue_deg = sleeve_hash(&tile.title) % 360;
+        let display_title = tile.title.to_uppercase();
 
-        v_flex()
+        hero_surface(hue_deg, true)
             .id("tonight-surprise")
             .flex_1()
             .min_w(px(260.))
-            .p_4()
-            .gap_2()
-            .justify_between()
-            .rounded(px(14.))
-            .bg(rgb(CARD))
-            .border_1()
-            .border_color(rgb(LINE))
-            .relative()
-            .overflow_hidden()
-            .child(div().absolute().top_0().left_0().right_0().h(px(3.)).bg(tint))
+            .min_h(px(236.))
+            .p_5()
+            .justify_end()
             .child(
                 v_flex()
-                    .gap_1p5()
-                    .child(div().text_xs().font_weight(FontWeight::SEMIBOLD).text_color(rgb(DIM)).child("Surprise me"))
-                    .child(div().text_lg().font_weight(FontWeight::BOLD).truncate().child(tile.title))
-                    .child(div().text_xs().text_color(rgb(DIM)).truncate().child(sub)),
-            )
-            .child(
-                h_flex()
-                    .pt_2()
+                    .relative()
                     .gap_2()
-                    .when_some(play_entry, |row, e| {
-                        let btn = Button::new("tonight-surprise-play")
-                            .small()
-                            .icon(Icon::new(Lucide::Play))
-                            .label("Play")
-                            .on_click(cx.listener(move |this, _, window, cx| {
-                                this.activate_entry(e.clone(), None, window, cx);
-                            }));
-                        row.child(if primary { btn.primary() } else { btn })
-                    })
+                    .child(div().text_xs().font_weight(FontWeight::BOLD).text_color(hsla(0., 0., 1., 0.80)).child("SURPRISE ME"))
+                    .child(div().text_xl().font_weight(FontWeight::EXTRA_BOLD).text_color(rgb(0xffffff)).truncate().child(display_title))
+                    .child(div().text_xs().font_weight(FontWeight::SEMIBOLD).text_color(hsla(0., 0., 1., 0.88)).truncate().child(sub))
                     .child(
-                        Button::new("tonight-surprise-another")
-                            .ghost()
-                            .small()
-                            .icon(Icon::new(Lucide::Sparkles))
-                            .label("Another")
-                            .on_click(cx.listener(|this, _, _, cx| this.roll_surprise_video(cx))),
+                        h_flex()
+                            .pt_2()
+                            .gap_2()
+                            .flex_wrap()
+                            .when_some(play_entry, |row, e| {
+                                let on_click = cx.listener(move |this, _, window, cx| {
+                                    this.activate_entry(e.clone(), None, window, cx);
+                                });
+                                let btn: AnyElement = if primary {
+                                    hero_primary_btn("tonight-surprise-play", Some(Lucide::Play), "Play")
+                                        .on_click(on_click)
+                                        .into_any_element()
+                                } else {
+                                    hero_secondary_btn("tonight-surprise-play", Some(Lucide::Play), "Play")
+                                        .on_click(on_click)
+                                        .into_any_element()
+                                };
+                                row.child(btn)
+                            })
+                            .child(
+                                hero_secondary_btn("tonight-surprise-another", Some(Lucide::Sparkles), "Another")
+                                    .on_click(cx.listener(|this, _, _, cx| this.roll_surprise_video(cx))),
+                            ),
                     ),
             )
     }
@@ -1196,8 +1360,12 @@ impl PearTube {
     }
 
     fn render_channel_on_now(&self, ch: &ChannelSchedule, now: u64, cx: &mut Context<Self>) -> impl IntoElement + use<> {
-        let block = &ch.blocks[ch.live_idx];
-        let item = &ch.items[block.item_idx];
+        let Some(block) = ch.blocks.get(ch.live_idx) else {
+            return div().into_any_element();
+        };
+        let Some(item) = ch.items.get(block.item_idx) else {
+            return div().into_any_element();
+        };
         let into = block.into_secs + now.saturating_sub(block.from_secs);
         let left_secs = item.seconds.saturating_sub(into);
         let ratio = (into as f32 / item.seconds.max(1) as f32).clamp(0.02, 1.0);
@@ -1205,57 +1373,42 @@ impl PearTube {
             Some(s) => format!("{s} · {}", format_time_left(left_secs * 1000)),
             None => format_time_left(left_secs * 1000),
         };
-        let tint = hsla((sleeve_hash(&item.name) % 360) as f32 / 360.0, 0.55, 0.45, 0.6);
+        let hue_deg = sleeve_hash(&item.name) % 360;
+        let display_title = item.name.to_uppercase();
         let entry = item.entry.clone();
         let into_ms = into * 1000;
 
-        v_flex()
+        hero_surface(hue_deg, true)
             .id(SharedString::from(format!("ch-onnow-{}", ch.number)))
             .flex_1()
             .min_w(px(260.))
-            .p_4()
-            .gap_2()
-            .justify_between()
-            .rounded(px(14.))
-            .bg(rgb(CARD))
-            .border_1()
-            .border_color(rgb(LINE))
-            .relative()
-            .overflow_hidden()
-            .child(div().absolute().top_0().left_0().right_0().h(px(3.)).bg(tint))
+            .min_h(px(216.))
+            .p_5()
+            .justify_end()
             .child(
                 v_flex()
-                    .gap_1p5()
+                    .relative()
+                    .gap_2()
                     .child(
                         div()
                             .text_xs()
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .text_color(rgb(DIM))
-                            .child(format!("CH {} · {} · on now", ch.number, ch.label)),
+                            .font_weight(FontWeight::BOLD)
+                            .text_color(hsla(0., 0., 1., 0.80))
+                            .child(format!("CH {} · {} · ON NOW", ch.number, ch.label.to_uppercase())),
                     )
-                    .child(div().text_lg().font_weight(FontWeight::BOLD).truncate().child(item.name.clone()))
-                    .child(div().text_xs().text_color(rgb(DIM)).truncate().child(facts))
+                    .child(div().text_xl().font_weight(FontWeight::EXTRA_BOLD).text_color(rgb(0xffffff)).truncate().child(display_title))
+                    .child(div().text_xs().font_weight(FontWeight::SEMIBOLD).text_color(hsla(0., 0., 1., 0.88)).truncate().child(facts))
+                    .child(hero_progress_bar(ratio))
                     .child(
-                        div()
-                            .mt_1()
-                            .h(px(3.))
-                            .w_full()
-                            .rounded(px(2.))
-                            .bg(hsla(0., 0., 1., 0.08))
-                            .child(div().h_full().rounded(px(2.)).w(relative(ratio)).bg(rgb(BRAND))),
+                        h_flex().pt_2().child(
+                            hero_secondary_btn(SharedString::from(format!("ch-watch-{}", ch.number)), Some(Lucide::Play), "Watch")
+                                .on_click(cx.listener(move |this, _, window, cx| {
+                                    this.activate_entry(entry.clone(), Some(into_ms), window, cx);
+                                })),
+                        ),
                     ),
             )
-            .child(
-                h_flex().pt_2().child(
-                    Button::new(SharedString::from(format!("ch-watch-{}", ch.number)))
-                        .small()
-                        .icon(Icon::new(Lucide::Play))
-                        .label("Watch")
-                        .on_click(cx.listener(move |this, _, window, cx| {
-                            this.activate_entry(entry.clone(), Some(into_ms), window, cx);
-                        })),
-                ),
-            )
+            .into_any_element()
     }
 
     fn render_channel_guide_row(&self, ch: &ChannelSchedule, cx: &mut Context<Self>) -> impl IntoElement + use<> {
@@ -1271,8 +1424,8 @@ impl PearTube {
                     .child(div().text_xs().font_weight(FontWeight::BOLD).text_color(rgb(DIM)).child(ch.number.to_string()))
                     .child(div().text_xs().font_weight(FontWeight::SEMIBOLD).truncate().child(ch.label)),
             )
-            .children(ch.blocks.iter().enumerate().map(|(b_idx, block)| {
-                let item = &ch.items[block.item_idx];
+            .children(ch.blocks.iter().enumerate().filter_map(|(b_idx, block)| {
+                let item = ch.items.get(block.item_idx)?;
                 let width_px = (((block.to_secs.saturating_sub(block.from_secs)) as f32 / 60.0) * GUIDE_PX_PER_MIN - 4.0).max(48.0);
                 let hue = (sleeve_hash(&item.name) % 360) as f32 / 360.0;
                 let bg = hsla(hue, 0.30, if block.live { 0.24 } else { 0.16 }, 1.0);
@@ -1281,24 +1434,26 @@ impl PearTube {
                     None => format_hhmm(block.from_secs),
                 };
                 let tk = item.tile_key.clone();
-                v_flex()
-                    .id(SharedString::from(format!("ch-{}-blk-{b_idx}", ch.number)))
-                    .flex_none()
-                    .w(px(width_px))
-                    .px_2p5()
-                    .py_2()
-                    .rounded(px(8.))
-                    .bg(bg)
-                    .border_1()
-                    .border_color(if block.live { rgb(BRAND) } else { rgb(LINE) })
-                    .cursor_pointer()
-                    .hover(|s| s.border_color(rgb(INK)))
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        this.watch_cover_key = Some(tk.clone());
-                        cx.notify();
-                    }))
-                    .child(div().text_xs().font_weight(FontWeight::SEMIBOLD).truncate().child(item.name.clone()))
-                    .child(div().text_xs().text_color(rgb(DIM)).truncate().child(sub))
+                Some(
+                    v_flex()
+                        .id(SharedString::from(format!("ch-{}-blk-{b_idx}", ch.number)))
+                        .flex_none()
+                        .w(px(width_px))
+                        .px_2p5()
+                        .py_2()
+                        .rounded(px(8.))
+                        .bg(bg)
+                        .border_1()
+                        .border_color(if block.live { rgb(BRAND) } else { rgb(LINE) })
+                        .cursor_pointer()
+                        .hover(|s| s.border_color(rgb(INK)))
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.watch_cover_key = Some(tk.clone());
+                            cx.notify();
+                        }))
+                        .child(div().text_xs().font_weight(FontWeight::SEMIBOLD).truncate().child(item.name.clone()))
+                        .child(div().text_xs().text_color(rgb(DIM)).truncate().child(sub)),
+                )
             }))
     }
 
@@ -1315,7 +1470,7 @@ impl PearTube {
                         let sub = tile.subtitle_line(format_bytes);
                         let badge = match tile.kind {
                             VideoKind::Series => Some("Series"),
-                            VideoKind::Movie => tile.year.as_deref(),
+                            VideoKind::Movie => Some("Film"),
                             VideoKind::Clip => Some("Clip"),
                         };
                         v_flex()
@@ -1383,7 +1538,7 @@ impl PearTube {
         };
 
         let kind_word = match tile.kind {
-            VideoKind::Movie => "Movie",
+            VideoKind::Movie => "Film",
             VideoKind::Series => "Series",
             VideoKind::Clip => "Clip",
         };

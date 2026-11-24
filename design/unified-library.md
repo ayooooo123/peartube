@@ -20,12 +20,12 @@ The page before this change had a Library tab (video only, with the tools to add
 2. **A film never enters the music queue.** `Up next` holds tracks only. A series offers `Next episode`.
 3. **Music waits for a video.** When a video starts while music plays, the music stops and keeps its track, its time and its list. When the video closes, the small player shows the waiting track, paused, with the line `Paused for a video`. Nothing starts again by itself: only `Play` does.
 4. **Music closes a video.** When a person starts music while a video is open, the video closes and keeps its place under `Keep playing`.
-5. **Artwork.** Use an embedded cover from a public file that the relay holds. Otherwise draw a sleeve from the album's name. Do not open private or remote files to fill a shelf. Do not contact a public image host for an album cover. A film's poster still comes through the relay (`/v1/poster/<id>`).
+5. **Artwork.** Use an embedded cover from a public file that the relay holds. Otherwise draw a sleeve from the album's name. Do not open private or remote files to fill a shelf. Do not contact a public image host for an album cover. A film's poster still comes through the relay (`/v1/poster/<id>`), falling back to a 4-variant geometric poster tinted by title hue when missing.
 6. **No artist photos.** There are none in the system. An artist's picture is a stack of that artist's sleeves.
 7. **Where a return visit starts.** The first visit opens Home. A later visit with no link opens the room that the person used last.
 8. **Old links keep working.** `#music` opens Listen, `#library` opens Home, `#find` opens Search, and `#tv` opens the TVs dialog.
 9. **Recently added needs a real date.** The library does not record when it first saw a title. Until it does, shelves are sorted by title and no shelf is called "new".
-10. **Network figures are not part of browsing.** Peer counts and transfer rates are on the Sharing page. The top bar keeps only the states that need an action: the relay cannot be reached, something is being added, a restart is needed, the person is not signed in.
+10. **Live Network pill in the top bar.** A compact live pill (`0 peers`, dot, mini sparkline, active rate) replaces the `Sharing` text button in the top bar and opens Network & Sharing (`#sharing` / `#network`). Other status pills in the bar stay limited to actionable states: offline, active add, restart needed, or sign-in.
 11. **The tools to add things are behind `Add to library`.** They do not stand above the shelves.
 12. **Unknown stays unknown.** A length, a year or a format that the page does not know is left out. It is not guessed.
 13. **A row plays the list that it is in.** A track row in Tracks, in an artist's tracks or in search results plays that list, in the order shown, from that row. A row on an album page plays the album from that row. `Up next` then holds the rest of that list.
@@ -58,19 +58,19 @@ Look: the pictures do the work and the chrome is quiet. No card around every blo
 
 The video player is not a place. It covers the page, or it stays as a small picture while the person browses, as before.
 
-**Top bar, wide screen:** `PearTube`, then `Home`, `Listen`, `Watch`, `Discover`; the search field; at the right the state pills, `Add` (a plus), the TV icon, then `Channels`, `Sharing`, `Settings` and the theme. The room that is open has a line under its word. An album, an artist, the track list and the music player belong to Listen; a title belongs to Watch; a shelf belongs to Discover.
+**Top bar, wide screen:** `PearTube`, then `Home`, `Listen`, `Watch`, `Discover`; the search field; at the right the state pills, the live Network pill (linking to `#sharing`), `Add` (a plus), the TV icon, then `Channels`, `Settings` and the theme. The room that is open has a raised pill behind its word. An album, an artist, the track list and the music player belong to Listen; a title belongs to Watch; a shelf belongs to Discover.
 
 **Widths.** The bar never makes the page wider than the window. Each range gives up one more thing:
 
 | Width | What changes |
 |---|---|
 | 1400 px and more | Everything is in one row |
-| 1100 to 1399 | `Channels`, `Sharing`, `Settings` and the theme go into `More` |
-| 821 to 1099 | `Add` and `PearTube` lose their words; their icons stay |
+| 1100 to 1399 | `Channels`, `Settings` and the theme go into `More`; the Network pill hides its rate below 1280 px |
+| 821 to 1099 | `Add` and `PearTube` lose their words; their icons stay; the Network pill hides its sparkline below 900 px |
 | 701 to 820 | The search field becomes a search button that opens Search |
 | 700 and less | The narrow layout below |
 
-**Narrow screen (700 px and less):** a top bar with the logo, the state pills, `Add`, the TV icon and `More` (the owner pages and the theme). At the bottom five items: `Home`, `Listen`, `Watch`, `Discover`, `Search`. The small player sits above that row. The music player covers the whole screen.
+**Narrow screen (700 px and less):** a top bar with the logo, the page name, the live Network pill (dot and peer count), `Add`, the TV icon and `More` (`Channels`, `Settings` and the theme). At the bottom five items: `Home`, `Listen`, `Watch`, `Discover`, `Search`. The small player sits above that row. The music player covers the whole screen.
 
 ## 3. Screens
 

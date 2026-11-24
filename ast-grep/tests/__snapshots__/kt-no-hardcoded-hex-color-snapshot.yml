@@ -1,0 +1,16 @@
+id: kt-no-hardcoded-hex-color
+snapshots:
+  ? |
+    Box(Modifier.background(Color(0xFF111111)))
+  : labels:
+    - source: Color(0xFF111111)
+      style: primary
+      start: 24
+      end: 41
+  ? |
+    Text("Live", color = Color(0xFFFF0000))
+  : labels:
+    - source: Color(0xFFFF0000)
+      style: primary
+      start: 21
+      end: 38

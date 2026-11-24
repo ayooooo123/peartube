@@ -16,7 +16,7 @@ use peartube::worker::{Entry, Status};
 use crate::api::{AcquireJob, IdentifyResult, extract_shared_url, format_duration, is_web_url};
 use crate::app::{DetailView, ListenTab, NetworkTab, PearTube, Room, WatchKind};
 use crate::qr::qr_card;
-use crate::theme::{ACCENT, BG, BRAND, CARD, CARD_ELEVATED, DANGER, DIM, INK, LINE};
+use crate::theme::{ACCENT, BG, BRAND, BRAND_HOVER, CARD, CARD_ELEVATED, DANGER, DIM, INK, LINE};
 
 pub fn format_bytes(bytes: u64) -> String {
     const KB: u64 = 1024;
@@ -139,14 +139,14 @@ impl AddModalForm {
                         }
                     }
                     _ => {
-                        if let Some(f) = &mut this.add_modal {
-                            if f.identified.is_some() || f.identifying || f.identified_url.is_some() {
-                                f.identified = None;
-                                f.identified_url = None;
-                                f.identifying = false;
-                                f.error = None;
-                                cx.notify();
-                            }
+                        if let Some(f) = &mut this.add_modal
+                            && (f.identified.is_some() || f.identifying || f.identified_url.is_some())
+                        {
+                            f.identified = None;
+                            f.identified_url = None;
+                            f.identifying = false;
+                            f.error = None;
+                            cx.notify();
                         }
                     }
                 }
@@ -213,7 +213,7 @@ impl PearTube {
         v_flex()
             .size_full()
             .relative()
-            // Quiet wide top bar (Rule 10: no peer counts or transfer rates while browsing)
+            // Unified top navigation bar with live Network pill and Add/TVs/Settings actions
             .child(
                 div().border_b_1().border_color(rgb(LINE)).bg(rgb(BG)).child(
                     h_flex()
@@ -376,24 +376,33 @@ impl PearTube {
 
     fn render_network_pill(&self, active_nav: &Room, cx: &mut Context<Self>) -> impl IntoElement {
         let active = matches!(active_nav, Room::Network(_));
-        let (peers, rate_bps, online) = match &self.status {
-            Some(st) => (total_peers(st), st.down_bps + st.up_bps, true),
-            None => (0, 0, false),
+        let (peers, down_bps, up_bps, online) = match &self.status {
+            Some(st) => (total_peers(st), st.down_bps, st.up_bps, true),
+            None => (0, 0, 0, false),
         };
-        let label_txt = if !online {
+        let peers_txt = if !online {
             "Network".to_string()
+        } else if peers == 1 {
+            "1 peer".to_string()
         } else {
-            let p_str = if peers == 1 {
-                "1 peer".to_string()
-            } else {
-                format!("{peers} peers")
-            };
-            if rate_bps > 0 {
-                format!("{p_str} · {}", format_rate(rate_bps))
-            } else {
-                p_str
-            }
+            format!("{peers} peers")
         };
+        let rate_badge = if !online {
+            None
+        } else if down_bps > 0 && down_bps >= up_bps {
+            Some(format!("↓ {}", format_rate(down_bps)))
+        } else if up_bps > 0 {
+            Some(format!("↑ {}", format_rate(up_bps)))
+        } else {
+            None
+        };
+        let spark_samples: Vec<u64> = self
+            .net_down_hist
+            .iter()
+            .zip(self.net_up_hist.iter())
+            .map(|(d, u)| d.saturating_add(*u))
+            .collect();
+        let show_spark = online && spark_samples.len() >= 2;
         let dot_color = if !online || peers == 0 {
             rgb(DIM)
         } else {
@@ -402,23 +411,37 @@ impl PearTube {
         h_flex()
             .id("top-network-pill")
             .items_center()
-            .gap_1p5()
-            .px_2p5()
-            .py_1()
+            .gap_2()
+            .h(px(32.))
+            .px_3()
             .rounded(px(99.))
             .bg(if active { rgb(CARD_ELEVATED) } else { rgb(CARD) })
             .border_1()
             .border_color(if active { rgb(BRAND) } else { rgb(LINE) })
             .text_xs()
-            .font_weight(FontWeight::MEDIUM)
-            .text_color(if active { rgb(INK) } else { rgb(DIM) })
+            .font_weight(FontWeight::SEMIBOLD)
+            .text_color(if active || (online && peers > 0) { rgb(INK) } else { rgb(DIM) })
             .cursor_pointer()
-            .hover(|s| s.border_color(rgb(BRAND)).text_color(rgb(INK)))
+            .hover(|s| s.border_color(rgb(DIM)).bg(rgb(CARD_ELEVATED)).text_color(rgb(INK)))
             .on_click(cx.listener(|this, _, _, cx| {
                 this.open_room(Room::Network(NetworkTab::Globe), cx);
             }))
-            .child(div().size(px(6.)).rounded(px(99.)).bg(dot_color))
-            .child(label_txt)
+            .child(div().size(px(8.)).rounded(px(99.)).bg(dot_color))
+            .child(peers_txt)
+            .when(show_spark, |pill| {
+                pill.child(
+                    div().w(px(42.)).h(px(16.)).flex_none().child(
+                        canvas(
+                            move |_, _, _| spark_samples.clone(),
+                            move |bounds, data, window, _| paint_pill_sparkline(bounds, &data, window),
+                        )
+                        .size_full(),
+                    ),
+                )
+            })
+            .when_some(rate_badge, |pill, rate| {
+                pill.child(div().text_color(rgb(DIM)).font_weight(FontWeight::MEDIUM).child(rate))
+            })
     }
 
     /// `Add to library` dialog (Rule 11 & Rule 18) with auto-identification (`ubit`) and live `Adding` jobs list.
@@ -786,7 +809,7 @@ impl PearTube {
 
     fn render_under_the_hood(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let status = self.status.as_ref();
-        let peers = status.map_or(0, |s| s.peers + s.lan_peers);
+        let peers = status.map_or(0, total_peers);
         let cached = status.map_or(0, |s| s.cached_bytes);
         let stored = status.map_or(0, |s| s.blob_bytes);
         let channel = status.map(|s| s.channel.clone()).unwrap_or_default();
@@ -857,7 +880,8 @@ impl PearTube {
                                         .take(48)
                                         .map(|s| {
                                             let label_txt = if s.alias.is_empty() {
-                                                format!("{}…", &s.key[..8.min(s.key.len())])
+                                                let short: String = s.key.chars().take(8).collect();
+                                                format!("{short}…")
                                             } else {
                                                 s.alias.clone()
                                             };
@@ -1015,7 +1039,8 @@ impl PearTube {
                                             let name = if !w.alias.is_empty() {
                                                 w.alias
                                             } else {
-                                                format!("{}…", &w.key[..8.min(w.key.len())])
+                                                let short: String = w.key.chars().take(8).collect();
+                                                format!("{short}…")
                                             };
                                             let tag = if w.self_device {
                                                 format!("{name} (this Mac)")
@@ -1086,6 +1111,42 @@ impl PearTube {
                             }),
                     ),
             )
+    }
+}
+
+/// Compact rate sparkline painted inside the top-bar Network pill.
+fn paint_pill_sparkline(bounds: Bounds<Pixels>, data: &[u64], window: &mut Window) {
+    let w = f32::from(bounds.size.width);
+    let h = f32::from(bounds.size.height);
+    if w < 4.0 || h < 4.0 || data.len() < 2 {
+        return;
+    }
+    let ox = f32::from(bounds.origin.x);
+    let oy = f32::from(bounds.origin.y);
+    let peak = data.iter().copied().max().unwrap_or(0);
+    let top = peak.max(1) as f32;
+    let step = w / (data.len() - 1) as f32;
+    let mut pb = PathBuilder::stroke(px(1.5));
+    for (i, &val) in data.iter().enumerate() {
+        let x = ox + i as f32 * step;
+        let y = if peak == 0 {
+            oy + h - 2.0
+        } else {
+            oy + (h - 2.0) - (val as f32 / top) * (h - 4.0)
+        };
+        if i == 0 {
+            pb.move_to(point(px(x), px(y)));
+        } else {
+            pb.line_to(point(px(x), px(y)));
+        }
+    }
+    if let Ok(path) = pb.build() {
+        let col = if peak == 0 {
+            Hsla::from(rgb(DIM)).opacity(0.45)
+        } else {
+            Hsla::from(rgb(BRAND_HOVER))
+        };
+        window.paint_path(path, col);
     }
 }
 

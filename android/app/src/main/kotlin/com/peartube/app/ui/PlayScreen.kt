@@ -100,6 +100,7 @@ import com.peartube.app.player.NativePlayer
 import com.peartube.app.player.PlayerHost
 import com.peartube.app.player.PlayerState
 import com.peartube.app.player.Track
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.cancel
@@ -164,6 +165,7 @@ fun PlayScreen(model: AppModel, host: PlayerHost, entry: Entry, startPositionMs:
             val opened = try {
                 NativePlayer.openWithOptions(liveEntry.streamUrl, soundfont, "auto", if (isTv) "exact" else "seamless", false)
             } catch (e: Throwable) {
+                if (e is CancellationException) throw e
                 failure = "The player did not start: ${e.message ?: e}"
                 0L
             }
@@ -557,7 +559,7 @@ private fun PlayerInfoPanel(
             .fillMaxWidth()
             .heightIn(max = if (landscape) 440.dp else 540.dp)
             .clip(RoundedCornerShape(22.dp))
-            .background(Color(0xF00F131C))
+            .background(OverlayPanelBg)
             .border(1.dp, Color.White.copy(alpha = 0.12f), RoundedCornerShape(22.dp))
             .verticalScroll(rememberScrollState())
             .padding(18.dp),

@@ -1,0 +1,11 @@
+id: swift-no-force-unwrap-url
+valid:
+  - |
+    guard let url = URL(string: raw) else { return }
+  - |
+    let url = URL(string: "https://example.com")
+invalid:
+  - |
+    let url = URL(string: raw)!
+  - |
+    openURL(URL(string: "https://example.com")!)

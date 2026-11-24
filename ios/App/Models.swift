@@ -217,7 +217,7 @@ struct MediaEntry: Identifiable, Hashable {
         self.seasonNumber = seasonNumber
         self.episodeNumber = episodeNumber
         self.seriesKey = seriesKey
-        self.baseTitle = (baseTitle?.isEmpty == false) ? baseTitle! : title
+        self.baseTitle = baseTitle.flatMap { $0.isEmpty ? nil : $0 } ?? title
         self.year = year
         self.music = music
     }

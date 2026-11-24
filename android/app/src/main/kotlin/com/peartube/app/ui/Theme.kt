@@ -46,10 +46,17 @@ val Brand = Color(0xFF9147FF)
 val BrandHover = Color(0xFFA866FF)
 val BrandRing = Color(0xFFB98BFF)
 val Danger = Color(0xFFFF7D7D)
+val HeroPrimaryInk = Color(0xFF111111)
+val OverlayPanelBg = Color(0xF00F131C)
+val SourceYoutube = Color(0xFFE05252)
+val SourceSoundCloud = Color(0xFFFF7A33)
+val SourceRumble = Color(0xFF7FD14B)
 
 val ControlShape = RoundedCornerShape(10.dp)
+val HeroButtonShape = RoundedCornerShape(12.dp)
 val CardShape = RoundedCornerShape(14.dp)
 val PanelShape = RoundedCornerShape(18.dp)
+val HeroShape = RoundedCornerShape(22.dp)
 val PillShape = RoundedCornerShape(999.dp)
 
 @Composable
@@ -111,6 +118,97 @@ fun fieldColors() = OutlinedTextFieldDefaults.colors(
     cursorColor = Brand,
 )
 
+/** Primary violet brand button matching sketch .btn.primary. */
+@Composable
+fun PrimaryBrandButton(
+    text: String,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    icon: ImageVector? = null,
+    enabled: Boolean = true,
+) {
+    Button(
+        onClick = onClick,
+        enabled = enabled,
+        shape = ControlShape,
+        colors = ButtonDefaults.buttonColors(
+            containerColor = Brand,
+            contentColor = Color.White,
+            disabledContainerColor = CardElevated,
+            disabledContentColor = Dim,
+        ),
+        contentPadding = PaddingValues(horizontal = 18.dp, vertical = 11.dp),
+        modifier = modifier,
+    ) {
+        if (icon != null) {
+            Icon(icon, null, modifier = Modifier.size(18.dp))
+            Spacer(Modifier.width(6.dp))
+        }
+        Text(text, fontWeight = FontWeight.SemiBold, fontSize = 14.sp, maxLines = 1)
+    }
+}
+
+/** Solid white hero primary button (#FFFFFF bg / #111111 ink) matching sketch .hero .btn.primary. */
+@Composable
+fun HeroPrimaryButton(
+    text: String,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    icon: ImageVector? = null,
+    enabled: Boolean = true,
+) {
+    Button(
+        onClick = onClick,
+        enabled = enabled,
+        shape = HeroButtonShape,
+        colors = ButtonDefaults.buttonColors(
+            containerColor = Color.White,
+            contentColor = HeroPrimaryInk,
+            disabledContainerColor = Color.White.copy(alpha = 0.25f),
+            disabledContentColor = Color.White.copy(alpha = 0.6f),
+        ),
+        contentPadding = PaddingValues(horizontal = 18.dp, vertical = 12.dp),
+        modifier = modifier,
+    ) {
+        if (icon != null) {
+            Icon(icon, null, modifier = Modifier.size(18.dp))
+            Spacer(Modifier.width(7.dp))
+        }
+        Text(text, fontWeight = FontWeight.SemiBold, fontSize = 14.sp, maxLines = 1)
+    }
+}
+
+/** Translucent frosted-glass hero secondary button matching sketch .hero .btn. */
+@Composable
+fun HeroGlassButton(
+    text: String,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    icon: ImageVector? = null,
+    enabled: Boolean = true,
+) {
+    OutlinedButton(
+        onClick = onClick,
+        enabled = enabled,
+        shape = HeroButtonShape,
+        border = BorderStroke(1.dp, Color.White.copy(alpha = if (enabled) 0.28f else 0.14f)),
+        colors = ButtonDefaults.outlinedButtonColors(
+            containerColor = Color.White.copy(alpha = 0.16f),
+            contentColor = Color.White,
+            disabledContainerColor = Color.White.copy(alpha = 0.08f),
+            disabledContentColor = Color.White.copy(alpha = 0.45f),
+        ),
+        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
+        modifier = modifier,
+    ) {
+        if (icon != null) {
+            Icon(icon, null, modifier = Modifier.size(18.dp))
+            Spacer(Modifier.width(7.dp))
+        }
+        Text(text, fontWeight = FontWeight.SemiBold, fontSize = 14.sp, maxLines = 1)
+    }
+}
+
 /** The main action is the light button (design/unified-library.md). */
 @Composable
 fun PrimaryLightButton(
@@ -148,20 +246,29 @@ fun QuietActionButton(
     modifier: Modifier = Modifier,
     icon: ImageVector? = null,
     active: Boolean = false,
+    enabled: Boolean = true,
 ) {
     OutlinedButton(
         onClick = onClick,
+        enabled = enabled,
         shape = ControlShape,
         border = BorderStroke(1.dp, if (active) Brand else Line),
         colors = ButtonDefaults.outlinedButtonColors(
             containerColor = if (active) Brand.copy(alpha = 0.16f) else CardElevated,
-            contentColor = if (active) Ink else Ink,
+            contentColor = Ink,
+            disabledContainerColor = CardBg,
+            disabledContentColor = Dim,
         ),
         contentPadding = PaddingValues(horizontal = 14.dp, vertical = 10.dp),
         modifier = modifier,
     ) {
         if (icon != null) {
-            Icon(icon, null, tint = if (active) Brand else Ink, modifier = Modifier.size(18.dp))
+            Icon(
+                icon,
+                null,
+                tint = if (!enabled) Dim else if (active) Brand else Ink,
+                modifier = Modifier.size(18.dp),
+            )
             Spacer(Modifier.width(6.dp))
         }
         Text(text, fontWeight = FontWeight.Medium, fontSize = 14.sp)

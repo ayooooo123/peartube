@@ -79,26 +79,28 @@ struct WatchScreen: View {
     var body: some View {
         VStack(spacing: 0) {
             VStack(spacing: 10) {
-                HStack(spacing: 10) {
-                    Picker("Watch view", selection: $viewMode) {
-                        ForEach(WatchViewMode.allCases) { mode in
-                            Text(mode.rawValue).tag(mode)
-                        }
+                HStack(alignment: .firstTextBaseline, spacing: 10) {
+                    Text("Watch")
+                        .font(.title2.weight(.bold))
+                        .foregroundStyle(PTColor.ink)
+                    if totalCount > 0 {
+                        Text(plural(totalCount, "title", "titles"))
+                            .font(.subheadline.weight(.medium))
+                            .foregroundStyle(PTColor.dim)
+                            .lineLimit(1)
                     }
-                    .pickerStyle(.segmented)
-                    .accessibilityIdentifier("watch.modePicker")
-
+                    Spacer(minLength: 8)
                     if !allFilteredVideos.isEmpty {
                         Button {
                             model.playRandomVideo(from: allFilteredVideos)
                         } label: {
                             Label("Play something", systemImage: "die.face.5")
-                                .labelStyle(.iconOnly)
-                                .font(.callout.weight(.semibold))
+                                .font(.caption.weight(.semibold))
                                 .foregroundStyle(PTColor.ink)
-                                .frame(width: 36, height: 32)
-                                .background(PTColor.raised, in: RoundedRectangle(cornerRadius: 8))
-                                .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(PTColor.line, lineWidth: 1))
+                                .padding(.horizontal, 10)
+                                .padding(.vertical, 6)
+                                .background(PTColor.raised, in: Capsule())
+                                .overlay(Capsule().strokeBorder(PTColor.line, lineWidth: 1))
                         }
                         .buttonStyle(.plain)
                         .accessibilityLabel("Play something")
@@ -107,9 +109,18 @@ struct WatchScreen: View {
                 }
                 .padding(.horizontal, 16)
                 .padding(.top, 10)
-                .padding(.bottom, viewMode == .rows ? 0 : 10)
 
-                if viewMode == .rows {
+                Picker("Watch view", selection: $viewMode) {
+                    ForEach(WatchViewMode.allCases) { mode in
+                        Text(mode.rawValue).tag(mode)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .accessibilityIdentifier("watch.modePicker")
+                .padding(.horizontal, 16)
+                .padding(.bottom, viewMode == .rows && (!model.catalog.allVideos.isEmpty || savedOnly || !model.sourceFilter.isEmpty) ? 0 : 10)
+
+                if viewMode == .rows && (!model.catalog.allVideos.isEmpty || savedOnly || !model.sourceFilter.isEmpty) {
                     ScrollView(.horizontal, showsIndicators: false) {
                         HStack(spacing: 8) {
                             PTChipButton(title: "All", count: totalCount, selected: kind == .all, identifier: "filters.all") { kind = .all }
@@ -202,9 +213,137 @@ struct WatchScreen: View {
         }
     }
 
+    private var featuredHeroSelection: (eyebrow: String, tile: LibraryTile, entry: MediaEntry, facts: String, progress: Double?, isContinue: Bool)? {
+        if let cont = continueVideos.first {
+            let ep = cont.entry.episode
+            let remaining = cont.progress.durationMs > 0
+                ? timeLeftText(seconds: cont.progress.remainingSeconds)
+                : "Resume at \(clock(cont.progress.positionMs))"
+            let facts = [ep, remaining, cont.tile.stateLabel].compactMap { $0 }.joined(separator: " · ")
+            return (
+                eyebrow: "Continue",
+                tile: cont.tile,
+                entry: cont.entry,
+                facts: facts,
+                progress: cont.progress.fraction > 0 ? cont.progress.fraction : nil,
+                isContinue: true
+            )
+        }
+        let candidates: [LibraryTile] = {
+            switch kind {
+            case .all: return moviesAndSeries + clips
+            case .movies: return movies
+            case .series: return series
+            case .clips: return clips
+            }
+        }()
+        for tile in candidates {
+            if let entry = model.primaryEntry(for: tile), !entry.locked {
+                return (
+                    eyebrow: "On this relay",
+                    tile: tile,
+                    entry: entry,
+                    facts: "\(tile.lineText) · \(tile.stateLabel)",
+                    progress: nil,
+                    isContinue: false
+                )
+            }
+        }
+        return nil
+    }
+
+    private func featuredHeroCard(
+        eyebrow: String,
+        tile: LibraryTile,
+        entry: MediaEntry,
+        facts: String,
+        progress: Double?,
+        isContinue: Bool
+    ) -> some View {
+        let hue = Double(watchTitleHue(tile.title))
+        return ZStack(alignment: .bottomLeading) {
+            PTHeroBackground(hue: hue, showOrb: true)
+
+            VStack(alignment: .leading, spacing: 10) {
+                Text(eyebrow)
+                    .font(.caption2.weight(.bold))
+                    .tracking(1.6)
+                    .textCase(.uppercase)
+                    .foregroundStyle(Color.white.opacity(0.80))
+
+                Text(tile.title)
+                    .font(.title.weight(.heavy))
+                    .tracking(-0.5)
+                    .textCase(.uppercase)
+                    .foregroundStyle(Color.white)
+                    .lineLimit(2)
+
+                Text(facts)
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(Color.white.opacity(0.90))
+                    .lineLimit(1)
+
+                if let progress, progress > 0 {
+                    GeometryReader { geo in
+                        ZStack(alignment: .leading) {
+                            Capsule().fill(Color.white.opacity(0.30))
+                            Capsule()
+                                .fill(PTColor.brandHover)
+                                .frame(width: geo.size.width * max(0.03, min(1, progress)))
+                        }
+                    }
+                    .frame(height: 4)
+                    .frame(maxWidth: 360)
+                }
+
+                PTWrapLayout(spacing: 8, rowSpacing: 8) {
+                    Button { model.play(entry) } label: {
+                        Label(isContinue ? "Continue" : "Play", systemImage: "play.fill")
+                    }
+                    .buttonStyle(PTHeroPrimaryButtonStyle(compact: true))
+                    .accessibilityLabel(isContinue ? "Continue \(tile.title)" : "Play \(tile.title)")
+                    .accessibilityIdentifier("watch.hero.play")
+
+                    if allFilteredVideos.count > 1 {
+                        Button { model.playRandomVideo(from: allFilteredVideos) } label: {
+                            Label("Play something", systemImage: "die.face.5")
+                        }
+                        .buttonStyle(PTHeroSecondaryButtonStyle(compact: true))
+                        .accessibilityLabel("Play a random video")
+                        .accessibilityIdentifier("watch.hero.surprise")
+                    }
+
+                    Button("Details") { onNavigate(.title(tile.key)) }
+                        .buttonStyle(PTHeroSecondaryButtonStyle(compact: true))
+                        .accessibilityIdentifier("watch.hero.details")
+                }
+                .padding(.top, 4)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(20)
+        }
+        .frame(maxWidth: .infinity, minHeight: 224, alignment: .bottomLeading)
+        .clipShape(RoundedRectangle(cornerRadius: 20))
+        .overlay(
+            RoundedRectangle(cornerRadius: 20)
+                .strokeBorder(Color.white.opacity(0.10), lineWidth: 1)
+        )
+    }
+
     private var rowsContent: some View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 24) {
+                if kind == .all, let hero = featuredHeroSelection {
+                    featuredHeroCard(
+                        eyebrow: hero.eyebrow,
+                        tile: hero.tile,
+                        entry: hero.entry,
+                        facts: hero.facts,
+                        progress: hero.progress,
+                        isContinue: hero.isContinue
+                    )
+                }
+
                 if kind == .all && !continueVideos.isEmpty {
                     VStack(alignment: .leading, spacing: 12) {
                         PTSectionHeader(title: "Keep watching")
@@ -215,6 +354,7 @@ struct WatchScreen: View {
                                         VStack(alignment: .leading, spacing: 6) {
                                             WideArtView(
                                                 title: item.tile.title,
+                                                kind: item.tile.kind,
                                                 backdropURL: model.backdropURL(imdb: item.tile.imdb),
                                                 posterURL: model.posterURL(imdb: item.tile.imdb),
                                                 progress: item.progress.fraction
@@ -517,77 +657,78 @@ private struct WatchTonightView: View {
         showAnother: Bool
     ) -> some View {
         let hue = Double(watchTitleHue(tile.title))
-        return VStack(alignment: .leading, spacing: 8) {
-            HStack {
-                Text(eyebrow)
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(PTColor.dim)
+        return ZStack(alignment: .bottomLeading) {
+            PTHeroBackground(hue: hue, showOrb: true)
+
+            VStack(alignment: .leading, spacing: 8) {
+                HStack {
+                    Text(eyebrow)
+                        .font(.caption2.weight(.bold))
+                        .tracking(1.4)
+                        .foregroundStyle(Color.white.opacity(0.80))
+                        .textCase(.uppercase)
+                    Spacer()
+                    Circle()
+                        .fill(watchSavedColor(for: tile))
+                        .frame(width: 7, height: 7)
+                }
+
+                Text(tile.title)
+                    .font(.title3.weight(.heavy))
+                    .tracking(-0.4)
                     .textCase(.uppercase)
-                Spacer()
-                Circle()
-                    .fill(watchSavedColor(for: tile))
-                    .frame(width: 7, height: 7)
-            }
+                    .foregroundStyle(Color.white)
+                    .lineLimit(2)
 
-            Text(tile.title)
-                .font(.title3.weight(.bold))
-                .foregroundStyle(PTColor.ink)
-                .lineLimit(2)
+                Text(subtitle)
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(Color.white.opacity(0.88))
+                    .lineLimit(1)
 
-            Text(subtitle)
-                .font(.caption)
-                .foregroundStyle(PTColor.dim)
-                .lineLimit(1)
-
-            if let progress, progress > 0 {
-                GeometryReader { geo in
-                    ZStack(alignment: .leading) {
-                        Capsule().fill(PTColor.line)
-                        Capsule().fill(PTColor.brand).frame(width: geo.size.width * max(0.03, min(1, progress)))
+                if let progress, progress > 0 {
+                    GeometryReader { geo in
+                        ZStack(alignment: .leading) {
+                            Capsule().fill(Color.white.opacity(0.30))
+                            Capsule().fill(PTColor.brandHover).frame(width: geo.size.width * max(0.03, min(1, progress)))
+                        }
                     }
-                }
-                .frame(height: 4)
-            }
-
-            HStack(spacing: 8) {
-                if primary {
-                    Button { model.play(entry) } label: {
-                        Label("Play", systemImage: "play.fill")
-                    }
-                    .buttonStyle(PTPrimaryButtonStyle(compact: true))
-                } else {
-                    Button { model.play(entry) } label: {
-                        Label("Play", systemImage: "play.fill")
-                    }
-                    .buttonStyle(PTQuietButtonStyle(compact: true))
+                    .frame(height: 4)
                 }
 
-                if showAnother {
-                    Button {
-                        surpriseKey = model.pickSurpriseVideo(excluding: tile.key, from: allVideos)?.key
-                    } label: {
-                        Label("Another", systemImage: "die.face.5")
+                PTWrapLayout(spacing: 8, rowSpacing: 8) {
+                    if primary {
+                        Button { model.play(entry) } label: {
+                            Label("Play", systemImage: "play.fill")
+                        }
+                        .buttonStyle(PTHeroPrimaryButtonStyle(compact: true))
+                    } else {
+                        Button { model.play(entry) } label: {
+                            Label("Play", systemImage: "play.fill")
+                        }
+                        .buttonStyle(PTHeroSecondaryButtonStyle(compact: true))
                     }
-                    .buttonStyle(PTQuietButtonStyle(compact: true))
-                    .accessibilityIdentifier("watch.tonight.another")
-                }
 
-                Button("Details") { onNavigate(.title(tile.key)) }
-                    .buttonStyle(PTQuietButtonStyle(compact: true))
+                    if showAnother {
+                        Button {
+                            surpriseKey = model.pickSurpriseVideo(excluding: tile.key, from: allVideos)?.key
+                        } label: {
+                            Label("Another", systemImage: "die.face.5")
+                        }
+                        .buttonStyle(PTHeroSecondaryButtonStyle(compact: true))
+                        .accessibilityIdentifier("watch.tonight.another")
+                    }
+
+                    Button("Details") { onNavigate(.title(tile.key)) }
+                        .buttonStyle(PTHeroSecondaryButtonStyle(compact: true))
+                }
+                .padding(.top, 4)
             }
-            .padding(.top, 2)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(16)
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(14)
-        .background(
-            LinearGradient(
-                colors: [Color.hsl(hue: hue, saturation: 0.36, lightness: 0.15), PTColor.surface],
-                startPoint: .topLeading,
-                endPoint: .bottomTrailing
-            ),
-            in: RoundedRectangle(cornerRadius: PTRadius.card)
-        )
-        .overlay(RoundedRectangle(cornerRadius: PTRadius.card).strokeBorder(PTColor.line, lineWidth: 1))
+        .frame(maxWidth: .infinity, minHeight: 168, alignment: .bottomLeading)
+        .clipShape(RoundedRectangle(cornerRadius: 18))
+        .overlay(RoundedRectangle(cornerRadius: 18).strokeBorder(Color.white.opacity(0.10), lineWidth: 1))
     }
 }
 
@@ -724,13 +865,14 @@ private struct VideoCoverSheet: View {
                     if tile.kind == .clip {
                         WideArtView(
                             title: tile.title,
+                            kind: tile.kind,
                             backdropURL: nil,
                             posterURL: nil,
                             progress: progress?.partial == true ? progress?.fraction : nil
                         )
                     } else {
                         HStack(alignment: .top, spacing: 16) {
-                            PosterView(title: tile.title, year: tile.year, url: model.posterURL(imdb: tile.imdb))
+                            PosterView(title: tile.title, year: tile.year, kind: tile.kind, url: model.posterURL(imdb: tile.imdb))
                                 .frame(width: 112)
                             VStack(alignment: .leading, spacing: 6) {
                                 Text(tile.kind == .show ? "Series" : "Film")
@@ -989,56 +1131,57 @@ private struct WatchChannelsView: View {
         let hue = Double(watchTitleHue(block.item.title))
         let facts = [block.item.sub, timeLeftText(seconds: Double(remaining))].compactMap { $0 }.joined(separator: " · ")
 
-        return VStack(alignment: .leading, spacing: 8) {
-            Text("CH \(channel.number) · \(channel.name) · on now")
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(PTColor.brandRing)
-                .textCase(.uppercase)
+        return ZStack(alignment: .bottomLeading) {
+            PTHeroBackground(hue: hue, showOrb: true)
 
-            Text(block.item.title)
-                .font(.title3.weight(.bold))
-                .foregroundStyle(PTColor.ink)
-                .lineLimit(2)
+            VStack(alignment: .leading, spacing: 8) {
+                Text("CH \(channel.number) · \(channel.name) · on now")
+                    .font(.caption2.weight(.bold))
+                    .tracking(1.4)
+                    .foregroundStyle(Color.white.opacity(0.82))
+                    .textCase(.uppercase)
 
-            Text(facts)
-                .font(.caption)
-                .foregroundStyle(PTColor.dim)
-                .lineLimit(1)
+                Text(block.item.title)
+                    .font(.title3.weight(.heavy))
+                    .tracking(-0.4)
+                    .textCase(.uppercase)
+                    .foregroundStyle(Color.white)
+                    .lineLimit(2)
 
-            GeometryReader { geo in
-                ZStack(alignment: .leading) {
-                    Capsule().fill(PTColor.line)
-                    Capsule().fill(PTColor.brand).frame(width: geo.size.width * max(0.03, min(1, frac)))
+                Text(facts)
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(Color.white.opacity(0.88))
+                    .lineLimit(1)
+
+                GeometryReader { geo in
+                    ZStack(alignment: .leading) {
+                        Capsule().fill(Color.white.opacity(0.30))
+                        Capsule().fill(PTColor.brandHover).frame(width: geo.size.width * max(0.03, min(1, frac)))
+                    }
                 }
-            }
-            .frame(height: 4)
+                .frame(height: 4)
 
-            HStack(spacing: 8) {
-                Button {
-                    let seekMs: Double? = block.item.hasKnownDuration ? Double(into) * 1000.0 : nil
-                    model.play(block.item.entry, at: seekMs)
-                } label: {
-                    Label("Watch", systemImage: "play.fill")
+                PTWrapLayout(spacing: 8, rowSpacing: 8) {
+                    Button {
+                        let seekMs: Double? = block.item.hasKnownDuration ? Double(into) * 1000.0 : nil
+                        model.play(block.item.entry, at: seekMs)
+                    } label: {
+                        Label("Watch", systemImage: "play.fill")
+                    }
+                    .buttonStyle(PTHeroPrimaryButtonStyle(compact: true))
+                    .accessibilityLabel("Watch channel \(channel.number): \(block.item.title)")
+
+                    Button("Details") { onOpenCover(block.item.tile) }
+                        .buttonStyle(PTHeroSecondaryButtonStyle(compact: true))
                 }
-                .buttonStyle(PTPrimaryButtonStyle(compact: true))
-                .accessibilityLabel("Watch channel \(channel.number): \(block.item.title)")
-
-                Button("Details") { onOpenCover(block.item.tile) }
-                    .buttonStyle(PTQuietButtonStyle(compact: true))
+                .padding(.top, 4)
             }
-            .padding(.top, 2)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(16)
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(14)
-        .background(
-            LinearGradient(
-                colors: [Color.hsl(hue: hue, saturation: 0.36, lightness: 0.15), PTColor.surface],
-                startPoint: .topLeading,
-                endPoint: .bottomTrailing
-            ),
-            in: RoundedRectangle(cornerRadius: PTRadius.card)
-        )
-        .overlay(RoundedRectangle(cornerRadius: PTRadius.card).strokeBorder(PTColor.line, lineWidth: 1))
+        .frame(maxWidth: .infinity, minHeight: 168, alignment: .bottomLeading)
+        .clipShape(RoundedRectangle(cornerRadius: 18))
+        .overlay(RoundedRectangle(cornerRadius: 18).strokeBorder(Color.white.opacity(0.10), lineWidth: 1))
     }
 
     private func guideGrid(start: Int, nowSeconds: Int, channels: [ChannelSchedule]) -> some View {
@@ -1142,7 +1285,7 @@ struct VideoPosterCard: View {
         VStack(alignment: .leading, spacing: 7) {
             ZStack(alignment: .bottomTrailing) {
                 Button { onNavigate(.title(tile.key)) } label: {
-                    PosterView(title: tile.title, year: tile.year, url: model.posterURL(imdb: tile.imdb))
+                    PosterView(title: tile.title, year: tile.year, kind: tile.kind, url: model.posterURL(imdb: tile.imdb))
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel(tile.title)
@@ -1199,6 +1342,7 @@ struct ClipWideCard: View {
                 Button { onNavigate(.title(tile.key)) } label: {
                     WideArtView(
                         title: tile.title,
+                        kind: tile.kind,
                         backdropURL: nil,
                         posterURL: nil,
                         progress: tile.firstEntry.flatMap { model.history[$0.key]?.partial == true ? model.history[$0.key]?.fraction : nil }
@@ -1279,10 +1423,10 @@ struct TitleScreen: View {
     private func header(_ tile: LibraryTile) -> some View {
         VStack(alignment: .leading, spacing: 14) {
             if tile.kind == .clip {
-                WideArtView(title: tile.title, backdropURL: nil, posterURL: nil)
+                WideArtView(title: tile.title, kind: tile.kind, backdropURL: nil, posterURL: nil)
             } else {
                 HStack(alignment: .top, spacing: 16) {
-                    PosterView(title: tile.title, year: tile.year, url: model.posterURL(imdb: tile.imdb))
+                    PosterView(title: tile.title, year: tile.year, kind: tile.kind, url: model.posterURL(imdb: tile.imdb))
                         .frame(width: 112)
                     VStack(alignment: .leading, spacing: 6) {
                         Text(tile.kind == .show ? "Series" : "Movie")

@@ -73,9 +73,31 @@ struct ListenScreen: View {
 
     private let twoColumns = [GridItem(.flexible(), spacing: 14), GridItem(.flexible(), spacing: 14)]
 
+    private var hasMusic: Bool {
+        !model.catalog.albums.isEmpty || !model.catalog.tracks.isEmpty
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             VStack(spacing: 10) {
+                HStack(alignment: .firstTextBaseline, spacing: 10) {
+                    Text("Listen")
+                        .font(.title2.weight(.bold))
+                        .foregroundStyle(PTColor.ink)
+                    if hasMusic {
+                        Text(countLabel)
+                            .font(.subheadline.weight(.medium))
+                            .foregroundStyle(PTColor.dim)
+                            .lineLimit(1)
+                    }
+                    Spacer(minLength: 8)
+                    if hasMusic || savedOnly {
+                        PTChipButton(title: "Saved here", selected: savedOnly, identifier: "listen.saved") {
+                            savedOnly.toggle()
+                        }
+                    }
+                }
+
                 Picker("Listen", selection: $section) {
                     ForEach(ListenSection.allCases) { item in
                         Text(item.rawValue).tag(item)
@@ -84,13 +106,14 @@ struct ListenScreen: View {
                 .pickerStyle(.segmented)
                 .accessibilityIdentifier("listen.picker")
 
-                if !model.catalog.tracks.isEmpty {
+                if hasMusic {
                     HStack(spacing: 8) {
                         if let waiting = waitingPausedTrack {
                             Button {
                                 music.togglePlayPause()
                             } label: {
                                 Label("Resume", systemImage: "play.fill")
+                                    .lineLimit(1)
                             }
                             .buttonStyle(PTPrimaryButtonStyle(compact: true))
                             .accessibilityLabel("Resume \(waiting.title)")
@@ -100,6 +123,7 @@ struct ListenScreen: View {
                                 music.playTrackList(activePlayList, startIndex: 0, sourceLabel: activeSourceLabel, shuffleOn: false)
                             } label: {
                                 Label("Play all", systemImage: "play.fill")
+                                    .lineLimit(1)
                             }
                             .buttonStyle(PTPrimaryButtonStyle(compact: true))
                             .disabled(activePlayList.isEmpty)
@@ -110,28 +134,13 @@ struct ListenScreen: View {
                             music.playTrackList(activePlayList, startIndex: nil, sourceLabel: activeSourceLabel, shuffleOn: true)
                         } label: {
                             Label("Shuffle", systemImage: "shuffle")
+                                .lineLimit(1)
                         }
                         .buttonStyle(PTQuietButtonStyle(compact: true))
                         .disabled(activePlayList.isEmpty)
                         .accessibilityIdentifier("listen.shuffle")
 
-                        Spacer(minLength: 4)
-
-                        PTChipButton(title: "Saved here", selected: savedOnly, identifier: "listen.saved") {
-                            savedOnly.toggle()
-                        }
-                    }
-                }
-
-                HStack {
-                    Text(countLabel)
-                        .font(.subheadline)
-                        .foregroundStyle(PTColor.dim)
-                    Spacer()
-                    if model.catalog.tracks.isEmpty {
-                        PTChipButton(title: "Saved here", selected: savedOnly, identifier: "listen.saved") {
-                            savedOnly.toggle()
-                        }
+                        Spacer(minLength: 0)
                     }
                 }
             }
@@ -178,7 +187,9 @@ struct ListenScreen: View {
                             }
                         }
                     case .tracks:
-                        tracksToolbar
+                        if hasMusic {
+                            tracksToolbar
+                        }
                         if filteredTracks.isEmpty {
                             emptyListenState(trackFilter.isEmpty ? "No tracks in your library yet." : "No tracks match \"\(trackFilter)\".")
                         } else {
@@ -279,16 +290,27 @@ struct ListenScreen: View {
     }
 
     private func emptyListenState(_ message: String) -> some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(spacing: 12) {
+            ZStack {
+                RoundedRectangle(cornerRadius: 22)
+                    .fill(PTColor.raised)
+                    .frame(width: 68, height: 68)
+                Image(systemName: "music.note.list")
+                    .font(.title2.weight(.semibold))
+                    .foregroundStyle(PTColor.dim)
+            }
             Text(message)
                 .font(.callout)
                 .foregroundStyle(PTColor.dim)
+                .multilineTextAlignment(.center)
             if model.entries.isEmpty {
                 Button("Add to library") { model.showSettings = true }
                     .buttonStyle(PTPrimaryButtonStyle())
+                    .padding(.top, 4)
             }
         }
-        .padding(.vertical, 28)
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 40)
     }
 }
 

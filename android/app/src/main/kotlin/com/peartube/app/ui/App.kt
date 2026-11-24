@@ -19,13 +19,19 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -123,6 +129,7 @@ fun App(model: AppModel, player: PlayerHost) {
                                 status = status,
                                 casting = cast.session != null,
                                 activeAcquireCount = activeAcquireCount,
+                                applyStatusBarPadding = error == null,
                                 onOpenHood = { showHood = true },
                                 onOpenNetwork = { model.pushScreen(Screen.Network) },
                                 onOpenAdd = { model.openAddSheet() },
@@ -288,6 +295,7 @@ private fun TopAppBarRow(
     status: Status?,
     casting: Boolean,
     activeAcquireCount: Int,
+    applyStatusBarPadding: Boolean,
     onOpenHood: () -> Unit,
     onOpenNetwork: () -> Unit,
     onOpenAdd: () -> Unit,
@@ -304,61 +312,68 @@ private fun TopAppBarRow(
     Row(
         Modifier
             .fillMaxWidth()
-            .statusBarsPadding()
-            .height(54.dp)
+            .then(if (applyStatusBarPadding) Modifier.statusBarsPadding() else Modifier)
+            .heightIn(min = 54.dp)
             .padding(start = 16.dp, end = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Row(
-            Modifier
-                .clickable(onClick = onOpenHood)
-                .padding(vertical = 8.dp),
+            modifier = Modifier.weight(1f),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Text(
-                text = "PearTube",
-                color = Ink,
-                fontSize = 21.sp,
-                fontWeight = FontWeight.Bold,
-                maxLines = 1,
-                softWrap = false,
-            )
-        }
-        Spacer(Modifier.width(8.dp))
-        Row(
-            modifier = Modifier
-                .clip(PillShape)
-                .background(CardElevated)
-                .border(1.dp, if (peers > 0L) Accent.copy(alpha = 0.4f) else Line, PillShape)
-                .clickable(onClick = onOpenNetwork)
-                .padding(horizontal = 9.dp, vertical = 5.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Box(
+            Row(
                 Modifier
-                    .size(6.dp)
-                    .background(if (peers > 0L) Accent else Dim, CircleShape),
-            )
-            Spacer(Modifier.width(5.dp))
-            Text(
-                text = netLabel,
-                color = if (peers > 0L) Ink else Dim,
-                fontSize = 11.sp,
-                fontWeight = FontWeight.Medium,
-                maxLines = 1,
-                softWrap = false,
-            )
+                    .clickable(onClick = onOpenHood)
+                    .padding(vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    text = "PearTube",
+                    color = Ink,
+                    fontSize = 21.sp,
+                    fontWeight = FontWeight.Bold,
+                    maxLines = 1,
+                    softWrap = false,
+                )
+            }
+            Spacer(Modifier.width(8.dp))
+            Row(
+                modifier = Modifier
+                    .weight(1f, fill = false)
+                    .clip(PillShape)
+                    .background(CardElevated)
+                    .border(1.dp, if (peers > 0L) Accent.copy(alpha = 0.4f) else Line, PillShape)
+                    .semantics { contentDescription = "Network: $netLabel" }
+                    .clickable(onClick = onOpenNetwork)
+                    .padding(horizontal = 9.dp, vertical = 5.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Box(
+                    Modifier
+                        .size(6.dp)
+                        .background(if (peers > 0L) Accent else Dim, CircleShape),
+                )
+                Spacer(Modifier.width(5.dp))
+                Text(
+                    text = netLabel,
+                    color = if (peers > 0L) Ink else Dim,
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Medium,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    softWrap = false,
+                )
+            }
         }
-        Spacer(Modifier.weight(1f))
         if (activeAcquireCount > 0) {
             Row(
                 modifier = Modifier
-                    .padding(end = 4.dp)
+                    .padding(start = 4.dp, end = 4.dp)
                     .clip(PillShape)
                     .background(CardElevated)
                     .border(1.dp, Brand.copy(alpha = 0.55f), PillShape)
                     .clickable(onClick = onOpenAdd)
-                    .padding(horizontal = 10.dp, vertical = 5.dp),
+                    .padding(horizontal = 9.dp, vertical = 5.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Box(
@@ -366,13 +381,14 @@ private fun TopAppBarRow(
                         .size(7.dp)
                         .background(Brand, CircleShape),
                 )
-                Spacer(Modifier.width(6.dp))
+                Spacer(Modifier.width(5.dp))
                 Text(
                     text = if (activeAcquireCount == 1) "Adding…" else "Adding $activeAcquireCount…",
                     color = Ink,
-                    fontSize = 12.sp,
+                    fontSize = 11.sp,
                     fontWeight = FontWeight.Medium,
                     maxLines = 1,
+                    softWrap = false,
                 )
             }
         }
@@ -404,7 +420,7 @@ private fun BottomRoomsBar(
         Modifier
             .fillMaxWidth()
             .background(Bg)
-            .height(60.dp)
+            .heightIn(min = 60.dp)
             .padding(horizontal = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -414,14 +430,14 @@ private fun BottomRoomsBar(
             Column(
                 modifier = Modifier
                     .weight(1f)
-                    .clickable { onSelect(room) }
-                    .padding(vertical = 6.dp),
+                    .selectable(selected = selected, role = Role.Tab, onClick = { onSelect(room) })
+                    .padding(vertical = 8.dp),
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.spacedBy(3.dp),
             ) {
                 Icon(
                     imageVector = roomIcon(room),
-                    contentDescription = room.label,
+                    contentDescription = null,
                     tint = tint,
                     modifier = Modifier.size(22.dp),
                 )
@@ -431,6 +447,7 @@ private fun BottomRoomsBar(
                     fontSize = 11.sp,
                     fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
                     maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
                 )
             }
         }

@@ -1,0 +1,23 @@
+id: protocol-no-peartube-imports
+language: javascript
+severity: error
+message: Shared protocol modules must not import relay or node implementation files.
+note: |
+  src/protocol.js and src/apply.js define the shared contract for peers, apps, and the Rust engine.
+  Keep them free of relative PearTube imports (src/apply.js may import ./protocol.js only).
+  See docs/code-rules.md#module-boundaries.
+files:
+  - src/protocol.js
+  - src/apply.js
+rule:
+  kind: import_statement
+  all:
+    - has:
+        field: source
+        kind: string
+        regex: ^['"]\.\.?/
+    - not:
+        has:
+          field: source
+          kind: string
+          regex: ^['"]\./protocol\.js['"]$

@@ -1,0 +1,18 @@
+id: js-no-nested-ternary
+language: javascript
+severity: error
+message: Nested ternary expressions are hard to read; use if/else or a small helper function.
+note: |
+  Flat control flow is easier to read and review than chained or nested ternaries.
+  See docs/code-rules.md#js-no-nested-ternary.
+files:
+  - src/**/*.js
+  - bin/**/*.js
+  - worklet/**/*.js
+rule:
+  kind: ternary_expression
+  has:
+    kind: ternary_expression
+    stopBy:
+      not:
+        kind: parenthesized_expression

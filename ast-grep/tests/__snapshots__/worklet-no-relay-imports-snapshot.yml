@@ -1,0 +1,46 @@
+id: worklet-no-relay-imports
+snapshots:
+  ? |
+    import { assertPublicUrl } from '../src/ssrf.js'
+  : labels:
+    - source: import { assertPublicUrl } from '../src/ssrf.js'
+      style: primary
+      start: 0
+      end: 48
+    - source: '''../src/ssrf.js'''
+      style: secondary
+      start: 32
+      end: 48
+  ? |
+    import { execFile } from 'node:child_process'
+  : labels:
+    - source: import { execFile } from 'node:child_process'
+      style: primary
+      start: 0
+      end: 45
+    - source: '''node:child_process'''
+      style: secondary
+      start: 25
+      end: 45
+  ? |
+    import { identifyUrl } from '../src/identify.js'
+  : labels:
+    - source: import { identifyUrl } from '../src/identify.js'
+      style: primary
+      start: 0
+      end: 48
+    - source: '''../src/identify.js'''
+      style: secondary
+      start: 28
+      end: 48
+  ? |
+    import { spawn } from 'bare-subprocess'
+  : labels:
+    - source: import { spawn } from 'bare-subprocess'
+      style: primary
+      start: 0
+      end: 39
+    - source: '''bare-subprocess'''
+      style: secondary
+      start: 22
+      end: 39

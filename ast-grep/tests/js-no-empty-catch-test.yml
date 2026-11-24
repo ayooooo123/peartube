@@ -1,0 +1,11 @@
+id: js-no-empty-catch
+valid:
+  - |
+    try { run() } catch (err) { log(err) }
+  - |
+    try { run() } catch { return null }
+invalid:
+  - |
+    try { run() } catch {}
+  - |
+    try { run() } catch (err) { /* ignore */ }

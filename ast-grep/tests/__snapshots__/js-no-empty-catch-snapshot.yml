@@ -1,0 +1,24 @@
+id: js-no-empty-catch
+snapshots:
+  ? |
+    try { run() } catch (err) { /* ignore */ }
+  : labels:
+    - source: catch (err) { /* ignore */ }
+      style: primary
+      start: 14
+      end: 42
+    - source: '{ /* ignore */ }'
+      style: secondary
+      start: 26
+      end: 42
+  ? |
+    try { run() } catch {}
+  : labels:
+    - source: catch {}
+      style: primary
+      start: 14
+      end: 22
+    - source: '{}'
+      style: secondary
+      start: 20
+      end: 22

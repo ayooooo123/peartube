@@ -1,0 +1,13 @@
+id: protocol-no-peartube-imports
+valid:
+  - |
+    import b4a from 'b4a'
+  - |
+    import { decodeOp } from './protocol.js'
+invalid:
+  - |
+    import { createNode } from './index.js'
+  - |
+    import { openSource } from './acquire.js'
+  - |
+    import helper from '../bin/relay.js'

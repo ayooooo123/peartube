@@ -1,0 +1,11 @@
+id: kt-no-force-nonnull
+language: kotlin
+severity: error
+message: Avoid force non-null (!!) in production Android code; it throws NullPointerException at runtime.
+note: |
+  Use safe calls (?.), elvis defaults (?:), or requireNotNull(x) { "clear reason" } instead of !!.
+  See docs/code-rules.md#kt-no-force-nonnull.
+files:
+  - android/**/src/main/**/*.kt
+rule:
+  pattern: $X!!

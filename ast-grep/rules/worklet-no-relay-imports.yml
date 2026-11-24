@@ -1,0 +1,16 @@
+id: worklet-no-relay-imports
+language: javascript
+severity: error
+message: Worklet code must not import relay-only modules (ssrf, identify, or subprocess).
+note: |
+  Mobile and desktop app worklets pack no subprocess or relay SSRF modules.
+  Keep bare-subprocess, node:child_process, src/ssrf.js, and src/identify.js in relay-only paths.
+  See docs/code-rules.md#worklet-no-relay-imports.
+files:
+  - worklet/**/*.js
+rule:
+  kind: import_statement
+  has:
+    field: source
+    kind: string
+    regex: (ssrf\.js|identify\.js|bare-subprocess|child_process)

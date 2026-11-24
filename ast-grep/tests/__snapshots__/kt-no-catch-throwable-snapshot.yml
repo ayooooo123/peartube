@@ -1,0 +1,23 @@
+id: kt-no-catch-throwable
+snapshots:
+  ? |
+    try {
+      work()
+    } catch (e: Throwable) {
+      log(e)
+    }
+  : labels:
+    - source: |-
+        catch (e: Throwable) {
+          log(e)
+        }
+      style: primary
+      start: 17
+      end: 50
+  ? |
+    try { work() } catch (_: Throwable) {}
+  : labels:
+    - source: 'catch (_: Throwable) {}'
+      style: primary
+      start: 15
+      end: 38

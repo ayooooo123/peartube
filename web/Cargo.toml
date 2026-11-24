@@ -22,6 +22,11 @@ oxideav-h265 = "*"
 codecs = { git = "https://github.com/ayooooo123/peartube-media", rev = "e85cd4edde1128fb4378f4f0a8b61a436d995a7a" }
 audio-trim = { git = "https://github.com/ayooooo123/peartube-media", rev = "e85cd4edde1128fb4378f4f0a8b61a436d995a7a" }
 
+[lints.clippy]
+todo = "deny"
+dbg_macro = "deny"
+await_holding_lock = "deny"
+
 [profile.release]
 lto = "fat"
 codegen-units = 1

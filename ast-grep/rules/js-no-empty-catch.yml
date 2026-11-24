@@ -1,0 +1,22 @@
+id: js-no-empty-catch
+language: javascript
+severity: error
+message: Empty catch block silently hides errors.
+note: |
+  Log the error, handle it explicitly, or annotate with // ast-grep-ignore: js-no-empty-catch -- <reason> when ignoring is intentional.
+  See docs/code-rules.md#js-no-empty-catch.
+files:
+  - src/**/*.js
+  - bin/**/*.js
+  - worklet/**/*.js
+rule:
+  kind: catch_clause
+  has:
+    field: body
+    kind: statement_block
+    not:
+      has:
+        all:
+          - pattern: $_
+          - not:
+              kind: comment

@@ -2,6 +2,7 @@
 
 use std::collections::BTreeSet;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use futures_channel::mpsc::unbounded;
@@ -192,7 +193,18 @@ impl PlayScreen {
 
     fn tick(&mut self, ended: bool, window: &mut Window, cx: &mut Context<Self>) {
         let Some(player) = &self.player else { return };
-        let prev = (self.has_picture(), self.state.buffering, self.state.error.is_some(), self.controls_drawn);
+        let prev_shown = self.controls_drawn;
+        let prev = (
+            self.has_picture(),
+            self.state.buffering,
+            self.state.playing,
+            self.state.error.is_some(),
+            prev_shown,
+            if prev_shown { self.state.position.as_secs() } else { 0 },
+            if prev_shown { self.state.duration.map(|d| d.as_secs()) } else { None },
+            if self.info_open { self.state.dropped_frames } else { 0 },
+            self.state.tracks.len(),
+        );
         self.state = player.state();
         if ended {
             if let Some(dur) = self.state.duration {
@@ -204,10 +216,12 @@ impl PlayScreen {
             self.pending_seek_ms = None;
             player.seek(Duration::from_millis(ms));
         }
+        let mut seek_created = false;
         if let (None, Some(duration)) = (&self.seek, self.state.duration) {
             let seek = cx.new(|_| SliderState::new().min(0.).max(duration.as_secs_f32().max(1.)).step(1.));
             let subscription = cx.subscribe_in(&seek, window, Self::on_seek);
             self.seek = Some((seek, subscription));
+            seek_created = true;
         }
         let shown = self.controls_shown();
         self.controls_drawn = shown;
@@ -218,10 +232,32 @@ impl PlayScreen {
             && let Some(dur) = self.state.duration
         {
             self.last_progress_saved = Instant::now();
-            peartube::worker::release_unused_memory();
+            // Return freed xzone/malloc pages off the main thread so 4K packet
+            // churn does not leave hundreds of MB of MALLOC_*(empty) resident
+            // without ever stalling AppKit/AVSampleBufferDisplayLayer.
+            static PURGING: AtomicBool = AtomicBool::new(false);
+            if PURGING.compare_exchange(false, true, Ordering::AcqRel, Ordering::Relaxed).is_ok() {
+                cx.background_executor()
+                    .spawn(async {
+                        peartube::worker::release_unused_memory();
+                        PURGING.store(false, Ordering::Release);
+                    })
+                    .detach();
+            }
             cx.emit(PlayEvent::Progress(self.entry.id.clone(), self.entry.key.clone(), self.state.position.as_millis() as u64, dur.as_millis() as u64));
         }
-        if shown || prev != (self.has_picture(), self.state.buffering, self.state.error.is_some(), shown) {
+        let next = (
+            self.has_picture(),
+            self.state.buffering,
+            self.state.playing,
+            self.state.error.is_some(),
+            shown,
+            if shown { self.state.position.as_secs() } else { 0 },
+            if shown { self.state.duration.map(|d| d.as_secs()) } else { None },
+            if self.info_open { self.state.dropped_frames } else { 0 },
+            self.state.tracks.len(),
+        );
+        if seek_created || prev != next {
             cx.notify();
         }
     }

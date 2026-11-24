@@ -5,6 +5,7 @@
 #![forbid(unsafe_code)]
 
 use std::collections::{BTreeSet, HashMap};
+use std::ops::Range;
 use std::sync::LazyLock;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -20,7 +21,7 @@ use peartube::worker::Entry;
 use crate::app::{DetailView, PearTube, Room, WatchKind, WatchProgress, WatchViewMode};
 use crate::catalog::{VideoKind, VideoTile, format_time_left, is_saved, monogram, plural, sleeve_hash};
 use crate::home::ResumeVideo;
-use crate::list::{column, format_bytes, label};
+use crate::list::{column, format_bytes, grid_columns, label};
 use crate::sleeves::{
     held_dot, hero_primary_btn, hero_progress_bar, hero_secondary_btn, hero_surface, video_art,
 };
@@ -241,13 +242,18 @@ fn item_duration_secs(entry: &Entry, kind: VideoKind, history: &HashMap<String, 
 }
 
 impl PearTube {
-    pub fn render_watch(&self, kind: WatchKind, cx: &mut Context<Self>) -> impl IntoElement {
+    pub fn render_watch(&self, kind: WatchKind, window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
         let mode = self.watch_view;
         let has_videos = !self.catalog.movies.is_empty()
             || !self.catalog.series.is_empty()
             || !self.catalog.clips.is_empty();
 
         let top_bar = self.render_watch_top_bar(mode, has_videos, cx);
+        if has_videos && mode == WatchViewMode::Rows && kind != WatchKind::All {
+            return self
+                .render_watch_virtual_rows(kind, top_bar, window, cx)
+                .into_any_element();
+        }
         let body: AnyElement = if !has_videos {
             div()
                 .py_16()
@@ -264,7 +270,69 @@ impl PearTube {
             }
         };
 
-        column().py_6().gap_6().child(top_bar).child(body)
+        column().py_6().gap_6().child(top_bar).child(body).into_any_element()
+    }
+
+    fn render_watch_virtual_rows(
+        &self,
+        kind: WatchKind,
+        top_bar: impl IntoElement,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let saved_only = self.watch_saved_only;
+        let source_filter = self.watch_source_filter.as_deref();
+        let matches_tile = |t: &VideoTile| -> bool {
+            let pass_saved = !saved_only || t.saved > 0;
+            let pass_src = source_filter
+                .is_none_or(|src| t.items.iter().any(|i| i.entry.source == src));
+            pass_saved && pass_src
+        };
+
+        let movie_indices: Vec<usize> = self
+            .catalog
+            .movies
+            .iter()
+            .enumerate()
+            .filter(|(_, t)| matches_tile(t))
+            .map(|(i, _)| i)
+            .collect();
+        let series_indices: Vec<usize> = self
+            .catalog
+            .series
+            .iter()
+            .enumerate()
+            .filter(|(_, t)| matches_tile(t))
+            .map(|(i, _)| i)
+            .collect();
+        let clip_indices: Vec<usize> = self
+            .catalog
+            .clips
+            .iter()
+            .enumerate()
+            .filter(|(_, t)| matches_tile(t))
+            .map(|(i, _)| i)
+            .collect();
+        let all_count = movie_indices.len() + series_indices.len() + clip_indices.len();
+        let filters = self.render_watch_row_filters(
+            &kind,
+            all_count,
+            movie_indices.len(),
+            series_indices.len(),
+            clip_indices.len(),
+            cx,
+        );
+        let body = match kind {
+            WatchKind::Movies => self.render_virtual_video_grid(VideoKind::Movie, movie_indices, window, cx),
+            WatchKind::Series => self.render_virtual_video_grid(VideoKind::Series, series_indices, window, cx),
+            WatchKind::Clips => self.render_virtual_video_grid(VideoKind::Clip, clip_indices, window, cx),
+            WatchKind::All => unreachable!(),
+        };
+
+        v_flex()
+            .size_full()
+            .child(column().pt_6().pb_4().gap_4().child(top_bar).child(filters))
+            .child(div().flex_1().min_h_0().size_full().child(body))
     }
 
     fn render_watch_top_bar(&self, mode: WatchViewMode, has_videos: bool, cx: &mut Context<Self>) -> impl IntoElement + use<> {
@@ -514,7 +582,7 @@ impl PearTube {
         series_len: usize,
         clips_len: usize,
         cx: &mut Context<Self>,
-    ) -> impl IntoElement {
+    ) -> impl IntoElement + use<> {
         let chip = |id: &'static str, txt: String, target: WatchKind, cx: &mut Context<Self>| {
             let active = *kind == target;
             div()
@@ -1457,6 +1525,93 @@ impl PearTube {
             }))
     }
 
+    fn render_video_card(&self, tile: &VideoTile, is_clip: bool, cx: &mut Context<Self>) -> Stateful<Div> {
+        let tk = tile.key.clone();
+        let sub = tile.subtitle_line(format_bytes);
+        let (prefix, card_w, art_h, badge) = if is_clip {
+            ("clip", 216., 122., Some("Clip"))
+        } else {
+            let b = match tile.kind {
+                VideoKind::Series => Some("Series"),
+                VideoKind::Movie => Some("Film"),
+                VideoKind::Clip => Some("Clip"),
+            };
+            ("poster", 154., 228., b)
+        };
+        v_flex()
+            .id(SharedString::from(format!("{prefix}-{}", tile.key)))
+            .w(px(card_w))
+            .gap_2()
+            .cursor_pointer()
+            .on_click(cx.listener(move |this, _, _, cx| {
+                this.open_detail(DetailView::Title(tk.clone()), cx);
+            }))
+            .child(video_art(&tile.title, badge, card_w, art_h))
+            .child(
+                v_flex()
+                    .gap_0p5()
+                    .child(div().text_sm().font_weight(FontWeight::SEMIBOLD).truncate().child(tile.title.clone()))
+                    .child(div().text_xs().text_color(rgb(DIM)).truncate().child(sub)),
+            )
+    }
+
+    fn render_virtual_video_grid(
+        &self,
+        video_kind: VideoKind,
+        indices: Vec<usize>,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let (id, heading, empty_text) = match video_kind {
+            VideoKind::Movie => ("watch-movies-grid", "Movies", "No movies match that filter."),
+            VideoKind::Series => ("watch-series-grid", "Series", "No series match that filter."),
+            VideoKind::Clip => ("watch-clips-grid", "Clips", "No clips match that filter."),
+        };
+        if indices.is_empty() {
+            return column()
+                .py_16()
+                .text_center()
+                .text_color(rgb(DIM))
+                .child(empty_text)
+                .into_any_element();
+        }
+        let is_clip = video_kind == VideoKind::Clip;
+        let cols = grid_columns(window, if is_clip { 216. } else { 154. }, 16.);
+        let row_count = indices.len().div_ceil(cols);
+        v_flex()
+            .size_full()
+            .child(column().pb_3().child(div().text_lg().font_weight(FontWeight::BOLD).child(heading)))
+            .child(
+                div().flex_1().min_h_0().size_full().child(
+                    uniform_list(
+                        id,
+                        row_count,
+                        cx.processor(move |this, range: Range<usize>, _, cx| {
+                            range
+                                .map(|row_idx| {
+                                    let start = row_idx * cols;
+                                    let end = (start + cols).min(indices.len());
+                                    let slice = match video_kind {
+                                        VideoKind::Movie => &this.catalog.movies,
+                                        VideoKind::Series => &this.catalog.series,
+                                        VideoKind::Clip => &this.catalog.clips,
+                                    };
+                                    let cards: Vec<_> = indices[start..end]
+                                        .iter()
+                                        .filter_map(|&i| slice.get(i))
+                                        .map(|tile| this.render_video_card(tile, is_clip, cx))
+                                        .collect();
+                                    column().pb_4().child(h_flex().gap_4().children(cards))
+                                })
+                                .collect()
+                        }),
+                    )
+                    .size_full(),
+                ),
+            )
+            .into_any_element()
+    }
+
     fn render_poster_grid(&self, heading: &'static str, tiles: &[&VideoTile], cx: &mut Context<Self>) -> impl IntoElement {
         v_flex()
             .gap_3()
@@ -1465,30 +1620,7 @@ impl PearTube {
                 h_flex()
                     .gap_4()
                     .flex_wrap()
-                    .children(tiles.iter().map(|tile| {
-                        let tk = tile.key.clone();
-                        let sub = tile.subtitle_line(format_bytes);
-                        let badge = match tile.kind {
-                            VideoKind::Series => Some("Series"),
-                            VideoKind::Movie => Some("Film"),
-                            VideoKind::Clip => Some("Clip"),
-                        };
-                        v_flex()
-                            .id(SharedString::from(format!("poster-{}", tile.key)))
-                            .w(px(154.))
-                            .gap_2()
-                            .cursor_pointer()
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                this.open_detail(DetailView::Title(tk.clone()), cx);
-                            }))
-                            .child(video_art(&tile.title, badge, 154., 228.))
-                            .child(
-                                v_flex()
-                                    .gap_0p5()
-                                    .child(div().text_sm().font_weight(FontWeight::SEMIBOLD).truncate().child(tile.title.clone()))
-                                    .child(div().text_xs().text_color(rgb(DIM)).truncate().child(sub)),
-                            )
-                    })),
+                    .children(tiles.iter().map(|tile| self.render_video_card(tile, false, cx))),
             )
     }
 
@@ -1500,25 +1632,7 @@ impl PearTube {
                 h_flex()
                     .gap_4()
                     .flex_wrap()
-                    .children(tiles.iter().map(|tile| {
-                        let tk = tile.key.clone();
-                        let sub = tile.subtitle_line(format_bytes);
-                        v_flex()
-                            .id(SharedString::from(format!("clip-{}", tile.key)))
-                            .w(px(216.))
-                            .gap_2()
-                            .cursor_pointer()
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                this.open_detail(DetailView::Title(tk.clone()), cx);
-                            }))
-                            .child(video_art(&tile.title, Some("Clip"), 216., 122.))
-                            .child(
-                                v_flex()
-                                    .gap_0p5()
-                                    .child(div().text_sm().font_weight(FontWeight::SEMIBOLD).truncate().child(tile.title.clone()))
-                                    .child(div().text_xs().text_color(rgb(DIM)).truncate().child(sub)),
-                            )
-                    })),
+                    .children(tiles.iter().map(|tile| self.render_video_card(tile, true, cx))),
             )
     }
 

@@ -178,9 +178,6 @@ impl PearTube {
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let collage_albums: Vec<AlbumTile> = self.catalog.albums.iter().take(4).cloned().collect();
-        let all_tracks: Vec<TrackItem> = self.catalog.tracks.iter().map(TrackItem::from_track_row).collect();
-        let play_tracks = all_tracks.clone();
-        let shuffle_tracks = all_tracks;
         let playing = self.music_is_playing();
 
         let (title, sub) = if let Some(cur) = saved_music {
@@ -214,8 +211,8 @@ impl PearTube {
                     .into_any_element()
             }
         } else {
-            let on_click = cx.listener(move |this, _, window, cx| {
-                this.play_music_list(play_tracks.clone(), 0, "Library".to_string(), Some(false), window, cx);
+            let on_click = cx.listener(|this, _, window, cx| {
+                this.play_all_library_tracks(Some(false), window, cx);
             });
             if is_primary {
                 hero_primary_btn("home-hero-listen-play", Some(Lucide::Play), "Play all")
@@ -229,15 +226,8 @@ impl PearTube {
         };
 
         let shuffle_btn = hero_secondary_btn("home-hero-listen-shuffle", Some(Lucide::Shuffle), "Shuffle")
-            .on_click(cx.listener(move |this, _, window, cx| {
-                this.play_music_list(
-                    shuffle_tracks.clone(),
-                    0,
-                    "Library".to_string(),
-                    Some(true),
-                    window,
-                    cx,
-                );
+            .on_click(cx.listener(|this, _, window, cx| {
+                this.play_all_library_tracks(Some(true), window, cx);
             }));
 
         let has_collage = !collage_albums.is_empty();
@@ -431,8 +421,7 @@ impl PearTube {
                     .flex_wrap()
                     .children(albums_preview.into_iter().map(|album| {
                         let a_key = album.key.clone();
-                        let play_items = TrackItem::from_album(&album);
-                        let play_label = album.album.clone();
+                        let play_key = album.key.clone();
                         v_flex()
                             .id(SharedString::from(format!("home-alb-{}", album.key)))
                             .w(px(148.))
@@ -457,14 +446,7 @@ impl PearTube {
                                                     .small()
                                                     .label("Play")
                                                     .on_click(cx.listener(move |this, _, window, cx| {
-                                                        this.play_music_list(
-                                                            play_items.clone(),
-                                                            0,
-                                                            play_label.clone(),
-                                                            None,
-                                                            window,
-                                                            cx,
-                                                        );
+                                                        this.play_album_key(&play_key, 0, None, window, cx);
                                                     })),
                                             ),
                                     ),

@@ -28,17 +28,13 @@ futures-channel = "0.3"
 # GPUI ships no HTTP client of its own; this one fetches artwork (and follows redirects).
 futures-util = "0.3"
 libc = "0.2"
-# Low-fragmentation global allocator for Rust/GPUI/decoder heaps; macOS xzone
-# leaves ~47% fragmentation across GPUI frame churn. Default features avoid
-# overriding C malloc so Bare/QuickJS/ObjC keep Apple's system zone.
-mimalloc = { version = "0.1.52", default-features = false }
 parking_lot = "0.12"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 # The video player: peartube-media's engine, OxideAV codecs and the
 # platform video decoders. See [patch.crates-io] below.
-player = { git = "https://github.com/ayooooo123/peartube-media", rev = "e85cd4edde1128fb4378f4f0a8b61a436d995a7a" }
-codecs = { git = "https://github.com/ayooooo123/peartube-media", rev = "e85cd4edde1128fb4378f4f0a8b61a436d995a7a" }
+player = { git = "https://github.com/ayooooo123/peartube-media", rev = "569bdd5d300e59e6caf3a1f449a3cec31c4e2ac6" }
+codecs = { git = "https://github.com/ayooooo123/peartube-media", rev = "569bdd5d300e59e6caf3a1f449a3cec31c4e2ac6" }
 oxideav-core = "*"
 
 [dev-dependencies]
@@ -102,6 +98,58 @@ opt-level = 3
 [profile.release.package.codec-dv]
 opt-level = 3
 [profile.release.package.oxideav-ogg]
+opt-level = 3
+[profile.release.package.oxideav-mkv]
+opt-level = 3
+[profile.release.package.oxideav-mp4]
+opt-level = 3
+[profile.release.package.oxideav-mov]
+opt-level = 3
+[profile.release.package.oxideav-mpegts]
+opt-level = 3
+[profile.release.package.oxideav-http]
+opt-level = 3
+[profile.release.package.oxideav-source]
+opt-level = 3
+[profile.release.package.oxideav-ac3]
+opt-level = 3
+[profile.release.package.oxideav-opus]
+opt-level = 3
+[profile.release.package.oxideav-vorbis]
+opt-level = 3
+[profile.release.package.audio-trim]
+opt-level = 3
+[profile.release.package.codecs]
+opt-level = 3
+[profile.release.package.codec-apple-audio]
+opt-level = 3
+[profile.release.package.codec-lpcm]
+opt-level = 3
+[profile.release.package.demux-seek-core]
+opt-level = 3
+[profile.release.package.compcol]
+opt-level = 3
+[profile.release.package.subs-bitmap]
+opt-level = 3
+[profile.release.package.subs-render]
+opt-level = 3
+[profile.release.package.subs-text]
+opt-level = 3
+[profile.release.package.ureq]
+opt-level = 3
+[profile.release.package.ureq-proto]
+opt-level = 3
+[profile.release.package.parking_lot]
+opt-level = 3
+[profile.release.package.parking_lot_core]
+opt-level = 3
+[profile.release.package.lock_api]
+opt-level = 3
+[profile.release.package.gpui-pre]
+opt-level = 3
+[profile.release.package.gpui-pre-apple]
+opt-level = 3
+[profile.release.package.gpui-pre-macos]
 opt-level = 3
 
 # Video decoding unoptimized is too slow to watch; keep the app's own code

@@ -545,19 +545,32 @@ test('a destination guard refuses hopOpen from an endpoint and cuts off an unadv
 
 test('createPrivateGuard with port 0 picks an ephemeral port instead of HyperDHT default 49737-49741', { timeout: 60_000 }, async t => {
   const RANGE = [49737, 49738, 49739, 49740, 49741]
-  const hold = port => new Promise(resolve => {
+  const hold = (port, host) => new Promise(resolve => {
     const s = dgram.createSocket('udp4')
     s.once('error', () => resolve(null))
-    s.bind(port, '127.0.0.1', () => resolve(s))
+    s.bind(port, host, () => resolve(s))
   })
   const closeSocket = s => new Promise(resolve => s.close(resolve))
   const held = new Map()
   t.after(async () => {
     for (const s of held.values()) await closeSocket(s)
   })
+  // Prefer 127.0.0.2 where available (Linux) so parallel testnets on 127.0.0.1 cannot crowd out 49737-49741.
+  let probeHost = '127.0.0.2'
   for (const port of RANGE) {
-    const s = await hold(port)
+    const s = await hold(port, probeHost)
     if (s) held.set(port, s)
+  }
+  if (held.size === 0) {
+    probeHost = '127.0.0.1'
+    const deadline = Date.now() + 15_000
+    while (held.size === 0 && Date.now() < deadline) {
+      for (const port of RANGE) {
+        const s = await hold(port, probeHost)
+        if (s) held.set(port, s)
+      }
+      if (held.size === 0) await sleep(150)
+    }
   }
   assert.ok(held.size > 0, 'at least one port in 49737-49741 must be free to test default-range avoidance')
   const testnet = await createTestnet(3)
@@ -567,7 +580,7 @@ test('createPrivateGuard with port 0 picks an ephemeral port instead of HyperDHT
   held.delete(freed)
   const ports = []
   for (let i = 0; i < 3; i++) {
-    const guard = await createPrivateGuard({ host: '127.0.0.1', port: 0, bootstrap: testnet.bootstrap, announceGuard: false })
+    const guard = await createPrivateGuard({ host: probeHost, port: 0, bootstrap: testnet.bootstrap, announceGuard: false })
     ports.push(guard.dht.localAddress()?.port)
     await guard.close()
   }

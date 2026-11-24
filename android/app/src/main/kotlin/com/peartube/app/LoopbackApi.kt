@@ -683,6 +683,240 @@ data class SoundCloudTrackInput(
     val disc: Int = 1,
 )
 
+data class DiscoverCreator(
+    val id: String,
+    val source: String,
+    val handle: String = "",
+    val name: String = "",
+    val url: String = "",
+    val channelId: String = "",
+    val avatar: String = "",
+    val followedAt: Long = 0L,
+    val followed: Boolean = false,
+) {
+    val displayName: String get() = name.ifBlank { handle }.ifBlank { id }
+
+    companion object {
+        fun from(json: JSONObject): DiscoverCreator {
+            val id = optCleanString(json, "id")
+            val source = optCleanString(json, "source").lowercase(Locale.ROOT)
+            val handle = optCleanString(json, "handle")
+            val name = optCleanString(json, "name").ifBlank { handle }.ifBlank { id }
+            val followedAt = optPositiveLong(json, "followedAt") ?: 0L
+            val followed = if (json.has("followed") && !json.isNull("followed")) {
+                json.optBoolean("followed", followedAt > 0L)
+            } else {
+                followedAt > 0L
+            }
+            return DiscoverCreator(
+                id = id,
+                source = source,
+                handle = handle,
+                name = name,
+                url = optCleanString(json, "url"),
+                channelId = optCleanString(json, "channelId"),
+                avatar = optCleanString(json, "avatar").ifBlank { optCleanString(json, "avatarUrl") },
+                followedAt = followedAt,
+                followed = followed,
+            )
+        }
+    }
+}
+
+data class DiscoverItem(
+    val id: String,
+    val source: String,
+    val kind: String = "video",
+    val itemId: String = "",
+    val title: String = "",
+    val creatorId: String = "",
+    val creatorName: String = "",
+    val creatorUrl: String = "",
+    val url: String = "",
+    val thumbnail: String = "",
+    val durationSec: Long? = null,
+    val publishedAt: Long = 0L,
+    val acquireId: String = "",
+    val audioOnly: Boolean = false,
+    val music: MusicMeta? = null,
+    val inLibrary: Boolean = false,
+) {
+    companion object {
+        fun from(json: JSONObject): DiscoverItem {
+            val source = optCleanString(json, "source").lowercase(Locale.ROOT)
+            val kind = optCleanString(json, "kind").ifBlank { if (source in AUDIO_ONLY_SITES) "audio" else "video" }
+            val itemId = optCleanString(json, "itemId")
+            val url = optCleanString(json, "url")
+            val id = optCleanString(json, "id").ifBlank {
+                if (source.isNotBlank() && itemId.isNotBlank()) "$source:$itemId" else url
+            }
+            val title = optCleanString(json, "title").ifBlank { itemId }
+            val creatorName = optCleanString(json, "creatorName")
+                .ifBlank { optCleanString(json, "creator") }
+                .ifBlank { optCleanString(json, "channel") }
+                .ifBlank { optCleanString(json, "artist") }
+            val audioOnly = if (json.has("audioOnly") && !json.isNull("audioOnly")) {
+                json.optBoolean("audioOnly", false)
+            } else {
+                kind.equals("audio", ignoreCase = true) || source in AUDIO_ONLY_SITES
+            }
+            val music = if (!json.isNull("music")) MusicMeta.from(json.optJSONObject("music")) else null
+            return DiscoverItem(
+                id = id,
+                source = source,
+                kind = kind,
+                itemId = itemId,
+                title = title,
+                creatorId = optCleanString(json, "creatorId"),
+                creatorName = creatorName,
+                creatorUrl = optCleanString(json, "creatorUrl"),
+                url = url,
+                thumbnail = optCleanString(json, "thumbnail").ifBlank { optCleanString(json, "thumb") },
+                durationSec = optPositiveLong(json, "duration") ?: optPositiveLong(json, "length"),
+                publishedAt = optPositiveLong(json, "publishedAt") ?: 0L,
+                acquireId = optCleanString(json, "acquireId"),
+                audioOnly = audioOnly,
+                music = music,
+                inLibrary = json.optBoolean("inLibrary", false),
+            )
+        }
+    }
+}
+
+data class DiscoverFeedError(
+    val source: String = "",
+    val creatorId: String = "",
+    val name: String = "",
+    val message: String = "",
+) {
+    val label: String
+        get() = name.ifBlank {
+            source.replaceFirstChar { it.uppercase(Locale.ROOT) }
+        }.ifBlank { "Discover" }
+
+    companion object {
+        fun from(json: JSONObject): DiscoverFeedError = DiscoverFeedError(
+            source = optCleanString(json, "source").lowercase(Locale.ROOT),
+            creatorId = optCleanString(json, "creatorId"),
+            name = optCleanString(json, "name"),
+            message = optCleanString(json, "message").ifBlank { optCleanString(json, "error") },
+        )
+
+        fun listFrom(json: JSONObject): List<DiscoverFeedError> {
+            val out = mutableListOf<DiscoverFeedError>()
+            val arr = json.optJSONArray("errors")
+            if (arr != null) {
+                for (i in 0 until arr.length()) {
+                    val obj = arr.optJSONObject(i) ?: continue
+                    val parsed = from(obj)
+                    if (parsed.message.isNotBlank()) out += parsed
+                }
+            } else {
+                val obj = json.optJSONObject("errors")
+                if (obj != null) {
+                    val keys = obj.keys()
+                    while (keys.hasNext()) {
+                        val k = keys.next()
+                        val msg = optCleanString(obj, k)
+                        if (msg.isNotBlank()) {
+                            out += DiscoverFeedError(source = k.lowercase(Locale.ROOT), message = msg)
+                        }
+                    }
+                }
+            }
+            return out
+        }
+    }
+}
+
+data class DiscoverFeed(
+    val creators: List<DiscoverCreator> = emptyList(),
+    val items: List<DiscoverItem> = emptyList(),
+    val errors: List<DiscoverFeedError> = emptyList(),
+    val updatedAt: Long = 0L,
+) {
+    companion object {
+        fun from(json: JSONObject): DiscoverFeed {
+            val creatorsArr = json.optJSONArray("creators")
+            val creators = if (creatorsArr == null) emptyList() else (0 until creatorsArr.length()).mapNotNull {
+                creatorsArr.optJSONObject(it)?.let(DiscoverCreator::from)
+            }
+            val itemsArr = json.optJSONArray("items")
+            val items = if (itemsArr == null) emptyList() else (0 until itemsArr.length()).mapNotNull {
+                itemsArr.optJSONObject(it)?.let(DiscoverItem::from)
+            }
+            return DiscoverFeed(
+                creators = creators,
+                items = items,
+                errors = DiscoverFeedError.listFrom(json),
+                updatedAt = optPositiveLong(json, "updatedAt") ?: 0L,
+            )
+        }
+    }
+}
+
+data class DiscoverBrowseResult(
+    val query: String = "",
+    val sources: List<String> = emptyList(),
+    val creators: List<DiscoverCreator> = emptyList(),
+    val items: List<DiscoverItem> = emptyList(),
+    val errors: List<DiscoverFeedError> = emptyList(),
+) {
+    companion object {
+        fun from(json: JSONObject): DiscoverBrowseResult {
+            val sourcesArr = json.optJSONArray("sources")
+            val sources = if (sourcesArr == null) emptyList() else List(sourcesArr.length()) {
+                sourcesArr.optString(it).trim().lowercase(Locale.ROOT)
+            }.filter { it.isNotBlank() }
+            val creatorsArr = json.optJSONArray("creators")
+            val creators = if (creatorsArr == null) emptyList() else (0 until creatorsArr.length()).mapNotNull {
+                creatorsArr.optJSONObject(it)?.let(DiscoverCreator::from)
+            }
+            val itemsArr = json.optJSONArray("items")
+            val items = if (itemsArr == null) emptyList() else (0 until itemsArr.length()).mapNotNull {
+                itemsArr.optJSONObject(it)?.let(DiscoverItem::from)
+            }
+            return DiscoverBrowseResult(
+                query = optCleanString(json, "query"),
+                sources = sources,
+                creators = creators,
+                items = items,
+                errors = DiscoverFeedError.listFrom(json),
+            )
+        }
+    }
+}
+
+data class DiscoverFollowResponse(
+    val creator: DiscoverCreator? = null,
+    val creators: List<DiscoverCreator> = emptyList(),
+)
+
+data class DiscoverUnfollowResponse(
+    val removed: Boolean = false,
+    val creators: List<DiscoverCreator> = emptyList(),
+)
+
+/**
+ * Resolves a proxied thumbnail path (`/v1/discover/thumb/...` or `/v1/providers/.../thumb/...`)
+ * against the local loopback [apiUrl]. Refuses non-loopback external URLs so the UI never dials third parties.
+ */
+fun resolveLoopbackThumbUrl(apiUrl: String?, rawPath: String): String? {
+    val path = rawPath.trim()
+    if (path.isEmpty()) return null
+    if (path.startsWith("/")) {
+        val base = apiUrl?.trim()?.trimEnd('/') ?: return null
+        if (base.isEmpty()) return null
+        return "$base$path"
+    }
+    if (path.startsWith("http://127.0.0.1:", ignoreCase = true) ||
+        path.startsWith("http://localhost:", ignoreCase = true)
+    ) {
+        return path
+    }
+    return null
+}
+
 class LoopbackApiException(message: String, val statusCode: Int? = null) : IOException(message)
 
 /**
@@ -905,6 +1139,100 @@ class LoopbackApi(private val baseUrlProvider: () -> String?) {
         ).mapCatching { SoulseekPeerSettings.from(it) }
     }
 
+    suspend fun listDiscoverCreators(): Result<List<DiscoverCreator>> = requestJson(
+        method = "GET",
+        path = "/v1/discover/creators",
+        readTimeoutMs = 10_000,
+    ).mapCatching { json ->
+        val arr = json.optJSONArray("creators") ?: return@mapCatching emptyList()
+        (0 until arr.length()).mapNotNull { arr.optJSONObject(it)?.let(DiscoverCreator::from) }
+    }
+
+    suspend fun followDiscoverCreator(
+        url: String,
+        source: String? = null,
+        name: String? = null,
+        channelId: String? = null,
+        handle: String? = null,
+    ): Result<DiscoverFollowResponse> {
+        val payload = JSONObject().put("url", url.trim()).apply {
+            source?.trim()?.takeIf { it.isNotEmpty() }?.let { put("source", it.lowercase(Locale.ROOT)) }
+            name?.trim()?.takeIf { it.isNotEmpty() }?.let { put("name", it) }
+            channelId?.trim()?.takeIf { it.isNotEmpty() }?.let { put("channelId", it) }
+            handle?.trim()?.takeIf { it.isNotEmpty() }?.let { put("handle", it) }
+        }
+        return requestJson(
+            method = "POST",
+            path = "/v1/discover/creators",
+            body = payload,
+            readTimeoutMs = 25_000,
+        ).mapCatching { json ->
+            val creator = json.optJSONObject("creator")?.let(DiscoverCreator::from)
+            val arr = json.optJSONArray("creators")
+            val list = if (arr == null) emptyList() else (0 until arr.length()).mapNotNull {
+                arr.optJSONObject(it)?.let(DiscoverCreator::from)
+            }
+            DiscoverFollowResponse(creator = creator, creators = list)
+        }
+    }
+
+    suspend fun unfollowDiscoverCreator(id: String): Result<DiscoverUnfollowResponse> {
+        val encoded = URLEncoder.encode(id, "UTF-8").replace("+", "%20")
+        return requestJson(
+            method = "DELETE",
+            path = "/v1/discover/creators/$encoded",
+            readTimeoutMs = 10_000,
+        ).mapCatching { json ->
+            val arr = json.optJSONArray("creators")
+            val list = if (arr == null) emptyList() else (0 until arr.length()).mapNotNull {
+                arr.optJSONObject(it)?.let(DiscoverCreator::from)
+            }
+            DiscoverUnfollowResponse(
+                removed = json.optBoolean("removed", false),
+                creators = list,
+            )
+        }
+    }
+
+    suspend fun getDiscoverFeed(
+        source: String = "",
+        creatorId: String = "",
+        refresh: Boolean = false,
+        limit: Int = 40,
+    ): Result<DiscoverFeed> {
+        val params = buildList {
+            val s = source.trim().lowercase(Locale.ROOT)
+            val c = creatorId.trim()
+            if (s.isNotEmpty()) add("source=${URLEncoder.encode(s, "UTF-8")}")
+            if (c.isNotEmpty()) add("creator=${URLEncoder.encode(c, "UTF-8")}")
+            if (refresh) add("refresh=1")
+            add("limit=${limit.coerceIn(1, 100)}")
+        }
+        val query = params.joinToString("&")
+        return requestJson(
+            method = "GET",
+            path = "/v1/discover/feed?$query",
+            readTimeoutMs = 35_000,
+        ).mapCatching { DiscoverFeed.from(it) }
+    }
+
+    suspend fun browseDiscover(
+        query: String,
+        sources: List<String> = listOf("youtube", "soundcloud", "rumble"),
+        limit: Int = 12,
+    ): Result<DiscoverBrowseResult> {
+        val payload = JSONObject()
+            .put("query", query.trim())
+            .put("sources", JSONArray(sources))
+            .put("limit", limit.coerceIn(1, 20))
+        return requestJson(
+            method = "POST",
+            path = "/v1/discover/browse",
+            body = payload,
+            readTimeoutMs = 45_000,
+        ).mapCatching { DiscoverBrowseResult.from(it) }
+    }
+
     private suspend fun requestJson(
         method: String,
         path: String,
@@ -971,6 +1299,9 @@ class LoopbackApi(private val baseUrlProvider: () -> String?) {
         }
     }
 }
+
+private fun optCleanString(json: JSONObject, key: String): String =
+    if (!json.has(key) || json.isNull(key)) "" else json.optString(key).trim()
 
 private fun optPositiveLong(json: JSONObject, key: String): Long? {
     if (!json.has(key) || json.isNull(key)) return null

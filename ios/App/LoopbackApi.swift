@@ -1017,6 +1017,333 @@ struct SoulseekSettings: Equatable {
     }
 }
 
+// MARK: - Discover v2 Models
+
+func discoverSourceLabel(_ source: String) -> String {
+    switch source.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
+    case "youtube": return "YouTube"
+    case "soundcloud": return "SoundCloud"
+    case "rumble": return "Rumble"
+    case "soulseek": return "Soulseek"
+    case "": return "Source"
+    default:
+        let s = source.trimmingCharacters(in: .whitespacesAndNewlines)
+        return s.prefix(1).uppercased() + s.dropFirst()
+    }
+}
+
+struct DiscoverCreator: Codable, Identifiable, Hashable {
+    var id: String
+    var source: String
+    var handle: String
+    var name: String
+    var url: String
+    var channelId: String
+    var avatar: String
+    var followedAt: Double
+    var followed: Bool?
+
+    var sourceBadge: String { discoverSourceLabel(source) }
+    var displayName: String {
+        if !name.isEmpty { return name }
+        if !handle.isEmpty { return handle }
+        return id
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case id, source, handle, name, url, channelId, avatar, followedAt, followed
+    }
+
+    init(
+        id: String,
+        source: String,
+        handle: String = "",
+        name: String = "",
+        url: String = "",
+        channelId: String = "",
+        avatar: String = "",
+        followedAt: Double = 0,
+        followed: Bool? = nil
+    ) {
+        self.id = id
+        self.source = source
+        self.handle = handle
+        self.name = name
+        self.url = url
+        self.channelId = channelId
+        self.avatar = avatar
+        self.followedAt = followedAt
+        self.followed = followed
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        let rawId = (try? c.decodeIfPresent(FlexibleString.self, forKey: .id))?.value ?? ""
+        let rawSource = (try? c.decodeIfPresent(String.self, forKey: .source)) ?? ""
+        let rawHandle = (try? c.decodeIfPresent(String.self, forKey: .handle)) ?? ""
+        let rawName = (try? c.decodeIfPresent(String.self, forKey: .name)) ?? ""
+        let rawUrl = (try? c.decodeIfPresent(String.self, forKey: .url)) ?? ""
+        let rawChannelId = (try? c.decodeIfPresent(FlexibleString.self, forKey: .channelId))?.value ?? ""
+        self.id = rawId.isEmpty ? "\(rawSource):\(rawChannelId.isEmpty ? rawUrl : rawChannelId)" : rawId
+        self.source = rawSource
+        self.handle = rawHandle
+        self.name = rawName.isEmpty ? (rawHandle.isEmpty ? self.id : rawHandle) : rawName
+        self.url = rawUrl
+        self.channelId = rawChannelId
+        self.avatar = (try? c.decodeIfPresent(String.self, forKey: .avatar)) ?? ""
+        self.followedAt = (try? c.decodeIfPresent(FlexibleDouble.self, forKey: .followedAt))?.value ?? 0
+        self.followed = try? c.decodeIfPresent(Bool.self, forKey: .followed)
+    }
+}
+
+struct DiscoverItem: Codable, Identifiable, Hashable {
+    var id: String
+    var source: String
+    var kind: String
+    var itemId: String
+    var title: String
+    var creatorId: String
+    var creatorName: String
+    var creatorUrl: String
+    var url: String
+    var thumbnail: String
+    var duration: Double?
+    var publishedAt: Double
+    var acquireId: String
+    var audioOnly: Bool
+    var music: MusicMeta?
+    var inLibrary: Bool
+
+    var sourceBadge: String { discoverSourceLabel(source) }
+    var durationText: String? {
+        guard let duration, duration > 0 else { return nil }
+        return clock(duration * 1000)
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case id, source, kind, itemId, title, creatorId, creatorName, creatorUrl
+        case url, thumbnail, duration, publishedAt, acquireId, audioOnly, music, inLibrary
+    }
+
+    init(
+        id: String,
+        source: String,
+        kind: String = "video",
+        itemId: String = "",
+        title: String,
+        creatorId: String = "",
+        creatorName: String = "",
+        creatorUrl: String = "",
+        url: String = "",
+        thumbnail: String = "",
+        duration: Double? = nil,
+        publishedAt: Double = 0,
+        acquireId: String = "",
+        audioOnly: Bool = false,
+        music: MusicMeta? = nil,
+        inLibrary: Bool = false
+    ) {
+        self.id = id
+        self.source = source
+        self.kind = kind
+        self.itemId = itemId
+        self.title = title
+        self.creatorId = creatorId
+        self.creatorName = creatorName
+        self.creatorUrl = creatorUrl
+        self.url = url
+        self.thumbnail = thumbnail
+        self.duration = duration
+        self.publishedAt = publishedAt
+        self.acquireId = acquireId
+        self.audioOnly = audioOnly
+        self.music = music
+        self.inLibrary = inLibrary
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        let src = (try? c.decodeIfPresent(String.self, forKey: .source)) ?? ""
+        let rawItemId = (try? c.decodeIfPresent(FlexibleString.self, forKey: .itemId))?.value ?? ""
+        let rawUrl = (try? c.decodeIfPresent(String.self, forKey: .url)) ?? ""
+        let rawId = (try? c.decodeIfPresent(FlexibleString.self, forKey: .id))?.value ?? ""
+        let resolvedAudio = (try? c.decodeIfPresent(Bool.self, forKey: .audioOnly)) ?? (src.lowercased() == "soundcloud")
+        let rawKind = (try? c.decodeIfPresent(String.self, forKey: .kind)) ?? (resolvedAudio ? "audio" : "video")
+        let rawTitle = (try? c.decodeIfPresent(String.self, forKey: .title)) ?? ""
+
+        self.id = rawId.isEmpty ? "\(src):\(rawItemId.isEmpty ? rawUrl : rawItemId)" : rawId
+        self.source = src
+        self.kind = rawKind
+        self.itemId = rawItemId
+        self.title = rawTitle.isEmpty ? "Untitled" : rawTitle
+        self.creatorId = (try? c.decodeIfPresent(FlexibleString.self, forKey: .creatorId))?.value ?? ""
+        self.creatorName = (try? c.decodeIfPresent(String.self, forKey: .creatorName)) ?? discoverSourceLabel(src)
+        self.creatorUrl = (try? c.decodeIfPresent(String.self, forKey: .creatorUrl)) ?? ""
+        self.url = rawUrl
+        self.thumbnail = (try? c.decodeIfPresent(String.self, forKey: .thumbnail)) ?? ""
+        self.duration = (try? c.decodeIfPresent(FlexibleDouble.self, forKey: .duration))?.value
+        self.publishedAt = (try? c.decodeIfPresent(FlexibleDouble.self, forKey: .publishedAt))?.value ?? 0
+        self.acquireId = (try? c.decodeIfPresent(String.self, forKey: .acquireId)) ?? ""
+        self.audioOnly = resolvedAudio
+        self.music = try? c.decodeIfPresent(MusicMeta.self, forKey: .music)
+        self.inLibrary = (try? c.decodeIfPresent(Bool.self, forKey: .inLibrary)) ?? false
+    }
+}
+
+struct DiscoverFeedError: Codable, Identifiable, Hashable {
+    var creatorId: String?
+    var source: String
+    var name: String
+    var message: String
+    var status: Int?
+
+    var id: String { "\(source)|\(creatorId ?? "")|\(name)|\(message)" }
+    var displayLabel: String {
+        if !name.isEmpty { return name }
+        return discoverSourceLabel(source)
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case creatorId, source, name, message, status
+    }
+
+    init(creatorId: String? = nil, source: String = "", name: String = "", message: String = "", status: Int? = nil) {
+        self.creatorId = creatorId
+        self.source = source
+        self.name = name
+        self.message = message
+        self.status = status
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.creatorId = (try? c.decodeIfPresent(FlexibleString.self, forKey: .creatorId))?.value
+        self.source = (try? c.decodeIfPresent(String.self, forKey: .source)) ?? ""
+        self.name = (try? c.decodeIfPresent(String.self, forKey: .name)) ?? ""
+        self.message = (try? c.decodeIfPresent(String.self, forKey: .message)) ?? ""
+        self.status = (try? c.decodeIfPresent(FlexibleInt.self, forKey: .status))?.value
+    }
+}
+
+struct DiscoverFeed: Codable, Hashable {
+    var creators: [DiscoverCreator]
+    var items: [DiscoverItem]
+    var errors: [DiscoverFeedError]
+    var updatedAt: Double
+
+    enum CodingKeys: String, CodingKey {
+        case creators, items, errors, updatedAt
+    }
+
+    init(
+        creators: [DiscoverCreator] = [],
+        items: [DiscoverItem] = [],
+        errors: [DiscoverFeedError] = [],
+        updatedAt: Double = 0
+    ) {
+        self.creators = creators
+        self.items = items
+        self.errors = errors
+        self.updatedAt = updatedAt
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.creators = (try? c.decodeIfPresent([DiscoverCreator].self, forKey: .creators)) ?? []
+        self.items = (try? c.decodeIfPresent([DiscoverItem].self, forKey: .items)) ?? []
+        self.errors = (try? c.decodeIfPresent([DiscoverFeedError].self, forKey: .errors)) ?? []
+        self.updatedAt = (try? c.decodeIfPresent(FlexibleDouble.self, forKey: .updatedAt))?.value ?? 0
+    }
+}
+
+struct DiscoverBrowseResult: Codable, Hashable {
+    var query: String
+    var sources: [String]
+    var creators: [DiscoverCreator]
+    var items: [DiscoverItem]
+    var errors: [DiscoverFeedError]
+
+    enum CodingKeys: String, CodingKey {
+        case query, sources, creators, items, errors
+    }
+
+    init(
+        query: String = "",
+        sources: [String] = [],
+        creators: [DiscoverCreator] = [],
+        items: [DiscoverItem] = [],
+        errors: [DiscoverFeedError] = []
+    ) {
+        self.query = query
+        self.sources = sources
+        self.creators = creators
+        self.items = items
+        self.errors = errors
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.query = (try? c.decodeIfPresent(String.self, forKey: .query)) ?? ""
+        self.sources = (try? c.decodeIfPresent([String].self, forKey: .sources)) ?? []
+        self.creators = (try? c.decodeIfPresent([DiscoverCreator].self, forKey: .creators)) ?? []
+        self.items = (try? c.decodeIfPresent([DiscoverItem].self, forKey: .items)) ?? []
+        self.errors = (try? c.decodeIfPresent([DiscoverFeedError].self, forKey: .errors)) ?? []
+    }
+}
+
+struct DiscoverFollowResponse: Codable, Hashable {
+    var creator: DiscoverCreator?
+    var creators: [DiscoverCreator]
+
+    enum CodingKeys: String, CodingKey {
+        case creator, creators
+    }
+
+    init(creator: DiscoverCreator? = nil, creators: [DiscoverCreator] = []) {
+        self.creator = creator
+        self.creators = creators
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.creator = try? c.decodeIfPresent(DiscoverCreator.self, forKey: .creator)
+        self.creators = (try? c.decodeIfPresent([DiscoverCreator].self, forKey: .creators)) ?? []
+    }
+}
+
+struct DiscoverUnfollowResponse: Codable, Hashable {
+    var removed: Bool
+    var creators: [DiscoverCreator]
+
+    enum CodingKeys: String, CodingKey {
+        case removed, creators
+    }
+
+    init(removed: Bool = false, creators: [DiscoverCreator] = []) {
+        self.removed = removed
+        self.creators = creators
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.removed = (try? c.decodeIfPresent(Bool.self, forKey: .removed)) ?? false
+        self.creators = (try? c.decodeIfPresent([DiscoverCreator].self, forKey: .creators)) ?? []
+    }
+}
+
+private struct DiscoverCreatorsListResponse: Decodable {
+    var creators: [DiscoverCreator]
+
+    enum CodingKeys: String, CodingKey {
+        case creators
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.creators = (try? c.decodeIfPresent([DiscoverCreator].self, forKey: .creators)) ?? []
+    }
+}
+
 // MARK: - Inline Save Feedback
 
 enum InlineSaveState: Equatable {
@@ -1151,6 +1478,73 @@ struct LoopbackApi {
         return SoulseekSettings.decode(from: data)
     }
 
+    // MARK: - Discover v2
+
+    func listDiscoverCreators() async throws -> [DiscoverCreator] {
+        let response: DiscoverCreatorsListResponse = try await getJSON("v1/discover/creators", timeout: 15)
+        return response.creators
+    }
+
+    func followDiscoverCreator(url: String, name: String? = nil) async throws -> DiscoverFollowResponse {
+        var payload: [String: Any] = ["url": url]
+        if let name, !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            payload["name"] = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        return try await postJSON("v1/discover/creators", body: payload, timeout: 30)
+    }
+
+    func unfollowDiscoverCreator(id: String) async throws -> DiscoverUnfollowResponse {
+        let unreserved = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "-._~"))
+        let encoded = id.addingPercentEncoding(withAllowedCharacters: unreserved) ?? id
+        let data = try await requestRaw(
+            method: "DELETE",
+            path: "v1/discover/creators",
+            percentEncodedTail: encoded,
+            body: nil,
+            timeout: 15
+        )
+        return try decode(DiscoverUnfollowResponse.self, from: data)
+    }
+
+    func getDiscoverFeed(
+        source: String? = nil,
+        creatorId: String? = nil,
+        refresh: Bool = false,
+        limit: Int = 40
+    ) async throws -> DiscoverFeed {
+        var queryItems: [URLQueryItem] = [URLQueryItem(name: "limit", value: String(limit))]
+        if let source, !source.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            queryItems.append(URLQueryItem(name: "source", value: source.trimmingCharacters(in: .whitespacesAndNewlines)))
+        }
+        if let creatorId, !creatorId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            queryItems.append(URLQueryItem(name: "creator", value: creatorId.trimmingCharacters(in: .whitespacesAndNewlines)))
+        }
+        if refresh {
+            queryItems.append(URLQueryItem(name: "refresh", value: "1"))
+        }
+        let data = try await requestRaw(
+            method: "GET",
+            path: "v1/discover/feed",
+            queryItems: queryItems,
+            body: nil,
+            timeout: 30
+        )
+        return try decode(DiscoverFeed.self, from: data)
+    }
+
+    func browseDiscover(
+        query: String,
+        sources: [String] = ["youtube", "soundcloud", "rumble"],
+        limit: Int = 12
+    ) async throws -> DiscoverBrowseResult {
+        let payload: [String: Any] = [
+            "query": query,
+            "sources": sources,
+            "limit": limit
+        ]
+        return try await postJSON("v1/discover/browse", body: payload, timeout: 45)
+    }
+
     // MARK: - Transport
 
     private func getJSON<T: Decodable>(_ path: String, timeout: TimeInterval) async throws -> T {
@@ -1171,8 +1565,33 @@ struct LoopbackApi {
         }
     }
 
-    private func requestRaw(method: String, path: String, body: [String: Any]?, timeout: TimeInterval) async throws -> Data {
-        let url = baseURL.appendingPathComponent(path)
+    private func makeURL(path: String, queryItems: [URLQueryItem] = [], percentEncodedTail: String? = nil) throws -> URL {
+        let base = baseURL.appendingPathComponent(path)
+        guard var components = URLComponents(url: base, resolvingAgainstBaseURL: false) else {
+            throw AppFailure("Invalid peer engine URL.")
+        }
+        if let tail = percentEncodedTail {
+            let prefix = components.percentEncodedPath.hasSuffix("/") ? components.percentEncodedPath : components.percentEncodedPath + "/"
+            components.percentEncodedPath = prefix + tail
+        }
+        if !queryItems.isEmpty {
+            components.queryItems = queryItems
+        }
+        guard let url = components.url else {
+            throw AppFailure("Invalid peer engine URL.")
+        }
+        return url
+    }
+
+    private func requestRaw(
+        method: String,
+        path: String,
+        queryItems: [URLQueryItem] = [],
+        percentEncodedTail: String? = nil,
+        body: [String: Any]?,
+        timeout: TimeInterval
+    ) async throws -> Data {
+        let url = try makeURL(path: path, queryItems: queryItems, percentEncodedTail: percentEncodedTail)
         var req = URLRequest(url: url, timeoutInterval: timeout)
         req.httpMethod = method
         req.setValue("application/json", forHTTPHeaderField: "Accept")

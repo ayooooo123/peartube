@@ -24,7 +24,7 @@ const CORS = {
   'access-control-allow-headers': 'content-type, authorization, range',
   'access-control-expose-headers': 'content-length, content-range, accept-ranges, content-disposition'
 }
-const ownerPath = path => path === '/v1/settings' || path === '/v1/restart' || path.startsWith('/v1/identity')
+const ownerPath = path => path === '/v1/settings' || path === '/v1/restart' || path.startsWith('/v1/identity') || path.startsWith('/v1/discover')
 const isWrite = req => req.method === 'POST' || req.method === 'PUT' || req.method === 'DELETE'
 // On an open LAN relay (no token), a DNS-rebound page can send matching `Host` and `Origin` (`evil.example:8174`)
 // to `127.0.0.1` or `10.x`. Only an IP literal, `localhost` or `.local` counts as the relay's own host without a token.
@@ -259,6 +259,32 @@ export function createApi (state) {
         const res = await n.claimWithMnemonic(mnemonic, { alias })
         srv.notify('update')
         return { ...res, ...(await n.identity()) }
+      }
+    }
+    if (path.startsWith('/v1/discover')) {
+      if (!state.discover) throw Object.assign(new Error('Discover unavailable on this peer'), { status: 404 })
+      if (req.method === 'GET' && path === '/v1/discover/creators') return state.discover.listCreators()
+      if (req.method === 'POST' && path === '/v1/discover/creators') {
+        const res = await state.discover.followCreator(await body(req))
+        srv.notify('update')
+        return res
+      }
+      const delCreator = path.match(/^\/v1\/discover\/creators\/(.+)$/)
+      if (delCreator && req.method === 'DELETE') {
+        const res = state.discover.unfollowCreator(delCreator[1])
+        srv.notify('update')
+        return res
+      }
+      if (req.method === 'GET' && path === '/v1/discover/feed') {
+        return state.discover.feed({
+          source: url.searchParams.get('source') || '',
+          creator: url.searchParams.get('creator') || '',
+          refresh: url.searchParams.get('refresh') === '1',
+          limit: url.searchParams.get('limit') || 40
+        })
+      }
+      if (req.method === 'POST' && path === '/v1/discover/browse') {
+        return state.discover.browse(await body(req))
       }
     }
     if (req.method === 'POST' && path === '/v1/identify' && state.identify) {
@@ -590,6 +616,21 @@ export function createApi (state) {
       }
       res.writeHead(200, { ...CORS, 'content-type': 'audio/x-mpegurl; charset=utf-8' })
       res.end(lines.join('\n') + '\n')
+      return
+    }
+    const discoverThumbMatch = req.method === 'GET' && url.pathname.match(/^\/v1\/discover\/thumb\/([0-9a-f]{20})$/)
+    if (discoverThumbMatch) {
+      let thumb = null
+      try {
+        requireOwner(req)
+        thumb = await state.discover?.thumb(discoverThumbMatch[1])
+      } catch (err) {
+        res.writeHead(err.status || 400, { ...CORP, 'content-type': 'application/json' })
+        res.end(JSON.stringify({ error: err.message }))
+        return
+      }
+      res.writeHead(thumb ? 200 : 204, thumb ? { ...CORP, 'content-type': thumb.type, 'content-length': String(thumb.bytes.byteLength), 'cache-control': 'private, max-age=86400' } : CORP)
+      res.end(thumb ? thumb.bytes : undefined)
       return
     }
     // A source result's picture, through the relay: the owner's browser never asks the source's image host. 204 when

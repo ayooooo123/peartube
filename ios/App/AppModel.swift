@@ -51,6 +51,15 @@ final class AppModel: ObservableObject {
     @Published var sourceSearchError: String?
     @Published var saveStates: [String: InlineSaveState] = [:]
     @Published var visitedShelves: [VisitedShelf] = []
+    @Published var discoverCreators: [DiscoverCreator] = []
+    @Published var discoverFeed: DiscoverFeed?
+    @Published var discoverBrowse: DiscoverBrowseResult?
+    @Published var discoverLoading = false
+    @Published var discoverFollowBusy = false
+    @Published var discoverError: String?
+    @Published var discoverSourceFilter = ""
+    @Published var discoverCreatorFilter = ""
+    @Published var discoverActiveTopic = ""
     @Published var soulseekSettings = SoulseekSettings()
     @Published var soulseekSettingsBusy = false
     @Published var soulseekSettingsMessage: String?
@@ -258,6 +267,15 @@ final class AppModel: ObservableObject {
     func backdropURL(imdb: String?) -> URL? {
         guard let imdb, !imdb.isEmpty, let apiBaseURL else { return nil }
         return apiBaseURL.appendingPathComponent("v1/backdrop/\(imdb)")
+    }
+    func discoverImageURL(_ path: String) -> URL? {
+        let trimmed = path.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        if trimmed.hasPrefix("/") {
+            guard let apiBaseURL else { return nil }
+            return URL(string: trimmed, relativeTo: apiBaseURL)?.absoluteURL
+        }
+        return URL(string: trimmed)
     }
     var sources: [[String: Any]] { status.objects("sources") }
     var discovered: [[String: Any]] { status.objects("discoveredSources") }
@@ -722,6 +740,185 @@ final class AppModel: ObservableObject {
     func removeVisitedShelf(peer: String) {
         visitedShelves.removeAll { $0.peer.caseInsensitiveCompare(peer) == .orderedSame }
         try? storage?.save(visitedShelves, name: "visited-shelves.json")
+    }
+
+    // MARK: - Discover v2
+
+    func discoverStateKey(for item: DiscoverItem, audioOverride: Bool = false) -> String {
+        audioOverride ? "discover:\(item.id):audio" : "discover:\(item.id)"
+    }
+
+    func isDiscoverItemInLibrary(_ item: DiscoverItem) -> Bool {
+        if item.inLibrary { return true }
+        if !item.acquireId.isEmpty {
+            if entries.contains(where: { $0.mediaID.caseInsensitiveCompare(item.acquireId) == .orderedSame }) {
+                return true
+            }
+            if jobs.contains(where: { $0.isDone && $0.mediaId.caseInsensitiveCompare(item.acquireId) == .orderedSame }) {
+                return true
+            }
+        }
+        return false
+    }
+
+    func isDiscoverItemAdding(_ item: DiscoverItem, audioOverride: Bool = false) -> Bool {
+        let key = discoverStateKey(for: item, audioOverride: audioOverride)
+        if saveStates[key] == .saving { return true }
+        if !audioOverride, !item.acquireId.isEmpty {
+            return jobs.contains(where: { $0.isActive && $0.mediaId.caseInsensitiveCompare(item.acquireId) == .orderedSame })
+        }
+        return false
+    }
+
+    func isDiscoverCreatorFollowed(_ item: DiscoverItem) -> Bool {
+        let itemURL = item.creatorUrl.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let itemName = item.creatorName.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return discoverCreators.contains { c in
+            if !item.creatorId.isEmpty && c.id == item.creatorId { return true }
+            if !itemURL.isEmpty && c.url.lowercased() == itemURL { return true }
+            if !itemName.isEmpty && c.source.lowercased() == item.source.lowercased() && c.name.lowercased() == itemName {
+                return true
+            }
+            return false
+        }
+    }
+
+    func loadDiscoverCreators() async {
+        do {
+            let api = try await ensureLoopback()
+            discoverCreators = try await api.listDiscoverCreators()
+        } catch {
+            discoverError = error.localizedDescription
+        }
+    }
+
+    func loadDiscoverFeed(refresh: Bool = false) async {
+        discoverLoading = true
+        discoverError = nil
+        defer { discoverLoading = false }
+        do {
+            let api = try await ensureLoopback()
+            let feed = try await api.getDiscoverFeed(
+                source: discoverSourceFilter.isEmpty ? nil : discoverSourceFilter,
+                creatorId: discoverCreatorFilter.isEmpty ? nil : discoverCreatorFilter,
+                refresh: refresh
+            )
+            discoverFeed = feed
+            discoverCreators = feed.creators
+        } catch {
+            discoverError = error.localizedDescription
+        }
+    }
+
+    @discardableResult
+    func followDiscoverCreator(url: String, name: String? = nil) async -> Bool {
+        let trimmed = url.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return false }
+        discoverFollowBusy = true
+        discoverError = nil
+        defer { discoverFollowBusy = false }
+        do {
+            let api = try await ensureLoopback()
+            let res = try await api.followDiscoverCreator(url: trimmed, name: name)
+            discoverCreators = res.creators
+            if var browse = discoverBrowse, let followed = res.creator {
+                browse.creators = browse.creators.map { c in
+                    var copy = c
+                    if c.id == followed.id || c.url.caseInsensitiveCompare(followed.url) == .orderedSame {
+                        copy.followed = true
+                    }
+                    return copy
+                }
+                discoverBrowse = browse
+            }
+            notice = "Following \(res.creator?.displayName ?? "creator")"
+            await loadDiscoverFeed(refresh: false)
+            return true
+        } catch {
+            discoverError = error.localizedDescription
+            return false
+        }
+    }
+
+    func unfollowDiscoverCreator(id: String) async {
+        guard !id.isEmpty else { return }
+        discoverFollowBusy = true
+        discoverError = nil
+        defer { discoverFollowBusy = false }
+        do {
+            let api = try await ensureLoopback()
+            let res = try await api.unfollowDiscoverCreator(id: id)
+            discoverCreators = res.creators
+            if discoverCreatorFilter == id {
+                discoverCreatorFilter = ""
+            }
+            await loadDiscoverFeed(refresh: false)
+        } catch {
+            discoverError = error.localizedDescription
+        }
+    }
+
+    func browseDiscoverTopic(_ topic: String) async {
+        let trimmed = topic.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            clearDiscoverBrowse()
+            return
+        }
+        discoverActiveTopic = trimmed
+        discoverLoading = true
+        discoverError = nil
+        let sources = discoverSourceFilter.isEmpty ? ["youtube", "soundcloud", "rumble"] : [discoverSourceFilter]
+        defer {
+            if discoverActiveTopic == trimmed {
+                discoverLoading = false
+            }
+        }
+        do {
+            let api = try await ensureLoopback()
+            let res = try await api.browseDiscover(query: trimmed, sources: sources, limit: 12)
+            if discoverActiveTopic == trimmed {
+                discoverBrowse = res
+            }
+        } catch {
+            if discoverActiveTopic == trimmed {
+                discoverError = error.localizedDescription
+            }
+        }
+    }
+
+    func clearDiscoverBrowse() {
+        discoverActiveTopic = ""
+        discoverBrowse = nil
+        discoverError = nil
+    }
+
+    func addDiscoverItem(_ item: DiscoverItem, audioOverride: Bool = false) async {
+        let stateKey = discoverStateKey(for: item, audioOverride: audioOverride)
+        saveStates[stateKey] = .saving
+        let finalId = item.acquireId.isEmpty
+            ? "clip:\(UUID().uuidString.replacingOccurrences(of: "-", with: "").prefix(16).lowercased())"
+            : item.acquireId
+        let audio = audioOverride ? true : item.audioOnly
+        let music: MusicMeta? = audioOverride
+            ? MusicMeta(title: item.title, artist: item.creatorName.isEmpty ? nil : item.creatorName)
+            : item.music
+        do {
+            let api = try await ensureLoopback()
+            let job = try await api.acquire(
+                id: finalId,
+                title: item.title,
+                url: item.url,
+                page: true,
+                audio: audio,
+                music: music
+            )
+            upsertJob(job)
+            saveStates[stateKey] = .saved(audioOverride ? "Adding audio…" : "Adding…")
+            await refreshJobs(silent: true)
+            notice = "Added to PearTube: \(item.title)"
+        } catch {
+            saveStates[stateKey] = .failed(error.localizedDescription)
+        }
     }
 
     func loadSoulseekSettings() async {

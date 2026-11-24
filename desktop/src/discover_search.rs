@@ -1,19 +1,22 @@
-//! Discover, unified Search (library + sources + other relays), and Soulseek shelf browser.
-//! Discover has no field of its own (Rule 16): `Search sources & relays` focuses the
-//! top-bar search field, and artist chips jump into Search and ask both sources and other relays.
+//! Discover v2 (followed creators feed, topic browsing, Soulseek shelves, and
+//! local network channels), unified Search (library + sources + other relays),
+//! and Soulseek shelf browser.
 
 #![forbid(unsafe_code)]
 
 use gpui_kit::assets::IconName as Lucide;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
+use gpui_kit::component::input::Input;
 use gpui_kit::component::{Disableable as _, Icon, Sizable as _, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
 use crate::api::{
-    ALL_SOURCES, format_duration, group_soulseek_candidates, is_web_url, unwrap_peartube_add,
+    ALL_SOURCES, DISCOVER_SOURCES, DISCOVER_TOPICS, DiscoverCreator, DiscoverFeedError,
+    DiscoverFollowRequest, DiscoverItem, format_duration, group_soulseek_candidates, is_web_url,
+    unwrap_peartube_add,
 };
-use crate::app::{DetailView, PearTube};
+use crate::app::{DetailView, DiscoverItemStatus, PearTube};
 use crate::catalog::{AlbumTile, TrackRow, VideoTile, plural};
 use crate::list::{column, format_bytes};
 use crate::music::TrackItem;
@@ -42,12 +45,755 @@ fn looks_like_web_link(s: &str) -> Option<String> {
 
 impl PearTube {
     pub fn render_discover(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        column()
+            .py_6()
+            .gap_8()
+            .child(self.render_discover_header(cx))
+            .child(self.render_discover_follow_bar(cx))
+            .child(self.render_discover_topics(cx))
+            .child(self.render_discover_filters(cx))
+            .child(self.render_discover_items_section(cx))
+            .child(self.render_visited_shelves_section(cx))
+            .child(self.render_network_channels_section(cx))
+            .child(self.render_more_from_artists_section(cx))
+    }
+
+    fn render_discover_header(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        h_flex()
+            .justify_between()
+            .items_start()
+            .flex_wrap()
+            .gap_3()
+            .child(
+                v_flex()
+                    .gap_1()
+                    .child(div().text_xl().font_weight(FontWeight::BOLD).child("Discover"))
+                    .child(
+                        div()
+                            .text_sm()
+                            .text_color(rgb(DIM))
+                            .child("Follow creators on YouTube, SoundCloud, and Rumble, browse topics, and save items in one click."),
+                    ),
+            )
+            .child(
+                Button::new("disc-search-relays")
+                    .primary()
+                    .small()
+                    .icon(Icon::new(Lucide::Search))
+                    .label("Search sources & relays")
+                    .on_click(cx.listener(|this, _, window, cx| this.focus_search(window, cx))),
+            )
+    }
+
+    fn render_discover_follow_bar(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let busy = self.discover_follow_busy;
+        let err = self.discover_error.clone();
+        v_flex()
+            .gap_2p5()
+            .p_4()
+            .rounded(px(14.))
+            .bg(rgb(CARD))
+            .border_1()
+            .border_color(rgb(LINE))
+            .child(
+                div()
+                    .text_sm()
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .child("Follow a creator"),
+            )
+            .child(
+                h_flex()
+                    .gap_2()
+                    .items_center()
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .child(Input::new(&self.discover_follow_input).cleanable(true)),
+                    )
+                    .child(
+                        Button::new("disc-follow-submit")
+                            .primary()
+                            .disabled(busy)
+                            .icon(Icon::new(Lucide::Plus))
+                            .label(if busy { "Following…" } else { "Follow" })
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.submit_discover_follow_input(window, cx);
+                            })),
+                    ),
+            )
+            .when_some(err, |this, msg| {
+                this.child(
+                    div()
+                        .text_xs()
+                        .text_color(rgb(DANGER))
+                        .child(msg),
+                )
+            })
+    }
+
+    fn render_discover_topics(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let active = self.discover_active_topic.as_deref();
+        v_flex()
+            .gap_2p5()
+            .child(
+                h_flex()
+                    .justify_between()
+                    .items_center()
+                    .child(
+                        div()
+                            .text_sm()
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .text_color(rgb(DIM))
+                            .child("Explore topics"),
+                    )
+                    .when(active.is_some(), |row| {
+                        row.child(
+                            Button::new("disc-clear-topic")
+                                .ghost()
+                                .small()
+                                .icon(Icon::new(Lucide::X))
+                                .label("Back to feed")
+                                .on_click(cx.listener(|this, _, _, cx| this.clear_discover_browse(cx))),
+                        )
+                    }),
+            )
+            .child(
+                h_flex()
+                    .gap_2()
+                    .flex_wrap()
+                    .children(DISCOVER_TOPICS.iter().enumerate().map(|(idx, &topic)| {
+                        let is_active = active.is_some_and(|a| a.eq_ignore_ascii_case(topic));
+                        let topic_owned = topic.to_string();
+                        div()
+                            .id(SharedString::from(format!("disc-topic-{idx}")))
+                            .px_3()
+                            .py_1()
+                            .rounded(px(99.))
+                            .bg(if is_active { rgb(BRAND) } else { rgb(CARD) })
+                            .border_1()
+                            .border_color(if is_active { rgb(BRAND) } else { rgb(LINE) })
+                            .text_xs()
+                            .font_weight(if is_active { FontWeight::SEMIBOLD } else { FontWeight::MEDIUM })
+                            .text_color(if is_active { rgb(0xffffff) } else { rgb(INK) })
+                            .cursor_pointer()
+                            .hover(|s| if is_active { s } else { s.bg(rgb(CARD_ELEVATED)) })
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                if is_active {
+                                    this.clear_discover_browse(cx);
+                                } else {
+                                    this.browse_discover_topic(topic_owned.clone(), cx);
+                                }
+                            }))
+                            .child(topic)
+                    })),
+            )
+    }
+
+    fn render_discover_filters(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let creators = self.discover_creators.clone();
+        let active_creator = self.discover_creator_filter.as_deref();
+        let active_source = self.discover_source_filter.as_deref();
+        let in_browse = self.discover_active_topic.is_some();
+        let loading = self.discover_loading;
+
+        v_flex()
+            .gap_3()
+            .child(
+                v_flex()
+                    .gap_2()
+                    .child(
+                        h_flex()
+                            .justify_between()
+                            .items_center()
+                            .child(
+                                div()
+                                    .text_sm()
+                                    .font_weight(FontWeight::SEMIBOLD)
+                                    .text_color(rgb(DIM))
+                                    .child(format!("Creators you follow ({})", creators.len())),
+                            )
+                            .child(
+                                Button::new("disc-refresh-feed")
+                                    .ghost()
+                                    .small()
+                                    .disabled(loading)
+                                    .icon(Icon::new(Lucide::RotateCcw))
+                                    .label(if loading { "Refreshing…" } else { "Refresh" })
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        if let Some(topic) = this.discover_active_topic.clone() {
+                                            this.browse_discover_topic(topic, cx);
+                                        } else {
+                                            this.refresh_discover_feed(true, cx);
+                                        }
+                                    })),
+                            ),
+                    )
+                    .child(
+                        h_flex()
+                            .gap_1p5()
+                            .flex_wrap()
+                            .child({
+                                let all_active = !in_browse && active_creator.is_none();
+                                div()
+                                    .id("disc-creator-all")
+                                    .px_3()
+                                    .py_1()
+                                    .rounded(px(99.))
+                                    .bg(if all_active { rgb(BRAND) } else { rgb(CARD) })
+                                    .border_1()
+                                    .border_color(if all_active { rgb(BRAND) } else { rgb(LINE) })
+                                    .text_xs()
+                                    .font_weight(if all_active { FontWeight::SEMIBOLD } else { FontWeight::MEDIUM })
+                                    .text_color(if all_active { rgb(0xffffff) } else { rgb(DIM) })
+                                    .cursor_pointer()
+                                    .hover(|s| if all_active { s } else { s.text_color(rgb(INK)) })
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        this.set_discover_creator_filter(None, cx);
+                                    }))
+                                    .child("All")
+                            })
+                            .children(creators.into_iter().enumerate().map(|(idx, creator)| {
+                                self.render_followed_creator_pill(idx, creator, active_creator, in_browse, cx)
+                            })),
+                    ),
+            )
+            .child(
+                h_flex()
+                    .gap_1p5()
+                    .flex_wrap()
+                    .child(self.render_source_filter_pill("disc-src-all", "All", None, active_source.is_none(), cx))
+                    .children(DISCOVER_SOURCES.iter().map(|(id, label)| {
+                        let is_on = active_source == Some(*id);
+                        self.render_source_filter_pill(
+                            SharedString::from(format!("disc-src-{id}")),
+                            label,
+                            Some((*id).to_string()),
+                            is_on,
+                            cx,
+                        )
+                    })),
+            )
+    }
+
+    fn render_followed_creator_pill(
+        &self,
+        idx: usize,
+        creator: DiscoverCreator,
+        active_creator: Option<&str>,
+        in_browse: bool,
+        cx: &mut Context<Self>,
+    ) -> Stateful<Div> {
+        let is_active = !in_browse && active_creator == Some(creator.id.as_str());
+        let select_id = creator.id.clone();
+        let remove_id = creator.id.clone();
+        let label = creator.display_name().to_string();
+        h_flex()
+            .id(SharedString::from(format!("disc-creator-pill-{idx}")))
+            .items_center()
+            .gap_1()
+            .pl_3()
+            .pr_1p5()
+            .py_1()
+            .rounded(px(99.))
+            .bg(if is_active { rgb(CARD_ELEVATED) } else { rgb(CARD) })
+            .border_1()
+            .border_color(if is_active { rgb(BRAND) } else { rgb(LINE) })
+            .child(
+                div()
+                    .id(SharedString::from(format!("disc-creator-sel-{idx}")))
+                    .text_xs()
+                    .font_weight(if is_active { FontWeight::SEMIBOLD } else { FontWeight::MEDIUM })
+                    .text_color(if is_active { rgb(INK) } else { rgb(DIM) })
+                    .cursor_pointer()
+                    .hover(|s| s.text_color(rgb(INK)))
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.set_discover_creator_filter(Some(select_id.clone()), cx);
+                    }))
+                    .child(label),
+            )
+            .child(
+                div()
+                    .id(SharedString::from(format!("disc-creator-rm-{idx}")))
+                    .px_1()
+                    .rounded(px(99.))
+                    .text_xs()
+                    .text_color(rgb(DIM))
+                    .cursor_pointer()
+                    .hover(|s| s.text_color(rgb(DANGER)))
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.unfollow_discover_creator(remove_id.clone(), cx);
+                    }))
+                    .child("×"),
+            )
+    }
+
+    fn render_source_filter_pill(
+        &self,
+        id: impl Into<ElementId>,
+        label: &'static str,
+        target: Option<String>,
+        is_active: bool,
+        cx: &mut Context<Self>,
+    ) -> Stateful<Div> {
+        div()
+            .id(id)
+            .px_2p5()
+            .py_0p5()
+            .rounded(px(99.))
+            .bg(if is_active { Hsla::from(rgb(CARD_ELEVATED)) } else { transparent_black() })
+            .border_1()
+            .border_color(if is_active { rgb(BRAND) } else { rgb(LINE) })
+            .text_xs()
+            .font_weight(if is_active { FontWeight::SEMIBOLD } else { FontWeight::NORMAL })
+            .text_color(if is_active { rgb(INK) } else { rgb(DIM) })
+            .cursor_pointer()
+            .hover(|s| s.text_color(rgb(INK)))
+            .on_click(cx.listener(move |this, _, _, cx| {
+                this.set_discover_source_filter(target.clone(), cx);
+            }))
+            .child(label)
+    }
+
+    fn render_discover_items_section(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let in_browse = self.discover_active_topic.is_some();
+        let src_filter = self.discover_source_filter.as_deref();
+        let loading = self.discover_loading;
+
+        let heading = match &self.discover_active_topic {
+            Some(topic) => format!("Browsing “{topic}”"),
+            None => "Latest from your creators".to_string(),
+        };
+
+        let (items, errors, suggested_creators): (Vec<DiscoverItem>, Vec<DiscoverFeedError>, Vec<DiscoverCreator>) =
+            if in_browse {
+                match &self.discover_browse {
+                    Some(b) => {
+                        let filtered = b
+                            .items
+                            .iter()
+                            .filter(|i| src_filter.is_none_or(|s| i.source.eq_ignore_ascii_case(s)))
+                            .cloned()
+                            .collect();
+                        let creators = b
+                            .creators
+                            .iter()
+                            .filter(|c| src_filter.is_none_or(|s| c.source.eq_ignore_ascii_case(s)))
+                            .cloned()
+                            .collect();
+                        (filtered, b.errors.clone(), creators)
+                    }
+                    None => (Vec::new(), Vec::new(), Vec::new()),
+                }
+            } else {
+                match &self.discover_feed {
+                    Some(f) => (f.items.clone(), f.errors.clone(), Vec::new()),
+                    None => (Vec::new(), Vec::new(), Vec::new()),
+                }
+            };
+
+        let empty_msg: Option<&'static str> = if loading && items.is_empty() {
+            Some(if in_browse {
+                "Browsing YouTube, SoundCloud, and Rumble…"
+            } else {
+                "Loading your creator feed…"
+            })
+        } else if !loading && items.is_empty() {
+            if in_browse {
+                Some("No items found for this topic and source filter.")
+            } else if self.discover_creators.is_empty() {
+                Some("Follow a YouTube, SoundCloud, or Rumble creator above — or pick a topic chip to browse.")
+            } else {
+                Some("No recent items from the selected creators.")
+            }
+        } else {
+            None
+        };
+
+        v_flex()
+            .gap_4()
+            .child(div().text_lg().font_weight(FontWeight::BOLD).child(heading))
+            .when(!errors.is_empty(), |this| {
+                this.child(self.render_discover_errors(&errors))
+            })
+            .when(in_browse && !suggested_creators.is_empty(), |this| {
+                this.child(self.render_suggested_creators_strip(suggested_creators, cx))
+            })
+            .when_some(empty_msg, |this, msg| {
+                this.child(
+                    div()
+                        .p_4()
+                        .rounded(px(12.))
+                        .bg(rgb(CARD))
+                        .border_1()
+                        .border_color(rgb(LINE))
+                        .text_sm()
+                        .text_color(rgb(DIM))
+                        .child(msg),
+                )
+            })
+            .when(!items.is_empty(), |this| {
+                this.child(
+                    h_flex()
+                        .gap_4()
+                        .flex_wrap()
+                        .items_stretch()
+                        .children(items.into_iter().enumerate().map(|(idx, item)| {
+                            self.render_discover_card(idx, item, in_browse, cx)
+                        })),
+                )
+            })
+    }
+
+    fn render_discover_errors(&self, errors: &[DiscoverFeedError]) -> impl IntoElement {
+        v_flex()
+            .gap_1()
+            .p_3()
+            .rounded(px(12.))
+            .bg(rgb(CARD))
+            .border_1()
+            .border_color(rgb(LINE))
+            .child(
+                div()
+                    .text_xs()
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .text_color(rgb(DIM))
+                    .child("Some sources could not be reached"),
+            )
+            .children(errors.iter().take(6).enumerate().map(|(idx, err)| {
+                div()
+                    .id(SharedString::from(format!("disc-err-{idx}")))
+                    .text_xs()
+                    .text_color(rgb(DIM))
+                    .child(err.display_label())
+            }))
+    }
+
+    fn render_suggested_creators_strip(
+        &self,
+        creators: Vec<DiscoverCreator>,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        h_flex()
+            .gap_2()
+            .flex_wrap()
+            .children(creators.into_iter().take(8).enumerate().map(|(idx, creator)| {
+                let followed = creator.followed == Some(true)
+                    || self.is_discover_creator_followed(&creator.source, &creator.url, &creator.name);
+                let req = DiscoverFollowRequest::from_creator(&creator);
+                let label = creator.display_name().to_string();
+                h_flex()
+                    .id(SharedString::from(format!("disc-sugg-{idx}")))
+                    .items_center()
+                    .gap_2()
+                    .pl_3()
+                    .pr_1p5()
+                    .py_1()
+                    .rounded(px(99.))
+                    .bg(rgb(CARD))
+                    .border_1()
+                    .border_color(rgb(LINE))
+                    .child(div().text_xs().font_weight(FontWeight::MEDIUM).child(label))
+                    .child(
+                        Button::new(SharedString::from(format!("disc-sugg-follow-{idx}")))
+                            .ghost()
+                            .small()
+                            .disabled(followed || self.discover_follow_busy)
+                            .label(if followed { "Following" } else { "Follow" })
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.follow_discover_creator(req.clone(), false, cx);
+                            })),
+                    )
+            }))
+    }
+
+    fn render_discover_card_thumb(&self, item: &DiscoverItem, width: f32, height: f32) -> Div {
+        let source_label = item.source_label();
+        let duration_text = item.duration.filter(|&d| d > 0).map(format_duration);
+        let thumb_el: AnyElement = match self.discover_thumbs.get(&item.thumbnail).cloned() {
+            Some(image) => img(image)
+                .size_full()
+                .object_fit(ObjectFit::Cover)
+                .into_any_element(),
+            None => video_art(&item.title, None, width, height).into_any_element(),
+        };
+
+        div()
+            .relative()
+            .w_full()
+            .h(px(height))
+            .bg(rgb(CARD_ELEVATED))
+            .overflow_hidden()
+            .child(thumb_el)
+            .child(
+                div()
+                    .absolute()
+                    .top_2()
+                    .left_2()
+                    .px_2()
+                    .py_0p5()
+                    .rounded(px(6.))
+                    .bg(hsla(0., 0., 0., 0.72))
+                    .text_xs()
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .text_color(rgb(INK))
+                    .child(source_label),
+            )
+            .when_some(duration_text, |box_el, dur| {
+                box_el.child(
+                    div()
+                        .absolute()
+                        .bottom_2()
+                        .right_2()
+                        .px_2()
+                        .py_0p5()
+                        .rounded(px(6.))
+                        .bg(hsla(0., 0., 0., 0.76))
+                        .text_xs()
+                        .font_weight(FontWeight::MEDIUM)
+                        .text_color(rgb(INK))
+                        .child(dur),
+                )
+            })
+    }
+
+    fn render_discover_card(
+        &self,
+        idx: usize,
+        item: DiscoverItem,
+        is_browse: bool,
+        cx: &mut Context<Self>,
+    ) -> Stateful<Div> {
+        let status = self.discover_item_status(&item);
+        let can_follow_creator = is_browse && !item.creator_url.is_empty();
+        let creator_followed = can_follow_creator
+            && self.is_discover_creator_followed(&item.source, &item.creator_url, &item.creator_name);
+        let follow_req = DiscoverFollowRequest::from_item(&item);
+        let add_primary_item = item.clone();
+        let add_audio_item = item.clone();
+        let show_audio_btn = !item.audio_only && status == DiscoverItemStatus::Available;
+        let card_width = 452.0_f32;
+        let thumb_height = 184.0_f32;
+
+        v_flex()
+            .id(SharedString::from(format!("disc-card-{idx}-{}", item.id)))
+            .w(px(card_width))
+            .rounded(px(14.))
+            .bg(rgb(CARD))
+            .border_1()
+            .border_color(rgb(LINE))
+            .overflow_hidden()
+            .child(self.render_discover_card_thumb(&item, card_width, thumb_height))
+            .child(
+                v_flex()
+                    .p_3p5()
+                    .gap_2p5()
+                    .child(
+                        h_flex()
+                            .justify_between()
+                            .items_center()
+                            .gap_2()
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .text_xs()
+                                    .font_weight(FontWeight::MEDIUM)
+                                    .text_color(rgb(DIM))
+                                    .truncate()
+                                    .child(item.creator_name.clone()),
+                            )
+                            .when(can_follow_creator, |row| {
+                                row.child(
+                                    Button::new(SharedString::from(format!("disc-card-follow-{idx}")))
+                                        .ghost()
+                                        .small()
+                                        .disabled(creator_followed || self.discover_follow_busy)
+                                        .label(if creator_followed { "Following" } else { "Follow" })
+                                        .on_click(cx.listener(move |this, _, _, cx| {
+                                            this.follow_discover_creator(follow_req.clone(), false, cx);
+                                        })),
+                                )
+                            }),
+                    )
+                    .child(
+                        div()
+                            .text_sm()
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .text_color(rgb(INK))
+                            .truncate()
+                            .child(item.title.clone()),
+                    )
+                    .child(
+                        h_flex()
+                            .items_center()
+                            .gap_2()
+                            .pt_1()
+                            .child(match status {
+                                DiscoverItemStatus::InLibrary => Button::new(SharedString::from(format!("disc-add-{idx}")))
+                                    .ghost()
+                                    .small()
+                                    .disabled(true)
+                                    .icon(Icon::new(Lucide::Check).text_color(rgb(ACCENT)))
+                                    .label("In library"),
+                                DiscoverItemStatus::Adding => Button::new(SharedString::from(format!("disc-add-{idx}")))
+                                    .small()
+                                    .disabled(true)
+                                    .label("Adding…"),
+                                DiscoverItemStatus::Available => Button::new(SharedString::from(format!("disc-add-{idx}")))
+                                    .primary()
+                                    .small()
+                                    .icon(Icon::new(Lucide::Plus))
+                                    .label("Add to PearTube")
+                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                        this.add_discover_item_to_library(add_primary_item.clone(), None, cx);
+                                    })),
+                            })
+                            .when(show_audio_btn, |row| {
+                                row.child(
+                                    Button::new(SharedString::from(format!("disc-add-audio-{idx}")))
+                                        .ghost()
+                                        .small()
+                                        .icon(Icon::new(Lucide::Volume2))
+                                        .label("Audio")
+                                        .on_click(cx.listener(move |this, _, _, cx| {
+                                            this.add_discover_item_to_library(add_audio_item.clone(), Some(true), cx);
+                                        })),
+                                )
+                            }),
+                    ),
+            )
+    }
+
+    fn render_visited_shelves_section(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let visited_shelves = self.visited_shelves.clone();
+        v_flex()
+            .gap_3()
+            .child(div().text_lg().font_weight(FontWeight::BOLD).child("Shelves you visited"))
+            .when(visited_shelves.is_empty(), |this| {
+                this.child(
+                    div()
+                        .text_sm()
+                        .text_color(rgb(DIM))
+                        .child("Peer shelves you browse from Soulseek search results will show up here."),
+                )
+            })
+            .when(!visited_shelves.is_empty(), |this| {
+                this.child(
+                    v_flex()
+                        .border_t_1()
+                        .border_color(rgb(LINE))
+                        .children(visited_shelves.into_iter().map(|shelf| {
+                            let peer_open = shelf.peer.clone();
+                            let peer_rm = shelf.peer.clone();
+                            let meta = if shelf.tracks > 0 {
+                                format!(
+                                    "{} · {}",
+                                    plural(shelf.tracks, "track", "tracks"),
+                                    format_bytes(shelf.size)
+                                )
+                            } else {
+                                "Soulseek peer".to_string()
+                            };
+                            h_flex()
+                                .id(SharedString::from(format!("disc-shelf-{}", shelf.peer)))
+                                .justify_between()
+                                .items_center()
+                                .py_3()
+                                .px_2()
+                                .border_b_1()
+                                .border_color(hsla(0., 0., 1., 0.06))
+                                .child(
+                                    v_flex()
+                                        .gap_0p5()
+                                        .child(div().text_sm().font_weight(FontWeight::SEMIBOLD).child(shelf.peer.clone()))
+                                        .child(div().text_xs().text_color(rgb(DIM)).child(meta)),
+                                )
+                                .child(
+                                    h_flex()
+                                        .gap_1p5()
+                                        .child(
+                                            Button::new(SharedString::from(format!("disc-shelf-open-{}", shelf.peer)))
+                                                .small()
+                                                .label("Browse shelf")
+                                                .on_click(cx.listener(move |this, _, _, cx| {
+                                                    this.open_shelf(peer_open.clone(), false, cx);
+                                                })),
+                                        )
+                                        .child(
+                                            Button::new(SharedString::from(format!("disc-shelf-rm-{}", shelf.peer)))
+                                                .ghost()
+                                                .small()
+                                                .icon(Icon::new(Lucide::X))
+                                                .tooltip("Remove from visited shelves")
+                                                .on_click(cx.listener(move |this, _, _, cx| {
+                                                    this.remove_visited_shelf(peer_rm.clone(), cx);
+                                                })),
+                                        ),
+                                )
+                        })),
+                )
+            })
+    }
+
+    fn render_network_channels_section(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let discovered = self
             .status
             .as_ref()
             .map(|s| s.discovered_sources.clone())
             .unwrap_or_default();
-        let visited_shelves = self.visited_shelves.clone();
+        v_flex()
+            .gap_3()
+            .child(div().text_lg().font_weight(FontWeight::BOLD).child("Channels on your network"))
+            .when(discovered.is_empty(), |this| {
+                this.child(
+                    div()
+                        .text_sm()
+                        .text_color(rgb(DIM))
+                        .child("No channels advertising on your local network right now."),
+                )
+            })
+            .when(!discovered.is_empty(), |this| {
+                this.child(
+                    v_flex()
+                        .border_t_1()
+                        .border_color(rgb(LINE))
+                        .children(discovered.into_iter().map(|d| {
+                            let title = if d.title.is_empty() {
+                                format!("{}…", &d.key[..8.min(d.key.len())])
+                            } else {
+                                d.title.clone()
+                            };
+                            let via = if d.via.is_empty() { "Local network".to_string() } else { d.via.clone() };
+                            let disc_clone = d.clone();
+                            h_flex()
+                                .id(SharedString::from(format!("disc-src-{}", d.key)))
+                                .justify_between()
+                                .items_center()
+                                .py_3()
+                                .px_2()
+                                .border_b_1()
+                                .border_color(hsla(0., 0., 1., 0.06))
+                                .child(
+                                    v_flex()
+                                        .gap_0p5()
+                                        .child(div().text_sm().font_weight(FontWeight::SEMIBOLD).child(title))
+                                        .child(div().text_xs().text_color(rgb(DIM)).child(via)),
+                                )
+                                .child(
+                                    Button::new(SharedString::from(format!("disc-follow-{}", d.key)))
+                                        .small()
+                                        .label("Follow")
+                                        .on_click(cx.listener(move |this, _, _, cx| {
+                                            this.subscribe_discovered(disc_clone.clone(), cx);
+                                        })),
+                                )
+                        })),
+                )
+            })
+    }
+
+    fn render_more_from_artists_section(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let artists: Vec<String> = self
             .catalog
             .artists
@@ -56,181 +802,37 @@ impl PearTube {
             .take(24)
             .map(|a| a.name.clone())
             .collect();
-
-        column()
-            .py_6()
-            .gap_8()
-            .child(
+        div().when(!artists.is_empty(), |this| {
+            this.child(
                 v_flex()
-                    .gap_2()
-                    .child(div().text_xl().font_weight(FontWeight::BOLD).child("Discover"))
+                    .gap_3()
+                    .child(div().text_lg().font_weight(FontWeight::BOLD).child("More from artists you have"))
                     .child(
-                        div()
-                            .text_sm()
-                            .text_color(rgb(DIM))
-                            .child("Find music and video from your sources, Soulseek shelves, other relays, and channels on your network."),
-                    )
-                    .child(
-                        h_flex().pt_1().child(
-                            Button::new("disc-search-relays")
-                                .primary()
-                                .icon(Icon::new(Lucide::Search))
-                                .label("Search sources & relays")
-                                .on_click(cx.listener(|this, _, window, cx| this.focus_search(window, cx))),
-                        ),
+                        h_flex()
+                            .gap_2()
+                            .flex_wrap()
+                            .children(artists.into_iter().enumerate().map(|(idx, name)| {
+                                let q = name.clone();
+                                div()
+                                    .id(SharedString::from(format!("disc-artist-chip-{idx}")))
+                                    .px_3()
+                                    .py_1p5()
+                                    .rounded(px(99.))
+                                    .bg(rgb(CARD))
+                                    .border_1()
+                                    .border_color(rgb(LINE))
+                                    .text_sm()
+                                    .text_color(rgb(INK))
+                                    .cursor_pointer()
+                                    .hover(|s| s.bg(rgb(CARD_ELEVATED)))
+                                    .on_click(cx.listener(move |this, _, window, cx| {
+                                        this.search_for_artist(q.clone(), window, cx);
+                                    }))
+                                    .child(name)
+                            })),
                     ),
             )
-            .child(
-                v_flex()
-                    .gap_3()
-                    .child(div().text_lg().font_weight(FontWeight::BOLD).child("Shelves you visited"))
-                    .when(visited_shelves.is_empty(), |this| {
-                        this.child(
-                            div()
-                                .text_sm()
-                                .text_color(rgb(DIM))
-                                .child("Peer shelves you browse from Soulseek search results will show up here."),
-                        )
-                    })
-                    .when(!visited_shelves.is_empty(), |this| {
-                        this.child(
-                            v_flex()
-                                .border_t_1()
-                                .border_color(rgb(LINE))
-                                .children(visited_shelves.into_iter().map(|shelf| {
-                                    let peer_open = shelf.peer.clone();
-                                    let peer_rm = shelf.peer.clone();
-                                    let meta = if shelf.tracks > 0 {
-                                        format!(
-                                            "{} · {}",
-                                            plural(shelf.tracks, "track", "tracks"),
-                                            format_bytes(shelf.size)
-                                        )
-                                    } else {
-                                        "Soulseek peer".to_string()
-                                    };
-                                    h_flex()
-                                        .id(SharedString::from(format!("disc-shelf-{}", shelf.peer)))
-                                        .justify_between()
-                                        .items_center()
-                                        .py_3()
-                                        .px_2()
-                                        .border_b_1()
-                                        .border_color(hsla(0., 0., 1., 0.06))
-                                        .child(
-                                            v_flex()
-                                                .gap_0p5()
-                                                .child(div().text_sm().font_weight(FontWeight::SEMIBOLD).child(shelf.peer.clone()))
-                                                .child(div().text_xs().text_color(rgb(DIM)).child(meta)),
-                                        )
-                                        .child(
-                                            h_flex()
-                                                .gap_1p5()
-                                                .child(
-                                                    Button::new(SharedString::from(format!("disc-shelf-open-{}", shelf.peer)))
-                                                        .small()
-                                                        .label("Browse shelf")
-                                                        .on_click(cx.listener(move |this, _, _, cx| {
-                                                            this.open_shelf(peer_open.clone(), false, cx);
-                                                        })),
-                                                )
-                                                .child(
-                                                    Button::new(SharedString::from(format!("disc-shelf-rm-{}", shelf.peer)))
-                                                        .ghost()
-                                                        .small()
-                                                        .icon(Icon::new(Lucide::X))
-                                                        .tooltip("Remove from visited shelves")
-                                                        .on_click(cx.listener(move |this, _, _, cx| {
-                                                            this.remove_visited_shelf(peer_rm.clone(), cx);
-                                                        })),
-                                                ),
-                                        )
-                                })),
-                        )
-                    }),
-            )
-            .child(
-                v_flex()
-                    .gap_3()
-                    .child(div().text_lg().font_weight(FontWeight::BOLD).child("Channels on your network"))
-                    .when(discovered.is_empty(), |this| {
-                        this.child(
-                            div()
-                                .text_sm()
-                                .text_color(rgb(DIM))
-                                .child("No channels advertising on your local network right now."),
-                        )
-                    })
-                    .when(!discovered.is_empty(), |this| {
-                        this.child(
-                            v_flex()
-                                .border_t_1()
-                                .border_color(rgb(LINE))
-                                .children(discovered.into_iter().map(|d| {
-                                    let title = if d.title.is_empty() {
-                                        format!("{}…", &d.key[..8.min(d.key.len())])
-                                    } else {
-                                        d.title.clone()
-                                    };
-                                    let via = if d.via.is_empty() { "Local network".to_string() } else { d.via.clone() };
-                                    let disc_clone = d.clone();
-                                    h_flex()
-                                        .id(SharedString::from(format!("disc-src-{}", d.key)))
-                                        .justify_between()
-                                        .items_center()
-                                        .py_3()
-                                        .px_2()
-                                        .border_b_1()
-                                        .border_color(hsla(0., 0., 1., 0.06))
-                                        .child(
-                                            v_flex()
-                                                .gap_0p5()
-                                                .child(div().text_sm().font_weight(FontWeight::SEMIBOLD).child(title))
-                                                .child(div().text_xs().text_color(rgb(DIM)).child(via)),
-                                        )
-                                        .child(
-                                            Button::new(SharedString::from(format!("disc-follow-{}", d.key)))
-                                                .small()
-                                                .label("Follow")
-                                                .on_click(cx.listener(move |this, _, _, cx| {
-                                                    this.subscribe_discovered(disc_clone.clone(), cx);
-                                                })),
-                                        )
-                                })),
-                        )
-                    }),
-            )
-            .when(!artists.is_empty(), |this| {
-                this.child(
-                    v_flex()
-                        .gap_3()
-                        .child(div().text_lg().font_weight(FontWeight::BOLD).child("More from artists you have"))
-                        .child(
-                            h_flex()
-                                .gap_2()
-                                .flex_wrap()
-                                .children(artists.into_iter().enumerate().map(|(idx, name)| {
-                                    let q = name.clone();
-                                    div()
-                                        .id(SharedString::from(format!("disc-artist-chip-{idx}")))
-                                        .px_3()
-                                        .py_1p5()
-                                        .rounded(px(99.))
-                                        .bg(rgb(CARD))
-                                        .border_1()
-                                        .border_color(rgb(LINE))
-                                        .text_sm()
-                                        .text_color(rgb(INK))
-                                        .cursor_pointer()
-                                        .hover(|s| s.bg(rgb(CARD_ELEVATED)))
-                                        .on_click(cx.listener(move |this, _, window, cx| {
-                                            this.search_for_artist(q.clone(), window, cx);
-                                        }))
-                                        .child(name)
-                                })),
-                        ),
-                )
-            })
+        })
     }
 
     pub fn render_search(&self, cx: &mut Context<Self>) -> impl IntoElement {

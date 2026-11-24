@@ -1,5 +1,8 @@
 package com.peartube.app.ui
 
+import android.graphics.BitmapFactory
+import android.util.LruCache
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -22,6 +25,8 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.AlertDialog
@@ -39,6 +44,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -46,6 +52,10 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
@@ -54,6 +64,9 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.peartube.app.AppModel
+import com.peartube.app.DiscoverCreator
+import com.peartube.app.DiscoverFeedError
+import com.peartube.app.DiscoverItem
 import com.peartube.app.LibraryCatalog
 import com.peartube.app.Room
 import com.peartube.app.RumbleCandidate
@@ -65,13 +78,184 @@ import com.peartube.app.SoundCloudCandidate
 import com.peartube.app.YouTubeCandidate
 import com.peartube.app.findIn
 import com.peartube.app.plural
+import com.peartube.app.resolveLoopbackThumbUrl
 import com.peartube.app.tileFactsLine
 import com.peartube.app.toTrackItem
 import com.peartube.app.toTrackItems
 import com.peartube.shared.clock
 import com.peartube.shared.formatBytes
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import java.net.HttpURLConnection
+import java.net.URL
+import java.util.Locale
 
 private val HEX_KEY_RE = Regex("^[a-fA-F0-9]{64}$")
+private val DISCOVER_TOPICS = listOf("Music", "Tech", "Science", "Podcasts", "Gaming", "Documentary")
+private val DISCOVER_SOURCE_FILTERS = listOf(
+    "" to "All",
+    "youtube" to "YouTube",
+    "soundcloud" to "SoundCloud",
+    "rumble" to "Rumble",
+)
+
+private object LoopbackThumbCache {
+    private val cache = object : LruCache<String, ImageBitmap>(64) {}
+
+    fun get(url: String): ImageBitmap? = synchronized(cache) { cache.get(url) }
+
+    fun put(url: String, bitmap: ImageBitmap) {
+        synchronized(cache) { cache.put(url, bitmap) }
+    }
+}
+
+private suspend fun fetchLoopbackBitmap(url: String): ImageBitmap? = withContext(Dispatchers.IO) {
+    LoopbackThumbCache.get(url)?.let { return@withContext it }
+    var conn: HttpURLConnection? = null
+    try {
+        conn = (URL(url).openConnection() as HttpURLConnection).apply {
+            requestMethod = "GET"
+            connectTimeout = 5_000
+            readTimeout = 8_000
+        }
+        if (conn.responseCode !in 200..299) return@withContext null
+        val decoded = conn.inputStream.use { input ->
+            BitmapFactory.decodeStream(input)?.asImageBitmap()
+        }
+        if (decoded != null) {
+            LoopbackThumbCache.put(url, decoded)
+        }
+        decoded
+    } catch (ce: CancellationException) {
+        throw ce
+    } catch (_: Exception) {
+        null
+    } finally {
+        try {
+            conn?.disconnect()
+        } catch (_: Exception) {
+            // Ignore socket cleanup errors.
+        }
+    }
+}
+
+private fun sourceAccentColor(source: String): Color = when (source.lowercase(Locale.ROOT)) {
+    "youtube" -> Color(0xFFE05252)
+    "soundcloud" -> Color(0xFFFF7A33)
+    "rumble" -> Color(0xFF7FD14B)
+    else -> Brand
+}
+
+private fun sourceDisplayLabel(source: String): String = when (source.lowercase(Locale.ROOT)) {
+    "youtube" -> "YouTube"
+    "soundcloud" -> "SoundCloud"
+    "rumble" -> "Rumble"
+    else -> source.replaceFirstChar { it.uppercase(Locale.ROOT) }.ifBlank { "Source" }
+}
+
+private fun formatRelativePublished(publishedAtMs: Long): String {
+    if (publishedAtMs <= 0L) return ""
+    val diffMs = (System.currentTimeMillis() - publishedAtMs).coerceAtLeast(0L)
+    val mins = diffMs / 60_000L
+    val hours = mins / 60L
+    val days = hours / 24L
+    return when {
+        mins < 60L -> if (mins <= 1L) "Just now" else "${mins}m ago"
+        hours < 24L -> "${hours}h ago"
+        days < 30L -> "${days}d ago"
+        days < 365L -> "${days / 30L}mo ago"
+        else -> "${days / 365L}y ago"
+    }
+}
+
+@Composable
+private fun LoopbackThumbnail(
+    apiUrl: String?,
+    path: String,
+    source: String,
+    audioOnly: Boolean,
+    contentDescription: String?,
+    modifier: Modifier = Modifier,
+) {
+    val resolvedUrl = remember(apiUrl, path) { resolveLoopbackThumbUrl(apiUrl, path) }
+    val bitmap by produceState<ImageBitmap?>(
+        initialValue = resolvedUrl?.let { LoopbackThumbCache.get(it) },
+        key1 = resolvedUrl,
+    ) {
+        value = if (resolvedUrl != null) fetchLoopbackBitmap(resolvedUrl) else null
+    }
+    val tint = sourceAccentColor(source)
+    Box(
+        modifier = modifier.background(CardElevated),
+        contentAlignment = Alignment.Center,
+    ) {
+        val loaded = bitmap
+        if (loaded != null) {
+            Image(
+                bitmap = loaded,
+                contentDescription = contentDescription,
+                contentScale = ContentScale.Crop,
+                modifier = Modifier.fillMaxSize(),
+            )
+        } else {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(tint.copy(alpha = 0.14f)),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    imageVector = if (audioOnly) ListenIcon else WatchIcon,
+                    contentDescription = null,
+                    tint = tint.copy(alpha = 0.78f),
+                    modifier = Modifier.size(32.dp),
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun LoopbackAvatar(
+    apiUrl: String?,
+    path: String,
+    name: String,
+    source: String,
+    modifier: Modifier = Modifier,
+) {
+    val resolvedUrl = remember(apiUrl, path) { resolveLoopbackThumbUrl(apiUrl, path) }
+    val bitmap by produceState<ImageBitmap?>(
+        initialValue = resolvedUrl?.let { LoopbackThumbCache.get(it) },
+        key1 = resolvedUrl,
+    ) {
+        value = if (resolvedUrl != null) fetchLoopbackBitmap(resolvedUrl) else null
+    }
+    val tint = sourceAccentColor(source)
+    Box(
+        modifier = modifier
+            .clip(CircleShape)
+            .background(tint.copy(alpha = 0.22f)),
+        contentAlignment = Alignment.Center,
+    ) {
+        val loaded = bitmap
+        if (loaded != null) {
+            Image(
+                bitmap = loaded,
+                contentDescription = name,
+                contentScale = ContentScale.Crop,
+                modifier = Modifier.fillMaxSize(),
+            )
+        } else {
+            Text(
+                text = name.trim().firstOrNull()?.uppercase() ?: "?",
+                color = tint,
+                fontSize = 11.sp,
+                fontWeight = FontWeight.Bold,
+            )
+        }
+    }
+}
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
@@ -80,32 +264,429 @@ fun DiscoverScreen(
     catalog: LibraryCatalog,
 ) {
     val status by model.status.collectAsState()
+    val entries by model.entries.collectAsState()
+    val acquireJobs by model.acquireJobs.collectAsState()
     val visitedShelves by model.visitedShelves.collectAsState()
+    val creators by model.discoverCreators.collectAsState()
+    val feed by model.discoverFeed.collectAsState()
+    val browse by model.discoverBrowse.collectAsState()
+    val loading by model.discoverLoading.collectAsState()
+    val followBusy by model.discoverFollowBusy.collectAsState()
+    val discoverError by model.discoverError.collectAsState()
+    val sourceFilter by model.discoverSourceFilter.collectAsState()
+    val creatorFilter by model.discoverCreatorFilter.collectAsState()
+    val activeTopic by model.discoverActiveTopic.collectAsState()
+    val submittingIds by model.discoverSubmittingIds.collectAsState()
+
+    var followInput by remember { mutableStateOf("") }
+    val focusManager = LocalFocusManager.current
+
+    val apiUrl = status?.apiUrl
     val discovered = status?.discoveredSources.orEmpty()
     val artistNames = remember(catalog.artists) {
         catalog.artists.map { it.name }.filter { it.isNotBlank() && it != "Unknown artist" }
+    }
+    val libraryIds = remember(entries) {
+        entries.map { it.id.lowercase(Locale.ROOT) }.toSet()
+    }
+    val activeAcquireIds = remember(acquireJobs) {
+        acquireJobs.filter { it.isActive }.map { it.id.lowercase(Locale.ROOT) }.filter { it.isNotBlank() }.toSet()
+    }
+    val followedCreatorIds = remember(creators) { creators.map { it.id }.toSet() }
+    val followedCreatorUrls = remember(creators) { creators.map { it.url.lowercase(Locale.ROOT) }.toSet() }
+    val followedCreatorKeys = remember(creators) {
+        creators.map { "${it.source}:${it.name.lowercase(Locale.ROOT)}" }.toSet()
+    }
+
+    val browsing = activeTopic != null
+    val shownItems = remember(browsing, browse, feed, sourceFilter) {
+        if (browsing) {
+            val all = browse?.items.orEmpty()
+            if (sourceFilter.isEmpty()) all else all.filter { it.source == sourceFilter }
+        } else {
+            feed.items
+        }
+    }
+    val shownErrors = remember(browsing, browse, feed) {
+        if (browsing) browse?.errors.orEmpty() else feed.errors
+    }
+
+    val submitFollow = {
+        val raw = followInput.trim()
+        if (raw.isNotEmpty() && !followBusy) {
+            focusManager.clearFocus()
+            model.followDiscoverCreator(raw) { followInput = "" }
+        }
     }
 
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
         contentPadding = PaddingValues(16.dp),
-        verticalArrangement = Arrangement.spacedBy(20.dp),
+        verticalArrangement = Arrangement.spacedBy(18.dp),
     ) {
-        item(key = "discover-search-cta") {
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text("Discover", color = Ink, fontSize = 22.sp, fontWeight = FontWeight.Bold)
-                Text("Search Soulseek, YouTube, SoundCloud, Rumble, and other relays for albums, videos, and tracks.", color = Dim, fontSize = 14.sp)
-                PrimaryLightButton(
-                    text = "Search sources & relays",
-                    icon = SearchIcon,
-                    onClick = { model.selectRoom(Room.Search, focusSearch = true) },
+        item(key = "discover-header") {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
+                    Text(
+                        text = "Discover",
+                        color = Ink,
+                        fontSize = 22.sp,
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier.weight(1f),
+                    )
+                    QuietActionButton(
+                        text = "Search sources & relays",
+                        icon = SearchIcon,
+                        onClick = { model.selectRoom(Room.Search, focusSearch = true) },
+                    )
+                }
+                Text(
+                    text = "Follow creators across YouTube, SoundCloud, and Rumble, or explore topics and pull picks straight into PearTube.",
+                    color = Dim,
+                    fontSize = 13.sp,
                 )
+            }
+        }
+
+        item(key = "discover-follow-bar") {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("Follow a creator", color = Ink, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    OutlinedTextField(
+                        value = followInput,
+                        onValueChange = { followInput = it },
+                        singleLine = true,
+                        enabled = !followBusy,
+                        placeholder = {
+                            Text(
+                                "YouTube @handle, SoundCloud, or Rumble link",
+                                fontSize = 13.sp,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                        },
+                        trailingIcon = if (followInput.isNotEmpty() && !followBusy) {
+                            { CinemaIcon(CloseIcon, "Clear input") { followInput = "" } }
+                        } else null,
+                        keyboardOptions = KeyboardOptions(
+                            capitalization = KeyboardCapitalization.None,
+                            autoCorrectEnabled = false,
+                            imeAction = ImeAction.Done,
+                        ),
+                        keyboardActions = KeyboardActions(onDone = { submitFollow() }),
+                        shape = ControlShape,
+                        colors = fieldColors(),
+                        modifier = Modifier.weight(1f),
+                    )
+                    PrimaryLightButton(
+                        text = if (followBusy) "…" else "Follow",
+                        enabled = followInput.isNotBlank() && !followBusy,
+                        onClick = submitFollow,
+                    )
+                }
+            }
+        }
+
+        item(key = "discover-topics") {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("Explore topics", color = Ink, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
+                LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    items(DISCOVER_TOPICS, key = { "topic-$it" }) { topic ->
+                        val selected = activeTopic.equals(topic, ignoreCase = true)
+                        FilterChip(
+                            selected = selected,
+                            onClick = {
+                                if (selected) model.clearDiscoverBrowse()
+                                else model.browseDiscoverTopic(topic)
+                            },
+                            label = { Text(topic, fontSize = 13.sp) },
+                            colors = FilterChipDefaults.filterChipColors(
+                                containerColor = CardBg,
+                                labelColor = Ink,
+                                selectedContainerColor = Brand.copy(alpha = 0.24f),
+                                selectedLabelColor = Ink,
+                            ),
+                        )
+                    }
+                }
+            }
+        }
+
+        if (creators.isNotEmpty()) {
+            item(key = "discover-creators-row") {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(
+                            text = "Creators you follow (${creators.size})",
+                            color = Ink,
+                            fontSize = 15.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            modifier = Modifier.weight(1f),
+                        )
+                        TextButton(
+                            enabled = !loading,
+                            onClick = {
+                                if (browsing && activeTopic != null) {
+                                    model.browseDiscoverTopic(activeTopic ?: return@TextButton)
+                                } else {
+                                    model.loadDiscoverFeed(refresh = true)
+                                }
+                            },
+                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+                        ) {
+                            Icon(ReplayIcon, null, tint = Brand, modifier = Modifier.size(16.dp))
+                            Spacer(Modifier.width(4.dp))
+                            Text("Refresh", color = Brand, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                        }
+                    }
+                    LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        item(key = "creator-all") {
+                            val selected = !browsing && creatorFilter.isEmpty()
+                            FilterChip(
+                                selected = selected,
+                                onClick = { model.setDiscoverCreatorFilter("") },
+                                label = { Text("All", fontSize = 12.sp) },
+                                colors = FilterChipDefaults.filterChipColors(
+                                    containerColor = CardBg,
+                                    labelColor = Ink,
+                                    selectedContainerColor = Brand.copy(alpha = 0.24f),
+                                    selectedLabelColor = Ink,
+                                ),
+                            )
+                        }
+                        items(creators, key = { "creator-${it.id}" }) { creator ->
+                            val selected = !browsing && creatorFilter == creator.id
+                            DiscoverCreatorChip(
+                                creator = creator,
+                                apiUrl = apiUrl,
+                                selected = selected,
+                                onSelect = { model.setDiscoverCreatorFilter(creator.id) },
+                                onUnfollow = { model.unfollowDiscoverCreator(creator.id) },
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
+        item(key = "discover-source-filter") {
+            LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                items(DISCOVER_SOURCE_FILTERS, key = { "src-${it.first}" }) { (id, label) ->
+                    val selected = sourceFilter == id
+                    FilterChip(
+                        selected = selected,
+                        onClick = { model.setDiscoverSourceFilter(id) },
+                        label = { Text(label, fontSize = 12.sp) },
+                        colors = FilterChipDefaults.filterChipColors(
+                            containerColor = CardBg,
+                            labelColor = Dim,
+                            selectedContainerColor = Brand.copy(alpha = 0.22f),
+                            selectedLabelColor = Ink,
+                        ),
+                    )
+                }
+            }
+        }
+
+        if (!discoverError.isNullOrBlank()) {
+            item(key = "discover-error-banner") {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(CardShape)
+                        .background(Danger.copy(alpha = 0.14f))
+                        .border(1.dp, Danger.copy(alpha = 0.4f), CardShape)
+                        .padding(start = 12.dp, end = 4.dp, top = 6.dp, bottom = 6.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        text = discoverError ?: "",
+                        color = Ink,
+                        fontSize = 13.sp,
+                        modifier = Modifier.weight(1f),
+                    )
+                    CinemaIcon(CloseIcon, "Dismiss", Ink) { model.discoverError.value = null }
+                }
+            }
+        }
+
+        if (shownErrors.isNotEmpty()) {
+            item(key = "discover-partial-errors") {
+                DiscoverSoftErrorBanner(errors = shownErrors)
+            }
+        }
+
+        item(key = "discover-feed-head") {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                val heading = if (browsing) {
+                    "Exploring \"${activeTopic ?: ""}\""
+                } else {
+                    "Latest from creators"
+                }
+                Text(
+                    text = heading,
+                    color = Ink,
+                    fontSize = 17.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    modifier = Modifier.weight(1f),
+                )
+                if (loading) {
+                    CircularProgressIndicator(
+                        color = Brand,
+                        strokeWidth = 2.dp,
+                        modifier = Modifier.size(16.dp),
+                    )
+                }
+                if (browsing) {
+                    TextButton(
+                        onClick = { model.clearDiscoverBrowse() },
+                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+                    ) {
+                        Text("Back to feed", color = Brand, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                    }
+                }
+            }
+        }
+
+        if (browsing) {
+            val browseCreators = browse?.creators.orEmpty().filter {
+                sourceFilter.isEmpty() || it.source == sourceFilter
+            }
+            if (browseCreators.isNotEmpty()) {
+                item(key = "discover-browse-creators") {
+                    LazyRow(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                        items(browseCreators, key = { "bc-${it.id}-${it.url}" }) { bc ->
+                            val alreadyFollowed = bc.followed ||
+                                bc.id in followedCreatorIds ||
+                                bc.url.lowercase(Locale.ROOT) in followedCreatorUrls ||
+                                "${bc.source}:${bc.name.lowercase(Locale.ROOT)}" in followedCreatorKeys
+                            DiscoverBrowseCreatorCard(
+                                creator = bc,
+                                apiUrl = apiUrl,
+                                followed = alreadyFollowed,
+                                followBusy = followBusy,
+                                onFollow = {
+                                    model.followDiscoverCreator(
+                                        input = bc.url,
+                                        name = bc.displayName,
+                                    )
+                                },
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
+        when {
+            loading && shownItems.isEmpty() -> {
+                item(key = "discover-loading") {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(CardShape)
+                            .background(CardBg)
+                            .border(1.dp, Line, CardShape)
+                            .padding(16.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    ) {
+                        CircularProgressIndicator(color = Brand, strokeWidth = 2.dp, modifier = Modifier.size(18.dp))
+                        Text(
+                            text = if (browsing) "Browsing \"${activeTopic ?: ""}\"…" else "Refreshing your creator feed…",
+                            color = Dim,
+                            fontSize = 13.sp,
+                        )
+                    }
+                }
+            }
+            !browsing && creators.isEmpty() -> {
+                item(key = "discover-empty-creators") {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(CardShape)
+                            .background(CardBg)
+                            .border(1.dp, Line, CardShape)
+                            .padding(16.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp),
+                    ) {
+                        Text("Your creator feed is empty", color = Ink, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
+                        Text(
+                            "Paste a YouTube @handle, SoundCloud artist, or Rumble channel link above — or tap a topic chip to browse and follow creators.",
+                            color = Dim,
+                            fontSize = 13.sp,
+                        )
+                    }
+                }
+            }
+            shownItems.isEmpty() -> {
+                item(key = "discover-empty-items") {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(CardShape)
+                            .background(CardBg)
+                            .border(1.dp, Line, CardShape)
+                            .padding(16.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp),
+                    ) {
+                        Text(
+                            text = if (browsing) "No results for \"${activeTopic ?: ""}\"." else "No recent items match this filter.",
+                            color = Dim,
+                            fontSize = 13.sp,
+                        )
+                    }
+                }
+            }
+            else -> {
+                items(shownItems, key = { "di-${it.id}" }) { item ->
+                    val inLibrary = item.inLibrary ||
+                        (item.acquireId.isNotBlank() && item.acquireId.lowercase(Locale.ROOT) in libraryIds)
+                    val isAdding = item.id in submittingIds ||
+                        (item.acquireId.isNotBlank() && item.acquireId.lowercase(Locale.ROOT) in activeAcquireIds)
+                    val creatorAlreadyFollowed = item.creatorId in followedCreatorIds ||
+                        (item.creatorUrl.isNotBlank() && item.creatorUrl.lowercase(Locale.ROOT) in followedCreatorUrls) ||
+                        "${item.source}:${item.creatorName.lowercase(Locale.ROOT)}" in followedCreatorKeys
+                    DiscoverItemCard(
+                        item = item,
+                        apiUrl = apiUrl,
+                        inLibrary = inLibrary,
+                        isAdding = isAdding,
+                        showFollowCreator = browsing && item.creatorUrl.isNotBlank() && !creatorAlreadyFollowed,
+                        followBusy = followBusy,
+                        onAdd = { model.addDiscoverItemToLibrary(item) },
+                        onAddAudio = { model.addDiscoverItemToLibrary(item, audioOverride = true) },
+                        onFollowCreator = {
+                            model.followDiscoverCreator(
+                                input = item.creatorUrl,
+                                name = item.creatorName,
+                            )
+                        },
+                    )
+                }
             }
         }
 
         if (visitedShelves.isNotEmpty()) {
             item(key = "discover-shelves") {
                 Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    HorizontalDivider(color = Line.copy(alpha = 0.6f))
                     Text("Shelves you visited", color = Ink, fontSize = 17.sp, fontWeight = FontWeight.SemiBold)
                     visitedShelves.forEach { shelf ->
                         Row(
@@ -136,6 +717,7 @@ fun DiscoverScreen(
 
         item(key = "discover-network") {
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                HorizontalDivider(color = Line.copy(alpha = 0.6f))
                 Text("Channels on your network", color = Ink, fontSize = 17.sp, fontWeight = FontWeight.SemiBold)
                 if (discovered.isEmpty()) {
                     Text("No channels announced on your Wi-Fi right now.", color = Dim, fontSize = 13.sp)
@@ -168,6 +750,7 @@ fun DiscoverScreen(
         if (artistNames.isNotEmpty()) {
             item(key = "discover-artists") {
                 Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    HorizontalDivider(color = Line.copy(alpha = 0.6f))
                     Text("More from artists you have", color = Ink, fontSize = 17.sp, fontWeight = FontWeight.SemiBold)
                     FlowRow(
                         horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -181,6 +764,301 @@ fun DiscoverScreen(
                             )
                         }
                     }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun DiscoverCreatorChip(
+    creator: DiscoverCreator,
+    apiUrl: String?,
+    selected: Boolean,
+    onSelect: () -> Unit,
+    onUnfollow: () -> Unit,
+) {
+    Row(
+        modifier = Modifier
+            .clip(PillShape)
+            .background(if (selected) Brand.copy(alpha = 0.24f) else CardBg)
+            .border(1.dp, if (selected) Brand else Line, PillShape)
+            .clickable(onClick = onSelect)
+            .padding(start = 6.dp, end = 6.dp, top = 5.dp, bottom = 5.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        LoopbackAvatar(
+            apiUrl = apiUrl,
+            path = creator.avatar,
+            name = creator.displayName,
+            source = creator.source,
+            modifier = Modifier.size(22.dp),
+        )
+        Text(
+            text = creator.displayName,
+            color = Ink,
+            fontSize = 12.sp,
+            fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Medium,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+        Box(
+            modifier = Modifier
+                .size(22.dp)
+                .clip(CircleShape)
+                .clickable(onClick = onUnfollow),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(
+                imageVector = CloseIcon,
+                contentDescription = "Unfollow ${creator.displayName}",
+                tint = Dim,
+                modifier = Modifier.size(14.dp),
+            )
+        }
+    }
+}
+
+@Composable
+private fun DiscoverBrowseCreatorCard(
+    creator: DiscoverCreator,
+    apiUrl: String?,
+    followed: Boolean,
+    followBusy: Boolean,
+    onFollow: () -> Unit,
+) {
+    Row(
+        modifier = Modifier
+            .clip(CardShape)
+            .background(CardBg)
+            .border(1.dp, Line, CardShape)
+            .padding(horizontal = 10.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        LoopbackAvatar(
+            apiUrl = apiUrl,
+            path = creator.avatar,
+            name = creator.displayName,
+            source = creator.source,
+            modifier = Modifier.size(30.dp),
+        )
+        Column(verticalArrangement = Arrangement.spacedBy(1.dp)) {
+            Text(
+                text = creator.displayName,
+                color = Ink,
+                fontSize = 13.sp,
+                fontWeight = FontWeight.Medium,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Text(
+                text = sourceDisplayLabel(creator.source),
+                color = Dim,
+                fontSize = 11.sp,
+            )
+        }
+        if (followed) {
+            SourceBadge(text = "Following", highlight = true)
+        } else {
+            TextButton(
+                enabled = !followBusy,
+                onClick = onFollow,
+                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+            ) {
+                Text("Follow", color = Brand, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+            }
+        }
+    }
+}
+
+@Composable
+private fun DiscoverSoftErrorBanner(errors: List<DiscoverFeedError>) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(CardShape)
+            .background(Warn.copy(alpha = 0.12f))
+            .border(1.dp, Warn.copy(alpha = 0.36f), CardShape)
+            .padding(horizontal = 12.dp, vertical = 10.dp),
+        verticalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
+        errors.take(4).forEach { err ->
+            Text(
+                text = "${err.label}: ${err.message}",
+                color = Warn,
+                fontSize = 12.sp,
+            )
+        }
+        if (errors.size > 4) {
+            Text(
+                text = "+ ${errors.size - 4} more source notes",
+                color = Dim,
+                fontSize = 11.sp,
+            )
+        }
+    }
+}
+
+@Composable
+private fun DiscoverItemCard(
+    item: DiscoverItem,
+    apiUrl: String?,
+    inLibrary: Boolean,
+    isAdding: Boolean,
+    showFollowCreator: Boolean,
+    followBusy: Boolean,
+    onAdd: () -> Unit,
+    onAddAudio: () -> Unit,
+    onFollowCreator: () -> Unit,
+) {
+    val sourceColor = sourceAccentColor(item.source)
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(CardShape)
+            .background(CardBg)
+            .border(1.dp, Line, CardShape),
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(176.dp),
+        ) {
+            LoopbackThumbnail(
+                apiUrl = apiUrl,
+                path = item.thumbnail,
+                source = item.source,
+                audioOnly = item.audioOnly,
+                contentDescription = item.title,
+                modifier = Modifier.fillMaxSize(),
+            )
+            Box(
+                modifier = Modifier
+                    .align(Alignment.TopStart)
+                    .padding(10.dp)
+                    .clip(PillShape)
+                    .background(Bg.copy(alpha = 0.82f))
+                    .border(1.dp, sourceColor.copy(alpha = 0.55f), PillShape)
+                    .padding(horizontal = 9.dp, vertical = 3.dp),
+            ) {
+                Text(
+                    text = sourceDisplayLabel(item.source),
+                    color = Ink,
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.SemiBold,
+                )
+            }
+            item.durationSec?.let { dur ->
+                Box(
+                    modifier = Modifier
+                        .align(Alignment.BottomEnd)
+                        .padding(10.dp)
+                        .clip(RoundedCornerShape(6.dp))
+                        .background(Bg.copy(alpha = 0.86f))
+                        .padding(horizontal = 7.dp, vertical = 3.dp),
+                ) {
+                    Text(
+                        text = clock(dur * 1000L),
+                        color = Ink,
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Medium,
+                    )
+                }
+            }
+        }
+
+        Column(
+            modifier = Modifier.padding(14.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Text(
+                text = item.title,
+                color = Ink,
+                fontSize = 15.sp,
+                fontWeight = FontWeight.SemiBold,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+            )
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                val relDate = remember(item.publishedAt) { formatRelativePublished(item.publishedAt) }
+                val meta = listOfNotNull(
+                    item.creatorName.takeIf { it.isNotBlank() },
+                    relDate.takeIf { it.isNotBlank() },
+                ).joinToString(" · ")
+                Text(
+                    text = meta.ifBlank { sourceDisplayLabel(item.source) },
+                    color = Dim,
+                    fontSize = 12.sp,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f),
+                )
+                if (showFollowCreator) {
+                    TextButton(
+                        enabled = !followBusy,
+                        onClick = onFollowCreator,
+                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+                    ) {
+                        Text("Follow", color = Brand, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                    }
+                }
+            }
+
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                when {
+                    inLibrary -> {
+                        Row(
+                            modifier = Modifier
+                                .clip(ControlShape)
+                                .background(Accent.copy(alpha = 0.16f))
+                                .border(1.dp, Accent.copy(alpha = 0.45f), ControlShape)
+                                .padding(horizontal = 12.dp, vertical = 8.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        ) {
+                            Icon(CheckIcon, null, tint = Accent, modifier = Modifier.size(16.dp))
+                            Text("In library", color = Accent, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                        }
+                    }
+                    isAdding -> {
+                        Row(
+                            modifier = Modifier
+                                .clip(ControlShape)
+                                .background(CardElevated)
+                                .border(1.dp, Line, ControlShape)
+                                .padding(horizontal = 12.dp, vertical = 8.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            CircularProgressIndicator(color = Brand, strokeWidth = 2.dp, modifier = Modifier.size(14.dp))
+                            Text("Adding…", color = Ink, fontSize = 13.sp, fontWeight = FontWeight.Medium)
+                        }
+                    }
+                    else -> {
+                        PrimaryLightButton(
+                            text = "Add to PearTube",
+                            icon = AddIcon,
+                            onClick = onAdd,
+                        )
+                    }
+                }
+
+                if (!item.audioOnly && !isAdding) {
+                    QuietActionButton(
+                        text = "Audio",
+                        icon = AudioIcon,
+                        onClick = onAddAudio,
+                    )
                 }
             }
         }

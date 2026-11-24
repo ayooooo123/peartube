@@ -134,9 +134,21 @@ class AppModel(private val app: Application) {
     val soulseekBusy = MutableStateFlow(false)
     val soulseekError = MutableStateFlow<String?>(null)
     val soulseekMessage = MutableStateFlow<String?>(null)
+    val discoverCreators = MutableStateFlow<List<DiscoverCreator>>(emptyList())
+    val discoverFeed = MutableStateFlow(DiscoverFeed())
+    val discoverBrowse = MutableStateFlow<DiscoverBrowseResult?>(null)
+    val discoverLoading = MutableStateFlow(false)
+    val discoverFollowBusy = MutableStateFlow(false)
+    val discoverError = MutableStateFlow<String?>(null)
+    val discoverSourceFilter = MutableStateFlow("")
+    val discoverCreatorFilter = MutableStateFlow("")
+    val discoverActiveTopic = MutableStateFlow<String?>(null)
+    val discoverSubmittingIds = MutableStateFlow<Set<String>>(emptySet())
     private var identifyJob: Job? = null
     private var sourceSearchJob: Job? = null
     private var shelfJob: Job? = null
+    private var discoverFeedJob: Job? = null
+    private var discoverBrowseJob: Job? = null
     private var previousActiveJobIds: Set<String> = emptySet()
     private var lastLoadedApiUrl: String? = null
 
@@ -181,6 +193,9 @@ class AppModel(private val app: Application) {
         saveLastRoom(room)
         if (focusSearch) searchAutoFocus.value = true
         navStack.value = listOf(Screen.Main)
+        if (room == Room.Discover) {
+            loadDiscoverCreators(autoLoadFeed = discoverActiveTopic.value == null)
+        }
     }
 
     fun openSearchFor(term: String, askRelays: Boolean = false) {
@@ -396,6 +411,9 @@ class AppModel(private val app: Application) {
                     refreshAcquireJobs()
                     refreshPlugins()
                     refreshSoulseekSettings()
+                    if (currentRoom.value == Room.Discover) {
+                        loadDiscoverCreators(autoLoadFeed = discoverActiveTopic.value == null)
+                    }
                 }
             }
         }
@@ -1281,6 +1299,258 @@ class AppModel(private val app: Application) {
                     soulseekError.value = err.message ?: "Could not save Soulseek settings."
                 },
             )
+        }
+    }
+
+    fun loadDiscoverCreators(autoLoadFeed: Boolean = false) {
+        if (status.value?.apiUrl.isNullOrBlank()) return
+        scope.launch {
+            loopbackApi.listDiscoverCreators().fold(
+                onSuccess = { list ->
+                    discoverCreators.value = list
+                    discoverError.value = null
+                    if (autoLoadFeed && list.isNotEmpty()) {
+                        loadDiscoverFeed(refresh = false)
+                    } else if (list.isEmpty()) {
+                        discoverFeed.value = DiscoverFeed()
+                    }
+                },
+                onFailure = { err ->
+                    discoverError.value = err.message ?: "Could not load followed creators."
+                },
+            )
+        }
+    }
+
+    fun loadDiscoverFeed(refresh: Boolean = false) {
+        if (status.value?.apiUrl.isNullOrBlank()) return
+        discoverFeedJob?.cancel()
+        discoverLoading.value = true
+        discoverError.value = null
+        val source = discoverSourceFilter.value
+        val creatorId = discoverCreatorFilter.value
+        discoverFeedJob = scope.launch {
+            loopbackApi.getDiscoverFeed(
+                source = source,
+                creatorId = creatorId,
+                refresh = refresh,
+                limit = 40,
+            ).fold(
+                onSuccess = { feed ->
+                    discoverFeed.value = feed
+                    discoverCreators.value = feed.creators
+                    discoverLoading.value = false
+                },
+                onFailure = { err ->
+                    discoverLoading.value = false
+                    discoverError.value = err.message ?: "Could not load Discover feed."
+                },
+            )
+        }
+    }
+
+    fun followDiscoverCreator(
+        input: String,
+        name: String? = null,
+        source: String? = null,
+        channelId: String? = null,
+        handle: String? = null,
+        onFollowed: (() -> Unit)? = null,
+    ) {
+        val clean = input.trim()
+        if (clean.isEmpty() || discoverFollowBusy.value) return
+        discoverFollowBusy.value = true
+        discoverError.value = null
+        scope.launch {
+            loopbackApi.followDiscoverCreator(
+                url = clean,
+                source = source,
+                name = name,
+                channelId = channelId,
+                handle = handle,
+            ).fold(
+                onSuccess = { res ->
+                    discoverCreators.value = res.creators
+                    discoverFollowBusy.value = false
+                    val label = res.creator?.displayName?.takeIf { it.isNotBlank() }
+                        ?: name?.trim()?.takeIf { it.isNotEmpty() }
+                        ?: "creator"
+                    notice.value = "Followed $label"
+                    onFollowed?.invoke()
+                    discoverBrowse.value?.let { current ->
+                        val followedUrls = res.creators.map { it.url.lowercase() }.toSet()
+                        val followedIds = res.creators.map { it.id }.toSet()
+                        val followedKeys = res.creators.map { "${it.source}:${it.name.lowercase()}" }.toSet()
+                        discoverBrowse.value = current.copy(
+                            creators = current.creators.map { c ->
+                                val isNowFollowed = c.id in followedIds ||
+                                    c.url.lowercase() in followedUrls ||
+                                    "${c.source}:${c.name.lowercase()}" in followedKeys ||
+                                    c.url.equals(clean, ignoreCase = true)
+                                if (isNowFollowed) c.copy(followed = true) else c
+                            },
+                        )
+                    }
+                    if (discoverActiveTopic.value == null) {
+                        loadDiscoverFeed(refresh = true)
+                    }
+                },
+                onFailure = { err ->
+                    discoverFollowBusy.value = false
+                    discoverError.value = err.message ?: "Could not follow creator."
+                },
+            )
+        }
+    }
+
+    fun unfollowDiscoverCreator(id: String) {
+        val clean = id.trim()
+        if (clean.isEmpty()) return
+        discoverError.value = null
+        scope.launch {
+            loopbackApi.unfollowDiscoverCreator(clean).fold(
+                onSuccess = { res ->
+                    discoverCreators.value = res.creators
+                    if (discoverCreatorFilter.value == clean) {
+                        discoverCreatorFilter.value = ""
+                    }
+                    discoverBrowse.value?.let { current ->
+                        val followedUrls = res.creators.map { it.url.lowercase() }.toSet()
+                        val followedIds = res.creators.map { it.id }.toSet()
+                        val followedKeys = res.creators.map { "${it.source}:${it.name.lowercase()}" }.toSet()
+                        discoverBrowse.value = current.copy(
+                            creators = current.creators.map { c ->
+                                val stillFollowed = c.id in followedIds ||
+                                    c.url.lowercase() in followedUrls ||
+                                    "${c.source}:${c.name.lowercase()}" in followedKeys
+                                c.copy(followed = stillFollowed)
+                            },
+                        )
+                    }
+                    if (res.creators.isEmpty()) {
+                        discoverFeed.value = DiscoverFeed()
+                    } else {
+                        val cur = discoverFeed.value
+                        discoverFeed.value = cur.copy(
+                            creators = res.creators,
+                            items = cur.items.filterNot { it.creatorId == clean },
+                        )
+                        if (discoverActiveTopic.value == null) {
+                            loadDiscoverFeed(refresh = false)
+                        }
+                    }
+                    notice.value = "Unfollowed creator"
+                },
+                onFailure = { err ->
+                    discoverError.value = err.message ?: "Could not unfollow creator."
+                },
+            )
+        }
+    }
+
+    fun browseDiscoverTopic(query: String) {
+        val q = query.trim()
+        if (q.isEmpty()) return
+        discoverBrowseJob?.cancel()
+        discoverActiveTopic.value = q
+        discoverLoading.value = true
+        discoverError.value = null
+        discoverBrowseJob = scope.launch {
+            val res = loopbackApi.browseDiscover(
+                query = q,
+                sources = listOf("youtube", "soundcloud", "rumble"),
+                limit = 12,
+            )
+            if (discoverActiveTopic.value != q) return@launch
+            res.fold(
+                onSuccess = { parsed ->
+                    discoverBrowse.value = parsed
+                    discoverLoading.value = false
+                },
+                onFailure = { err ->
+                    discoverLoading.value = false
+                    discoverError.value = err.message ?: "Could not browse \"$q\"."
+                },
+            )
+        }
+    }
+
+    fun clearDiscoverBrowse() {
+        discoverBrowseJob?.cancel()
+        discoverActiveTopic.value = null
+        discoverBrowse.value = null
+        discoverError.value = null
+        discoverLoading.value = false
+        if (discoverCreators.value.isNotEmpty()) {
+            loadDiscoverFeed(refresh = false)
+        }
+    }
+
+    fun setDiscoverSourceFilter(source: String) {
+        val norm = source.trim().lowercase()
+        discoverSourceFilter.value = norm
+        val activeCreator = discoverCreatorFilter.value
+        if (activeCreator.isNotEmpty() && norm.isNotEmpty()) {
+            val match = discoverCreators.value.firstOrNull { it.id == activeCreator }
+            if (match != null && match.source != norm) {
+                discoverCreatorFilter.value = ""
+            }
+        }
+        if (discoverActiveTopic.value == null && discoverCreators.value.isNotEmpty()) {
+            loadDiscoverFeed(refresh = false)
+        }
+    }
+
+    fun setDiscoverCreatorFilter(creatorId: String) {
+        val clean = creatorId.trim()
+        discoverCreatorFilter.value = clean
+        if (discoverActiveTopic.value != null) {
+            discoverBrowseJob?.cancel()
+            discoverActiveTopic.value = null
+            discoverBrowse.value = null
+        }
+        if (discoverCreators.value.isNotEmpty()) {
+            loadDiscoverFeed(refresh = false)
+        }
+    }
+
+    fun addDiscoverItemToLibrary(item: DiscoverItem, audioOverride: Boolean? = null) {
+        if (item.url.isBlank()) return
+        val audio = audioOverride ?: item.audioOnly
+        val music = when {
+            audioOverride == true -> MusicMeta(
+                title = item.title.takeIf { it.isNotBlank() },
+                artist = item.creatorName.takeIf { it.isNotBlank() },
+            )
+            item.music != null -> item.music
+            audio -> MusicMeta(
+                title = item.title.takeIf { it.isNotBlank() },
+                artist = item.creatorName.takeIf { it.isNotBlank() },
+            )
+            else -> null
+        }
+        discoverSubmittingIds.value = discoverSubmittingIds.value + item.id
+        scope.launch {
+            try {
+                loopbackApi.acquire(
+                    id = item.acquireId,
+                    title = item.title,
+                    url = item.url,
+                    page = true,
+                    audio = audio,
+                    music = music,
+                ).fold(
+                    onSuccess = { job ->
+                        recordSubmittedJob(job)
+                        notice.value = if (audio) "Saving audio for ${item.title}…" else "Saving ${item.title}…"
+                    },
+                    onFailure = { err ->
+                        error.value = err.message ?: "Could not add ${item.title} to PearTube."
+                    },
+                )
+            } finally {
+                discoverSubmittingIds.value = discoverSubmittingIds.value - item.id
+            }
         }
     }
 

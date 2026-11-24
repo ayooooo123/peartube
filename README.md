@@ -413,7 +413,7 @@ has a FLAC copy plays the FLAC first.
 | `GET /v1/identity`, `POST /v1/identity/{writers,epoch,recover}`, `DELETE /v1/identity/writers/:key` | Channel writer ACL, 12-word recovery phrase (`?reveal=1` / `recover`), and paid subscriber epoch pass rotation; same token and origin gate as `/v1/settings` |
 | `POST /v1/restart` | Reopens the node, jobs, plugins and cast stack in the running process; same auth and origin rules as settings |
 | `POST /v1/identify` `{url}` | Link contents: parsed name, Cinemeta `candidates` and `match`, or a plain `clip:` fallback |
-| `POST /v1/search/global` `{query, id}` | Search relays this relay does not follow (`peartube/search/v1`): rows with `magnetUrl`, `relays` and the title fields, after about 1.2 s. The same query again within 10 s returns the answers that arrived since; after that it asks the relays again, so a file a relay got since shows up (a relay rebuilds its list at most every 15 s). Token when one is set, else private addresses only, and only from the relay's own page; a new query at most every 3 s per address |
+| `POST /v1/search/global` `{query, id}` | Search relays this relay does not follow (`peartube/search/v2`; a relay on an older version is not asked): rows with `magnetUrl`, `relays` and the title fields, after about 1.2 s. The same query again within 10 s returns the answers that arrived since; after that it asks the relays again, so a file a relay got since shows up (a relay rebuilds its list at most every 15 s). Token when one is set, else private addresses only, and only from the relay's own page; a new query at most every 3 s per address |
 | `POST /v1/search/sources` `{query, sources?, limit?, timeoutMs?, stream?}` | One search over the owner's sources (`soulseek`, `youtube`; default: all). Rows carry `source` and `lossy` (`true` or `null`, never `false`: a FLAC name proves only the container) and stay grouped by source, each in its own order. A source that fails is one entry in `errors`; the reply is still 200. `stream: true` answers as server-sent events: one `source` event per source as it finishes, then `done` |
 | `POST /v1/providers/soulseek/{search,browse,mirror}` | Search peers, list one peer's shared folders, and mirror files into the import folder |
 | `POST /v1/providers/youtube/{search,mirror}`, `GET /v1/providers/youtube/thumb/:videoId` | Search YouTube through `ubit` (one page, no account). `mirror` `{artist, album, year?, tracks: [{videoId, title, track?}]}` saves each video's AAC audio unchanged as `<Artist> - <Album> (<Year>) [YouTube]/NN - Title.m4a` under `yt:<hash>` ids. A video YouTube refuses is listed in the job's `skipped`; YouTube's bot check stops the album and sets `canSave: false` on `/v1/plugins`. `thumb` serves a result's picture through the relay (204 when none) |
@@ -455,9 +455,11 @@ P2P node with a player. Smart TV browsers are not supported: a receiver needs na
 
 A cast uses one connection. The sender's node connects to the receiver's node as to any peer: on
 the LAN when mDNS (`_peartube-cast._tcp`) shows the receiver, else by its key over the swarm.
-Pairing and remote control run on a Protomux channel of that connection (`src/cast-control.js`),
-and the film reaches the TV over the same connection and the swarm. The receiver has no control
-port and no LAN HTTP: its only HTTP port is on loopback, for its own player.
+Pairing and remote control run on a Protomux channel of that connection (`peartube-cast/v2`,
+`src/cast-control.js`), and the film reaches the TV over the same connection and the swarm. The
+receiver has no control port and no LAN HTTP: its only HTTP port is on loopback, for its own player.
+A sender and a receiver on different PearTube versions cannot cast to each other: the sender lists
+the receiver as not current and says both devices need the update.
 
 - **Pairing** is the 6-character code on the TV's screen, or a
   `peartube://receiver/<pubkey>?token=…` link, which needs no code. The receiver's node keeps one

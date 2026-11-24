@@ -1,7 +1,9 @@
 // Global search (src/search.js) on a local HyperDHT testnet: a searcher that follows nothing finds media on a relay
 // it has never met, by words in any order, and plays it from that relay; the relay offers only public files it holds
-// whole and has checked are media; junk frames leave the connection working; the relay rate-limits and can stop
-// answering; a privately routed node refuses; a searcher closes what it dialed a minute after its last search.
+// whole and has checked are media; hostile frames on peartube/search/v2 leave the channel answering and the connection
+// working; the relay rate-limits and can stop answering; a peer on the old protocol is refused on both sides; relays
+// announce only the v2 topic; a privately routed node refuses; a searcher closes what it dialed a minute after its
+// last search.
 // Writes desktop/target/e2e/global-search-result.json.
 import test from 'node:test'
 import assert from 'node:assert/strict'
@@ -14,9 +16,19 @@ import createTestnet from 'hyperdht/testnet.js'
 import Protomux from 'protomux'
 import c from 'compact-encoding'
 import b4a from 'b4a'
+import hypercoreCrypto from 'hypercore-crypto'
+import { getEncoding } from '../spec/hyperschema/index.js'
+import { SEARCH } from '../spec/protocols.js'
 import { createNode } from '../src/index.js'
 import { createMirrorHost } from '../src/mirror.js'
 import { createPrivateGuard } from '../src/private-overlay.js'
+import { SEARCH_TOPIC } from '../src/search.js'
+import { serveChannel } from '../src/control-channel.js'
+
+const FRAME = getEncoding('@peartube/frame')
+const QUERY = getEncoding('@peartube/search-query')
+const HITS = getEncoding('@peartube/search-hits')
+const REMOTE_ERROR = getEncoding('@peartube/remote-error')
 
 const tmp = () => mkdtempSync(join(tmpdir(), 'peartube-search-'))
 const sha = buf => createHash('sha256').update(buf).digest('hex')
@@ -138,43 +150,123 @@ test('global search finds, checks, plays and tears down', { timeout: 420_000 }, 
   assert.equal(sha(bytes), filmOp.sha256, 'the played hit is the exact file')
   result.playedSha256 = sha(bytes)
 
-  // Junk on the search channel neither closes the connection nor stops the relay answering on it.
+  // Hostile frames on the relay's search channel are dropped or answered; none closes the connection, and the relay
+  // keeps answering on the channel. (Fails before v2: the relay spoke JSON on peartube/search/v1.)
   const prober = await open()
   const conn = await prober.connectPeer(relay.peerKey, { timeoutMs: 90_000 })
-  const replies = new Map()
-  let opened
-  const openedP = new Promise(resolve => { opened = resolve })
-  const channel = Protomux.from(conn).createChannel({ protocol: 'peartube/search/v1', onopen: () => opened(true), onclose: () => opened(false) })
-  const raw = channel.addMessage({ encoding: c.raw, onmessage: buf => { try { const m = c.decode(c.json, buf); replies.set(m.id, m) } catch {} } })
-  channel.open()
-  assert.equal(await openedP, true, 'a relay that answers takes the channel')
-  raw.send(b4a.alloc(70 * 1024, 0x61))
-  raw.send(c.encode(c.json, [1]))
-  raw.send(c.encode(c.json, 42))
-  raw.send(b4a.from([5, 0x7b, 0x7b, 0x7b]))
-  const ask = id => raw.send(c.encode(c.json, { id, type: 'search', q: 'stalker' }))
-  ask(1)
-  const first = await until(() => replies.get(1), 10_000)
-  assert.equal(first.ok, true)
-  assert.equal(first.result.hits.length, 1)
+  const rawChannel = protocol => {
+    const frames = new Map()
+    let opened
+    const openedP = new Promise(resolve => { opened = resolve })
+    const channel = Protomux.from(conn).createChannel({ protocol, onopen: () => opened(true), onclose: () => opened(false) })
+    const msg = channel.addMessage({ encoding: c.raw, onmessage: buf => { const f = c.decode(FRAME, buf); frames.set(f.id, f) } })
+    channel.open()
+    return { channel, frames, opened: openedP, send: buf => msg.send(buf) }
+  }
+  const frame = (kind, op, id, value) => c.encode(FRAME, { kind, op, id, value })
+  const query = (id, q, limit = 20) => frame(0, 0, id, c.encode(QUERY, { q, mid: '', limit }))
+  const errorOf = f => c.decode(REMOTE_ERROR, f.value)
+  const varint53 = b4a.from([0xff, 0, 0, 0, 0, 0, 0, 0x20, 0])
+  const probe = rawChannel(SEARCH.protocol)
+  assert.equal(await probe.opened, true, 'a relay that answers takes the channel')
+  probe.send(b4a.alloc(70 * 1024, 0x61)) // over the frame cap
+  probe.send(b4a.concat([varint53, b4a.from([0, 1, 0])])) // kind at 2^53
+  probe.send(b4a.concat([b4a.from([0]), varint53, b4a.from([1, 0])])) // op at 2^53
+  probe.send(b4a.concat([b4a.from([0, 0]), varint53, b4a.from([0])])) // id at 2^53
+  probe.send(frame(4, 0, 90, b4a.alloc(0))) // kind 4
+  probe.send(query(0, 'stalker')) // id 0
+  probe.send(frame(0, 0, 91, b4a.from([0xff]))) // a value that does not decode
+  const askedUnknown = Date.now()
+  probe.send(frame(0, 7, 92, b4a.alloc(0))) // an op search does not have
+  assert.equal(errorOf(await until(() => probe.frames.get(91), 10_000)).code, 'DECODE_ERROR')
+  assert.equal(errorOf(await until(() => probe.frames.get(92), 10_000)).code, 'UNKNOWN_OP')
+  assert.ok(Date.now() - askedUnknown < 1000, 'an unknown op is answered at once')
+  assert.equal(probe.frames.has(90) || probe.frames.has(0), false, 'kind 4 and id 0 are not answered')
+  probe.send(query(1, 'stalker'))
+  const first = await until(() => probe.frames.get(1), 10_000)
+  assert.equal(first.kind, 1)
+  const firstHits = c.decode(HITS, first.value).hits
+  assert.equal(firstHits.length, 1)
   assert.equal(conn.destroyed, false, 'junk frames left the connection open')
-  for (let id = 2; id <= 5; id++) ask(id)
-  const fifth = await until(() => replies.get(5), 10_000)
-  assert.deepEqual({ ok: fifth.ok, error: fifth.error }, { ok: false, error: 'busy' }, 'the fifth query in 10 s is refused')
-  const probed = await prober.openUri(first.result.hits[0].uri)
+  for (let id = 2; id <= 5; id++) probe.send(query(id, 'stalker'))
+  const fifth = await until(() => probe.frames.get(5), 10_000)
+  assert.deepEqual({ kind: fifth.kind, ...errorOf(fifth) }, { kind: 2, code: 'HANDLER_ERROR', message: 'busy' }, 'the fifth query in 10 s is refused')
+  const probed = await prober.openUri(firstHits[0].uri)
   const probedBytes = Buffer.from(await (await fetch(probed.entry.streamUrl)).arrayBuffer())
   assert.equal(sha(probedBytes), filmOp.sha256, 'a download on the same connection still works')
 
   // Turned off, the relay closes its search channels and refuses new ones.
   relay.serveSearch(null)
-  await until(() => channel.closed, 10_000)
-  const refused = await new Promise(resolve => {
-    const ch = Protomux.from(conn).createChannel({ protocol: 'peartube/search/v1', onopen: () => resolve(false), onclose: () => resolve(true) })
-    assert.ok(ch, 'the closed channel left room for a new one')
-    ch.open()
-  })
-  assert.equal(refused, true, 'a relay that stopped answering refuses the channel')
+  await until(() => probe.channel.closed, 10_000)
+  assert.equal(await rawChannel(SEARCH.protocol).opened, false, 'a relay that stopped answering refuses the channel')
   relay.serveSearch({ isMedia: key => mirror.isMedia(key) })
+
+  // Eight undecodable frames close that channel, never the connection; a new channel on it is answered with the hit.
+  // (Turning answering off and on above cleared the rate windows.)
+  const noisy = rawChannel(SEARCH.protocol)
+  assert.equal(await noisy.opened, true)
+  for (let i = 0; i < 8; i++) noisy.send(b4a.from([0xff]))
+  await until(() => noisy.channel.closed, 10_000)
+  const fresh = rawChannel(SEARCH.protocol)
+  assert.equal(await fresh.opened, true, 'the relay takes a new search channel on the same connection')
+  const hitsOf = async id => {
+    const f = await until(() => fresh.frames.get(id), 10_000)
+    assert.equal(f.kind, 1, `query ${id} is answered with hits`)
+    return c.decode(HITS, f.value).hits.map(h => h.uri)
+  }
+  fresh.send(query(1, 'stalker'))
+  assert.deepEqual(await hitsOf(1), [firstHits[0].uri], 'and answers on it with the hit')
+  // limit 0 is the default 20, as released; limit 1 is one. 'imdb' matches both films.
+  fresh.send(query(2, 'imdb', 0))
+  assert.equal((await hitsOf(2)).length, 2, 'limit 0 means the default')
+  fresh.send(query(3, 'imdb', 1))
+  assert.equal((await hitsOf(3)).length, 1)
+  assert.equal(conn.destroyed, false, 'the connection stays open')
+
+  // A peer on the old version: a v1 asker is refused by the relay and the connection stays; a v1-only peer gets no
+  // frame from a new searcher. (Fails before v2: both sides spoke peartube/search/v1.)
+  assert.equal(await rawChannel('peartube/search/v1').opened, false, 'the relay refuses the old protocol name')
+  assert.equal(conn.destroyed, false)
+  const oldPeer = await open()
+  let oldOpens = 0
+  let v2Asked = 0
+  oldPeer.onConnection(cn => {
+    const mux = Protomux.from(cn)
+    mux.pair({ protocol: 'peartube/search/v1' }, () => { oldOpens++ })
+    // Counted, and refused: nothing opens this side's half.
+    mux.pair({ protocol: SEARCH.protocol }, () => { v2Asked++ })
+  })
+  const toOld = await searcher.connectPeer(oldPeer.peerKey, { timeoutMs: 90_000 })
+  const mixed = await searcher.searchGlobal({ query: 'roadside picnic' })
+  assert.deepEqual(mixed, [], 'no rows from a peer that only speaks the old version')
+  assert.ok(v2Asked >= 1, 'the searcher asked it on peartube/search/v2, and was refused')
+  assert.equal(oldOpens, 0, 'the old-version peer never sees a search channel')
+  assert.equal(toOld.destroyed, false, 'and the connection to it stays')
+
+  // A hit's link is at most 2,048 bytes of UTF-8, not 2,048 characters: a relay's link of about 1,650 characters
+  // with accented letters (2 bytes each) is dropped, one that fits in bytes is kept.
+  const accented = (name, letters) => `peartube://watch/${randomBytes(32).toString('hex')}:0:1:0:1000?id=clip:${name}&sha256=${'ab'.repeat(32)}&title=${'é'.repeat(letters)}`
+  const over = accented('accentover', 1_500)
+  const under = accented('accentunder', 900)
+  assert.ok(over.length <= 2048 && b4a.byteLength(over) > 2048 && b4a.byteLength(under) <= 2048)
+  const fake = await open()
+  fake.onConnection(cn => serveChannel(cn, { spec: SEARCH, label: 'Searcher', handlers: { query: () => ({ hits: [{ uri: over }, { uri: under }] }) } }))
+  await searcher.connectPeer(fake.peerKey, { timeoutMs: 90_000 })
+  const accentRows = await until(async () => {
+    const r = await searcher.searchGlobal({ query: 'accent' })
+    return r.length && r
+  }, 30_000)
+  assert.deepEqual(accentRows.map(r => r.id), ['clip:accentunder'], 'a link over 2,048 bytes is dropped')
+
+  // Relays announce, and searchers look up, only the v2 topic.
+  assert.ok(b4a.equals(SEARCH_TOPIC, hypercoreCrypto.hash(b4a.from('peartube/search/v2/0'))))
+  const announced = async topic => {
+    const keys = new Set()
+    for await (const reply of testnet.nodes[0].lookup(topic)) for (const peer of reply.peers) keys.add(b4a.toString(peer.publicKey, 'hex'))
+    return keys
+  }
+  assert.equal((await announced(SEARCH_TOPIC)).has(relay.peerKey), true, 'the relay announces the v2 topic')
+  assert.equal((await announced(hypercoreCrypto.hash(b4a.from('peartube/search/v1/0')))).has(relay.peerKey), false, 'and not the v1 topic')
 
   // A privately routed node never searches.
   const guards = []

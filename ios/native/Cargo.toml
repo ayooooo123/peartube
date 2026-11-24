@@ -15,8 +15,55 @@ oxideav-core = "*"
 player = { git = "https://github.com/ayooooo123/peartube-media", rev = "e85cd4edde1128fb4378f4f0a8b61a436d995a7a" }
 codecs = { git = "https://github.com/ayooooo123/peartube-media", rev = "e85cd4edde1128fb4378f4f0a8b61a436d995a7a" }
 
+# Stripped, fat LTO, one codegen unit. Cold dependencies build for size ("z");
+# the hot media decoders and player engine keep opt-level = 3 (matching
+# android/native/Cargo.toml and peartube-media/Cargo.toml). Unwinding stays on:
+# the player catches decoder panics.
 [profile.release]
 strip = true
+lto = "fat"
+codegen-units = 1
+
+[profile.release.package."*"]
+opt-level = "z"
+[profile.release.package.oxideav-core]
+opt-level = 3
+[profile.release.package.oxideav-pixfmt]
+opt-level = 3
+[profile.release.package.player]
+opt-level = 3
+[profile.release.package.oxideav-h264]
+opt-level = 3
+[profile.release.package.oxideav-h265]
+opt-level = 3
+[profile.release.package.oxideav-av1]
+opt-level = 3
+[profile.release.package.oxideav-vp8]
+opt-level = 3
+[profile.release.package.oxideav-vp9]
+opt-level = 3
+[profile.release.package.oxideav-mpeg12video]
+opt-level = 3
+[profile.release.package.oxideav-mpeg4video]
+opt-level = 3
+[profile.release.package.codec-wmv]
+opt-level = 3
+[profile.release.package.oxideav-aac]
+opt-level = 3
+[profile.release.package.oxideav-mp3]
+opt-level = 3
+[profile.release.package.codec-dca]
+opt-level = 3
+[profile.release.package.codec-mlp]
+opt-level = 3
+[profile.release.package.oxideav-flac]
+opt-level = 3
+[profile.release.package.subs-cc]
+opt-level = 3
+[profile.release.package.codec-dv]
+opt-level = 3
+[profile.release.package.oxideav-ogg]
+opt-level = 3
 
 [profile.dev.package."*"]
 opt-level = 3

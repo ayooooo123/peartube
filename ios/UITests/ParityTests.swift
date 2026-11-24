@@ -28,11 +28,11 @@ final class ParityTests: XCTestCase {
     func element(_ id: String) -> XCUIElement { app.descendants(matching: .any).matching(NSPredicate(format: "identifier == %@", id)).firstMatch }
     func tap(_ id: String, timeout: TimeInterval = 15) throws {
         try checkSystemPrompt()
+        let target = element(id)
         let surface = element("player.surface")
-        if id.hasPrefix("player."), id != "player.surface", !element("player.info.close").exists, surface.exists {
+        if id.hasPrefix("player."), id != "player.surface", !target.isHittable, !element("player.info.close").exists, surface.exists {
             surface.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.22)).tap()
         }
-        let target = element(id)
         if !target.exists && !target.waitForExistence(timeout: timeout) {
             for _ in 0..<5 where !target.exists {
                 try checkSystemPrompt()
@@ -65,6 +65,35 @@ final class ParityTests: XCTestCase {
         XCTAssertTrue(surface.waitForExistence(timeout: 15), file: file, line: line)
         XCTAssertEqual(surface.frame.width, app.frame.width, accuracy: 4, file: file, line: line)
         XCTAssertEqual(surface.frame.height, app.frame.height, accuracy: 4, file: file, line: line)
+    }
+
+    private func revealControlsDuringPlayback() throws -> XCUICoordinate {
+        let movie = try XCTUnwrap(fixture["movieKey"] as? String)
+        let row = element("library.entry.\(movie)")
+        XCTAssertTrue(row.waitForExistence(timeout: 150))
+        row.tap()
+        let surface = element("player.surface")
+        XCTAssertTrue(surface.waitForExistence(timeout: 45))
+        let pause = element("player.pause")
+        XCTAssertTrue(pause.waitForNonExistence(timeout: 15), "Controls must first hide during playback")
+        let video = surface.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.22))
+        video.tap()
+        XCTAssertTrue(pause.exists)
+        XCTAssertEqual(pause.label, "Pause")
+        return video
+    }
+
+    func testSecondVideoTapHidesControlsImmediately() throws {
+        let video = try revealControlsDuringPlayback()
+        video.tap()
+        XCTAssertTrue(element("player.pause").waitForNonExistence(timeout: 1))
+    }
+
+    func testSeekButtonKeepsControlsVisible() throws {
+        _ = try revealControlsDuringPlayback()
+        element("player.skipForward").tap()
+        XCTAssertTrue(element("player.skipBack").isHittable)
+        XCTAssertTrue(element("player.clock").exists)
     }
 
     func testLibraryPlaybackAndLifecycle() throws {

@@ -13,7 +13,14 @@ struct PlayerScreen: View {
     var body: some View {
         ZStack {
             PlayerSurface(player: player).ignoresSafeArea()
-            Color.clear.contentShape(Rectangle()).ignoresSafeArea().onTapGesture { reveal() }
+            Color.clear.contentShape(Rectangle()).ignoresSafeArea().onTapGesture {
+                if player.state.playing && controls {
+                    hideTask?.cancel()
+                    controls = false
+                } else {
+                    reveal()
+                }
+            }
             if player.state.buffering && player.state.error.isEmpty { ProgressView().tint(.white).accessibilityIdentifier("player.buffering") }
             if !player.state.error.isEmpty {
                 Text(player.state.error).foregroundStyle(PTColor.bad).padding().background(.black.opacity(0.8), in: RoundedRectangle(cornerRadius: 12)).padding().accessibilityIdentifier("player.error")
@@ -81,7 +88,7 @@ struct PlayerScreen: View {
         }
         .padding(.horizontal, 20).padding(.top, 12).padding(.bottom, 20)
         .foregroundStyle(.white)
-        .background(LinearGradient(colors: [.black.opacity(0.65), .clear, .black.opacity(0.75)], startPoint: .top, endPoint: .bottom))
+        .background(LinearGradient(colors: [.black.opacity(0.65), .clear, .black.opacity(0.75)], startPoint: .top, endPoint: .bottom).allowsHitTesting(false))
     }
     private var audioMenu: some View {
         Menu {

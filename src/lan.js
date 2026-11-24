@@ -56,7 +56,7 @@ function encodedTxtBytes (txt) {
 // Three random characters in every advertisement's name. bonjour-service does not throw when a name is taken: it
 // logs "Service name is already in use" and silently stops the advertisement. A name used once (by this or an earlier
 // run) can still be answered for by a cache or a reflector, so no advertisement ever reuses one.
-const adNonce = () => Math.random().toString(36).slice(2, 5).padEnd(3, '0')
+export const adNonce = () => Math.random().toString(36).slice(2, 5).padEnd(3, '0')
 
 function createRecords (peerKeyHex, port, tokens, nonce = adNonce()) {
   const sorted = tokens.slice().sort()

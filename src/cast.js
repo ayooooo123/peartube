@@ -13,7 +13,7 @@ import HyperDHT from 'hyperdht'
 import ByteStream from 'hypercore-byte-stream'
 import b4a from 'b4a'
 import { HEX64, RECEIVER_PORT, cleanName, formatReceiverUri, formatWatchUri, parseUri, safeEqual } from './protocol.js'
-import { interfaceAdapter, selfAddressAdapter } from './lan.js'
+import { adNonce, interfaceAdapter, selfAddressAdapter } from './lan.js'
 import { qrSvg } from './qr.js'
 import { CAST } from '../spec/protocols.js'
 import { boundedEntry, commandFromWire, commandToWire, openControl, pairToWire, pairedFromWire, pairedToWire, serveControl, stateFromWire, stateToWire, subscribeToWire } from './cast-control.js'
@@ -209,6 +209,16 @@ function loadIdentity (storage, name = '') {
 // same after a restart.
 export function receiverKeyPair (storage) {
   return HyperDHT.keyPair(b4a.from(loadIdentity(storage).seed, 'hex'))
+}
+
+// The instance name of one advertisement: the start of the display name, the start of the device id, and a nonce no
+// advertisement had before (adNonce in src/lan.js). A DNS label holds 63 bytes, and a packet with a longer one cannot
+// be decoded: 16 UTF-16 units are 48 bytes at most. A cut inside a character leaves half a surrogate pair, which has
+// no UTF-8 form: the label on the wire is then not the name the receiver holds (V8 sends U+FFFD for the half), and
+// the receiver does not answer to the name senders read. So the half goes too. Senders show the full name from the
+// TXT record.
+export function instanceName (name, deviceId, nonce) {
+  return `${name.slice(0, 16).replace(/[\uD800-\uDBFF]$/, '')} (${deviceId.slice(0, 6)}-${nonce})`
 }
 
 function adapterForHost (host, customAdapter) {
@@ -754,7 +764,8 @@ export async function createReceiver ({
   const stopServing = node.onConnection(serve)
   for (const conn of node.peerConnections()) serve(conn)
 
-  // The advertisement names the node's LAN endpoint, the address a sender dials. It is renewed when that changes.
+  // The advertisement names the node's LAN endpoint, the address a sender dials. It is renewed when that changes, each
+  // time under a name never used before (see adNonce in src/lan.js): senders know a receiver by TXT `id` and `name`.
   let adSig = ''
 
   async function refreshMdns () {
@@ -768,7 +779,7 @@ export async function createReceiver ({
     try {
       const mdns = adapterForHost(currentHost, adapter)
       adHandle = mdns.advertise({
-        name: `${identity.name} (${identity.deviceId.slice(0, 6)})`,
+        name: instanceName(identity.name, identity.deviceId, adNonce()),
         type: CAST_SERVICE_TYPE,
         protocol: 'tcp',
         port: lan?.port || RECEIVER_PORT,
@@ -939,13 +950,15 @@ export function createCastController ({
             auth: txt.auth === 'open' ? 'open' : 'code',
             // A receiver on another PearTube version advertises another `v`, refuses this one's channel, and is
             // never dialed.
-            current: txt.v === CAST_TXT_VERSION
+            current: txt.v === CAST_TXT_VERSION,
+            // The advertisement heard last for this id. An older one (a restart, a new address) can still go down later.
+            adName: svc.name
           })
           emitChange()
         },
         onServiceDown (svc) {
           const id = String(svc?.txt?.id || '')
-          if (id && discovered.delete(id)) emitChange()
+          if (id && discovered.get(id)?.adName === svc.name && discovered.delete(id)) emitChange()
         },
         onError () {}
       })

@@ -10,6 +10,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { randomBytes } from 'node:crypto'
+import dgram from 'node:dgram'
 import { mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import HyperDHT from 'hyperdht'
@@ -20,7 +21,7 @@ import b4a from 'b4a'
 import { getEncoding } from '../spec/hyperschema/index.js'
 import { GUARD } from '../spec/protocols.js'
 import { openChannel, serveChannel } from '../src/control-channel.js'
-import { createPrivateGuard, createPrivateSwarm, diversityBucketForAddress, publishStandaloneRouteCard } from '../src/private-overlay.js'
+import { createPrivateGuard, createPrivateSwarm, diversityBucketForAddress, keepDuplicateInnerStream, publishStandaloneRouteCard } from '../src/private-overlay.js'
 
 const root = new URL('..', import.meta.url).pathname
 const artifact = join(root, 'desktop/target/e2e/private-guard-result.json')
@@ -539,6 +540,54 @@ test('a destination guard refuses hopOpen from an endpoint and cuts off an unadv
   await assert.rejects(rpc.call('hello', { role: 'hop' }, 10_000), /connection closed/, 'no answer to the hop claim')
   await until(() => claimer.destroyed, 5000, 'the guard cut off the connection')
   Object.assign(checks, { endpointHopOpenRefused: true, unadvertisedHopCutOff: true })
+  writeResult()
+})
+
+test('createPrivateGuard with port 0 picks an ephemeral port instead of HyperDHT default 49737-49741', { timeout: 60_000 }, async t => {
+  const RANGE = [49737, 49738, 49739, 49740, 49741]
+  const hold = port => new Promise(resolve => {
+    const s = dgram.createSocket('udp4')
+    s.once('error', () => resolve(null))
+    s.bind(port, '127.0.0.1', () => resolve(s))
+  })
+  const closeSocket = s => new Promise(resolve => s.close(resolve))
+  const held = new Map()
+  t.after(async () => {
+    for (const s of held.values()) await closeSocket(s)
+  })
+  for (const port of RANGE) {
+    const s = await hold(port)
+    if (s) held.set(port, s)
+  }
+  assert.ok(held.size > 0, 'at least one port in 49737-49741 must be free to test default-range avoidance')
+  const testnet = await createTestnet(3)
+  t.after(() => testnet.destroy())
+  const freed = [...held.keys()][0]
+  await closeSocket(held.get(freed))
+  held.delete(freed)
+  const ports = []
+  for (let i = 0; i < 3; i++) {
+    const guard = await createPrivateGuard({ host: '127.0.0.1', port: 0, bootstrap: testnet.bootstrap, announceGuard: false })
+    ports.push(guard.dht.localAddress()?.port)
+    await guard.close()
+  }
+  assert.ok(ports.every(p => Number.isInteger(p) && p > 0), `expected bound ephemeral ports, got ${JSON.stringify(ports)}`)
+  assert.equal(ports.every(p => p === freed), false, `port 0 fell back to HyperDHT default port ${freed}: ${JSON.stringify(ports)}`)
+  Object.assign(checks, { guardPortZeroEphemeral: true })
+  writeResult()
+})
+
+test('keepDuplicateInnerStream converges on the lower key dial in every arrival order', () => {
+  const low = b4a.alloc(32, 0x11)
+  const high = b4a.alloc(32, 0x22)
+  // Both ends keep low's dial (initiator on low, responder on high) regardless of which stream opened first.
+  const survivor = (local, remote, firstIsInitiator, secondIsInitiator) =>
+    keepDuplicateInnerStream(local, remote, secondIsInitiator) ? secondIsInitiator : firstIsInitiator
+  assert.equal(survivor(low, high, true, false), true, 'low keeps its own dial when high dials second')
+  assert.equal(survivor(low, high, false, true), true, 'low replaces high dial with its own dial when high arrived first')
+  assert.equal(survivor(high, low, true, false), false, 'high replaces its own dial with low dial when low arrives second')
+  assert.equal(survivor(high, low, false, true), false, 'high keeps low dial when high dial arrives second')
+  Object.assign(checks, { duplicateInnerStreamConverges: true })
   writeResult()
 })
 

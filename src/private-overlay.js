@@ -182,7 +182,7 @@ export async function createPrivateGuard ({
   // HyperDHT then tells every client to dial it directly and skip the holepunch, and their packets never arrive.
   // Only a loopback testnet has no NAT for certain; everywhere else HyperDHT finds out for itself.
   const open = isLocalBootstrap(host, bootstrap)
-  const dht = new HyperDHT({ host: bindHost, bootstrap, port, ...(open ? { ephemeral: false, firewalled: false } : {}) })
+  const dht = new HyperDHT({ host: bindHost, bootstrap, port: port || [0, 0], ...(open ? { ephemeral: false, firewalled: false } : {}) })
   await dht.ready()
 
   const routes = new Map(), rvTopics = new Map(), activeCircuits = new Set(), conns = new Set(), hopPeers = new Map()
@@ -532,6 +532,11 @@ export async function createPrivateGuard ({
   }
 }
 
+// Both ends keep the stream the lower key dialled, whatever order simultaneous dials arrive in.
+export function keepDuplicateInnerStream (localPublicKey, remotePublicKey, incomingIsInitiator) {
+  return incomingIsInitiator === (b4a.compare(remotePublicKey, localPublicKey) > 0)
+}
+
 export async function createPrivateSwarm ({
   host,
   bootstrap,
@@ -572,7 +577,7 @@ export async function createPrivateSwarm ({
       }
       const hex = b4a.toString(rk, 'hex'), prev = activeByPeer.get(hex)
       if (prev && !prev.destroyed) {
-        if (!(!enc.isInitiator && b4a.compare(rk, keyPair.publicKey) < 0)) { enc.destroy(); return }
+        if (!keepDuplicateInnerStream(keyPair.publicKey, rk, enc.isInitiator)) { enc.destroy(); return }
         prev.destroy()
       }
       activeByPeer.set(hex, enc); connections.add(enc)

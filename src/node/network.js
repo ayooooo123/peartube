@@ -130,6 +130,14 @@ export async function createNetwork (ctx) {
     lan?.join(topic)
   }
 
+  // Drops one hold on a LAN-only topic; the LAN leaves the topic once its last hold goes.
+  function leaveLanTopic (id) {
+    const topic = lanTopics.get(id)
+    if (!topic) return
+    lanTopics.delete(id)
+    if (![...lanTopics.values()].some(held => b4a.equals(held, topic))) lan?.leave?.(topic)
+  }
+
   // Two holds can share one topic: a followed channel and a watch link to it. Leaving one ends only that hold, and
   // the topic leaves the DHT and the LAN with its last hold.
   async function leaveOverlayTopic (id) {
@@ -369,6 +377,7 @@ export async function createNetwork (ctx) {
     releaseContent,
     offerCopy,
     joinLanTopic,
+    leaveLanTopic,
     rotateTimer,
     get refreshTimer () { return refreshTimer },
     setLan,

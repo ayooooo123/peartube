@@ -1,5 +1,8 @@
 import { readFileSync, writeFileSync, renameSync } from 'node:fs'
 import { join } from 'node:path'
+import HyperDHT from 'hyperdht'
+import hypercoreCrypto from 'hypercore-crypto'
+import b4a from 'b4a'
 import { isBootstrapNode, looksIPv6 } from './app-settings.js'
 import { CINEMETA_URL } from './art.js'
 
@@ -215,4 +218,24 @@ export function createSettings (storage, env = {}) {
 
   const isLive = key => Boolean(SPEC[key]?.live)
   return { get, view, update, remember, snapshot, markApplied, isLive, file }
+}
+
+// Persistent swarm key pair for a relay (`<storage>/swarm-key.json`, mode 0600, private beside settings.json).
+// Keeping one peer identity across restarts and in-process reopens lets followers reconnect to the same key
+// immediately instead of retrying a dead ephemeral key until the next 10-minute topic refresh.
+export function relayKeyPair (storage) {
+  const file = join(storage, 'swarm-key.json')
+  let seed = ''
+  try {
+    const raw = JSON.parse(readFileSync(file, 'utf8'))
+    if (typeof raw?.seed === 'string' && HEX64.test(raw.seed.toLowerCase())) seed = raw.seed.toLowerCase()
+  } catch (err) {
+    if (err?.code !== 'ENOENT') console.error(`swarm-key.json ignored: ${err?.message || err}`)
+  }
+  if (!seed) {
+    seed = b4a.toString(hypercoreCrypto.randomBytes(32), 'hex')
+    writeFileSync(file + '.tmp', JSON.stringify({ seed }, null, 2), { mode: 0o600 })
+    renameSync(file + '.tmp', file)
+  }
+  return HyperDHT.keyPair(b4a.from(seed, 'hex'))
 }

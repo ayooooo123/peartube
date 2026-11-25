@@ -242,7 +242,10 @@ export async function createSources (ctx) {
     if (src.closing) await src.closing
     if (ctx.life.closing || extraSources.get(k) !== src) return null
     if (src.bee) {
-      if (touch) src.touchedAt = ++touchClock
+      if (touch) {
+        src.touchedAt = ++touchClock
+        ctx.net.refreshOverlayTopic(`channel:${k}`)
+      }
       return src.bee
     }
     if (src.opening) {

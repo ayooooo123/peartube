@@ -373,6 +373,10 @@ export async function createBlobs (ctx) {
     if (!entry?.blobs || !entry?.blob) return
     ctx.net.wantContent(entry.blobs)
     const core = await blobCore(entry.blobs)
+    if (!isOwnedBlob(entry.blobs) && core.peers.length === 0 && !wholeHere(core)) {
+      const ch = typeof entry.channel === 'string' ? entry.channel.trim().toLowerCase() : ''
+      if (!ch || !ctx.net.refreshOverlayTopic(`channel:${ch}`)) ctx.net.refreshAllOverlayTopics()
+    }
     const tag = `${entry.blobs}:${entry.blob.blockOffset}`
     if (warmRanges.has(tag)) return
     if (warmRanges.size >= 8) {
@@ -1137,7 +1141,8 @@ export async function createBlobs (ctx) {
         ctx.net.wantContent(hex)
         if (!isWorklet && !info?.head) lastHttpViewAt = Date.now()
         if (!isOwnedBlob(hex)) {
-          await blobCore(hex).catch(() => {})
+          const core = await blobCore(hex).catch(() => null)
+          if (core && core.peers.length === 0 && !wholeHere(core)) ctx.net.refreshAllOverlayTopics()
           const copy = !info?.head && !encryptionKey && info?.blob ? await pickCopy(hex, info.blob).catch(() => null) : null
           if (copy) return { key: b4a.from(copy.blobs, 'hex'), blob: copy.blob, active: true }
         } else if (!ctx.life.closing && ownedBlobs.has(hex) && !info?.head) {

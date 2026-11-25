@@ -12,7 +12,7 @@ import { createAcquirer, publicJob } from '../src/acquire.js'
 import { createApi } from '../src/http.js'
 import { createMirrorHost } from '../src/mirror.js'
 import { createCastController } from '../src/cast.js'
-import { createSettings } from '../src/settings.js'
+import { createSettings, relayKeyPair } from '../src/settings.js'
 import { createDiscover } from '../src/discover.js'
 import { send as fetchArt } from '../src/art.js'
 import { identify, posterUrl, backdropUrl, ubitInfo, downloadPage } from '../src/identify.js'
@@ -228,6 +228,7 @@ async function start () {
   const using = settings.snapshot()
   const node = await createNode({
     storage,
+    keyPair: relayKeyPair(storage),
     tracker: cfg('channel') || null,
     sources: loadSavedSources(),
     allowedPeers: list(cfg('allowedPeers')),

@@ -108,6 +108,7 @@ export async function createNetwork (ctx) {
   })
   const discoveries = new Map()
   const lanTopics = new Map()
+  const lastOverlayRefresh = new Map()
   // lanPeers declared above so swarm firewall yields to direct LAN sockets
   let lan = null
 
@@ -121,6 +122,31 @@ export async function createNetwork (ctx) {
     discoveries.set(id, disc)
     lanTopics.set(id, discKey)
     lan?.join(discKey)
+  }
+
+  // Trigger an immediate upstream Hyperswarm discovery refresh on a joined topic (rate-limited per topic) so
+  // playback on a cold or stale client discovers a restarted or NAT-rebound relay without waiting 10 minutes.
+  function refreshOverlayTopic (id, { minIntervalMs = 5_000 } = {}) {
+    if (ctx.life.closing || ctx.life.suspended) return false
+    const disc = discoveries.get(id)
+    if (!disc?.refresh) return false
+    const now = Date.now()
+    if (now - (lastOverlayRefresh.get(id) || 0) < minIntervalMs) return false
+    lastOverlayRefresh.set(id, now)
+    disc.refresh().catch(() => {})
+    if (!dht) {
+      const discKey = lanTopics.get(id)
+      if (discKey) lan?.join(discKey)
+    }
+    return true
+  }
+
+  function refreshAllOverlayTopics (opts) {
+    let count = 0
+    for (const id of discoveries.keys()) {
+      if (refreshOverlayTopic(id, opts)) count++
+    }
+    return count
   }
 
   // A topic only this LAN hears: the peers on it connect to each other here, and it is never announced on the DHT.
@@ -145,6 +171,7 @@ export async function createNetwork (ctx) {
     const discKey = lanTopics.get(id)
     discoveries.delete(id)
     lanTopics.delete(id)
+    lastOverlayRefresh.delete(id)
     if (discKey && ![...lanTopics.values()].some(held => b4a.equals(held, discKey))) lan?.leave?.(discKey)
     if (dht) await swarm.leaveSource(id).catch(() => {})
     else if (disc) await disc.destroy().catch(() => {})
@@ -159,6 +186,7 @@ export async function createNetwork (ctx) {
   // swarm, the LAN) serves any video it stores over that connection with no topic at all.
   const announced = new Map() // blobsHex -> { topic, session }, least recently served first
   const lookups = new Map() // the same, least recently read first
+  const lastLookupRefresh = new Map()
   const usable = hex => !dht && !ctx.life.closing && str(hex, HEX64)
   const holdsAll = hex => {
     const meta = ctx.blobs.cachedBlobs.get(hex)
@@ -168,6 +196,7 @@ export async function createNetwork (ctx) {
     const held = map.get(hex)
     if (!held) return
     map.delete(hex)
+    if (map === lookups) lastLookupRefresh.delete(hex)
     held.session.destroy().catch(() => {})
     lan?.leave?.(held.topic)
   }
@@ -199,8 +228,17 @@ export async function createNetwork (ctx) {
     announced.set(hex, looked || joinTopic(hex, { server: true, client: false }))
   }
   function lookupContent (hex) {
-    if (!usable(hex) || announced.has(hex) || touch(lookups, hex)) return
+    if (!usable(hex) || announced.has(hex)) return
+    if (touch(lookups, hex)) {
+      const now = Date.now()
+      if (now - (lastLookupRefresh.get(hex) || 0) >= 5_000) {
+        lastLookupRefresh.set(hex, now)
+        lookups.get(hex)?.session.refresh?.().catch(() => {})
+      }
+      return
+    }
     if (lookups.size >= MAX_LOOKUPS) dropTopic(lookups, lookups.keys().next().value)
+    lastLookupRefresh.set(hex, Date.now())
     lookups.set(hex, joinTopic(hex, { server: false, client: true }))
   }
   // A title about to be read: find its peers, unless this node holds all of it.
@@ -369,6 +407,8 @@ export async function createNetwork (ctx) {
     sample,
     discoveries,
     joinOverlayTopic,
+    refreshOverlayTopic,
+    refreshAllOverlayTopics,
     leaveOverlayTopic,
     announceContent,
     lookupContent,

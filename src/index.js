@@ -403,7 +403,14 @@ async function openNode ({
     addSource: ctx.sources.addSource,
     removeSource: ctx.sources.removeSource,
     listSources: ctx.sources.listSources,
-    focusSource: key => ctx.sources.wakeSource(key, { touch: true }).then(b => Boolean(b)),
+    focusSource: key => {
+      const k = String(key || '').trim().toLowerCase()
+      if (k && k === ctx.channel.primaryKey && ctx.channel.usePrimary()) {
+        ctx.net.refreshOverlayTopic(`channel:${k}`)
+        return Promise.resolve(true)
+      }
+      return ctx.sources.wakeSource(key, { touch: true }).then(b => Boolean(b))
+    },
     setPlayerActive: active => { ctx.blobs.setPlayerActive(active); return { ok: true } },
     activeSourceCount: () => ctx.sources.activeSources.size,
     overlayTopicCount: () => ctx.net.discoveries.size,

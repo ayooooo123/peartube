@@ -62,6 +62,7 @@ pub struct PlayScreen {
     frame_rate_mode: FrameRateMode,
     prefer_fel_12bit: bool,
     last_progress_saved: Instant,
+    last_mem_trim: Instant,
     player: Option<Arc<Player>>,
     video: Option<VideoView>,
     open_error: Option<String>,
@@ -76,6 +77,7 @@ pub struct PlayScreen {
     pending_click: Option<Task<()>>,
     last_fullscreen_at: Option<Instant>,
     focus: FocusHandle,
+    fast_tick: Arc<AtomicBool>,
     _tick: Task<()>,
 }
 
@@ -122,7 +124,21 @@ impl PlayScreen {
             if open {
                 self.controls_until = Instant::now() + SHOW_FOR;
             }
+            self.sync_overlay();
             cx.notify();
+        }
+    }
+
+    fn sync_overlay(&self) {
+        let visible = overlay_needed(
+            self.has_picture(),
+            self.state.buffering,
+            self.state.error.is_some() || self.open_error.is_some(),
+            self.controls_shown(),
+        );
+        self.fast_tick.store(visible || self.pending_seek_ms.is_some(), Ordering::Relaxed);
+        if let Some(video) = &self.video {
+            video.set_overlay_visible(visible);
         }
     }
 
@@ -145,9 +161,16 @@ impl PlayScreen {
             }
             Err(err) => (None, None, Some(err.into())),
         };
+        let fast_tick = Arc::new(AtomicBool::new(true));
+        let fast_tick_loop = Arc::clone(&fast_tick);
         let tick = cx.spawn_in(window, async move |this, cx| {
             loop {
-                let beat = cx.background_executor().timer(Duration::from_millis(250));
+                let interval = if fast_tick_loop.load(Ordering::Relaxed) {
+                    Duration::from_millis(250)
+                } else {
+                    Duration::from_secs(1)
+                };
+                let beat = cx.background_executor().timer(interval);
                 let ended = match select(events.next(), beat).await {
                     Either::Left((None, _)) => return,
                     Either::Left((Some(event), _)) => matches!(event, Event::Ended),
@@ -173,6 +196,7 @@ impl PlayScreen {
             frame_rate_mode: FrameRateMode::Seamless,
             prefer_fel_12bit: false,
             last_progress_saved: Instant::now(),
+            last_mem_trim: Instant::now(),
             player,
             video,
             open_error,
@@ -187,6 +211,7 @@ impl PlayScreen {
             pending_click: None,
             last_fullscreen_at: None,
             focus,
+            fast_tick,
             _tick: tick,
         }
     }
@@ -228,24 +253,17 @@ impl PlayScreen {
         if shown {
             self.sync_seek(window, cx);
         }
-        if self.last_progress_saved.elapsed() >= Duration::from_secs(4)
+        if self.last_progress_saved.elapsed() >= Duration::from_secs(15)
             && let Some(dur) = self.state.duration
         {
             self.last_progress_saved = Instant::now();
-            // Return freed xzone/malloc pages off the main thread so 4K packet
-            // churn does not leave hundreds of MB of MALLOC_*(empty) resident
-            // without ever stalling AppKit/AVSampleBufferDisplayLayer.
-            static PURGING: AtomicBool = AtomicBool::new(false);
-            if PURGING.compare_exchange(false, true, Ordering::AcqRel, Ordering::Relaxed).is_ok() {
-                cx.background_executor()
-                    .spawn(async {
-                        peartube::worker::release_unused_memory();
-                        PURGING.store(false, Ordering::Release);
-                    })
-                    .detach();
-            }
             cx.emit(PlayEvent::Progress(self.entry.id.clone(), self.entry.key.clone(), self.state.position.as_millis() as u64, dur.as_millis() as u64));
         }
+        if self.last_mem_trim.elapsed() >= Duration::from_secs(60) {
+            self.last_mem_trim = Instant::now();
+            peartube::worker::release_unused_memory();
+        }
+        self.sync_overlay();
         let next = (
             self.has_picture(),
             self.state.buffering,
@@ -282,9 +300,15 @@ impl PlayScreen {
         });
         self.player = Some(Arc::new(player));
         self.pending_seek_ms = (pos_ms > 0).then_some(pos_ms);
+        let fast_tick_loop = Arc::clone(&self.fast_tick);
         self._tick = cx.spawn_in(window, async move |this, cx| {
             loop {
-                let beat = cx.background_executor().timer(Duration::from_millis(250));
+                let interval = if fast_tick_loop.load(Ordering::Relaxed) {
+                    Duration::from_millis(250)
+                } else {
+                    Duration::from_secs(1)
+                };
+                let beat = cx.background_executor().timer(interval);
                 let ended = match select(events.next(), beat).await {
                     Either::Left((None, _)) => return,
                     Either::Left((Some(event), _)) => matches!(event, Event::Ended),
@@ -296,6 +320,7 @@ impl PlayScreen {
             }
         });
         self.controls_until = Instant::now() + SHOW_FOR;
+        self.sync_overlay();
         cx.notify();
     }
 
@@ -333,6 +358,7 @@ impl PlayScreen {
                 self.state = p.state();
             }
             self.sync_seek(window, cx);
+            self.sync_overlay();
             cx.notify();
         }
     }
@@ -437,6 +463,7 @@ impl PlayScreen {
             self.transparent_applied = true;
             window.set_background_appearance(WindowBackgroundAppearance::Transparent);
         }
+        self.sync_overlay();
     }
 
     fn track_menu(&self, kind: TrackKind, button: Button, anchor: Anchor, cx: &mut Context<Self>) -> Option<impl IntoElement + use<>> {
@@ -1117,6 +1144,10 @@ fn pretty_decoder(dec: &str) -> (String, bool) {
     (format!("{} · {dec}", if hw { "HW" } else { "SW" }), hw)
 }
 
+fn overlay_needed(has_picture: bool, buffering: bool, has_error: bool, controls_shown: bool) -> bool {
+    !has_picture || buffering || has_error || controls_shown
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum BackAction {
     DismissCast,
@@ -1139,7 +1170,7 @@ fn escape_action(cast_open: bool, info_open: bool, is_fullscreen: bool) -> BackA
 
 #[cfg(test)]
 mod tests {
-    use super::{BackAction, escape_action};
+    use super::{BackAction, escape_action, overlay_needed};
 
     #[test]
     fn escape_exits_overlays_then_fullscreen_then_leaves() {
@@ -1147,5 +1178,14 @@ mod tests {
         assert_eq!(escape_action(false, true, true), BackAction::CloseInfo);
         assert_eq!(escape_action(false, false, true), BackAction::ExitFullscreen);
         assert_eq!(escape_action(false, false, false), BackAction::Leave);
+    }
+
+    #[test]
+    fn overlay_hides_only_during_clean_idle_playback() {
+        assert!(!overlay_needed(true, false, false, false));
+        assert!(overlay_needed(false, false, false, false));
+        assert!(overlay_needed(true, true, false, false));
+        assert!(overlay_needed(true, false, true, false));
+        assert!(overlay_needed(true, false, false, true));
     }
 }

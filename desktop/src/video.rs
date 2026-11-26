@@ -40,4 +40,11 @@ impl VideoView {
         self.slot.set_frame(rect);
     }
 
+    /// Shows or hides GPUI's transparent Metal layer above the picture while
+    /// keeping mouse/keyboard input active, enabling macOS hardware video scanout
+    /// when HUD controls are hidden.
+    pub fn set_overlay_visible(&self, visible: bool) {
+        self.slot.set_overlay_visible(visible);
+    }
+
 }

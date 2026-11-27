@@ -1,17 +1,22 @@
 package com.peartube.app.ui
 
+import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.asPaddingValues
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -20,6 +25,7 @@ import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
@@ -44,6 +50,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -52,17 +59,28 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.rotate
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.layout
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import com.peartube.app.AppModel
+import com.peartube.app.CinemaEpisodeMeta
+import com.peartube.app.CinemaTitleMeta
 import com.peartube.app.DownloadProgress
 import com.peartube.app.Entry
+import com.peartube.app.ExternalDiscoveryApi
+import com.peartube.app.ExternalImageCache
 import com.peartube.app.LibraryCatalog
 import com.peartube.app.LibraryKind
 import com.peartube.app.LibraryTile
@@ -72,6 +90,8 @@ import com.peartube.app.WatchProgress
 import com.peartube.app.findStartedVideos
 import com.peartube.app.formatDurationWords
 import com.peartube.app.formatTimeLeft
+import com.peartube.app.imdbBackdropUrl
+import com.peartube.app.imdbPosterUrl
 import com.peartube.app.indexLetter
 import com.peartube.app.isSaved
 import com.peartube.app.nextEpisodeForSeries
@@ -97,8 +117,8 @@ private enum class WatchView(val label: String) {
 private enum class WatchFilter(val label: String) {
     All("All"),
     Movies("Movies"),
-    Series("Series"),
-    Clips("Clips"),
+    Series("TV Shows"),
+    Clips("Videos"),
 }
 
 @Composable
@@ -106,6 +126,8 @@ fun WatchScreen(
     model: AppModel,
     catalog: LibraryCatalog,
     onOpenTitle: (String) -> Unit,
+    embedded: Boolean = false,
+    bottomPadding: Dp = 24.dp,
 ) {
     val status by model.status.collectAsState()
     val history by model.watchHistory.collectAsState()
@@ -188,118 +210,184 @@ fun WatchScreen(
     val clips = remember(shown) { shown.filter { it.kind == LibraryKind.Clip } }
 
     Column(Modifier.fillMaxSize()) {
-        // Watch display header + count / quick surprise action
-        Row(
-            Modifier
-                .fillMaxWidth()
-                .padding(start = 16.dp, end = 16.dp, top = 12.dp, bottom = 4.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(10.dp),
-        ) {
-            Text(
-                text = "Watch",
-                color = Ink,
-                fontSize = 28.sp,
-                fontWeight = FontWeight.ExtraBold,
-                letterSpacing = (-0.5).sp,
-                modifier = Modifier.weight(1f),
-            )
-            if (view == WatchView.Store || view == WatchView.Channels) {
-                QuietActionButton(
-                    text = "Play something",
-                    icon = DiceIcon,
-                    onClick = { model.playSurpriseVideo(allVideos.ifEmpty { catalog.videos }) },
-                )
-            } else {
+        if (!embedded) {
+            // Watch display header + count / quick surprise action
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .padding(start = 16.dp, end = 16.dp, top = 12.dp, bottom = 4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
                 Text(
-                    text = plural(catalog.videos.size, "title", "titles"),
-                    color = Dim,
-                    fontSize = 13.sp,
-                    fontWeight = FontWeight.Medium,
+                    text = "Watch",
+                    color = Ink,
+                    fontSize = 28.sp,
+                    fontWeight = FontWeight.ExtraBold,
+                    letterSpacing = (-0.5).sp,
+                    modifier = Modifier.weight(1f),
                 )
-            }
-        }
-
-        // Segmented view switcher: Rows / Tonight / Store / Channels
-        Row(
-            Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 16.dp, vertical = 6.dp)
-                .clip(ControlShape)
-                .background(CardBg)
-                .border(1.dp, Line, ControlShape)
-                .padding(3.dp),
-            horizontalArrangement = Arrangement.spacedBy(3.dp),
-        ) {
-            WatchView.entries.forEach { item ->
-                val selected = view == item
-                Box(
-                    modifier = Modifier
-                        .weight(1f)
-                        .clip(RoundedCornerShape(8.dp))
-                        .background(if (selected) CardElevated else Color.Transparent)
-                        .clickable { view = item }
-                        .padding(vertical = 8.dp),
-                    contentAlignment = Alignment.Center,
-                ) {
+                if (view == WatchView.Store || view == WatchView.Channels) {
+                    QuietActionButton(
+                        text = "Play something",
+                        icon = DiceIcon,
+                        onClick = { model.playSurpriseVideo(allVideos.ifEmpty { catalog.videos }) },
+                    )
+                } else {
                     Text(
-                        text = item.label,
-                        color = if (selected) Ink else Dim,
-                        fontSize = 12.sp,
-                        fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Medium,
-                        maxLines = 1,
+                        text = plural(catalog.videos.size, "title", "titles"),
+                        color = Dim,
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.Medium,
                     )
                 }
             }
         }
 
-        when (view) {
-            WatchView.Rows -> {
-                LazyRow(
-                    Modifier.fillMaxWidth(),
-                    contentPadding = PaddingValues(horizontal = 16.dp, vertical = 4.dp),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    val chips = listOf(
-                        WatchFilter.All to allVideos.size,
-                        WatchFilter.Movies to movieCount,
-                        WatchFilter.Series to seriesCount,
-                        WatchFilter.Clips to clipCount,
-                    ).filter { it.first == WatchFilter.All || it.second > 0 }
+        if (!embedded) {
+            // Segmented view switcher: Rows / Tonight / Store / Channels
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 6.dp)
+                    .clip(ControlShape)
+                    .background(CardBg)
+                    .border(1.dp, Line, ControlShape)
+                    .padding(3.dp),
+                horizontalArrangement = Arrangement.spacedBy(3.dp),
+            ) {
+                WatchView.entries.forEach { item ->
+                    val selected = view == item
+                    Box(
+                        modifier = Modifier
+                            .weight(1f)
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(if (selected) CardElevated else Color.Transparent)
+                            .clickable { view = item }
+                            .padding(vertical = 8.dp),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Text(
+                            text = item.label,
+                            color = if (selected) Ink else Dim,
+                            fontSize = 12.sp,
+                            fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Medium,
+                            maxLines = 1,
+                        )
+                    }
+                }
+            }
+        }
 
-                    items(chips, key = { it.first.name }) { (kind, count) ->
-                        FilterChip(
-                            selected = filter == kind,
-                            onClick = { filter = kind },
-                            label = { Text("${kind.label} $count", fontSize = 12.sp) },
-                            colors = FilterChipDefaults.filterChipColors(
-                                selectedContainerColor = Brand.copy(alpha = 0.22f),
-                                selectedLabelColor = Ink,
-                            ),
-                        )
+        val effectiveView = if (embedded) WatchView.Rows else view
+        when (effectiveView) {
+            WatchView.Rows -> {
+                if (embedded) {
+                    // Streamlined single quiet pill filter row: All | Films | Series | Clips (if any) | Saved
+                    LazyRow(
+                        modifier = Modifier.fillMaxWidth(),
+                        contentPadding = PaddingValues(horizontal = 20.dp, vertical = 4.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        val pills = buildList {
+                            add(WatchFilter.All to "All")
+                            if (movieCount > 0) add(WatchFilter.Movies to "Movies")
+                            if (seriesCount > 0) add(WatchFilter.Series to "TV Shows")
+                            if (clipCount > 0) add(WatchFilter.Clips to "Videos")
+                        }
+                        items(pills, key = { it.first.name }) { (kind, label) ->
+                            val selected = filter == kind
+                            Box(
+                                modifier = Modifier
+                                    .clip(PillShape)
+                                    .background(if (selected) Pearl else GlassBg)
+                                    .then(
+                                        if (selected) Modifier else Modifier.border(0.75.dp, GlassBorder, PillShape),
+                                    )
+                                    .clickable { filter = kind }
+                                    .padding(horizontal = 14.dp, vertical = 7.dp),
+                                contentAlignment = Alignment.Center,
+                            ) {
+                                Text(
+                                    text = label,
+                                    color = if (selected) PearlInk else Dim,
+                                    fontSize = 12.sp,
+                                    fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Medium,
+                                    maxLines = 1,
+                                )
+                            }
+                        }
+                        item(key = "saved-pill") {
+                            Box(
+                                modifier = Modifier
+                                    .clip(PillShape)
+                                    .background(if (savedOnly) Brand.copy(alpha = 0.22f) else GlassBg)
+                                    .border(
+                                        width = 0.75.dp,
+                                        color = if (savedOnly) Brand.copy(alpha = 0.65f) else GlassBorder,
+                                        shape = PillShape,
+                                    )
+                                    .clickable { savedOnly = !savedOnly }
+                                    .padding(horizontal = 14.dp, vertical = 7.dp),
+                                contentAlignment = Alignment.Center,
+                            ) {
+                                Text(
+                                    text = "Saved",
+                                    color = if (savedOnly) Ink else Dim,
+                                    fontSize = 12.sp,
+                                    fontWeight = if (savedOnly) FontWeight.SemiBold else FontWeight.Medium,
+                                    maxLines = 1,
+                                )
+                            }
+                        }
                     }
-                    item(key = "saved-here") {
-                        FilterChip(
-                            selected = savedOnly,
-                            onClick = { savedOnly = !savedOnly },
-                            label = { Text("Saved here", fontSize = 12.sp) },
-                            colors = FilterChipDefaults.filterChipColors(
-                                selectedContainerColor = Brand.copy(alpha = 0.22f),
-                                selectedLabelColor = Ink,
-                            ),
-                        )
-                    }
-                    if (sources.size > 1) {
-                        items(sources, key = { "src-${it.key}" }) { ch ->
+                } else {
+                    LazyRow(
+                        Modifier.fillMaxWidth(),
+                        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 4.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        val chips = listOf(
+                            WatchFilter.All to allVideos.size,
+                            WatchFilter.Movies to movieCount,
+                            WatchFilter.Series to seriesCount,
+                            WatchFilter.Clips to clipCount,
+                        ).filter { it.first == WatchFilter.All || it.second > 0 }
+
+                        items(chips, key = { it.first.name }) { (kind, count) ->
                             FilterChip(
-                                selected = sourceKey == ch.key,
-                                onClick = {
-                                    val next = if (sourceKey == ch.key) null else ch.key
-                                    sourceKey = next
-                                    if (next != null) model.focusSource(next)
-                                },
-                                label = { Text(ch.alias.ifBlank { "Channel ${ch.key.take(6)}" }, fontSize = 12.sp) },
+                                selected = filter == kind,
+                                onClick = { filter = kind },
+                                label = { Text("${kind.label} $count", fontSize = 12.sp) },
+                                colors = FilterChipDefaults.filterChipColors(
+                                    selectedContainerColor = Brand.copy(alpha = 0.22f),
+                                    selectedLabelColor = Ink,
+                                ),
                             )
+                        }
+                        item(key = "saved-here") {
+                            FilterChip(
+                                selected = savedOnly,
+                                onClick = { savedOnly = !savedOnly },
+                                label = { Text("Saved here", fontSize = 12.sp) },
+                                colors = FilterChipDefaults.filterChipColors(
+                                    selectedContainerColor = Brand.copy(alpha = 0.22f),
+                                    selectedLabelColor = Ink,
+                                ),
+                            )
+                        }
+                        if (sources.size > 1) {
+                            items(sources, key = { "src-${it.key}" }) { ch ->
+                                FilterChip(
+                                    selected = sourceKey == ch.key,
+                                    onClick = {
+                                        val next = if (sourceKey == ch.key) null else ch.key
+                                        sourceKey = next
+                                        if (next != null) model.focusSource(next)
+                                    },
+                                    label = { Text(ch.alias.ifBlank { "Channel ${ch.key.take(6)}" }, fontSize = 12.sp) },
+                                )
+                            }
                         }
                     }
                 }
@@ -312,12 +400,89 @@ fun WatchScreen(
                             fontSize = 14.sp,
                         )
                     }
+                } else if (embedded) {
+                    // Airy 2-column real IMDb poster grid (3 columns on tablets), zero nested heroes or heavy card boxes
+                    BoxWithConstraints(Modifier.weight(1f).fillMaxWidth()) {
+                        val columns = if (maxWidth >= 540.dp) 3 else 2
+                        val filmRows = remember(films, columns) { films.chunked(columns) }
+
+                        LazyColumn(
+                            modifier = Modifier.fillMaxSize(),
+                            contentPadding = PaddingValues(top = 12.dp, bottom = bottomPadding),
+                            verticalArrangement = Arrangement.spacedBy(18.dp),
+                        ) {
+                            if (filmRows.isNotEmpty()) {
+                                items(filmRows.size, key = { idx -> "watch-grid-row-$idx" }) { rowIdx ->
+                                    val rowTiles = filmRows[rowIdx]
+                                    Row(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .padding(horizontal = 20.dp),
+                                        horizontalArrangement = Arrangement.spacedBy(14.dp),
+                                    ) {
+                                        rowTiles.forEach { tile ->
+                                            LibraryPosterGridCard(
+                                                tile = tile,
+                                                onOpen = { onOpenTitle(tile.key) },
+                                                modifier = Modifier.weight(1f),
+                                            )
+                                        }
+                                        repeat(columns - rowTiles.size) {
+                                            Spacer(Modifier.weight(1f))
+                                        }
+                                    }
+                                }
+                            }
+
+                            if (clips.isNotEmpty()) {
+                                if (filmRows.isNotEmpty()) {
+                                    item(key = "embedded-clips-head") {
+                                        SectionHeader(title = "Clips", modifier = Modifier.padding(top = 8.dp))
+                                    }
+                                }
+                                items(clips, key = { "embedded-clip-${it.key}" }) { tile ->
+                                    Column(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .padding(horizontal = 20.dp)
+                                            .clickable { onOpenTitle(tile.key) },
+                                        verticalArrangement = Arrangement.spacedBy(6.dp),
+                                    ) {
+                                        WideTitleArt(
+                                            title = tile.title,
+                                            seed = tile.seed,
+                                            kindLabel = posterKindLabel(tile.kind),
+                                            imdb = tile.imdb,
+                                            showTitleOverlay = false,
+                                            borderless = true,
+                                            modifier = Modifier.fillMaxWidth(),
+                                        )
+                                        Text(
+                                            text = tile.title,
+                                            color = Ink,
+                                            fontSize = 14.sp,
+                                            fontWeight = FontWeight.Medium,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis,
+                                        )
+                                        Text(
+                                            text = tileFactsLine(tile),
+                                            color = Dim,
+                                            fontSize = 12.sp,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis,
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
                 } else {
                     val heroStarted = startedVideos.firstOrNull()
                     val heroFeatured = featuredLocal ?: shown.firstOrNull()
                     LazyColumn(
                         modifier = Modifier.weight(1f).fillMaxWidth(),
-                        contentPadding = PaddingValues(top = 6.dp, bottom = 24.dp),
+                        contentPadding = PaddingValues(top = 6.dp, bottom = bottomPadding),
                         verticalArrangement = Arrangement.spacedBy(14.dp),
                     ) {
                         if (filter == WatchFilter.All && (heroStarted != null || heroFeatured != null)) {
@@ -355,6 +520,7 @@ fun WatchScreen(
                                                     badge = if (tile.kind == LibraryKind.Series) entry.episodeLabel else null,
                                                     progress = pct,
                                                     kindLabel = posterKindLabel(tile.kind),
+                                                    imdb = tile.imdb,
                                                     modifier = Modifier.fillMaxWidth(),
                                                 )
                                                 Text(
@@ -414,6 +580,7 @@ fun WatchScreen(
                     videos = catalog.videos,
                     history = history,
                     onOpenTitle = onOpenTitle,
+                    bottomPadding = bottomPadding,
                     modifier = Modifier.weight(1f).fillMaxWidth(),
                 )
             }
@@ -422,6 +589,7 @@ fun WatchScreen(
                     catalog = catalog,
                     history = history,
                     onInspect = { coverTile = it },
+                    bottomPadding = bottomPadding,
                     modifier = Modifier.weight(1f).fillMaxWidth(),
                 )
             }
@@ -431,6 +599,7 @@ fun WatchScreen(
                     catalog = catalog,
                     history = history,
                     onInspect = { coverTile = it },
+                    bottomPadding = bottomPadding,
                     modifier = Modifier.weight(1f).fillMaxWidth(),
                 )
             }
@@ -493,6 +662,7 @@ private fun WatchFeaturedHero(
     HeroPanel(
         hue = normalizeHue(heroTile.seed),
         showOrb = true,
+        backdropImdb = heroTile.imdb,
         modifier = modifier,
     ) {
         Text(
@@ -588,6 +758,7 @@ private fun WatchTonightView(
     videos: List<LibraryTile>,
     history: Map<String, WatchProgress>,
     onOpenTitle: (String) -> Unit,
+    bottomPadding: Dp = 28.dp,
     modifier: Modifier = Modifier,
 ) {
     val started = remember(videos, history) { findStartedVideos(videos, history) }
@@ -645,7 +816,7 @@ private fun WatchTonightView(
     LazyColumn(
         state = listState,
         modifier = modifier,
-        contentPadding = PaddingValues(top = 6.dp, bottom = 28.dp),
+        contentPadding = PaddingValues(top = 6.dp, bottom = bottomPadding),
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
         if (continueInfo != null) {
@@ -815,6 +986,7 @@ private fun TonightDecisionCard(
         hue = normalizeHue(tile.seed),
         small = true,
         showOrb = true,
+        backdropImdb = tile.imdb,
         modifier = modifier.fillMaxWidth(),
     ) {
         Text(
@@ -883,6 +1055,7 @@ private fun WatchStoreView(
     catalog: LibraryCatalog,
     history: Map<String, WatchProgress>,
     onInspect: (LibraryTile) -> Unit,
+    bottomPadding: Dp = 28.dp,
     modifier: Modifier = Modifier,
 ) {
     val startedKeys = remember(catalog.videos, history) {
@@ -898,7 +1071,7 @@ private fun WatchStoreView(
 
     LazyColumn(
         modifier = modifier,
-        contentPadding = PaddingValues(top = 6.dp, bottom = 28.dp),
+        contentPadding = PaddingValues(top = 6.dp, bottom = bottomPadding),
         verticalArrangement = Arrangement.spacedBy(22.dp),
     ) {
         shelves.forEach { (heading, tiles) ->
@@ -1151,6 +1324,7 @@ private fun WatchChannelsView(
     catalog: LibraryCatalog,
     history: Map<String, WatchProgress>,
     onInspect: (LibraryTile) -> Unit,
+    bottomPadding: Dp = 28.dp,
     modifier: Modifier = Modifier,
 ) {
     var clockTick by remember { mutableLongStateOf(System.currentTimeMillis()) }
@@ -1187,7 +1361,7 @@ private fun WatchChannelsView(
 
     LazyColumn(
         modifier = modifier,
-        contentPadding = PaddingValues(top = 6.dp, bottom = 28.dp),
+        contentPadding = PaddingValues(top = 6.dp, bottom = bottomPadding),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         item(key = "on-now-head") { SectionHeader("On now") }
@@ -1203,6 +1377,7 @@ private fun WatchChannelsView(
                 hue = normalizeHue(live.item.tile.seed),
                 small = true,
                 showOrb = true,
+                backdropImdb = live.item.tile.imdb,
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(horizontal = 16.dp),
@@ -1414,6 +1589,7 @@ private fun VideoCoverDialog(
                         title = tile.title,
                         seed = tile.seed,
                         kindLabel = posterKindLabel(tile.kind),
+                        imdb = tile.imdb,
                         modifier = Modifier.width(126.dp),
                     )
                 } else {
@@ -1422,6 +1598,7 @@ private fun VideoCoverDialog(
                         year = tile.year,
                         seed = tile.seed,
                         kindLabel = posterKindLabel(tile.kind),
+                        imdb = tile.imdb,
                         modifier = Modifier.width(90.dp),
                     )
                 }
@@ -1504,6 +1681,7 @@ private fun WatchVideoCard(
                     year = tile.year,
                     seed = tile.seed,
                     kindLabel = posterKindLabel(tile.kind),
+                    imdb = tile.imdb,
                     modifier = Modifier.width(58.dp),
                 )
                 Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
@@ -1552,12 +1730,13 @@ private fun WatchVideoCard(
                     year = tile.year,
                     seed = tile.seed,
                     kindLabel = posterKindLabel(tile.kind),
+                    imdb = tile.imdb,
                     modifier = Modifier.width(58.dp),
                 )
                 Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(5.dp)) {
                     Text(tile.title, color = Ink, fontSize = 16.sp, fontWeight = FontWeight.SemiBold, maxLines = 2, overflow = TextOverflow.Ellipsis)
                     Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
-                        Text("Film", color = Dim, fontSize = 12.sp)
+                        Text("Movie", color = Dim, fontSize = 12.sp)
                         val detail = listOfNotNull(
                             tile.year,
                             if (tile.items.size > 1) "${tile.items.size} versions" else formatBytes(first.size),
@@ -1591,6 +1770,7 @@ private fun ClipCard(tile: LibraryTile, onOpen: () -> Unit, modifier: Modifier =
             title = tile.title,
             seed = tile.seed,
             kindLabel = posterKindLabel(tile.kind),
+            imdb = tile.imdb,
             modifier = Modifier.width(116.dp),
         )
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
@@ -1598,6 +1778,33 @@ private fun ClipCard(tile: LibraryTile, onOpen: () -> Unit, modifier: Modifier =
             Text(tileFactsLine(tile), color = Dim, fontSize = 12.sp)
             Text(stateText, color = if (isOk) Accent else Dim, fontSize = 11.sp)
         }
+    }
+}
+
+private fun formatSeasonLabel(rawSeason: String): String {
+    val num = rawSeason.trim().removePrefix("S").removePrefix("s").toIntOrNull()
+    return if (num != null) "Season $num" else rawSeason
+}
+
+private fun cleanEpisodeFallbackTitle(entry: Entry, showTitle: String, epCode: String): String {
+    val epNum = entry.episode
+    val raw = entry.title.trim()
+    val stripped = raw
+        .removePrefix(showTitle)
+        .trim()
+        .removePrefix("·")
+        .removePrefix("-")
+        .removePrefix(":")
+        .trim()
+    val isBareCode = stripped.isEmpty() ||
+        stripped.equals(epCode, ignoreCase = true) ||
+        raw.equals(showTitle, ignoreCase = true) ||
+        raw.equals("$showTitle $epCode", ignoreCase = true) ||
+        raw.equals(epCode, ignoreCase = true)
+    return if (isBareCode) {
+        if (epNum != null) "Episode $epNum" else "Episode"
+    } else {
+        stripped
     }
 }
 
@@ -1620,13 +1827,33 @@ fun TitleDetailScreen(
     val history by model.watchHistory.collectAsState()
     val downloads by model.downloads.collectAsState()
     val status by model.status.collectAsState()
-    val (stateText, isOk) = tileStateLabel(tile)
+    val copyText = rememberCopyText()
+    val statusBarTop = WindowInsets.statusBars.asPaddingValues().calculateTopPadding()
+    val isSeries = tile.kind == LibraryKind.Series
+
+    val titleMeta by produceState<CinemaTitleMeta?>(
+        initialValue = tile.imdb?.let { ExternalDiscoveryApi.cachedTitleMeta(it, isSeries = isSeries) },
+        key1 = tile.key,
+        key2 = tile.imdb,
+    ) {
+        if (tile.kind == LibraryKind.Movie || tile.kind == LibraryKind.Series) {
+            val resolvedImdb = tile.imdb
+                ?: ExternalDiscoveryApi.resolveTitleImdb(tile.title, isSeries = isSeries)
+            value = if (resolvedImdb != null) {
+                ExternalDiscoveryApi.loadTitleMeta(resolvedImdb, isSeries = isSeries)
+            } else {
+                null
+            }
+        }
+    }
 
     val episodes = remember(tile) {
         if (tile.kind == LibraryKind.Series) tile.items.map { it.entry }.distinctBy { it.id } else emptyList()
     }
     val seasons = remember(episodes) { episodes.mapNotNull { it.seasonLabel }.distinct() }
     var selectedSeason by remember(tile.key, seasons) { mutableStateOf(seasons.firstOrNull() ?: "") }
+    var primaryMenuOpen by remember { mutableStateOf(false) }
+    var synopsisExpanded by remember(tile.key) { mutableStateOf(false) }
 
     val primaryEntry = remember(tile, episodes, history) {
         if (tile.kind == LibraryKind.Series && episodes.isNotEmpty()) {
@@ -1639,88 +1866,340 @@ fun TitleDetailScreen(
         }
     }
     val primaryResume = primaryEntry?.let { history[it.key]?.takeIf { p -> p.partial } }
+    val primaryDownload = primaryEntry?.let { downloads[it.key] }
+    val primaryCanDelete = primaryEntry != null &&
+        status?.let { it.writable && it.channel.isNotEmpty() && it.channel == primaryEntry.source } == true
 
-    Column(Modifier.fillMaxSize().statusBarsPadding()) {
-        DetailTopBar(title = "", onBack = onBack)
+    val effectiveImdb = tile.imdb ?: titleMeta?.imdbId
+    val backdropUrl = remember(effectiveImdb, titleMeta?.backdropUrl) {
+        titleMeta?.backdropUrl?.takeIf { it.isNotBlank() } ?: imdbBackdropUrl(effectiveImdb)
+    }
+    val posterFallbackUrl = remember(effectiveImdb, titleMeta?.posterUrl) {
+        titleMeta?.posterUrl?.takeIf { it.isNotBlank() } ?: imdbPosterUrl(effectiveImdb)
+    }
+    val heroArt by produceState<ImageBitmap?>(
+        initialValue = backdropUrl?.let { ExternalImageCache.get(it) }
+            ?: posterFallbackUrl?.let { ExternalImageCache.get(it) },
+        key1 = backdropUrl,
+        key2 = posterFallbackUrl,
+    ) {
+        value = when {
+            backdropUrl != null -> ExternalImageCache.load(backdropUrl)
+                ?: posterFallbackUrl?.let { ExternalImageCache.load(it) }
+            posterFallbackUrl != null -> ExternalImageCache.load(posterFallbackUrl)
+            else -> null
+        }
+    }
+
+    val displayYear = titleMeta?.year?.takeIf { it.isNotBlank() } ?: tile.year
+    val displayRuntime = titleMeta?.runtime?.takeIf { it.isNotBlank() }
+    val displayRating = titleMeta?.rating?.takeIf { it.isNotBlank() }
+
+    val metadataParts = remember(tile, displayYear, displayRuntime, seasons.size, episodes.size) {
+        when (tile.kind) {
+            LibraryKind.Movie -> listOfNotNull(
+                displayYear,
+                displayRuntime,
+                if (displayYear == null && displayRuntime == null) "Movie" else null,
+            )
+            LibraryKind.Series -> listOfNotNull(
+                displayYear,
+                if (seasons.isNotEmpty()) plural(seasons.size, "Season", "Seasons") else plural(episodes.size, "Episode", "Episodes"),
+                displayRuntime,
+            )
+            LibraryKind.Clip -> listOfNotNull(
+                "Video",
+                tile.items.firstOrNull()?.entry?.size?.takeIf { it > 0L }?.let { formatBytes(it) },
+            )
+            LibraryKind.Album -> listOfNotNull(tile.artist.takeIf { it.isNotBlank() })
+        }
+    }
+
+    Box(Modifier.fillMaxSize().background(Bg)) {
         LazyColumn(
-            modifier = Modifier.weight(1f).fillMaxWidth(),
-            contentPadding = PaddingValues(bottom = 28.dp),
-            verticalArrangement = Arrangement.spacedBy(14.dp),
+            modifier = Modifier.fillMaxSize(),
+            contentPadding = PaddingValues(bottom = 32.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
-            item(key = "title-header") {
-                Column(
-                    Modifier.fillMaxWidth().padding(horizontal = 20.dp),
-                    verticalArrangement = Arrangement.spacedBy(12.dp),
-                ) {
-                    Row(horizontalArrangement = Arrangement.spacedBy(16.dp), verticalAlignment = Alignment.CenterVertically) {
-                        if (tile.kind == LibraryKind.Clip) {
-                            WideTitleArt(
-                                title = tile.title,
-                                seed = tile.seed,
-                                kindLabel = posterKindLabel(tile.kind),
-                                modifier = Modifier.width(136.dp),
+            // Cinematic full-bleed 16:9 IMDb backdrop hero melting smoothly into Bg
+            item(key = "title-cinematic-hero") {
+                val hue = normalizeHue(tile.seed)
+                val heroHeight = 250.dp + statusBarTop
+                Column(Modifier.fillMaxWidth()) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(heroHeight),
+                    ) {
+                        val art = heroArt
+                        if (art != null) {
+                            Image(
+                                bitmap = art,
+                                contentDescription = tile.title,
+                                contentScale = ContentScale.Crop,
+                                modifier = Modifier.fillMaxSize(),
                             )
+                            Canvas(Modifier.fillMaxSize()) {
+                                drawRect(
+                                    Brush.verticalGradient(
+                                        0.0f to Bg.copy(alpha = 0.65f),
+                                        0.30f to Color.Transparent,
+                                        0.58f to Bg.copy(alpha = 0.68f),
+                                        0.86f to Bg.copy(alpha = 0.94f),
+                                        1.0f to Bg,
+                                    ),
+                                )
+                            }
                         } else {
-                            PosterArt(
-                                title = tile.title,
-                                year = tile.year,
-                                seed = tile.seed,
-                                kindLabel = posterKindLabel(tile.kind),
-                                modifier = Modifier.width(96.dp),
-                            )
+                            val glowA = Color.hsl(hue.toFloat(), 0.48f, 0.24f)
+                            val glowB = Color.hsl(((hue + 48) % 360).toFloat(), 0.54f, 0.12f)
+                            Canvas(Modifier.fillMaxSize()) {
+                                drawRect(
+                                    Brush.verticalGradient(
+                                        0.0f to glowA,
+                                        0.58f to glowB,
+                                        1.0f to Bg,
+                                    ),
+                                )
+                                drawCircle(
+                                    brush = Brush.radialGradient(
+                                        0.0f to Color.hsl(((hue + 140) % 360).toFloat(), 0.60f, 0.48f, alpha = 0.22f),
+                                        1.0f to Color.Transparent,
+                                        center = Offset(size.width * 0.78f, size.height * 0.25f),
+                                        radius = size.width * 0.65f,
+                                    ),
+                                    radius = size.width * 0.65f,
+                                    center = Offset(size.width * 0.78f, size.height * 0.25f),
+                                )
+                            }
                         }
-                        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+
+                        Column(
+                            modifier = Modifier
+                                .align(Alignment.BottomStart)
+                                .fillMaxWidth()
+                                .padding(horizontal = 20.dp, vertical = 14.dp),
+                            verticalArrangement = Arrangement.spacedBy(6.dp),
+                        ) {
                             Text(
-                                when (tile.kind) {
-                                    LibraryKind.Movie -> "Movie"
-                                    LibraryKind.Series -> "Series"
-                                    LibraryKind.Clip -> "Clip"
-                                    LibraryKind.Album -> "Album"
-                                },
-                                color = Dim,
-                                fontSize = 12.sp,
-                                fontWeight = FontWeight.Medium,
+                                text = tile.title,
+                                color = Ink,
+                                fontSize = 26.sp,
+                                lineHeight = 30.sp,
+                                fontFamily = FontFamily.SansSerif,
+                                fontWeight = FontWeight.Bold,
+                                letterSpacing = (-0.7).sp,
+                                maxLines = 2,
+                                overflow = TextOverflow.Ellipsis,
                             )
-                            Text(tile.title, color = Ink, fontSize = 21.sp, fontWeight = FontWeight.Bold, maxLines = 3, overflow = TextOverflow.Ellipsis)
-                            val detailFacts = when (tile.kind) {
-                                LibraryKind.Movie -> listOfNotNull(
-                                    tile.year,
-                                    tile.items.firstOrNull()?.entry?.size?.takeIf { it > 0L }?.let { formatBytes(it) },
-                                    if (tile.items.size > 1) plural(tile.items.size, "version", "versions") else null,
-                                ).joinToString(" · ")
-                                LibraryKind.Clip -> tile.items.firstOrNull()?.entry?.size?.takeIf { it > 0L }?.let { formatBytes(it) } ?: ""
-                                else -> tileFactsLine(tile)
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                            ) {
+                                if (tile.allSaved) {
+                                    Box(
+                                        modifier = Modifier
+                                            .size(6.dp)
+                                            .clip(CircleShape)
+                                            .background(Accent),
+                                    )
+                                }
+                                val joined = metadataParts.joinToString(" · ")
+                                if (joined.isNotBlank()) {
+                                    Text(
+                                        text = joined,
+                                        color = Ink.copy(alpha = 0.80f),
+                                        fontSize = 13.sp,
+                                        fontWeight = FontWeight.Medium,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                    )
+                                }
+                                if (displayRating != null) {
+                                    if (joined.isNotBlank()) {
+                                        Text("·", color = Dim, fontSize = 13.sp)
+                                    }
+                                    Text(
+                                        text = "★ $displayRating",
+                                        color = Warn,
+                                        fontSize = 13.sp,
+                                        fontWeight = FontWeight.SemiBold,
+                                        maxLines = 1,
+                                    )
+                                }
                             }
-                            if (detailFacts.isNotBlank()) {
-                                Text(detailFacts, color = Dim, fontSize = 13.sp)
-                            }
-                            Text(stateText, color = if (isOk) Accent else Dim, fontSize = 12.sp)
                         }
                     }
 
+                    // Primary Pearl Play/Resume pill + Cast & More icon buttons
                     if (primaryEntry != null) {
                         val playLabel = when {
                             tile.kind == LibraryKind.Series && primaryResume != null -> "Resume ${primaryEntry.episodeLabel}"
-                            tile.kind == LibraryKind.Series -> "Next episode · ${primaryEntry.episodeLabel}"
+                            tile.kind == LibraryKind.Series -> "Play ${primaryEntry.episodeLabel}"
                             primaryResume != null -> "Resume"
                             else -> "Play"
                         }
-                        Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
-                            PrimaryLightButton(
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 20.dp)
+                                .padding(top = 4.dp),
+                            horizontalArrangement = Arrangement.spacedBy(10.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            HeroPrimaryButton(
                                 text = playLabel,
                                 icon = PlayIcon,
+                                shape = PillShape,
                                 onClick = { model.playEntry(primaryEntry) },
+                                modifier = Modifier.weight(1f).height(46.dp),
                             )
                             if (!primaryEntry.locked) {
-                                QuietActionButton(
-                                    text = "Play on a TV",
-                                    icon = TvIcon,
-                                    onClick = {
-                                        model.openTvsPickerForEntry(
-                                            primaryEntry,
-                                            history[primaryEntry.key]?.takeIf { it.partial }?.positionMs ?: 0L,
+                                Box(
+                                    modifier = Modifier
+                                        .size(46.dp)
+                                        .clip(CircleShape)
+                                        .background(GlassBg)
+                                        .border(0.75.dp, GlassBorder, CircleShape)
+                                        .semantics { contentDescription = "Cast to TV" }
+                                        .clickable {
+                                            model.openTvsPickerForEntry(
+                                                primaryEntry,
+                                                history[primaryEntry.key]?.takeIf { it.partial }?.positionMs ?: 0L,
+                                            )
+                                        },
+                                    contentAlignment = Alignment.Center,
+                                ) {
+                                    Icon(CastIcon, null, tint = Ink, modifier = Modifier.size(20.dp))
+                                }
+                            }
+                            Box {
+                                Box(
+                                    modifier = Modifier
+                                        .size(46.dp)
+                                        .clip(CircleShape)
+                                        .background(GlassBg)
+                                        .border(0.75.dp, GlassBorder, CircleShape)
+                                        .semantics { contentDescription = "More options" }
+                                        .clickable { primaryMenuOpen = true },
+                                    contentAlignment = Alignment.Center,
+                                ) {
+                                    Icon(MoreVertIcon, null, tint = Ink, modifier = Modifier.size(20.dp))
+                                }
+                                DropdownMenu(
+                                    expanded = primaryMenuOpen,
+                                    onDismissRequest = { primaryMenuOpen = false },
+                                ) {
+                                    if (!primaryEntry.locked) {
+                                        if (primaryDownload != null) {
+                                            DropdownMenuItem(
+                                                text = { Text("Cancel download") },
+                                                onClick = {
+                                                    primaryMenuOpen = false
+                                                    model.cancelDownload(primaryEntry.key)
+                                                },
+                                            )
+                                        } else {
+                                            DropdownMenuItem(
+                                                text = { Text("Download") },
+                                                onClick = {
+                                                    primaryMenuOpen = false
+                                                    model.downloadEntry(primaryEntry, primaryEntry.title)
+                                                },
+                                            )
+                                        }
+                                    }
+                                    if (primaryEntry.magnetUrl.isNotBlank()) {
+                                        DropdownMenuItem(
+                                            text = { Text("Copy link") },
+                                            onClick = {
+                                                primaryMenuOpen = false
+                                                copyText(primaryEntry.magnetUrl)
+                                                model.notice.value = "Link copied"
+                                            },
                                         )
-                                    },
+                                    }
+                                    if (!primaryEntry.local && primaryEntry.cachedBytes > 0L) {
+                                        DropdownMenuItem(
+                                            text = { Text("Free up cache") },
+                                            onClick = {
+                                                primaryMenuOpen = false
+                                                model.clearCache(primaryEntry.key)
+                                            },
+                                        )
+                                    }
+                                    if (primaryCanDelete) {
+                                        DropdownMenuItem(
+                                            text = { Text("Delete", color = Danger) },
+                                            onClick = {
+                                                primaryMenuOpen = false
+                                                model.removeChannelEntry(primaryEntry.key)
+                                            },
+                                        )
+                                    }
+                                }
+                            }
+                        }
+
+                        if (primaryResume != null && primaryResume.durationMs > 0L) {
+                            val left = formatTimeLeft(primaryResume.durationMs - primaryResume.positionMs)
+                            val frac = (primaryResume.positionMs.toFloat() / primaryResume.durationMs).coerceIn(0.03f, 1f)
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 20.dp)
+                                    .padding(top = 12.dp),
+                                verticalArrangement = Arrangement.spacedBy(5.dp),
+                            ) {
+                                LinearProgressIndicator(
+                                    progress = { frac },
+                                    modifier = Modifier.fillMaxWidth().height(3.dp).clip(PillShape),
+                                    color = Pearl,
+                                    trackColor = GlassBorder,
+                                )
+                                Text(left, color = Dim, fontSize = 12.sp)
+                            }
+                        }
+                    }
+
+                    // Rich Cinemeta synopsis, subtle inline genres, and cast line
+                    val meta = titleMeta
+                    if (meta != null && (meta.genres.isNotEmpty() || meta.description.isNotBlank() || meta.cast.isNotEmpty())) {
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 20.dp)
+                                .padding(top = 16.dp),
+                            verticalArrangement = Arrangement.spacedBy(6.dp),
+                        ) {
+                            if (meta.genres.isNotEmpty()) {
+                                Text(
+                                    text = meta.genres.take(4).joinToString(" · "),
+                                    color = Dim,
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.Medium,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                            }
+                            if (meta.description.isNotBlank()) {
+                                Text(
+                                    text = meta.description,
+                                    color = Ink.copy(alpha = 0.84f),
+                                    fontSize = 13.5.sp,
+                                    lineHeight = 20.sp,
+                                    maxLines = if (synopsisExpanded) 12 else 3,
+                                    overflow = TextOverflow.Ellipsis,
+                                    modifier = Modifier.clickable { synopsisExpanded = !synopsisExpanded },
+                                )
+                            }
+                            if (meta.cast.isNotEmpty()) {
+                                Text(
+                                    text = "Starring ${meta.cast.take(4).joinToString(", ")}",
+                                    color = Dim,
+                                    fontSize = 12.sp,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
                                 )
                             }
                         }
@@ -1730,48 +2209,71 @@ fun TitleDetailScreen(
 
             if (tile.kind == LibraryKind.Series) {
                 if (seasons.size > 1) {
-                    item(key = "season-chips") {
-                        Row(
-                            Modifier
-                                .fillMaxWidth()
-                                .horizontalScroll(rememberScrollState())
-                                .padding(horizontal = 16.dp),
+                    item(key = "season-pills") {
+                        LazyRow(
+                            modifier = Modifier.fillMaxWidth(),
+                            contentPadding = PaddingValues(horizontal = 20.dp),
                             horizontalArrangement = Arrangement.spacedBy(8.dp),
                         ) {
-                            seasons.forEach { s ->
-                                FilterChip(
-                                    selected = selectedSeason == s,
-                                    onClick = { selectedSeason = s },
-                                    label = { Text(s) },
-                                    colors = FilterChipDefaults.filterChipColors(
-                                        selectedContainerColor = Brand.copy(alpha = 0.22f),
-                                        selectedLabelColor = Ink,
-                                    ),
-                                )
+                            items(seasons, key = { "season-$it" }) { s ->
+                                val selected = selectedSeason == s
+                                Box(
+                                    modifier = Modifier
+                                        .clip(PillShape)
+                                        .background(if (selected) Pearl else GlassBg)
+                                        .then(
+                                            if (selected) Modifier else Modifier.border(0.75.dp, GlassBorder, PillShape),
+                                        )
+                                        .clickable { selectedSeason = s }
+                                        .padding(horizontal = 14.dp, vertical = 7.dp),
+                                    contentAlignment = Alignment.Center,
+                                ) {
+                                    Text(
+                                        text = formatSeasonLabel(s),
+                                        color = if (selected) PearlInk else Dim,
+                                        fontSize = 13.sp,
+                                        fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Medium,
+                                        maxLines = 1,
+                                    )
+                                }
                             }
                         }
                     }
                 }
                 val seasonEpisodes = episodes.filter { seasons.size <= 1 || it.seasonLabel == selectedSeason }
-                item(key = "episodes-head") { SectionHeader("Episodes") }
+                item(key = "episodes-head") {
+                    SectionHeader(
+                        title = if (seasons.size > 1 && selectedSeason.isNotBlank()) {
+                            "${formatSeasonLabel(selectedSeason)} · ${plural(seasonEpisodes.size, "Episode", "Episodes")}"
+                        } else {
+                            "Episodes"
+                        },
+                    )
+                }
                 items(seasonEpisodes, key = { it.key }) { episode ->
                     val epCode = episode.episodeLabel
+                    val epMeta = if (episode.season != null && episode.episode != null) {
+                        titleMeta?.episodes?.get(episode.season to episode.episode)
+                    } else {
+                        null
+                    }
+                    val resolvedTitle = epMeta?.name?.takeIf { it.isNotBlank() }
+                        ?: cleanEpisodeFallbackTitle(episode, tile.title, epCode)
                     val dlName = if (episode.title.contains(epCode, ignoreCase = true)) episode.title else "${episode.title} $epCode"
-                    FileVersionRow(
+                    CleanEpisodeRow(
                         model = model,
                         entry = episode,
-                        label = epCode,
-                        subTitle = episode.title.takeIf { it != tile.title },
+                        epCode = epCode,
+                        title = resolvedTitle,
+                        episodeMeta = epMeta,
                         progress = history[episode.key],
                         download = downloads[episode.key],
                         downloadName = dlName,
                         canDelete = status?.let { it.writable && it.channel.isNotEmpty() && it.channel == episode.source } == true,
                     )
                 }
-            } else {
-                item(key = "versions-head") {
-                    SectionHeader(if (tile.items.size > 1) "Versions" else "File")
-                }
+            } else if (tile.items.size > 1) {
+                item(key = "versions-head") { SectionHeader("Versions") }
                 items(tile.items, key = { it.entry.key }) { item ->
                     val entry = item.entry
                     FileVersionRow(
@@ -1785,7 +2287,253 @@ fun TitleDetailScreen(
                         canDelete = status?.let { it.writable && it.channel.isNotEmpty() && it.channel == entry.source } == true,
                     )
                 }
+            } else if (primaryEntry != null) {
+                item(key = "single-file-note") {
+                    val savedHere = isSaved(primaryEntry)
+                    val dl = primaryDownload
+                    val note = buildList {
+                        primaryEntry.size.takeIf { it > 0L }?.let { add(formatBytes(it)) }
+                        when {
+                            primaryEntry.locked -> add("Subscriber pass needed")
+                            dl != null && dl.total > 0L -> add("Downloading ${(dl.bytes * 100L / dl.total).coerceIn(0L, 100L)}%")
+                            dl != null -> add("Downloading ${formatBytes(dl.bytes)}")
+                            savedHere -> add("Saved on device")
+                            primaryEntry.cachedBytes > 0L -> add("Partly cached")
+                            else -> add("Streams over swarm")
+                        }
+                    }.joinToString(" · ")
+                    if (note.isNotBlank()) {
+                        Column(
+                            modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp),
+                            verticalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            Text(note, color = if (savedHere) Accent else Dim, fontSize = 12.sp)
+                            if (dl != null) {
+                                EntryProgressBar(primaryEntry, primaryResume, dl)
+                            }
+                        }
+                    }
+                }
             }
+        }
+
+        // Floating circular Back button over top-left of backdrop
+        Box(
+            modifier = Modifier
+                .align(Alignment.TopStart)
+                .statusBarsPadding()
+                .padding(start = 16.dp, top = 8.dp)
+                .size(38.dp)
+                .clip(CircleShape)
+                .background(Bg.copy(alpha = 0.56f))
+                .border(0.75.dp, GlassBorder, CircleShape)
+                .semantics { contentDescription = "Back" }
+                .clickable(onClick = onBack),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(BackIcon, null, tint = Ink, modifier = Modifier.size(19.dp))
+        }
+    }
+}
+
+@Composable
+private fun CleanEpisodeRow(
+    model: AppModel,
+    entry: Entry,
+    epCode: String,
+    title: String,
+    episodeMeta: CinemaEpisodeMeta?,
+    progress: WatchProgress?,
+    download: DownloadProgress?,
+    downloadName: String,
+    canDelete: Boolean,
+) {
+    var menu by remember { mutableStateOf(false) }
+    val copyText = rememberCopyText()
+    val savedHere = isSaved(entry)
+    val watched = progress != null && !progress.partial && progress.positionMs > 0L
+    val shortBadge = entry.episode?.let { "E$it" } ?: epCode
+    val thumbUrl = episodeMeta?.thumbnailUrl?.takeIf { it.isNotBlank() }
+    val thumbBitmap by produceState<ImageBitmap?>(
+        initialValue = thumbUrl?.let { ExternalImageCache.get(it) },
+        key1 = thumbUrl,
+    ) {
+        value = if (thumbUrl != null) ExternalImageCache.load(thumbUrl) else null
+    }
+    val watchFrac = if (progress?.partial == true && progress.durationMs > 0L) {
+        (progress.positionMs.toFloat() / progress.durationMs.toFloat()).coerceIn(0.04f, 1f)
+    } else {
+        0f
+    }
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 20.dp)
+            .clip(CardShape)
+            .background(CardBg)
+            .border(0.75.dp, Line.copy(alpha = 0.7f), CardShape)
+            .clickable { model.playEntry(entry) },
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(start = 10.dp, end = 4.dp, top = 10.dp, bottom = 10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            // Crisp 16:9 episode still thumbnail (112x63dp) with bottom watch progress bar
+            val thumbShape = RoundedCornerShape(8.dp)
+            Box(
+                modifier = Modifier
+                    .width(112.dp)
+                    .height(63.dp)
+                    .clip(thumbShape)
+                    .background(CardElevated)
+                    .border(0.5.dp, GlassBorder.copy(alpha = 0.65f), thumbShape),
+                contentAlignment = Alignment.Center,
+            ) {
+                val loadedStill = thumbBitmap
+                if (loadedStill != null) {
+                    Image(
+                        bitmap = loadedStill,
+                        contentDescription = title,
+                        contentScale = ContentScale.Crop,
+                        modifier = Modifier.fillMaxSize(),
+                    )
+                } else {
+                    Text(
+                        text = shortBadge,
+                        color = Dim,
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        fontFamily = FontFamily.Monospace,
+                    )
+                }
+                if (watchFrac > 0f) {
+                    Box(
+                        modifier = Modifier
+                            .align(Alignment.BottomStart)
+                            .fillMaxWidth()
+                            .height(2.5.dp)
+                            .background(Bg.copy(alpha = 0.65f)),
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxHeight()
+                                .fillMaxWidth(watchFrac)
+                                .background(Pearl),
+                        )
+                    }
+                }
+            }
+
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    Text(
+                        text = shortBadge,
+                        color = Dim,
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        fontFamily = FontFamily.Monospace,
+                    )
+                    if (watched) {
+                        Icon(CheckIcon, "Watched", tint = Accent, modifier = Modifier.size(13.dp))
+                    } else if (savedHere && !entry.locked) {
+                        Box(
+                            modifier = Modifier
+                                .size(5.dp)
+                                .clip(CircleShape)
+                                .background(Accent),
+                        )
+                    }
+                    val statusSub = when {
+                        entry.locked -> "Pass needed"
+                        download != null && download.total > 0L -> "${(download.bytes * 100L / download.total).coerceIn(0L, 100L)}%"
+                        download != null -> formatBytes(download.bytes)
+                        progress?.partial == true && progress.durationMs > 0L -> formatTimeLeft(progress.durationMs - progress.positionMs)
+                        else -> ""
+                    }
+                    if (statusSub.isNotBlank()) {
+                        Text(
+                            text = "· $statusSub",
+                            color = if (entry.locked) Danger else Dim,
+                            fontSize = 11.sp,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                }
+                Text(
+                    text = title,
+                    color = Ink,
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.Medium,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                val overview = episodeMeta?.overview?.takeIf { it.isNotBlank() }
+                if (overview != null) {
+                    Text(
+                        text = overview,
+                        color = Dim,
+                        fontSize = 11.5.sp,
+                        lineHeight = 15.sp,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+            }
+
+            Box {
+                CinemaIcon(MoreVertIcon, "Episode options", Dim) { menu = true }
+                DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
+                    if (!entry.locked) {
+                        DropdownMenuItem(
+                            text = { Text("Cast to TV") },
+                            onClick = {
+                                menu = false
+                                model.openTvsPickerForEntry(entry, progress?.takeIf { it.partial }?.positionMs ?: 0L)
+                            },
+                        )
+                        if (download != null) {
+                            DropdownMenuItem(
+                                text = { Text("Cancel download") },
+                                onClick = { menu = false; model.cancelDownload(entry.key) },
+                            )
+                        } else {
+                            DropdownMenuItem(
+                                text = { Text("Download") },
+                                onClick = { menu = false; model.downloadEntry(entry, downloadName) },
+                            )
+                        }
+                    }
+                    if (entry.magnetUrl.isNotBlank()) {
+                        DropdownMenuItem(
+                            text = { Text("Copy link") },
+                            onClick = { menu = false; copyText(entry.magnetUrl); model.notice.value = "Link copied" },
+                        )
+                    }
+                    if (!entry.local && entry.cachedBytes > 0L) {
+                        DropdownMenuItem(
+                            text = { Text("Free up cache") },
+                            onClick = { menu = false; model.clearCache(entry.key) },
+                        )
+                    }
+                    if (canDelete) {
+                        DropdownMenuItem(
+                            text = { Text("Delete", color = Danger) },
+                            onClick = { menu = false; model.removeChannelEntry(entry.key) },
+                        )
+                    }
+                }
+            }
+        }
+        if (download != null) {
+            EntryProgressBar(entry, progress, download)
         }
     }
 }
@@ -1808,26 +2556,26 @@ private fun FileVersionRow(
         entry.locked -> "Subscriber pass needed"
         download != null && download.total > 0L -> "Downloading ${(download.bytes * 100L / download.total).coerceIn(0L, 100L)}%"
         download != null -> "Downloading ${formatBytes(download.bytes)}"
-        savedHere -> "Saved here"
-        entry.cachedBytes > 0L -> "Partly saved"
-        else -> "On the network"
+        savedHere -> "Saved on device"
+        entry.cachedBytes > 0L -> "Partly cached"
+        else -> "Streams over swarm"
     }
 
     Column(
         Modifier
             .fillMaxWidth()
-            .padding(horizontal = 16.dp)
+            .padding(horizontal = 20.dp)
             .clip(CardShape)
             .background(CardBg)
-            .border(1.dp, Line, CardShape)
+            .border(0.75.dp, Line.copy(alpha = 0.7f), CardShape)
             .clickable { model.playEntry(entry) },
     ) {
         Row(
-            Modifier.padding(start = 14.dp, end = 4.dp, top = 10.dp, bottom = 10.dp),
+            Modifier.padding(start = 14.dp, end = 4.dp, top = 11.dp, bottom = 11.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
-                Text(label, color = Ink, fontSize = 15.sp, fontWeight = FontWeight.Medium, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                Text(label, color = Ink, fontSize = 14.sp, fontWeight = FontWeight.Medium, maxLines = 2, overflow = TextOverflow.Ellipsis)
                 if (!subTitle.isNullOrBlank()) {
                     Text(subTitle, color = Dim, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
@@ -1846,18 +2594,12 @@ private fun FileVersionRow(
                     )
                 }
             }
-            if (!entry.locked) {
-                CinemaIcon(PlayIcon, "Play $label", Ink) { model.playEntry(entry) }
-                CinemaIcon(TvIcon, "Play on a TV", Dim) {
-                    model.openTvsPickerForEntry(entry, progress?.takeIf { it.partial }?.positionMs ?: 0L)
-                }
-            }
             Box {
-                CinemaIcon(MoreVertIcon, "More options") { menu = true }
+                CinemaIcon(MoreVertIcon, "Version options", Dim) { menu = true }
                 DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
                     if (!entry.locked) {
                         DropdownMenuItem(
-                            text = { Text("Play on a TV") },
+                            text = { Text("Cast to TV") },
                             onClick = {
                                 menu = false
                                 model.openTvsPickerForEntry(entry, progress?.takeIf { it.partial }?.positionMs ?: 0L)
@@ -1878,7 +2620,7 @@ private fun FileVersionRow(
                     if (entry.magnetUrl.isNotBlank()) {
                         DropdownMenuItem(
                             text = { Text("Copy link") },
-                            onClick = { menu = false; copyText(entry.magnetUrl) },
+                            onClick = { menu = false; copyText(entry.magnetUrl); model.notice.value = "Link copied" },
                         )
                     }
                     if (!entry.local && entry.cachedBytes > 0L) {

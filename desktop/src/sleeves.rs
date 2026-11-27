@@ -10,7 +10,7 @@ use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
 use crate::catalog::sleeve_hash;
-use crate::theme::{ACCENT, BRAND_HOVER, CARD_ELEVATED, LINE};
+use crate::theme::{ACCENT, BRAND_HOVER, CARD_ELEVATED, LINE, PEARL};
 
 /// Square drawn sleeve derived deterministically from an album's `hue`, `seed`,
 /// and `monogram`, mirroring `albumArt` in `src/ui.js`.
@@ -301,7 +301,7 @@ pub fn hero_surface(hue_deg: u32, show_orb: bool) -> Div {
         .child(div().absolute().inset_0().bg(left_scrim))
 }
 
-/// Crisp white primary action button for hero cards (`#ffffff` bg, `#111111` ink).
+/// Crisp pearl primary action button for LUMEN hero cards (`#eae6dd` bg, `#0b0c10` ink).
 pub fn hero_primary_btn(id: impl Into<ElementId>, icon: Option<Lucide>, label: impl Into<SharedString>) -> Stateful<Div> {
     h_flex()
         .id(id)
@@ -310,18 +310,18 @@ pub fn hero_primary_btn(id: impl Into<ElementId>, icon: Option<Lucide>, label: i
         .gap_2()
         .h(px(42.))
         .px_5()
-        .rounded(px(12.))
-        .bg(rgb(0xffffff))
+        .rounded(px(99.))
+        .bg(rgb(PEARL))
         .text_sm()
         .font_weight(FontWeight::BOLD)
-        .text_color(rgb(0x111111))
+        .text_color(rgb(0x0b0c10))
         .cursor_pointer()
-        .hover(|s| s.bg(rgb(0xe6e2f5)))
-        .when_some(icon, |row, ic| row.child(Icon::new(ic).text_color(rgb(0x111111))))
+        .hover(|s| s.bg(rgb(0xffffff)))
+        .when_some(icon, |row, ic| row.child(Icon::new(ic).text_color(rgb(0x0b0c10))))
         .child(label.into())
 }
 
-/// Frosted translucent secondary action button for hero cards.
+/// Frosted obsidian-glass secondary action button for LUMEN hero cards.
 pub fn hero_secondary_btn(id: impl Into<ElementId>, icon: Option<Lucide>, label: impl Into<SharedString>) -> Stateful<Div> {
     h_flex()
         .id(id)
@@ -330,16 +330,16 @@ pub fn hero_secondary_btn(id: impl Into<ElementId>, icon: Option<Lucide>, label:
         .gap_2()
         .h(px(42.))
         .px_4()
-        .rounded(px(12.))
-        .bg(hsla(0., 0., 1., 0.16))
+        .rounded(px(99.))
+        .bg(hsla(0., 0., 1., 0.12))
         .border_1()
-        .border_color(hsla(0., 0., 1., 0.28))
+        .border_color(hsla(0., 0., 1., 0.22))
         .text_sm()
         .font_weight(FontWeight::SEMIBOLD)
-        .text_color(rgb(0xffffff))
+        .text_color(rgb(0xf4f5f7))
         .cursor_pointer()
-        .hover(|s| s.bg(hsla(0., 0., 1., 0.28)))
-        .when_some(icon, |row, ic| row.child(Icon::new(ic).text_color(rgb(0xffffff))))
+        .hover(|s| s.bg(hsla(0., 0., 1., 0.22)))
+        .when_some(icon, |row, ic| row.child(Icon::new(ic).text_color(rgb(0xf4f5f7))))
         .child(label.into())
 }
 

@@ -3,6 +3,7 @@ package com.peartube.app.ui
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -36,6 +37,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardCapitalization
@@ -57,6 +60,8 @@ import org.json.JSONObject
 @Composable
 fun TvsDialog(model: AppModel) {
     val cast by model.cast.collectAsState()
+    val castReconnecting by model.castReconnecting.collectAsState()
+    val lastCastSession by model.lastCastSession.collectAsState()
     val pending by model.pendingCast.collectAsState()
     var scanner by remember { mutableStateOf(false) }
     var pairCode by remember { mutableStateOf("") }
@@ -89,7 +94,8 @@ fun TvsDialog(model: AppModel) {
                 onClose = { scanner = false },
             )
         } else {
-            val session = cast.session
+            val reconnecting = cast.session == null && castReconnecting
+            val session = cast.session ?: lastCastSession.takeIf { reconnecting }
             LazyColumn(
                 modifier = Modifier.fillMaxWidth().navigationBarsPadding(),
                 contentPadding = PaddingValues(start = 20.dp, end = 20.dp, bottom = 24.dp),
@@ -154,7 +160,12 @@ fun TvsDialog(model: AppModel) {
                         ) {
                             Row(verticalAlignment = Alignment.CenterVertically) {
                                 Column(Modifier.weight(1f)) {
-                                    Text("Playing on ${session.receiverName}", color = Accent, fontSize = 12.sp, fontWeight = FontWeight.Medium)
+                                    Text(
+                                        text = if (reconnecting) "Reconnecting to ${session.receiverName}…" else "Playing on ${session.receiverName}",
+                                        color = if (reconnecting) Warn else Accent,
+                                        fontSize = 12.sp,
+                                        fontWeight = FontWeight.Medium,
+                                    )
                                     Text(title, color = Ink, fontSize = 16.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
                                 }
                                 TextButton(onClick = { model.stopCasting() }) {
@@ -359,22 +370,55 @@ fun TvsDialog(model: AppModel) {
 @Composable
 fun CastRemoteBar(model: AppModel) {
     val cast by model.cast.collectAsState()
-    val session = cast.session ?: return
+    val castReconnecting by model.castReconnecting.collectAsState()
+    val lastCastSession by model.lastCastSession.collectAsState()
+    val reconnecting = cast.session == null && castReconnecting
+    val session = cast.session ?: lastCastSession.takeIf { reconnecting } ?: return
     val state = session.state
     val title = state.entry?.title?.ifBlank { session.receiverName } ?: session.receiverName
+    val density = LocalDensity.current
+    val upThresholdPx = remember(density) { with(density) { 40.dp.toPx() } }
     Row(
         Modifier
             .fillMaxWidth()
             .background(CardBg)
             .border(1.dp, Line)
+            .pointerInput(upThresholdPx) {
+                var dragUp = 0f
+                var opened = false
+                detectVerticalDragGestures(
+                    onDragStart = {
+                        dragUp = 0f
+                        opened = false
+                    },
+                    onDragEnd = { dragUp = 0f },
+                    onDragCancel = { dragUp = 0f },
+                    onVerticalDrag = { change, dragAmount ->
+                        if (!opened && dragAmount < 0f) {
+                            dragUp += -dragAmount
+                            if (dragUp >= upThresholdPx) {
+                                opened = true
+                                change.consume()
+                                model.openCastSheet()
+                            }
+                        }
+                    },
+                )
+            }
             .clickable { model.openCastSheet() }
             .padding(start = 14.dp, end = 6.dp, top = 6.dp, bottom = 6.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Icon(TvIcon, null, tint = Accent, modifier = Modifier.size(20.dp))
+        Icon(TvIcon, null, tint = if (reconnecting) Warn else Accent, modifier = Modifier.size(20.dp))
         Column(Modifier.weight(1f).padding(horizontal = 12.dp)) {
             Text(title, color = Ink, fontSize = 14.sp, fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            Text("Playing on ${session.receiverName}", color = Accent, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(
+                text = if (reconnecting) "Reconnecting to ${session.receiverName}…" else "Playing on ${session.receiverName}",
+                color = if (reconnecting) Warn else Accent,
+                fontSize = 12.sp,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
         }
         CinemaIcon(
             icon = if (state.playing) PauseIcon else PlayIcon,

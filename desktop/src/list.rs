@@ -16,7 +16,7 @@ use peartube::worker::{Entry, Status};
 use crate::api::{AcquireJob, IdentifyResult, extract_shared_url, format_duration, is_web_url};
 use crate::app::{DetailView, ListenTab, NetworkTab, PearTube, Room, WatchKind, WatchViewMode};
 use crate::qr::qr_card;
-use crate::theme::{ACCENT, BG, BRAND, BRAND_HOVER, CARD, CARD_ELEVATED, DANGER, DIM, INK, LINE};
+use crate::theme::{ACCENT, BG, BRAND, BRAND_HOVER, CARD, CARD_ELEVATED, DANGER, DIM, GLASS_BORDER, INK, LINE, PEARL};
 
 pub fn format_bytes(bytes: u64) -> String {
     const KB: u64 = 1024;
@@ -185,15 +185,31 @@ impl PearTube {
         let nav_tab = |id: &'static str, text: &'static str, is_active: bool, target: Room, cx: &mut Context<Self>| {
             div()
                 .id(id)
-                .px_2p5()
-                .py_2()
-                .border_b_2()
-                .border_color(if is_active { Hsla::from(rgb(BRAND)) } else { transparent_black() })
+                .px_3p5()
+                .py_1p5()
+                .rounded(px(99.))
+                .bg(if is_active {
+                    hsla(256. / 360., 0.85, 0.72, 0.18)
+                } else {
+                    transparent_black()
+                })
+                .border_1()
+                .border_color(if is_active {
+                    hsla(256. / 360., 0.85, 0.74, 0.34)
+                } else {
+                    transparent_black()
+                })
                 .text_sm()
                 .font_weight(if is_active { FontWeight::SEMIBOLD } else { FontWeight::MEDIUM })
-                .text_color(if is_active { rgb(INK) } else { rgb(DIM) })
+                .text_color(if is_active { rgb(PEARL) } else { rgb(DIM) })
                 .cursor_pointer()
-                .hover(|s| s.text_color(rgb(INK)))
+                .hover(|s| {
+                    if is_active {
+                        s
+                    } else {
+                        s.text_color(rgb(INK)).bg(hsla(0., 0., 1., 0.05))
+                    }
+                })
                 .on_click(cx.listener(move |this, _, _, cx| {
                     this.open_room(target.clone(), cx);
                 }))
@@ -226,47 +242,76 @@ impl PearTube {
         v_flex()
             .size_full()
             .relative()
-            // Unified top navigation bar with live Network pill and Add/TVs/Settings actions
+            .bg(rgb(BG))
+            // LUMEN consistently transparent floating top header (no heavy bar or 1px seam)
             .child(
-                div().border_b_1().border_color(rgb(LINE)).bg(rgb(BG)).child(
+                div().bg(transparent_black()).pt_2().pb_1().child(
                     h_flex()
                         .w_full()
                         .max_w(px(1240.))
                         .mx_auto()
                         .px_6()
-                        .h(px(54.))
+                        .h(px(52.))
                         .items_center()
                         .justify_between()
                         .gap_4()
-                        // Left: Brand (opens Under the Hood) + room tabs
+                        // Left: Pearl orb brand mark (opens Under the Hood) + floating glass pill nav
                         .child(
                             h_flex()
                                 .items_center()
-                                .gap_5()
+                                .gap_4()
                                 .child(
-                                    div()
+                                    h_flex()
                                         .id("brand-hood-trigger")
-                                        .px_2()
-                                        .py_1()
+                                        .items_center()
+                                        .gap_2()
+                                        .px_2p5()
+                                        .py_1p5()
                                         .ml(px(-8.))
-                                        .rounded(px(8.))
+                                        .rounded(px(99.))
                                         .cursor_pointer()
-                                        .hover(|s| s.bg(hsla(0., 0., 1., 0.04)))
+                                        .hover(|s| s.bg(hsla(0., 0., 1., 0.05)))
                                         .on_click(cx.listener(|this, _, _, cx| {
                                             this.hood_open = !this.hood_open;
                                             cx.notify();
                                         }))
-                                        .child(div().text_lg().font_weight(FontWeight::BOLD).child("PearTube")),
+                                        .child(
+                                            div()
+                                                .size(px(10.))
+                                                .rounded(px(99.))
+                                                .bg(rgb(PEARL))
+                                                .border_1()
+                                                .border_color(hsla(256. / 360., 0.85, 0.74, 0.55)),
+                                        )
+                                        .child(
+                                            div()
+                                                .text_lg()
+                                                .font_weight(FontWeight::BOLD)
+                                                .text_color(rgb(PEARL))
+                                                .child("PearTube"),
+                                        ),
                                 )
                                 .child(
                                     h_flex()
                                         .items_center()
                                         .gap_1()
+                                        .p_1()
+                                        .rounded(px(99.))
+                                        .bg(hsla(0., 0., 1., 0.06))
+                                        .border_1()
+                                        .border_color(GLASS_BORDER)
                                         .child(nav_tab(
                                             "nav-home",
                                             "Home",
                                             matches!(active_nav, Room::Home),
                                             Room::Home,
+                                            cx,
+                                        ))
+                                        .child(nav_tab(
+                                            "nav-discover",
+                                            "Discover",
+                                            matches!(active_nav, Room::Discover),
+                                            Room::Discover,
                                             cx,
                                         ))
                                         .child(nav_tab(
@@ -282,25 +327,24 @@ impl PearTube {
                                             matches!(active_nav, Room::Watch(_)),
                                             Room::Watch(WatchKind::All),
                                             cx,
-                                        ))
-                                        .child(nav_tab(
-                                            "nav-discover",
-                                            "Discover",
-                                            matches!(active_nav, Room::Discover),
-                                            Room::Discover,
-                                            cx,
                                         )),
                                 ),
                         )
-                        // Center: unified search input (Rule 16)
+                        // Center: sleek rounded search field (Rule 16)
                         .child(
-                            div().flex_1().max_w(px(360.)).min_w(px(180.)).child(
-                                Input::new(&self.search)
-                                    .prefix(Icon::new(Lucide::Search).text_color(rgb(DIM)))
-                                    .cleanable(true),
-                            ),
+                            div()
+                                .flex_1()
+                                .max_w(px(340.))
+                                .min_w(px(180.))
+                                .rounded(px(99.))
+                                .overflow_hidden()
+                                .child(
+                                    Input::new(&self.search)
+                                        .prefix(Icon::new(Lucide::Search).text_color(rgb(DIM)))
+                                        .cleanable(true),
+                                ),
                         )
-                        // Right: live network pill, Adding… pill (when active), Add (+), TVs (green dot when casting), Settings
+                        // Right: Pearl network pill, Adding… pill (when active), Add (+), TVs (green dot when casting), Settings
                         .child(
                             h_flex()
                                 .items_center()
@@ -426,7 +470,7 @@ impl PearTube {
             .collect();
         let show_spark = online && spark_samples.len() >= 2;
         let dot_color = if !online || peers == 0 {
-            rgb(DIM)
+            rgb(PEARL)
         } else {
             rgb(ACCENT)
         };
@@ -434,17 +478,21 @@ impl PearTube {
             .id("top-network-pill")
             .items_center()
             .gap_2()
-            .h(px(32.))
+            .h(px(34.))
             .px_3()
             .rounded(px(99.))
-            .bg(if active { rgb(CARD_ELEVATED) } else { rgb(CARD) })
+            .bg(if active {
+                hsla(256. / 360., 0.85, 0.72, 0.16)
+            } else {
+                hsla(0., 0., 1., 0.06)
+            })
             .border_1()
-            .border_color(if active { rgb(BRAND) } else { rgb(LINE) })
+            .border_color(if active { Hsla::from(rgb(BRAND)) } else { GLASS_BORDER })
             .text_xs()
             .font_weight(FontWeight::SEMIBOLD)
-            .text_color(if active || (online && peers > 0) { rgb(INK) } else { rgb(DIM) })
+            .text_color(if active || (online && peers > 0) { rgb(PEARL) } else { rgb(DIM) })
             .cursor_pointer()
-            .hover(|s| s.border_color(rgb(DIM)).bg(rgb(CARD_ELEVATED)).text_color(rgb(INK)))
+            .hover(|s| s.border_color(rgb(BRAND_HOVER)).bg(rgb(CARD_ELEVATED)).text_color(rgb(INK)))
             .on_click(cx.listener(|this, _, _, cx| {
                 this.open_room(Room::Network(NetworkTab::Globe), cx);
             }))

@@ -27,27 +27,49 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
-// Tokens from design/tokens.json (dark palette + violet brand)
-val Bg = Color(0xFF08090C)
-val CardBg = Color(0xFF101218)
-val CardElevated = Color(0xFF171A22)
-val Line = Color(0xFF232733)
-val Ink = Color(0xFFF2F4F8)
-val Dim = Color(0xFF98A0B3)
+// LUMEN v4.5 Obsidian & Pearl palette tokens
+val Bg = Color(0xFF06070A)
+val CardBg = Color(0xFF0E1017)
+val CardElevated = Color(0xFF161923)
+val GlassBg = Color(0xCC12151F)
+val GlassBorder = Color(0x24FFFFFF)
+val GlassHighlight = Color(0x18FFFFFF)
+val FloatingDockBg = Color(0xF211141D)
+val FloatingDockBorder = Color(0x2AFFFFFF)
+val TopBarScrim = Color(0xB806070A)
+val TopBarSolid = Color(0xF506070A)
+val TopBarFadeMid = Color(0xCC06070A)
+val BottomBarScrim = Color(0xD906070A)
+val BottomScrimStrong = Color(0xF006070A)
+val AmbientPearlGlow = Color(0x1AEAE6DD)
+val AmbientBrandGlow = Color(0x1C9B7BFF)
+val AmbientAccentGlow = Color(0x1645D08A)
+val Pearl = Color(0xFFEAE6DD)
+val PearlHighlight = Color(0xFFFFFDF8)
+val PearlMid = Color(0xFFDAD3C5)
+val PearlRim = Color(0xFF474B59)
+val PearlInk = Color(0xFF0B0C10)
+val MiniScrim = Color(0x9906070A)
+val MiniButtonBg = Color(0x9912151F)
+val Line = Color(0xFF222634)
+val Ink = Color(0xFFF4F5F7)
+val Dim = Color(0xFF959CB0)
+val Brand = Color(0xFF9B7BFF)
+val BrandHover = Color(0xFFB096FF)
+val BrandRing = Color(0xFFC2ADFF)
 val Accent = Color(0xFF45D08A)
 val Warn = Color(0xFFE8B45C)
-val Brand = Color(0xFF9147FF)
-val BrandHover = Color(0xFFA866FF)
-val BrandRing = Color(0xFFB98BFF)
 val Danger = Color(0xFFFF7D7D)
-val HeroPrimaryInk = Color(0xFF111111)
-val OverlayPanelBg = Color(0xF00F131C)
+val HeroPrimaryInk = Color(0xFF0B0C10)
+val OverlayPanelBg = Color(0xF20B0D14)
 val SourceYoutube = Color(0xFFE05252)
 val SourceSoundCloud = Color(0xFFFF7A33)
 val SourceRumble = Color(0xFF7FD14B)
@@ -148,7 +170,7 @@ fun PrimaryBrandButton(
     }
 }
 
-/** Solid white hero primary button (#FFFFFF bg / #111111 ink) matching sketch .hero .btn.primary. */
+/** Solid pearl hero primary button. */
 @Composable
 fun HeroPrimaryButton(
     text: String,
@@ -156,18 +178,19 @@ fun HeroPrimaryButton(
     modifier: Modifier = Modifier,
     icon: ImageVector? = null,
     enabled: Boolean = true,
+    shape: Shape = HeroButtonShape,
 ) {
     Button(
         onClick = onClick,
         enabled = enabled,
-        shape = HeroButtonShape,
+        shape = shape,
         colors = ButtonDefaults.buttonColors(
-            containerColor = Color.White,
-            contentColor = HeroPrimaryInk,
-            disabledContainerColor = Color.White.copy(alpha = 0.25f),
-            disabledContentColor = Color.White.copy(alpha = 0.6f),
+            containerColor = Pearl,
+            contentColor = PearlInk,
+            disabledContainerColor = Pearl.copy(alpha = 0.25f),
+            disabledContentColor = Pearl.copy(alpha = 0.6f),
         ),
-        contentPadding = PaddingValues(horizontal = 18.dp, vertical = 12.dp),
+        contentPadding = PaddingValues(horizontal = 20.dp, vertical = 11.dp),
         modifier = modifier,
     ) {
         if (icon != null) {
@@ -178,7 +201,7 @@ fun HeroPrimaryButton(
     }
 }
 
-/** Translucent frosted-glass hero secondary button matching sketch .hero .btn. */
+/** Translucent frosted-glass hero secondary button. */
 @Composable
 fun HeroGlassButton(
     text: String,
@@ -186,19 +209,20 @@ fun HeroGlassButton(
     modifier: Modifier = Modifier,
     icon: ImageVector? = null,
     enabled: Boolean = true,
+    shape: Shape = HeroButtonShape,
 ) {
     OutlinedButton(
         onClick = onClick,
         enabled = enabled,
-        shape = HeroButtonShape,
-        border = BorderStroke(1.dp, Color.White.copy(alpha = if (enabled) 0.28f else 0.14f)),
+        shape = shape,
+        border = BorderStroke(1.dp, Color.White.copy(alpha = if (enabled) 0.24f else 0.12f)),
         colors = ButtonDefaults.outlinedButtonColors(
-            containerColor = Color.White.copy(alpha = 0.16f),
+            containerColor = Color.White.copy(alpha = 0.14f),
             contentColor = Color.White,
             disabledContainerColor = Color.White.copy(alpha = 0.08f),
             disabledContentColor = Color.White.copy(alpha = 0.45f),
         ),
-        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
+        contentPadding = PaddingValues(horizontal = 18.dp, vertical = 11.dp),
         modifier = modifier,
     ) {
         if (icon != null) {
@@ -223,8 +247,8 @@ fun PrimaryLightButton(
         enabled = enabled,
         shape = ControlShape,
         colors = ButtonDefaults.buttonColors(
-            containerColor = Ink,
-            contentColor = Bg,
+            containerColor = Pearl,
+            contentColor = PearlInk,
             disabledContainerColor = CardElevated,
             disabledContentColor = Dim,
         ),
@@ -281,10 +305,11 @@ fun SectionHeader(
     actionLabel: String? = null,
     onAction: (() -> Unit)? = null,
     trailing: (@Composable RowScope.() -> Unit)? = null,
+    horizontalPadding: Dp = 20.dp,
     modifier: Modifier = Modifier,
 ) {
     Row(
-        modifier = modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
+        modifier = modifier.fillMaxWidth().padding(horizontal = horizontalPadding, vertical = 2.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Text(
@@ -292,12 +317,13 @@ fun SectionHeader(
             color = Ink,
             fontSize = 18.sp,
             fontWeight = FontWeight.SemiBold,
+            letterSpacing = (-0.2).sp,
             modifier = Modifier.weight(1f),
         )
         if (trailing != null) {
             trailing()
         } else if (actionLabel != null && onAction != null) {
-            TextButton(onClick = onAction, contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)) {
+            TextButton(onClick = onAction, contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)) {
                 Text(actionLabel, color = Dim, fontSize = 13.sp, fontWeight = FontWeight.Medium)
             }
         }

@@ -37,6 +37,9 @@ object NativePlayer {
     /** 0 pending, 1 retired, 2 failed. */
     @JvmStatic external fun retireSurface(id: Long, keepReceipt: Boolean): Int
     @JvmStatic external fun surfaceRetirementStatus(id: Long): Int
+
+    /** Updates the active display's hardware VSYNC timestamp (`CLOCK_MONOTONIC`) and period; period <= 0 clears. */
+    @JvmStatic external fun setDisplayVsync(hwVsyncNs: Long, periodNs: Long)
 }
 
 data class Track(

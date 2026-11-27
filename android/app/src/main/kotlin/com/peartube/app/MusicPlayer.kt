@@ -1,8 +1,10 @@
 package com.peartube.app
 
+import android.content.Context
 import android.util.AtomicFile
 import com.peartube.app.player.NativePlayer
 import com.peartube.app.player.PlayerState
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -51,9 +53,17 @@ data class TrackItem(
     val trackNo: String = "",
     val disc: Int? = null,
     val track: Int? = null,
+    val artUrl: String = "",
+    val albumBrowseId: String = "",
+    val externalStreamSource: String? = null,
+    val externalSaveUrl: String? = null,
+    val externalSaveKind: String? = null,
+    val streamUserAgent: String = "",
+    val externalVideoId: String = "",
 ) {
     val key: String get() = entry.key
     val monogramText: String get() = monogram(album.ifBlank { title })
+    val isExternalStream: Boolean get() = !externalStreamSource.isNullOrBlank()
 
     fun toJson(): JSONObject = JSONObject()
         .put("entryKey", entry.key)
@@ -77,6 +87,13 @@ data class TrackItem(
         .apply {
             disc?.let { put("disc", it) }
             track?.let { put("track", it) }
+            if (artUrl.isNotBlank()) put("artUrl", artUrl)
+            if (albumBrowseId.isNotBlank()) put("albumBrowseId", albumBrowseId)
+            externalStreamSource?.takeIf { it.isNotBlank() }?.let { put("externalStreamSource", it) }
+            externalSaveUrl?.takeIf { it.isNotBlank() }?.let { put("externalSaveUrl", it) }
+            externalSaveKind?.takeIf { it.isNotBlank() }?.let { put("externalSaveKind", it) }
+            if (streamUserAgent.isNotBlank()) put("streamUserAgent", streamUserAgent)
+            if (externalVideoId.isNotBlank()) put("externalVideoId", externalVideoId)
         }
 
     companion object {
@@ -85,6 +102,25 @@ data class TrackItem(
             val artist = json.optString("artist")
             val disc = if (json.isNull("disc")) null else json.optInt("disc")
             val track = if (json.isNull("track")) null else json.optInt("track")
+            val artUrl = json.optString("artUrl")
+            val albumBrowseId = json.optString("albumBrowseId")
+            val externalStreamSource = if (json.isNull("externalStreamSource")) {
+                null
+            } else {
+                json.optString("externalStreamSource").takeIf { it.isNotBlank() }
+            }
+            val externalSaveUrl = if (json.isNull("externalSaveUrl")) {
+                null
+            } else {
+                json.optString("externalSaveUrl").takeIf { it.isNotBlank() }
+            }
+            val externalSaveKind = if (json.isNull("externalSaveKind")) {
+                null
+            } else {
+                json.optString("externalSaveKind").takeIf { it.isNotBlank() }
+            }
+            val streamUserAgent = json.optString("streamUserAgent")
+            val externalVideoId = json.optString("externalVideoId")
             val entry = Entry(
                 key = json.getString("entryKey"),
                 id = json.optString("entryId"),
@@ -112,6 +148,13 @@ data class TrackItem(
                 trackNo = json.optString("trackNo"),
                 disc = disc,
                 track = track,
+                artUrl = artUrl,
+                albumBrowseId = albumBrowseId,
+                externalStreamSource = externalStreamSource,
+                externalSaveUrl = externalSaveUrl,
+                externalSaveKind = externalSaveKind,
+                streamUserAgent = streamUserAgent,
+                externalVideoId = externalVideoId,
             )
         }
     }
@@ -124,12 +167,16 @@ data class MusicState(
     val sourceLabel: String = "",
     val shuffle: Boolean = false,
     val repeat: RepeatMode = RepeatMode.Off,
+    val autoplay: Boolean = true,
+    val autoplayLoading: Boolean = false,
     val pausedForVideo: Boolean = false,
     val positionMs: Long = 0L,
     val durationMs: Long? = null,
     val playing: Boolean = false,
     val buffering: Boolean = false,
     val error: String? = null,
+    val audioCodec: String? = null,
+    val audioOutput: String? = null,
     val updatedAt: Long = 0L,
 ) {
     val hasQueue: Boolean get() = order.isNotEmpty() && index in order.indices
@@ -193,6 +240,8 @@ object MusicQueue {
             playing = true,
             buffering = true,
             error = null,
+            audioCodec = null,
+            audioOutput = null,
             updatedAt = nowMs,
         )
         return QueueStep(state = nextState, openTrack = track)
@@ -252,6 +301,46 @@ object MusicQueue {
 
     fun cycleRepeat(state: MusicState, nowMs: Long = System.currentTimeMillis()): MusicState =
         state.copy(repeat = state.repeat.next(), updatedAt = nowMs)
+
+    fun toggleAutoplay(state: MusicState, nowMs: Long = System.currentTimeMillis()): MusicState =
+        state.copy(autoplay = !state.autoplay, updatedAt = nowMs)
+
+    fun appendAutoplay(
+        state: MusicState,
+        candidates: List<TrackItem>,
+        nowMs: Long = System.currentTimeMillis(),
+    ): MusicState {
+        if (!state.hasQueue || candidates.isEmpty()) return state
+        val seenKeys = HashSet<String>(state.queue.size * 2)
+        val seenVideoIds = HashSet<String>(state.queue.size)
+        val seenSignatures = HashSet<String>(state.queue.size)
+        for (existing in state.queue) {
+            seenKeys.add(existing.key)
+            if (existing.externalVideoId.isNotBlank()) seenVideoIds.add(existing.externalVideoId)
+            val sig = "${fold(existing.artist)}|${fold(existing.title)}"
+            if (sig != "|") seenSignatures.add(sig)
+        }
+        val fresh = ArrayList<TrackItem>()
+        for (cand in candidates) {
+            if (cand.key in seenKeys) continue
+            if (cand.externalVideoId.isNotBlank() && cand.externalVideoId in seenVideoIds) continue
+            val sig = "${fold(cand.artist)}|${fold(cand.title)}"
+            if (sig != "|" && sig in seenSignatures) continue
+            seenKeys.add(cand.key)
+            if (cand.externalVideoId.isNotBlank()) seenVideoIds.add(cand.externalVideoId)
+            if (sig != "|") seenSignatures.add(sig)
+            fresh.add(cand)
+        }
+        if (fresh.isEmpty()) return state
+        val base = state.queue.size
+        val nextQueue = state.queue + fresh
+        val addedIndices = (base until base + fresh.size).toList()
+        return state.copy(
+            queue = nextQueue,
+            order = state.order + addedIndices,
+            updatedAt = nowMs,
+        )
+    }
 
     fun next(
         state: MusicState,
@@ -439,12 +528,15 @@ object MusicQueue {
             playing = false,
             buffering = false,
             error = null,
+            audioCodec = null,
+            audioOutput = null,
             updatedAt = nowMs,
         )
 
     fun toJson(state: MusicState): JSONObject = JSONObject()
         .put("shuffle", state.shuffle)
         .put("repeat", state.repeat.name.lowercase())
+        .put("autoplay", state.autoplay)
         .put("index", state.index)
         .put("sourceLabel", state.sourceLabel)
         .put("positionMs", state.positionMs)
@@ -474,6 +566,7 @@ object MusicQueue {
             sourceLabel = json.optString("sourceLabel"),
             shuffle = json.optBoolean("shuffle", false),
             repeat = RepeatMode.parse(json.optString("repeat")),
+            autoplay = json.optBoolean("autoplay", true),
             pausedForVideo = json.optBoolean("pausedForVideo", false),
             positionMs = json.optLong("positionMs", 0L).coerceAtLeast(0L),
             durationMs = if (json.isNull("durationMs")) null else json.optLong("durationMs").takeIf { it > 0L },
@@ -490,9 +583,11 @@ object MusicQueue {
  * 250 ms polling, auto-advance, and AtomicFile persistence in dataDir/music-state.json.
  */
 class MusicPlayerController(
+    private val context: Context,
     private val scope: CoroutineScope,
     private val dataDir: File,
     private val resolveStreamUrl: suspend (Entry) -> Entry,
+    private val fetchAutoplayTracks: suspend (TrackItem, Set<String>) -> List<TrackItem> = { _, _ -> emptyList() },
     private val onStartingMusic: () -> Unit,
     private val onPlaybackActiveChanged: (Boolean) -> Unit,
 ) {
@@ -504,6 +599,8 @@ class MusicPlayerController(
     private var openedKey: String? = null
     private var openJob: Job? = null
     private var pollJob: Job? = null
+    private var autoplayJob: Job? = null
+    private var lastAutoplaySeedKey: String? = null
     private var pendingSeekMs: Long? = null
     private var persistCounter = 0
 
@@ -526,6 +623,29 @@ class MusicPlayerController(
         }
     }
 
+    fun showExternalResolving(placeholder: TrackItem) {
+        openJob?.cancel()
+        openJob = null
+        closeHandle()
+        onStartingMusic()
+        _state.value = _state.value.copy(
+            queue = listOf(placeholder),
+            order = listOf(0),
+            index = 0,
+            sourceLabel = placeholder.externalStreamSource.orEmpty().ifBlank { "Streaming" },
+            pausedForVideo = false,
+            positionMs = 0L,
+            durationMs = null,
+            playing = true,
+            buffering = true,
+            error = null,
+            audioCodec = null,
+            audioOutput = null,
+            updatedAt = System.currentTimeMillis(),
+        )
+        onPlaybackActiveChanged(true)
+    }
+
     fun playTrackList(
         items: List<TrackItem>,
         startIndex: Int = 0,
@@ -533,11 +653,14 @@ class MusicPlayerController(
         shuffleOn: Boolean? = null,
     ) {
         if (items.isEmpty()) return
+        autoplayJob?.cancel()
+        lastAutoplaySeedKey = null
         onStartingMusic()
         val step = MusicQueue.playList(_state.value, items, startIndex, sourceLabel, shuffleOn)
-        _state.value = step.state
+        _state.value = step.state.copy(autoplayLoading = false)
         persist(step.state)
         step.openTrack?.let { openAndPlay(it, seekMs = 0L) }
+        maybeRefillAutoplay()
     }
 
     fun playNext(items: List<TrackItem>, sourceLabel: String = "") {
@@ -562,40 +685,55 @@ class MusicPlayerController(
 
     fun togglePlayPause() {
         val cur = _state.value
+        if (cur.playing) pause() else play()
+    }
+
+    fun pause() {
+        val cur = _state.value
+        if (!cur.hasQueue || !cur.playing) return
+        val h = handle
+        if (h != 0L) runCatching { NativePlayer.pause(h) }
+        val paused = cur.copy(playing = false, buffering = false, updatedAt = System.currentTimeMillis())
+        _state.value = paused
+        persist(paused)
+        onPlaybackActiveChanged(false)
+    }
+
+    fun play() {
+        val cur = _state.value
         val track = cur.currentTrack ?: return
-        if (cur.playing) {
-            val h = handle
-            if (h != 0L) runCatching { NativePlayer.pause(h) }
-            val paused = cur.copy(playing = false, buffering = false, updatedAt = System.currentTimeMillis())
-            _state.value = paused
-            persist(paused)
-            onPlaybackActiveChanged(false)
+        if (cur.playing && handle != 0L && openedKey == track.key) return
+        onStartingMusic()
+        val resumed = cur.copy(pausedForVideo = false, playing = true, error = null, updatedAt = System.currentTimeMillis())
+        _state.value = resumed
+        persist(resumed)
+        val h = handle
+        if (h != 0L && openedKey == track.key) {
+            runCatching { NativePlayer.play(h) }
+            onPlaybackActiveChanged(true)
+            ensurePolling(h)
         } else {
-            onStartingMusic()
-            val resumed = cur.copy(pausedForVideo = false, playing = true, error = null, updatedAt = System.currentTimeMillis())
-            _state.value = resumed
-            persist(resumed)
-            val h = handle
-            if (h != 0L && openedKey == track.key) {
-                runCatching { NativePlayer.play(h) }
-                onPlaybackActiveChanged(true)
-                ensurePolling(h)
-            } else {
-                openAndPlay(track, seekMs = cur.positionMs)
-            }
+            openAndPlay(track, seekMs = cur.positionMs)
         }
     }
 
     fun next() {
         val step = MusicQueue.next(_state.value, userTriggered = true)
-        _state.value = step.state
-        persist(step.state)
         if (step.openTrack != null) {
+            _state.value = step.state
+            persist(step.state)
             onStartingMusic()
             openAndPlay(step.openTrack, seekMs = 0L)
+            maybeRefillAutoplay()
         } else if (step.reachedEnd) {
-            closeHandle()
-            onPlaybackActiveChanged(false)
+            if (_state.value.autoplay && _state.value.hasQueue) {
+                maybeRefillAutoplay(advanceWhenReady = true, force = true)
+            } else {
+                _state.value = step.state
+                persist(step.state)
+                closeHandle()
+                onPlaybackActiveChanged(false)
+            }
         }
     }
 
@@ -619,6 +757,7 @@ class MusicPlayerController(
         step.openTrack?.let {
             onStartingMusic()
             openAndPlay(it, seekMs = 0L)
+            maybeRefillAutoplay()
         }
     }
 
@@ -645,6 +784,22 @@ class MusicPlayerController(
         val next = MusicQueue.cycleRepeat(_state.value)
         _state.value = next
         persist(next)
+        if (next.repeat != RepeatMode.One) {
+            maybeRefillAutoplay()
+        }
+    }
+
+    fun toggleAutoplay() {
+        val next = MusicQueue.toggleAutoplay(_state.value)
+        _state.value = next.copy(autoplayLoading = if (next.autoplay) next.autoplayLoading else false)
+        persist(next)
+        if (next.autoplay) {
+            lastAutoplaySeedKey = null
+            maybeRefillAutoplay()
+        } else {
+            autoplayJob?.cancel()
+            autoplayJob = null
+        }
     }
 
     fun removeFromQueue(orderIndex: Int) {
@@ -656,12 +811,18 @@ class MusicPlayerController(
                 closeHandle()
                 onPlaybackActiveChanged(false)
             }
-            step.openTrack != null -> openAndPlay(step.openTrack, seekMs = 0L)
+            step.openTrack != null -> {
+                openAndPlay(step.openTrack, seekMs = 0L)
+                maybeRefillAutoplay()
+            }
+            else -> maybeRefillAutoplay()
         }
     }
 
     fun clearUpNext() {
-        val next = MusicQueue.clearUpNext(_state.value)
+        autoplayJob?.cancel()
+        autoplayJob = null
+        val next = MusicQueue.clearUpNext(_state.value).copy(autoplayLoading = false)
         _state.value = next
         persist(next)
     }
@@ -691,8 +852,11 @@ class MusicPlayerController(
     fun stopMusic() {
         openJob?.cancel()
         openJob = null
+        autoplayJob?.cancel()
+        autoplayJob = null
+        lastAutoplaySeedKey = null
         closeHandle()
-        val stopped = MusicQueue.stop(_state.value)
+        val stopped = MusicQueue.stop(_state.value).copy(autoplayLoading = false)
         _state.value = stopped
         persist(stopped)
         onPlaybackActiveChanged(false)
@@ -718,15 +882,162 @@ class MusicPlayerController(
         }
     }
 
-    private fun openAndPlay(track: TrackItem, seekMs: Long) {
+    /** Enriches a queued streaming track with resolved album, artist, artUrl, or track number. */
+    fun updateTrackMetadata(
+        trackKey: String,
+        album: String? = null,
+        artist: String? = null,
+        artUrl: String? = null,
+        albumBrowseId: String? = null,
+        trackNumber: Int? = null,
+    ) {
+        val cur = _state.value
+        if (cur.queue.isEmpty()) return
+        var changed = false
+        val updated = cur.queue.map { item ->
+            if (item.key != trackKey) {
+                item
+            } else {
+                val nextAlbum = album?.trim()?.takeIf { it.isNotBlank() } ?: item.album
+                val nextArtist = artist?.trim()?.takeIf { it.isNotBlank() } ?: item.artist
+                val nextArt = artUrl?.trim()?.takeIf { it.isNotBlank() } ?: item.artUrl
+                val nextBrowseId = albumBrowseId?.trim()?.takeIf { it.isNotBlank() } ?: item.albumBrowseId
+                val nextTrack = trackNumber?.takeIf { it > 0 } ?: item.track
+                val nextTrackNo = if (nextTrack != null && item.trackNo.isBlank()) {
+                    nextTrack.toString().padStart(2, '0')
+                } else {
+                    item.trackNo
+                }
+                if (nextAlbum != item.album ||
+                    nextArtist != item.artist ||
+                    nextArt != item.artUrl ||
+                    nextBrowseId != item.albumBrowseId ||
+                    nextTrack != item.track
+                ) {
+                    changed = true
+                    item.copy(
+                        album = nextAlbum,
+                        artist = nextArtist,
+                        artUrl = nextArt,
+                        albumBrowseId = nextBrowseId,
+                        track = nextTrack,
+                        trackNo = nextTrackNo,
+                    )
+                } else {
+                    item
+                }
+            }
+        }
+        if (changed) {
+            val nextState = cur.copy(queue = updated, updatedAt = System.currentTimeMillis())
+            _state.value = nextState
+            persist(nextState)
+        }
+    }
+
+    private fun maybeRefillAutoplay(
+        advanceWhenReady: Boolean = false,
+        force: Boolean = false,
+    ) {
+        val cur = _state.value
+        if (!cur.autoplay || !cur.hasQueue) return
+        if (cur.repeat == RepeatMode.One && !advanceWhenReady) return
+        if (!force && cur.upNextCount > 2) return
+        val seed = cur.currentTrack ?: return
+        if (seed.title.isBlank() && seed.artist.isBlank() && seed.externalVideoId.isBlank()) return
+        if (!force && autoplayJob?.isActive == true) return
+        if (!force && lastAutoplaySeedKey == seed.key && cur.upNextCount > 0) return
+
+        autoplayJob?.cancel()
+        lastAutoplaySeedKey = seed.key
+        val existingIds = cur.queue.mapNotNull { it.externalVideoId.takeIf { id -> id.isNotBlank() } }.toSet()
+        _state.value = _state.value.copy(autoplayLoading = true)
+        autoplayJob = scope.launch {
+            val fetched = try {
+                fetchAutoplayTracks(seed, existingIds)
+            } catch (e: Exception) {
+                if (e is CancellationException) throw e
+                emptyList()
+            }
+            withContext(Dispatchers.Main.immediate + NonCancellable) {
+                val latest = _state.value
+                if (!latest.hasQueue || !latest.autoplay) {
+                    _state.value = latest.copy(autoplayLoading = false)
+                    return@withContext
+                }
+                val appended = MusicQueue.appendAutoplay(latest, fetched).copy(autoplayLoading = false)
+                _state.value = appended
+                persist(appended)
+                if (advanceWhenReady) {
+                    val step = MusicQueue.next(appended, userTriggered = false)
+                    _state.value = step.state
+                    persist(step.state)
+                    if (step.openTrack != null) {
+                        onStartingMusic()
+                        openAndPlay(step.openTrack, seekMs = 0L)
+                        maybeRefillAutoplay()
+                    } else {
+                        closeHandle()
+                        onPlaybackActiveChanged(false)
+                    }
+                }
+            }
+        }
+    }
+
+    private fun openAndPlay(track: TrackItem, seekMs: Long, autoSkipDepth: Int = 0) {
         openJob?.cancel()
         pollJob?.cancel()
         closeHandle()
         pendingSeekMs = seekMs.takeIf { it > 0L }
         onPlaybackActiveChanged(true)
         openJob = scope.launch {
-            val resolved = runCatching { resolveStreamUrl(track.entry) }.getOrDefault(track.entry)
-            if (resolved.streamUrl.isBlank()) {
+            var activeTrack = track
+            val resolved = if (track.isExternalStream) {
+                val existingUrl = track.entry.streamUrl.trim()
+                if (existingUrl.isNotBlank()) {
+                    track.entry
+                } else {
+                    // Lazy resolution for infinite radio tracks: resolve fresh playable audio right on open.
+                    val fresh = if (track.externalVideoId.isNotBlank()) {
+                        ExternalDiscoveryApi.resolveYouTubeAudioStream(track.externalVideoId)
+                    } else {
+                        ExternalDiscoveryApi.resolveFullSongStream(track.artist, track.title)
+                    }
+                    if (fresh != null) {
+                        val updatedEntry = track.entry.copy(streamUrl = fresh.streamUrl)
+                        activeTrack = track.copy(
+                            entry = updatedEntry,
+                            streamUserAgent = fresh.userAgent,
+                            externalVideoId = fresh.videoId,
+                            externalSaveUrl = fresh.watchUrl,
+                            externalSaveKind = "youtube",
+                        )
+                        val cur = _state.value
+                        val updatedQueue = cur.queue.map { if (it.key == track.key) activeTrack else it }
+                        _state.value = cur.copy(
+                            queue = updatedQueue,
+                            durationMs = fresh.durationMs.takeIf { it > 0L } ?: cur.durationMs,
+                        )
+                        updatedEntry
+                    } else {
+                        track.entry
+                    }
+                }
+            } else {
+                runCatching { resolveStreamUrl(track.entry) }.getOrDefault(track.entry)
+            }
+            val rawUrl = resolved.streamUrl.trim()
+            if (rawUrl.isBlank()) {
+                if (activeTrack.isExternalStream && autoSkipDepth < 3 && _state.value.upNextCount > 0) {
+                    val step = MusicQueue.next(_state.value, userTriggered = false)
+                    _state.value = step.state
+                    persist(step.state)
+                    if (step.openTrack != null) {
+                        openAndPlay(step.openTrack, seekMs = 0L, autoSkipDepth = autoSkipDepth + 1)
+                        return@launch
+                    }
+                }
                 _state.value = _state.value.copy(
                     playing = false,
                     buffering = false,
@@ -735,12 +1046,23 @@ class MusicPlayerController(
                 onPlaybackActiveChanged(false)
                 return@launch
             }
+            // Bridge direct HTTPS audio streams (YouTube audio/mp4, SoundCloud, direct HTTPS audio)
+            // through our loopback HTTP Range proxy so PearTube's native Rust player (`peartube-media`
+            // / AAudio) decodes fragmented MP4/Opus/AAC/FLAC with instant startup and seeking.
+            val url = if (rawUrl.startsWith("https://", ignoreCase = true)) {
+                withContext(Dispatchers.IO) {
+                    LocalStreamProxy.register(rawUrl, activeTrack.streamUserAgent)
+                }
+            } else {
+                rawUrl
+            }
             val soundfont = SoundFont.file(dataDir).takeIf { it.isFile }?.path
             var failure: String? = null
             val opened = withContext(Dispatchers.IO) {
                 try {
-                    NativePlayer.openWithOptions(resolved.streamUrl, soundfont, "auto", "off", false)
-                } catch (e: Throwable) {
+                    NativePlayer.openWithOptions(url, soundfont, "auto", "off", false)
+                } catch (e: Exception) {
+                    if (e is CancellationException) throw e
                     failure = "The player did not start: ${e.message ?: e}"
                     0L
                 }
@@ -778,6 +1100,12 @@ class MusicPlayerController(
                         pendingSeekMs = null
                         runCatching { NativePlayer.seek(h, seek.coerceAtMost(ps.durationMs)) }
                     }
+                    val activeAudioCodec = ps.tracks
+                        .firstOrNull { t -> t.kind == "audio" && (ps.audio == null || t.stream == ps.audio) }
+                        ?.codec
+                        ?.trim()
+                        ?.takeIf { it.isNotEmpty() }
+                    val activeAudioOutput = ps.audioOutput?.trim()?.takeIf { it.isNotEmpty() }
                     val cur = _state.value
                     val updated = cur.copy(
                         positionMs = ps.positionMs,
@@ -785,16 +1113,23 @@ class MusicPlayerController(
                         playing = ps.playing && !ps.ended,
                         buffering = ps.buffering && ps.error == null,
                         error = ps.error,
+                        audioCodec = activeAudioCodec ?: cur.audioCodec,
+                        audioOutput = activeAudioOutput ?: cur.audioOutput,
                     )
                     _state.value = updated
                     if (++persistCounter % 20 == 0) persist(updated)
                     if (ps.ended) {
                         val step = MusicQueue.next(updated, userTriggered = false)
-                        _state.value = step.state
-                        persist(step.state)
                         if (step.openTrack != null) {
+                            _state.value = step.state
+                            persist(step.state)
                             openAndPlay(step.openTrack, seekMs = 0L)
+                            maybeRefillAutoplay()
+                        } else if (updated.autoplay && updated.hasQueue) {
+                            maybeRefillAutoplay(advanceWhenReady = true, force = true)
                         } else {
+                            _state.value = step.state
+                            persist(step.state)
                             closeHandle()
                             onPlaybackActiveChanged(false)
                         }

@@ -11,6 +11,7 @@ import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
 import android.util.Log
+import android.view.Choreographer
 import android.view.Display
 import android.view.Gravity
 import android.view.PixelCopy
@@ -24,6 +25,7 @@ import android.widget.FrameLayout
 import android.widget.Toast
 import kotlin.math.abs
 import kotlin.math.roundToInt
+import kotlin.math.roundToLong
 
 /** The longest surfaceDestroyed waits for the native side to let go of its Surface. */
 private const val RELEASE_WAIT_MS = 1_000L
@@ -53,6 +55,8 @@ class PlayerHost(private val activity: Activity) {
     private var closeStarted = 0L
     private var closeReported = false
     private val retirementPoll = Runnable { advance() }
+    private val vsyncCallback = Choreographer.FrameCallback { frameTimeNanos -> onVsyncSample(frameTimeNanos) }
+    private val vsyncPoll = Runnable { requestVsyncSample() }
     private val letterbox = Letterbox()
     private var crop: Crop? = null
     private var sample: Bitmap? = null
@@ -71,6 +75,7 @@ class PlayerHost(private val activity: Activity) {
         forgetPicture()
         beginRetirement()
         advance()
+        requestVsyncSample()
     }
 
     /** Moves the views over [left, top, width, height] in window pixels. */
@@ -165,7 +170,40 @@ class PlayerHost(private val activity: Activity) {
         if (best != null && best.modeId != active.modeId && best.modeId != appliedModeId) {
             appliedModeId = best.modeId
             activity.window.attributes = activity.window.attributes.apply { preferredDisplayModeId = best.modeId }
+            handler.removeCallbacks(vsyncPoll)
+            handler.postDelayed(vsyncPoll, 150L)
         }
+    }
+
+    private fun requestVsyncSample() {
+        handler.removeCallbacks(vsyncPoll)
+        if (!wanted || destroyed) return
+        Choreographer.getInstance().removeFrameCallback(vsyncCallback)
+        Choreographer.getInstance().postFrameCallback(vsyncCallback)
+    }
+
+    private fun onVsyncSample(frameTimeNanos: Long) {
+        if (!wanted || destroyed) return
+        val display: Display? = if (Build.VERSION.SDK_INT >= 30) {
+            activity.display
+        } else {
+            @Suppress("DEPRECATION")
+            activity.windowManager.defaultDisplay
+        }
+        val refreshHz = display?.mode?.refreshRate ?: display?.refreshRate ?: 0f
+        if (refreshHz >= 10f && refreshHz <= 500f) {
+            val periodNs = (1_000_000_000.0 / refreshHz.toDouble()).roundToLong()
+            val appOffsetNs = display?.appVsyncOffsetNanos ?: 0L
+            runCatching { NativePlayer.setDisplayVsync(frameTimeNanos - appOffsetNs, periodNs) }
+        }
+        handler.removeCallbacks(vsyncPoll)
+        handler.postDelayed(vsyncPoll, 500L)
+    }
+
+    private fun stopVsyncSampling() {
+        handler.removeCallbacks(vsyncPoll)
+        Choreographer.getInstance().removeFrameCallback(vsyncCallback)
+        runCatching { NativePlayer.setDisplayVsync(0L, 0L) }
     }
 
     private fun restoreDisplayMode() {
@@ -182,6 +220,7 @@ class PlayerHost(private val activity: Activity) {
     fun close() {
         wanted = false
         hasFrame = false
+        stopVsyncSampling()
         restoreDisplayMode()
         beginRetirement()
         advance()
@@ -190,6 +229,7 @@ class PlayerHost(private val activity: Activity) {
     fun destroy() {
         destroyed = true
         wanted = false
+        stopVsyncSampling()
         restoreDisplayMode()
         handler.removeCallbacks(retirementPoll)
         // Framework destruction cannot wait for a stalled native call. Publish

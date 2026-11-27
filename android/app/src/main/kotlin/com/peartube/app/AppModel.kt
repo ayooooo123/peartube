@@ -2,6 +2,7 @@ package com.peartube.app
 
 import android.app.Application
 import android.content.ContentValues
+import android.graphics.Rect
 import android.net.ConnectivityManager
 import android.net.Network
 import android.net.Uri
@@ -35,6 +36,7 @@ import org.json.JSONObject
 import java.io.File
 import java.net.HttpURLConnection
 import java.net.URL
+import java.util.Locale
 import java.util.concurrent.ConcurrentHashMap
 
 enum class Room(val label: String) {
@@ -42,13 +44,231 @@ enum class Room(val label: String) {
     Listen("Listen"),
     Watch("Watch"),
     Discover("Discover"),
+    Library("Library"),
     Search("Search"),
 }
+
+enum class LibrarySubTab(val label: String) {
+    Movies("Movies"),
+    Series("TV Shows"),
+    Music("Music"),
+    Videos("Videos"),
+}
+
+enum class SearchScope(val label: String) {
+    Top("Top"),
+    Music("Music"),
+    Library("Library"),
+    Creators("Creators"),
+    Sources("Sources"),
+    Relays("Relays"),
+}
+
+enum class StreamSaveState {
+    Unsaved,
+    Saving,
+    Saved,
+}
+
+internal fun streamSaveLookupKeys(
+    trackKey: String,
+    videoId: String,
+    artist: String,
+    title: String,
+): Set<String> {
+    val keys = LinkedHashSet<String>(3)
+    if (trackKey.isNotBlank()) keys.add(trackKey)
+    val cleanVid = videoId.trim()
+    if (cleanVid.isNotBlank()) keys.add("ytv:$cleanVid")
+    val sig = "${fold(artist)}|${fold(title)}"
+    if (sig != "|") keys.add("sig:$sig")
+    return keys
+}
+
+internal fun resolveStreamSaveState(
+    track: TrackItem,
+    catalog: LibraryCatalog,
+    jobs: List<AcquireJob>,
+    saveJobMap: Map<String, String>,
+    submittingKeys: Set<String>,
+    savedKeys: Set<String>,
+): StreamSaveState {
+    if (!track.isExternalStream) return StreamSaveState.Saved
+    val keys = streamSaveLookupKeys(track.key, track.externalVideoId, track.artist, track.title)
+    if (keys.any { it in savedKeys }) return StreamSaveState.Saved
+    val sig = "${fold(track.artist)}|${fold(track.title)}"
+    if (sig != "|" && catalog.allTracks.any { "${fold(it.artist)}|${fold(it.name)}" == sig }) {
+        return StreamSaveState.Saved
+    }
+    val jobsById = jobs.associateBy { it.jobId }
+    for (k in keys) {
+        val jobId = saveJobMap[k] ?: continue
+        val job = jobsById[jobId]
+        if (job != null) {
+            if (job.isDone) return StreamSaveState.Saved
+            if (job.isActive) return StreamSaveState.Saving
+        } else {
+            return StreamSaveState.Saving
+        }
+    }
+    if (keys.any { it in submittingKeys }) return StreamSaveState.Saving
+    return StreamSaveState.Unsaved
+}
+
+private val RECENT_SEARCH_HEX_KEY_RE = Regex("^[a-fA-F0-9]{64}$")
+private val ACQUIRE_SEASON_EP_RE = Regex(":s\\d{2}e\\d{2,3}$", RegexOption.IGNORE_CASE)
+private val ACQUIRE_PROTOCOL_ID_RE = Regex("^[a-z0-9]+:[a-z0-9]+(?::s\\d{2}e\\d{2,3})?$")
+private val ACQUIRE_PROTOCOL_BASE_RE = Regex("^[a-z0-9]+:[a-z0-9]+$")
+private val ACQUIRE_YT_VID_RE = Regex("(?:[?&]v=|youtu\\.be/|youtube\\.com/shorts/)([A-Za-z0-9_-]{11})")
+
+internal fun normalizeAcquireId(
+    rawId: String,
+    title: String,
+    artist: String,
+    url: String,
+    audio: Boolean,
+): String {
+    val cleanId = rawId.trim()
+    val lowerId = cleanId.lowercase(Locale.ROOT)
+    val ytVid = ACQUIRE_YT_VID_RE.find(url)?.groupValues?.getOrNull(1)
+    val isYouTube = !ytVid.isNullOrBlank() ||
+        url.contains("youtube.com", ignoreCase = true) ||
+        url.contains("youtu.be/", ignoreCase = true) ||
+        lowerId.startsWith("yt:")
+    if (!audio) {
+        if (ACQUIRE_PROTOCOL_ID_RE.matches(cleanId) && !lowerId.startsWith("yt:")) {
+            return cleanId
+        }
+        val seed = ytVid?.let { "yt-video:$it" }
+            ?: url.trim().ifBlank { "${artist.trim().lowercase(Locale.ROOT)}|${title.trim().lowercase(Locale.ROOT)}" }
+        return "clip:${ExternalImageCache.sha256Hex(seed).take(20)}"
+    }
+    if (ACQUIRE_PROTOCOL_ID_RE.matches(cleanId) && ACQUIRE_SEASON_EP_RE.containsMatchIn(cleanId)) {
+        return cleanId
+    }
+    if (isYouTube) {
+        val hashSeed = listOf(
+            artist.trim().lowercase(Locale.ROOT),
+            title.trim().lowercase(Locale.ROOT),
+            ytVid.orEmpty(),
+        ).joinToString("|")
+        val hex = ExternalImageCache.sha256Hex(hashSeed).take(20)
+        return "yt:$hex:s01e01"
+    }
+    if (ACQUIRE_PROTOCOL_BASE_RE.matches(cleanId)) {
+        return "$cleanId:s01e01"
+    }
+    val hash = ExternalImageCache.sha256Hex(
+        "${artist.trim().lowercase(Locale.ROOT)}|${title.trim().lowercase(Locale.ROOT)}|${url.trim()}",
+    ).take(20)
+    return "album:$hash:s01e01"
+}
+
+internal fun isSearchLink(raw: String): Boolean {
+    val trimmed = raw.trim()
+    return trimmed.startsWith("peartube://", ignoreCase = true) ||
+        trimmed.startsWith("http://", ignoreCase = true) ||
+        trimmed.startsWith("https://", ignoreCase = true) ||
+        RECENT_SEARCH_HEX_KEY_RE.matches(trimmed)
+}
+
+internal fun addRecentSearchTerm(
+    current: List<String>,
+    rawTerm: String,
+    maxCount: Int = 6,
+): List<String> {
+    val clean = rawTerm.trim()
+    if (clean.length < 2 || isSearchLink(clean)) return current
+    val deduped = current.filterNot { it.equals(clean, ignoreCase = true) }
+    return (listOf(clean) + deduped).take(maxCount)
+}
+
+internal fun removeRecentSearchTerm(current: List<String>, term: String): List<String> {
+    val clean = term.trim()
+    return current.filterNot { it.equals(clean, ignoreCase = true) }
+}
+
+internal fun isCastSessionLive(session: CastSession?): Boolean {
+    if (session == null) return false
+    val st = session.state
+    return st.entry != null || st.playing || st.buffering || (st.status != "idle" && !st.ended)
+}
+
+internal fun buildCastMediaSnapshot(
+    session: CastSession?,
+    reconnecting: Boolean,
+): MediaSessionSnapshot {
+    if (session == null || (!reconnecting && !isCastSessionLive(session))) {
+        return MediaSessionSnapshot(active = false)
+    }
+    val st = session.state
+    val entry = st.entry
+    val receiverName = session.receiverName.ifBlank { "PearTube TV" }
+    val title = entry?.title?.ifBlank { receiverName } ?: receiverName
+    val subtitle = when {
+        reconnecting -> "Reconnecting to $receiverName…"
+        st.playing -> "Playing on $receiverName"
+        else -> "Paused on $receiverName"
+    }
+    val poster = entry?.id?.takeIf { it.isNotBlank() }?.let { imdbPosterUrl(extractImdbId(it)) }
+    return MediaSessionSnapshot(
+        active = true,
+        isVideo = true,
+        isCast = true,
+        title = title,
+        subtitle = subtitle,
+        album = receiverName,
+        playing = !reconnecting && st.playing,
+        buffering = reconnecting || st.buffering,
+        positionMs = st.positionMs,
+        durationMs = st.durationMs ?: 0L,
+        artworkUrl = poster,
+    )
+}
+
+private val CAST_RECONNECT_BACKOFF_MS = longArrayOf(1_500L, 3_000L, 5_000L, 8_000L, 12_000L, 15_000L)
+
+internal fun nextCastReconnectDelayMs(attempt: Int): Long {
+    val idx = attempt.coerceIn(0, CAST_RECONNECT_BACKOFF_MS.lastIndex)
+    return CAST_RECONNECT_BACKOFF_MS[idx]
+}
+
+interface VideoControlBridge {
+    fun play()
+    fun pause()
+    fun togglePlayPause()
+    fun seekBy(deltaMs: Long)
+    fun seekTo(positionMs: Long)
+    fun stop()
+}
+
+enum class VideoDisplayMode {
+    Closed,
+    Fullscreen,
+    Mini,
+    Pip,
+}
+
+data class ActiveVideo(
+    val entry: Entry,
+    val startPositionMs: Long? = null,
+)
 
 sealed interface Screen {
     data object Main : Screen
     data class AlbumDetail(val albumKey: String) : Screen
     data class ArtistDetail(val artistKey: String) : Screen
+    data class ExternalArtistDetail(
+        val browseId: String,
+        val name: String,
+        val artUrl: String = "",
+    ) : Screen
+    data class ExternalAlbumDetail(
+        val browseId: String,
+        val title: String,
+        val artist: String = "",
+        val artUrl: String = "",
+    ) : Screen
     data class TitleDetail(val titleKey: String) : Screen
     data class ShelfDetail(val peer: String) : Screen
     data object MusicPlayerFull : Screen
@@ -57,12 +277,21 @@ sealed interface Screen {
     data class Play(val entry: Entry, val startPositionMs: Long? = null) : Screen
 }
 
+sealed interface PeekTarget {
+    data class LibraryTitle(val tile: LibraryTile) : PeekTarget
+    data class LibraryAlbum(val album: LibraryTile) : PeekTarget
+    data class DiscoverCinema(val item: CinemaDiscoverItem) : PeekTarget
+    data class DiscoverVideo(val video: ExternalVideoPick) : PeekTarget
+    data class DiscoverAlbum(val album: SuggestedAlbum) : PeekTarget
+}
+
 data class DownloadProgress(val bytes: Long, val total: Long)
 
 data class AddSheetState(
     val rawInput: String = "",
     val identifying: Boolean = false,
     val identified: IdentifyResult? = null,
+    val detectedKind: DetectedMediaKind? = null,
     val identifyError: String? = null,
     val titleInput: String = "",
     val artistInput: String = "",
@@ -99,10 +328,19 @@ class AppModel(private val app: Application) {
     val entries = MutableStateFlow<List<Entry>>(emptyList())
     val error = MutableStateFlow<String?>(null)
     val query = MutableStateFlow("")
+    val searchScope = MutableStateFlow(SearchScope.Top)
+    val recentSearches = MutableStateFlow<List<String>>(emptyList())
+    val ytmSearch = MutableStateFlow(YtmSearchResult(""))
+    val ytmSearchBusy = MutableStateFlow(false)
     val global = MutableStateFlow(GlobalSearch())
 
     private val prefsFile = AtomicFile(File(dataDir, "ui-prefs.json"))
     val currentRoom = MutableStateFlow(loadLastRoom())
+    val shareImportMode = MutableStateFlow(loadShareImportMode())
+    val podcastImportFormat = MutableStateFlow(loadPodcastImportFormat())
+    val autoAcquireBanner = MutableStateFlow<AutoAcquireBanner?>(null)
+    val libraryTab = MutableStateFlow(LibrarySubTab.Movies)
+    private var lastNonSearchRoom: Room = currentRoom.value.takeUnless { it == Room.Search } ?: Room.Home
     private val navStack = MutableStateFlow<List<Screen>>(listOf(Screen.Main))
     val screen: StateFlow<Screen> = navStack
         .map { it.lastOrNull() ?: Screen.Main }
@@ -113,13 +351,42 @@ class AppModel(private val app: Application) {
         .stateIn(scope, SharingStarted.Eagerly, LibraryCatalog.Empty)
 
     val cast = MutableStateFlow(CastStatus())
+    val castReconnecting = MutableStateFlow(false)
+    val lastCastSession = MutableStateFlow<CastSession?>(null)
     val pendingCast = MutableStateFlow<PendingCast?>(null)
     val selectedCastReceiver = MutableStateFlow<CastReceiver?>(null)
+    private var stickyCastReceiverId: String? = null
+    private var castReconnectJob: Job? = null
+    private var castReconnectUntilMs: Long = 0L
+    private val castReconnectWindowMs = 5 * 60_000L
+    private var workerSuspended: Boolean = false
     val showTvsDialog = MutableStateFlow(false)
     val showAddSheet = MutableStateFlow(false)
+    val showMusicPlayer = MutableStateFlow(false)
+    val peekTarget = MutableStateFlow<PeekTarget?>(null)
+    val showTonightsPick = MutableStateFlow(false)
     val addSheet = MutableStateFlow(AddSheetState())
+
+    fun openMusicPlayer() {
+        showMusicPlayer.value = true
+    }
+
+    fun closeMusicPlayer() {
+        showMusicPlayer.value = false
+    }
+
+    fun openPeek(target: PeekTarget) {
+        peekTarget.value = target
+    }
+
+    fun closePeek() {
+        peekTarget.value = null
+    }
     val searchAutoFocus = MutableStateFlow(false)
     val notice = MutableStateFlow<String?>(null)
+    val streamingSaveJobs = MutableStateFlow<Map<String, String>>(emptyMap())
+    val streamingSubmittingKeys = MutableStateFlow<Set<String>>(emptySet())
+    val streamingSavedKeys = MutableStateFlow<Set<String>>(emptySet())
     val downloads = MutableStateFlow<Map<String, DownloadProgress>>(emptyMap())
     private val downloadJobs = ConcurrentHashMap<String, Job>()
     private val historyFile = AtomicFile(File(dataDir, "watch-history.json"))
@@ -148,43 +415,129 @@ class AppModel(private val app: Application) {
     val discoverCreatorFilter = MutableStateFlow("")
     val discoverActiveTopic = MutableStateFlow<String?>(null)
     val discoverSubmittingIds = MutableStateFlow<Set<String>>(emptySet())
+
+    // LUMEN v4.4 Discover tabs, typeahead creator finder, music discovery, cinema discovery, and full-length streaming
+    val discoverTab = MutableStateFlow(DiscoverTab.All)
+    val creatorSuggestions = MutableStateFlow<List<CreatorSuggestion>>(emptyList())
+    val creatorSuggestBusy = MutableStateFlow(false)
+    val musicDiscoverMood = MutableStateFlow("featured")
+    val musicDiscoverQuery = MutableStateFlow("")
+    val musicDiscoverData = MutableStateFlow<MusicDiscoverData?>(null)
+    val musicDiscoverLoading = MutableStateFlow(false)
+    val musicDiscoverError = MutableStateFlow<String?>(null)
+    val selectedSuggestedArtist = MutableStateFlow<SuggestedArtist?>(null)
+    val cinemaDiscoverGenre = MutableStateFlow("Popular")
+    val cinemaDiscoverData = MutableStateFlow<CinemaDiscoverData?>(null)
+    val cinemaDiscoverLoading = MutableStateFlow(false)
+    val cinemaDiscoverError = MutableStateFlow<String?>(null)
+    val featuredCreators = MutableStateFlow<List<CreatorSuggestion>>(emptyList())
+    val featuredCreatorsLoading = MutableStateFlow(false)
+    val externalVideos = MutableStateFlow<List<ExternalVideoPick>>(emptyList())
+    val externalVideosTopic = MutableStateFlow("Featured")
+    val externalVideosLoading = MutableStateFlow(false)
+
+    // Hoisted video player session (persists across Fullscreen <-> Mini <-> OS PiP)
+    val activeVideo = MutableStateFlow<ActiveVideo?>(null)
+    val videoMode = MutableStateFlow(VideoDisplayMode.Closed)
+    val isVideoPlaying = MutableStateFlow(false)
+    val videoPlaying: StateFlow<Boolean> get() = isVideoPlaying
+    val videoPositionMs = MutableStateFlow(0L)
+    val videoDurationMs = MutableStateFlow(0L)
+    val videoBuffering = MutableStateFlow(false)
+    val videoAspectRatio = MutableStateFlow(16f / 9f)
+    val videoSourceRect = MutableStateFlow<Rect?>(null)
+    private var prePipMode: VideoDisplayMode = VideoDisplayMode.Fullscreen
+    @Volatile private var videoControlBridge: VideoControlBridge? = null
+    @Volatile private var musicSessionActive: Boolean = false
+
     private var identifyJob: Job? = null
+    private var autoAcquireBannerJob: Job? = null
     private var sourceSearchJob: Job? = null
     private var shelfJob: Job? = null
     private var discoverFeedJob: Job? = null
     private var discoverBrowseJob: Job? = null
+    private var creatorSuggestJob: Job? = null
+    private var ytmSearchJob: Job? = null
+    private var musicDiscoverJob: Job? = null
+    private var cinemaDiscoverJob: Job? = null
+    private var externalVideosJob: Job? = null
+    private var externalStreamResolveJob: Job? = null
+    private var catalogRefreshBurstJob: Job? = null
+    private val cinemaDiscoverCache = ConcurrentHashMap<String, CinemaDiscoverData>()
+    private var featuredCreatorsLoaded = false
     private var previousActiveJobIds: Set<String> = emptySet()
     private var lastLoadedApiUrl: String? = null
 
-    val music = MusicPlayerController(
+    val previewPlayer: MusicPreviewPlayer = MusicPreviewPlayer(
+        onStartingPreview = {
+            if (musicState.value.playing) {
+                music.pauseForVideo()
+            }
+        },
+    )
+
+    val music: MusicPlayerController = MusicPlayerController(
+        context = app,
         scope = scope,
         dataDir = dataDir,
         resolveStreamUrl = { entry -> resolveEntry(entry) },
+        fetchAutoplayTracks = { seed, excludeVideoIds ->
+            buildAutoplayRadioBatch(seed, excludeVideoIds)
+        },
         onStartingMusic = {
+            previewPlayer.stop()
+            musicSessionActive = true
             // Rule 4: Starting music while a video is open closes the video (keeping its place under Keep playing).
-            if (screen.value is Screen.Play) {
-                popScreen()
+            if (activeVideo.value != null || screen.value is Screen.Play) {
+                closeVideo()
             }
         },
         onPlaybackActiveChanged = { active ->
-            setPlayerActive(active || screen.value is Screen.Play)
+            if (active) {
+                musicSessionActive = true
+            } else if (!music.state.value.hasQueue) {
+                musicSessionActive = false
+            }
+            setPlayerActive(active || activeVideo.value != null || screen.value is Screen.Play)
             applyBackgroundPolicy()
         },
     )
     val musicState: StateFlow<MusicState> = music.state
 
-    private fun loadLastRoom(): Room = runCatching {
-        val json = JSONObject(prefsFile.openRead().bufferedReader().use { it.readText() })
-        Room.entries.firstOrNull { it.name.equals(json.optString("room"), ignoreCase = true) } ?: Room.Home
-    }.getOrDefault(Room.Home)
+    private fun readUiPrefsJson(): JSONObject? = runCatching {
+        JSONObject(prefsFile.openRead().bufferedReader().use { it.readText() })
+    }.getOrNull()
 
-    private fun saveLastRoom(room: Room) {
+    private fun loadLastRoom(): Room {
+        val savedName = readUiPrefsJson()?.optString("room").orEmpty()
+        val saved = Room.entries.firstOrNull { it.name.equals(savedName, ignoreCase = true) } ?: Room.Home
+        return when (saved) {
+            Room.Listen, Room.Watch -> Room.Library
+            else -> saved
+        }
+    }
+
+    private fun loadShareImportMode(): ShareImportMode =
+        ShareImportMode.fromId(readUiPrefsJson()?.optString("shareImportMode"))
+
+    private fun loadPodcastImportFormat(): PodcastImportFormat =
+        PodcastImportFormat.fromId(readUiPrefsJson()?.optString("podcastImportFormat"))
+
+    private fun saveUiPrefs(
+        room: Room = currentRoom.value,
+        shareMode: ShareImportMode = shareImportMode.value,
+        podcastFormat: PodcastImportFormat = podcastImportFormat.value,
+    ) {
         scope.launch(Dispatchers.IO) {
             var stream: java.io.FileOutputStream? = null
             try {
                 dataDir.mkdirs()
+                val json = JSONObject()
+                    .put("room", room.name)
+                    .put("shareImportMode", shareMode.id)
+                    .put("podcastImportFormat", podcastFormat.id)
                 stream = prefsFile.startWrite()
-                stream.write(JSONObject().put("room", room.name).toString().toByteArray(Charsets.UTF_8))
+                stream.write(json.toString().toByteArray(Charsets.UTF_8))
                 prefsFile.finishWrite(stream)
             } catch (_: Exception) {
                 stream?.let(prefsFile::failWrite)
@@ -192,20 +545,113 @@ class AppModel(private val app: Application) {
         }
     }
 
-    fun selectRoom(room: Room, focusSearch: Boolean = false) {
-        currentRoom.value = room
-        saveLastRoom(room)
-        if (focusSearch) searchAutoFocus.value = true
-        navStack.value = listOf(Screen.Main)
-        if (room == Room.Discover) {
-            loadDiscoverCreators(autoLoadFeed = discoverActiveTopic.value == null)
+    fun setShareImportMode(mode: ShareImportMode) {
+        if (shareImportMode.value == mode) return
+        shareImportMode.value = mode
+        saveUiPrefs(shareMode = mode)
+    }
+
+    fun setPodcastImportFormat(format: PodcastImportFormat) {
+        if (podcastImportFormat.value == format) return
+        podcastImportFormat.value = format
+        saveUiPrefs(podcastFormat = format)
+    }
+
+    private fun showAutoAcquireBanner(banner: AutoAcquireBanner) {
+        autoAcquireBannerJob?.cancel()
+        autoAcquireBanner.value = banner
+        autoAcquireBannerJob = scope.launch {
+            delay(8_000L)
+            if (autoAcquireBanner.value?.jobId == banner.jobId) {
+                autoAcquireBanner.value = null
+            }
         }
     }
 
+    fun dismissAutoAcquireBanner() {
+        autoAcquireBannerJob?.cancel()
+        autoAcquireBannerJob = null
+        autoAcquireBanner.value = null
+    }
+
+    fun selectLibraryTab(tab: LibrarySubTab) {
+        libraryTab.value = tab
+        if (currentRoom.value != Room.Library) {
+            selectRoom(Room.Library)
+        }
+    }
+
+    fun toggleSearchRoom() {
+        if (currentRoom.value == Room.Search) {
+            selectRoom(lastNonSearchRoom)
+        } else {
+            selectRoom(Room.Search, focusSearch = true)
+        }
+    }
+
+    fun selectRoom(room: Room, focusSearch: Boolean = false) {
+        val resolvedRoom = when (room) {
+            Room.Listen -> {
+                libraryTab.value = LibrarySubTab.Music
+                Room.Library
+            }
+            Room.Watch -> {
+                val cat = catalog.value
+                libraryTab.value = if (cat.movies.isEmpty() && cat.series.isNotEmpty()) {
+                    LibrarySubTab.Series
+                } else {
+                    LibrarySubTab.Movies
+                }
+                Room.Library
+            }
+            else -> room
+        }
+        if (resolvedRoom != Room.Discover) {
+            previewPlayer.stop()
+        }
+        if (resolvedRoom != Room.Search) {
+            lastNonSearchRoom = resolvedRoom
+        }
+        currentRoom.value = resolvedRoom
+        showMusicPlayer.value = false
+        saveUiPrefs(room = resolvedRoom)
+        if (focusSearch) searchAutoFocus.value = true
+        navStack.value = listOf(Screen.Main)
+        if (resolvedRoom == Room.Discover) {
+            loadDiscoverCreators(autoLoadFeed = discoverActiveTopic.value == null)
+            if (musicDiscoverData.value == null && !musicDiscoverLoading.value) {
+                loadMusicDiscover(musicDiscoverMood.value, musicDiscoverQuery.value)
+            }
+            if (cinemaDiscoverData.value == null && !cinemaDiscoverLoading.value) {
+                loadCinemaDiscover(cinemaDiscoverGenre.value)
+            }
+            if (externalVideos.value.isEmpty() && !externalVideosLoading.value) {
+                loadExternalVideos(externalVideosTopic.value)
+            }
+            loadFeaturedCreatorsIfNeeded()
+        }
+    }
+
+    fun recordRecentSearch(term: String) {
+        recentSearches.value = addRecentSearchTerm(recentSearches.value, term)
+    }
+
+    fun removeRecentSearch(term: String) {
+        recentSearches.value = removeRecentSearchTerm(recentSearches.value, term)
+    }
+
+    fun clearRecentSearches() {
+        recentSearches.value = emptyList()
+    }
+
     fun openSearchFor(term: String, askRelays: Boolean = false) {
+        previewPlayer.stop()
         query.value = term
+        recordRecentSearch(term)
+        searchScope.value = if (term.trim().startsWith("@")) SearchScope.Creators else SearchScope.Top
         currentRoom.value = Room.Search
-        saveLastRoom(Room.Search)
+        showMusicPlayer.value = false
+        saveUiPrefs(room = Room.Search)
         navStack.value = listOf(Screen.Main)
         if (askRelays && term.trim().length >= 2) {
             searchAll(term)
@@ -213,34 +659,260 @@ class AppModel(private val app: Application) {
     }
 
     fun pushScreen(next: Screen) {
+        if (next is Screen.Play) {
+            openVideo(next.entry, next.startPositionMs)
+            return
+        }
+        if (next is Screen.MusicPlayerFull) {
+            openMusicPlayer()
+            return
+        }
+        previewPlayer.stop()
+        showMusicPlayer.value = false
         val stack = navStack.value
         if (stack.lastOrNull() == next) return
-        if (next is Screen.Play) {
-            // Rule 3: Music waits for a video. Pause music, keep track/position/queue, show Paused for a video.
-            music.pauseForVideo()
-        }
         navStack.value = stack + next
     }
 
     fun replaceTopScreen(next: Screen) {
         if (next is Screen.Play) {
-            music.pauseForVideo()
+            openVideo(next.entry, next.startPositionMs)
+            return
         }
+        if (next is Screen.MusicPlayerFull) {
+            openMusicPlayer()
+            return
+        }
+        showMusicPlayer.value = false
         val stack = navStack.value
         navStack.value = if (stack.size <= 1) listOf(Screen.Main, next) else stack.dropLast(1) + next
     }
 
     fun popScreen() {
+        previewPlayer.stop()
+        if (showMusicPlayer.value) {
+            showMusicPlayer.value = false
+            return
+        }
         val stack = navStack.value
         navStack.value = if (stack.size > 1) stack.dropLast(1) else listOf(Screen.Main)
     }
 
     fun goHome() {
+        previewPlayer.stop()
+        showMusicPlayer.value = false
         navStack.value = listOf(Screen.Main)
     }
 
+    fun openVideo(entry: Entry, startPositionMs: Long? = null) {
+        previewPlayer.stop()
+        showMusicPlayer.value = false
+        // Rule 3: Music waits for a video. Pause music, keep track/position/queue, show Paused for a video.
+        music.pauseForVideo()
+        musicSessionActive = false
+        activeVideo.value = ActiveVideo(entry = entry, startPositionMs = startPositionMs)
+        videoMode.value = VideoDisplayMode.Fullscreen
+        isVideoPlaying.value = true
+        videoBuffering.value = true
+        videoPositionMs.value = startPositionMs ?: 0L
+        videoDurationMs.value = 0L
+        setPlayerActive(true)
+        applyBackgroundPolicy()
+    }
+
+    fun minimizeVideo() {
+        if (activeVideo.value != null) {
+            videoMode.value = VideoDisplayMode.Mini
+        }
+    }
+
+    fun expandVideo() {
+        if (activeVideo.value != null) {
+            videoMode.value = VideoDisplayMode.Fullscreen
+        }
+    }
+
     fun closeVideo() {
+        val hadVideo = activeVideo.value != null
+        activeVideo.value = null
+        videoMode.value = VideoDisplayMode.Closed
+        isVideoPlaying.value = false
+        videoBuffering.value = false
+        videoPositionMs.value = 0L
+        videoDurationMs.value = 0L
+        videoSourceRect.value = null
+        videoControlBridge = null
+        playStarted = false
         if (screen.value is Screen.Play) popScreen()
+        setPlayerActive(musicState.value.playing)
+        applyBackgroundPolicy()
+        if (hadVideo) refreshes.trySend(Unit)
+    }
+
+    fun hasActivePlayingVideo(): Boolean =
+        activeVideo.value != null && videoMode.value != VideoDisplayMode.Closed && isVideoPlaying.value
+
+    fun registerVideoControls(bridge: VideoControlBridge?) {
+        videoControlBridge = bridge
+    }
+
+    fun updateVideoSourceRect(rect: Rect?) {
+        if (videoSourceRect.value != rect) {
+            videoSourceRect.value = rect
+        }
+    }
+
+    fun updateVideoPlaybackState(
+        playing: Boolean,
+        displayAspect: Float?,
+        positionMs: Long = videoPositionMs.value,
+        durationMs: Long? = null,
+        buffering: Boolean = false,
+    ) {
+        val playingChanged = isVideoPlaying.value != playing
+        if (playingChanged) {
+            isVideoPlaying.value = playing
+        }
+        if (videoBuffering.value != buffering) {
+            videoBuffering.value = buffering
+        }
+        videoPositionMs.value = positionMs.coerceAtLeast(0L)
+        if (durationMs != null && durationMs > 0L) {
+            videoDurationMs.value = durationMs
+        }
+        if (displayAspect != null && displayAspect.isFinite() && displayAspect > 0.1f) {
+            videoAspectRatio.value = displayAspect
+        }
+        if (playingChanged) {
+            applyBackgroundPolicy()
+        } else {
+            syncMediaService()
+        }
+    }
+
+    fun dispatchVideoMediaAction(action: MediaAction, seekPositionMs: Long? = null) {
+        val bridge = videoControlBridge
+        if (bridge == null) {
+            if (action == MediaAction.Stop) closeVideo()
+            return
+        }
+        when (action) {
+            MediaAction.Play -> bridge.play()
+            MediaAction.Pause -> bridge.pause()
+            MediaAction.TogglePlayPause -> bridge.togglePlayPause()
+            MediaAction.SkipForward, MediaAction.Next -> bridge.seekBy(10_000L)
+            MediaAction.SkipBack, MediaAction.Previous -> bridge.seekBy(-10_000L)
+            MediaAction.SeekTo -> seekPositionMs?.let { bridge.seekTo(it) }
+            MediaAction.Stop -> bridge.stop()
+        }
+    }
+
+    fun dispatchMediaAction(action: MediaAction, seekPositionMs: Long? = null) {
+        val hasVideo = activeVideo.value != null && videoMode.value != VideoDisplayMode.Closed
+        if (hasVideo) {
+            dispatchVideoMediaAction(action, seekPositionMs)
+            return
+        }
+        val ms = musicState.value
+        val musicActivelyRunning = ms.currentTrack != null && (ms.playing || ms.buffering)
+        if (!musicActivelyRunning && (isCastSessionLive(cast.value.session) || castReconnecting.value)) {
+            when (action) {
+                MediaAction.Play -> sendCastControl(JSONObject().put("action", "play"))
+                MediaAction.Pause -> sendCastControl(JSONObject().put("action", "pause"))
+                MediaAction.TogglePlayPause -> sendCastControl(JSONObject().put("action", "togglePlay"))
+                MediaAction.SkipForward, MediaAction.Next -> sendCastControl(JSONObject().put("action", "skip").put("deltaMs", 10_000))
+                MediaAction.SkipBack, MediaAction.Previous -> sendCastControl(JSONObject().put("action", "skip").put("deltaMs", -10_000))
+                MediaAction.SeekTo -> seekPositionMs?.let { sendCastControl(JSONObject().put("action", "seek").put("positionMs", it)) }
+                MediaAction.Stop -> stopCasting()
+            }
+            return
+        }
+        when (action) {
+            MediaAction.Play -> music.play()
+            MediaAction.Pause -> music.pause()
+            MediaAction.TogglePlayPause -> music.togglePlayPause()
+            MediaAction.Next -> music.next()
+            MediaAction.Previous -> music.previous()
+            MediaAction.SkipForward -> music.seekTo(musicState.value.positionMs + 10_000L)
+            MediaAction.SkipBack -> music.seekTo((musicState.value.positionMs - 10_000L).coerceAtLeast(0L))
+            MediaAction.SeekTo -> seekPositionMs?.let { music.seekTo(it) }
+            MediaAction.Stop -> {
+                musicSessionActive = false
+                music.stopMusic()
+            }
+        }
+    }
+
+    fun currentMediaSnapshot(): MediaSessionSnapshot {
+        val vid = activeVideo.value
+        if (vid != null && videoMode.value != VideoDisplayMode.Closed) {
+            val e = vid.entry
+            val sub = buildList {
+                if (e.isEpisode) add(e.episodeLabel)
+                e.year?.takeIf { it.isNotBlank() }?.let { add(it) }
+            }.joinToString(" · ").ifBlank { "PearTube Video" }
+            val poster = imdbPosterUrl(extractImdbId(e.id))
+            return MediaSessionSnapshot(
+                active = true,
+                isVideo = true,
+                title = e.title.ifBlank { "Video" },
+                subtitle = sub,
+                album = "PearTube",
+                playing = isVideoPlaying.value,
+                buffering = videoBuffering.value,
+                positionMs = videoPositionMs.value,
+                durationMs = videoDurationMs.value,
+                artworkUrl = poster,
+            )
+        }
+        val ms = musicState.value
+        val track = ms.currentTrack
+        if (track != null && (ms.playing || ms.buffering || (musicSessionActive && !ms.pausedForVideo))) {
+            val art = track.artUrl.takeIf { it.isNotBlank() }
+                ?: ExternalDiscoveryApi.cachedAlbumArtUrl(track.artist, track.album)
+            return MediaSessionSnapshot(
+                active = true,
+                isVideo = false,
+                title = track.title.ifBlank { track.album },
+                subtitle = track.artist.ifBlank { track.album.ifBlank { track.externalStreamSource.orEmpty() } },
+                album = track.album.ifBlank { track.externalStreamSource.orEmpty() },
+                playing = ms.playing,
+                buffering = ms.buffering,
+                positionMs = ms.positionMs,
+                durationMs = ms.durationMs ?: 0L,
+                artworkUrl = art,
+            )
+        }
+        val castSession = cast.value.session ?: lastCastSession.value.takeIf { castReconnecting.value }
+        val castSnapshot = buildCastMediaSnapshot(castSession, reconnecting = cast.value.session == null && castReconnecting.value)
+        if (castSnapshot.active) {
+            return castSnapshot
+        }
+        return MediaSessionSnapshot(active = false)
+    }
+
+    fun syncMediaService() {
+        MediaPlaybackService.sync(app, currentMediaSnapshot())
+    }
+
+    fun onSystemPipChanged(inPip: Boolean, isDismissed: Boolean = false) {
+        if (inPip) {
+            if (activeVideo.value != null) {
+                val cur = videoMode.value
+                if (cur == VideoDisplayMode.Fullscreen || cur == VideoDisplayMode.Mini) {
+                    prePipMode = cur
+                }
+                videoMode.value = VideoDisplayMode.Pip
+                applyBackgroundPolicy()
+            }
+        } else {
+            if (isDismissed) {
+                closeVideo()
+            } else if (activeVideo.value != null && videoMode.value == VideoDisplayMode.Pip) {
+                videoMode.value = VideoDisplayMode.Fullscreen
+                applyBackgroundPolicy()
+            }
+        }
     }
 
     private fun loadWatchHistory(): Map<String, WatchProgress> = runCatching {
@@ -284,9 +956,7 @@ class AppModel(private val app: Application) {
             if (receiver != null) {
                 castToReceiver(receiver, current.key, "auto", start)
             } else {
-                // Rule 3: Music waits for a video.
-                music.pauseForVideo()
-                pushScreen(Screen.Play(current, startPositionMs))
+                openVideo(current, startPositionMs)
             }
         }
     }
@@ -299,6 +969,694 @@ class AppModel(private val app: Application) {
         val entry = primaryEntryForVideo(picked, watchHistory.value) ?: return null
         playEntry(entry)
         return picked
+    }
+
+    fun streamExternalTrack(
+        id: String,
+        title: String,
+        artist: String,
+        album: String = "",
+        streamUrl: String,
+        artUrl: String = "",
+        sourceLabel: String = "Streaming",
+        saveUrl: String? = null,
+        saveKind: String? = null,
+    ) {
+        val cleanUrl = streamUrl.trim()
+        if (cleanUrl.isEmpty()) return
+        val extKey = "ext:$id"
+        if (music.state.value.currentTrack?.key == extKey) {
+            music.togglePlayPause()
+            return
+        }
+        val cleanTitle = title.ifBlank { "Audio stream" }
+        val cleanSource = sourceLabel.ifBlank { "Streaming" }
+        val seed = sleeveHash("$artist|$album|$cleanTitle|$id")
+        val hue = ((seed % 360L).toInt() + 360) % 360
+        val entry = Entry(
+            key = extKey,
+            id = extKey,
+            title = cleanTitle,
+            size = 0L,
+            sha256 = "",
+            local = false,
+            streamUrl = cleanUrl,
+            music = MusicMeta(
+                title = cleanTitle,
+                artist = artist.takeIf { it.isNotBlank() },
+            ),
+        )
+        val item = TrackItem(
+            entry = entry,
+            title = cleanTitle,
+            artist = artist,
+            album = album,
+            albumKey = "",
+            hue = hue,
+            seed = seed,
+            artUrl = artUrl,
+            externalStreamSource = cleanSource,
+            externalSaveUrl = saveUrl?.takeIf { it.isNotBlank() },
+            externalSaveKind = saveKind?.takeIf { it.isNotBlank() },
+        )
+        music.playTrackList(listOf(item), 0, cleanSource, shuffleOn = false)
+    }
+
+    private suspend fun buildAutoplayRadioBatch(
+        seed: TrackItem,
+        excludeVideoIds: Set<String>,
+    ): List<TrackItem> {
+        val radioPicks = ExternalDiscoveryApi.fetchRadioNext(
+            seedVideoId = seed.externalVideoId.takeIf { it.isNotBlank() },
+            artist = seed.artist,
+            title = seed.title,
+            excludeVideoIds = excludeVideoIds,
+            limit = 14,
+        )
+        val libraryTracks = catalog.value.allTracks
+        val byArtistTitle = HashMap<String, TrackRow>(libraryTracks.size)
+        for (row in libraryTracks) {
+            val sig = "${fold(row.artist)}|${fold(row.name)}"
+            if (sig != "|" && !byArtistTitle.containsKey(sig)) {
+                byArtistTitle[sig] = row
+            }
+        }
+        val out = ArrayList<TrackItem>()
+        for (pick in radioPicks) {
+            val sig = "${fold(pick.artist)}|${fold(pick.title)}"
+            val localMatch = byArtistTitle[sig]
+            if (localMatch != null) {
+                out.add(trackItemFromRow(localMatch))
+            } else {
+                val itemSeed = sleeveHash("${pick.artist}|${pick.album}|${pick.title}|${pick.videoId}")
+                val hue = ((itemSeed % 360L).toInt() + 360) % 360
+                val key = "ext:radio:${pick.videoId}"
+                val entry = Entry(
+                    key = key,
+                    id = key,
+                    title = pick.title,
+                    size = 0L,
+                    sha256 = "",
+                    local = false,
+                    streamUrl = "",
+                    music = MusicMeta(
+                        title = pick.title,
+                        artist = pick.artist.takeIf { it.isNotBlank() },
+                    ),
+                )
+                if (pick.album.isNotBlank() && pick.artUrl.isNotBlank()) {
+                    ExternalDiscoveryApi.rememberAlbumArtUrl(pick.artist, pick.album, pick.artUrl)
+                }
+                out.add(
+                    TrackItem(
+                        entry = entry,
+                        title = pick.title,
+                        artist = pick.artist,
+                        album = pick.album,
+                        albumKey = "",
+                        hue = hue,
+                        seed = itemSeed,
+                        artUrl = pick.artUrl,
+                        externalStreamSource = "Autoplay · Radio",
+                        externalSaveUrl = "https://www.youtube.com/watch?v=${pick.videoId}",
+                        externalSaveKind = "youtube",
+                        externalVideoId = pick.videoId,
+                    ),
+                )
+            }
+        }
+        // Offline fallback: continue seamlessly from unqueued tracks in the local library.
+        if (out.isEmpty() && libraryTracks.isNotEmpty()) {
+            val seedArtistFold = fold(seed.artist)
+            val sameArtist = libraryTracks.filter { seedArtistFold.isNotEmpty() && fold(it.artist) == seedArtistFold }
+            val others = libraryTracks.filter { seedArtistFold.isEmpty() || fold(it.artist) != seedArtistFold }.shuffled()
+            (sameArtist.shuffled() + others).take(12).forEach { row ->
+                out.add(trackItemFromRow(row))
+            }
+        }
+        return out
+    }
+
+    private fun trackItemFromRow(row: TrackRow): TrackItem = TrackItem(
+        entry = row.entry,
+        title = row.name,
+        artist = row.artist,
+        album = row.albumName,
+        albumKey = row.album.key,
+        hue = row.album.hue,
+        seed = row.album.seed,
+        trackNo = row.number,
+        disc = row.item.season,
+        track = row.item.episode,
+    )
+
+    fun searchMusicCatalog(rawQuery: String) {
+        val q = rawQuery.trim()
+        ytmSearchJob?.cancel()
+        if (q.length < 2 || q.startsWith("@") || isSearchLink(q)) {
+            ytmSearch.value = YtmSearchResult("")
+            ytmSearchBusy.value = false
+            return
+        }
+        ytmSearchBusy.value = true
+        ytmSearchJob = scope.launch {
+            delay(260L)
+            try {
+                val result = ExternalDiscoveryApi.searchYouTubeMusic(q)
+                if (query.value.trim() == q) {
+                    ytmSearch.value = result
+                }
+            } catch (e: Exception) {
+                if (e is CancellationException) throw e
+            } finally {
+                if (query.value.trim() == q) {
+                    ytmSearchBusy.value = false
+                }
+            }
+        }
+    }
+
+    fun openExternalArtist(browseId: String = "", name: String, artUrl: String = "") {
+        val cleanName = name.trim()
+        val cleanId = browseId.trim()
+        if (cleanName.isEmpty() && cleanId.isEmpty()) return
+        pushScreen(Screen.ExternalArtistDetail(browseId = cleanId, name = cleanName, artUrl = artUrl))
+    }
+
+    fun openExternalAlbum(browseId: String = "", title: String, artist: String = "", artUrl: String = "") {
+        val cleanTitle = title.trim()
+        val cleanId = browseId.trim()
+        if (cleanTitle.isEmpty() && cleanId.isEmpty()) return
+        pushScreen(
+            Screen.ExternalAlbumDetail(
+                browseId = cleanId,
+                title = cleanTitle,
+                artist = artist.trim(),
+                artUrl = artUrl,
+            ),
+        )
+    }
+
+    fun playYtmSongList(
+        songs: List<YtmSongItem>,
+        startIndex: Int = 0,
+        sourceLabel: String = "Music",
+        shuffleOn: Boolean? = null,
+    ) {
+        if (songs.isEmpty()) return
+        externalStreamResolveJob?.cancel()
+        val libraryTracks = catalog.value.allTracks
+        val byArtistTitle = HashMap<String, TrackRow>(libraryTracks.size)
+        for (row in libraryTracks) {
+            val sig = "${fold(row.artist)}|${fold(row.name)}"
+            if (sig != "|" && !byArtistTitle.containsKey(sig)) {
+                byArtistTitle[sig] = row
+            }
+        }
+        val items = songs.mapIndexed { idx, song ->
+            val sig = "${fold(song.artist)}|${fold(song.title)}"
+            val localMatch = byArtistTitle[sig]
+            if (localMatch != null) {
+                trackItemFromRow(localMatch)
+            } else {
+                val seed = sleeveHash("${song.artist}|${song.album}|${song.title}|${song.videoId}")
+                val hue = ((seed % 360L).toInt() + 360) % 360
+                val key = "ext:ytm:${song.videoId}"
+                val entry = Entry(
+                    key = key,
+                    id = key,
+                    title = song.title,
+                    size = 0L,
+                    sha256 = "",
+                    local = false,
+                    streamUrl = "",
+                    music = MusicMeta(
+                        title = song.title,
+                        artist = song.artist.takeIf { it.isNotBlank() },
+                    ),
+                )
+                if (song.album.isNotBlank() && song.artUrl.isNotBlank()) {
+                    ExternalDiscoveryApi.rememberAlbumArtUrl(song.artist, song.album, song.artUrl)
+                }
+                TrackItem(
+                    entry = entry,
+                    title = song.title,
+                    artist = song.artist,
+                    album = song.album,
+                    albumKey = "",
+                    hue = hue,
+                    seed = seed,
+                    trackNo = (idx + 1).toString().padStart(2, '0'),
+                    disc = 1,
+                    track = idx + 1,
+                    artUrl = song.artUrl,
+                    albumBrowseId = song.albumBrowseId,
+                    externalStreamSource = "Streaming",
+                    externalSaveUrl = "https://www.youtube.com/watch?v=${song.videoId}",
+                    externalSaveKind = "youtube",
+                    externalVideoId = song.videoId,
+                )
+            }
+        }
+        music.playTrackList(items, startIndex, sourceLabel, shuffleOn = shuffleOn)
+        val started = if (startIndex in items.indices) items[startIndex] else items.firstOrNull()
+        if (started != null && started.isExternalStream && started.album.isBlank()) {
+            enrichStreamingTrackAlbum(started)
+        }
+    }
+
+    private fun enrichStreamingTrackAlbum(track: TrackItem) {
+        if (!track.isExternalStream) return
+        scope.launch {
+            val meta = runCatching {
+                ExternalDiscoveryApi.resolveTrackAlbumMeta(
+                    videoId = track.externalVideoId.takeIf { it.isNotBlank() },
+                    artist = track.artist,
+                    title = track.title,
+                    albumBrowseId = track.albumBrowseId,
+                )
+            }.getOrNull() ?: return@launch
+            val resolvedAlbum = meta.album.trim()
+            val resolvedArtist = meta.artist.trim().ifBlank { track.artist }
+            val resolvedArt = meta.artUrl.trim().ifBlank { track.artUrl }
+            if (resolvedAlbum.isNotBlank() && resolvedArt.isNotBlank()) {
+                ExternalDiscoveryApi.rememberAlbumArtUrl(resolvedArtist, resolvedAlbum, resolvedArt)
+            }
+            if (resolvedAlbum.isNotBlank() || resolvedArt != track.artUrl || meta.albumBrowseId.isNotBlank()) {
+                music.updateTrackMetadata(
+                    trackKey = track.key,
+                    album = resolvedAlbum.takeIf { it.isNotBlank() },
+                    artist = resolvedArtist.takeIf { it.isNotBlank() && track.artist.isBlank() },
+                    artUrl = resolvedArt.takeIf { it.isNotBlank() && track.artUrl.isBlank() },
+                    albumBrowseId = meta.albumBrowseId.takeIf { it.isNotBlank() },
+                    trackNumber = meta.trackNumber,
+                )
+            }
+        }
+    }
+
+    private fun nextTrackNumberForAlbum(artist: String, album: String): Int {
+        val fArtist = fold(artist)
+        val fAlbum = fold(album)
+        if (fAlbum.isEmpty()) return 1
+        val existing = catalog.value.albums.firstOrNull { tile ->
+            fold(tile.album.ifBlank { tile.title }) == fAlbum &&
+                (fArtist.isEmpty() || fold(tile.artist) == fArtist)
+        } ?: return 1
+        val maxEp = existing.items.mapNotNull { it.episode }.maxOrNull() ?: existing.items.size
+        return (maxEp + 1).coerceIn(1, 999)
+    }
+
+    fun saveYtmSongToLibrary(song: YtmSongItem) {
+        val initialArtist = song.artist.trim().ifBlank { "YouTube" }
+        val cleanTitle = song.title.trim().ifBlank { song.videoId }
+        val initialAlbum = song.album.trim()
+        val watchUrl = "https://www.youtube.com/watch?v=${song.videoId}"
+        val trackKeys = streamSaveLookupKeys("ext:ytm:${song.videoId}", song.videoId, initialArtist, cleanTitle)
+        streamingSubmittingKeys.value = streamingSubmittingKeys.value + trackKeys
+        notice.value = "Saving $cleanTitle to Music library…"
+        scope.launch {
+            val needsAlbumResolve = initialAlbum.isBlank() || initialAlbum.equals(cleanTitle, ignoreCase = true)
+            val resolvedMeta = if (needsAlbumResolve) {
+                withTimeoutOrNull(5_000L) {
+                    runCatching {
+                        ExternalDiscoveryApi.resolveTrackAlbumMeta(
+                            videoId = song.videoId,
+                            artist = song.artist,
+                            title = cleanTitle,
+                            albumBrowseId = song.albumBrowseId,
+                        )
+                    }.getOrNull()
+                }
+            } else {
+                null
+            }
+            val cleanArtist = resolvedMeta?.artist?.trim()?.takeIf { it.isNotBlank() && song.artist.isBlank() }
+                ?: initialArtist
+            val cleanAlbum = resolvedMeta?.album?.trim()?.takeIf { it.isNotBlank() }
+                ?: initialAlbum.ifBlank { cleanTitle }
+            val year = resolvedMeta?.year?.trim()?.takeIf { it.length == 4 }
+            val bestArtUrl = song.artUrl.trim().ifBlank { resolvedMeta?.artUrl.orEmpty().trim() }
+            if (bestArtUrl.isNotBlank()) {
+                ExternalDiscoveryApi.rememberAlbumArtUrl(cleanArtist, cleanAlbum, bestArtUrl)
+            }
+            val trackNumber = resolvedMeta?.trackNumber?.takeIf { it > 0 }
+                ?: nextTrackNumberForAlbum(cleanArtist, cleanAlbum)
+            if (status.value?.apiUrl.isNullOrBlank()) {
+                withTimeoutOrNull(4_000L) {
+                    status.first { !it?.apiUrl.isNullOrBlank() }
+                }
+            }
+            if (!status.value?.apiUrl.isNullOrBlank() && song.videoId.length == 11) {
+                loopbackApi.mirrorYouTube(
+                    artist = cleanArtist,
+                    album = cleanAlbum,
+                    year = year,
+                    tracks = listOf(YouTubeTrackInput(videoId = song.videoId, title = cleanTitle, track = trackNumber, disc = 1)),
+                ).fold(
+                    onSuccess = { job ->
+                        bindStreamingSaveJob(trackKeys, job)
+                        recordSubmittedJob(job)
+                        notice.value = "Saving $cleanTitle to Music library…"
+                    },
+                    onFailure = {
+                        acquireMusicUrlDirectly(watchUrl, cleanTitle, cleanArtist, cleanAlbum, trackKeys)
+                    },
+                )
+            } else {
+                acquireMusicUrlDirectly(watchUrl, cleanTitle, cleanArtist, cleanAlbum, trackKeys)
+            }
+        }
+    }
+
+    fun saveYtmAlbumToLibrary(album: YtmAlbumPage) {
+        if (album.tracks.isEmpty()) return
+        val cleanArtist = album.artist.trim().ifBlank { "YouTube" }
+        val cleanAlbum = album.title.trim().ifBlank { "Album" }
+        if (album.artUrl.isNotBlank()) {
+            ExternalDiscoveryApi.rememberAlbumArtUrl(cleanArtist, cleanAlbum, album.artUrl)
+        }
+        val trackInputs = album.tracks.mapIndexed { idx, t ->
+            YouTubeTrackInput(videoId = t.videoId, title = t.title, track = idx + 1, disc = 1)
+        }
+        notice.value = "Saving $cleanAlbum (${trackInputs.size} tracks) to Music library…"
+        scope.launch {
+            if (status.value?.apiUrl.isNullOrBlank()) {
+                withTimeoutOrNull(4_000L) {
+                    status.first { !it?.apiUrl.isNullOrBlank() }
+                }
+            }
+            loopbackApi.mirrorYouTube(
+                artist = cleanArtist,
+                album = cleanAlbum,
+                year = album.year.takeIf { it.isNotBlank() },
+                tracks = trackInputs,
+            ).fold(
+                onSuccess = { job ->
+                    recordSubmittedJob(job)
+                    notice.value = "Saving $cleanAlbum to Music library…"
+                },
+                onFailure = {
+                    // Fallback to direct music acquire per track if relay YouTube mirror isn't enabled.
+                    album.tracks.forEach { t ->
+                        acquireMusicUrlDirectly(
+                            url = "https://www.youtube.com/watch?v=${t.videoId}",
+                            title = t.title,
+                            artist = t.artist.ifBlank { cleanArtist },
+                            album = cleanAlbum,
+                        )
+                    }
+                },
+            )
+        }
+    }
+
+    fun streamFullSong(
+        id: String,
+        title: String,
+        artist: String,
+        album: String = "",
+        artUrl: String = "",
+        videoId: String? = null,
+        sourceLabel: String = "Streaming",
+    ) {
+        val extKey = "ext:$id"
+        if (music.state.value.currentTrack?.key == extKey) {
+            music.togglePlayPause()
+            return
+        }
+        externalStreamResolveJob?.cancel()
+        val cleanTitle = title.trim().ifBlank { "Audio stream" }
+        val cleanArtist = artist.trim()
+        val cleanAlbum = album.trim()
+        val cleanSource = sourceLabel.trim().ifBlank { "Streaming" }
+        if (cleanAlbum.isNotBlank() && artUrl.isNotBlank()) {
+            ExternalDiscoveryApi.rememberAlbumArtUrl(cleanArtist, cleanAlbum, artUrl)
+        }
+        val seed = sleeveHash("$cleanArtist|$cleanAlbum|$cleanTitle|$id")
+        val hue = ((seed % 360L).toInt() + 360) % 360
+        val placeholderEntry = Entry(
+            key = extKey,
+            id = extKey,
+            title = cleanTitle,
+            size = 0L,
+            sha256 = "",
+            local = false,
+            streamUrl = "",
+            music = MusicMeta(
+                title = cleanTitle,
+                artist = cleanArtist.takeIf { it.isNotBlank() },
+            ),
+        )
+        val placeholder = TrackItem(
+            entry = placeholderEntry,
+            title = cleanTitle,
+            artist = cleanArtist,
+            album = cleanAlbum,
+            albumKey = "",
+            hue = hue,
+            seed = seed,
+            artUrl = artUrl,
+            externalStreamSource = cleanSource,
+            externalSaveKind = "youtube",
+            externalVideoId = videoId?.trim().orEmpty(),
+        )
+        music.showExternalResolving(placeholder)
+        externalStreamResolveJob = scope.launch {
+            val resolved = if (!videoId.isNullOrBlank()) {
+                ExternalDiscoveryApi.resolveYouTubeAudioStream(videoId.trim())
+            } else {
+                ExternalDiscoveryApi.resolveFullSongStream(cleanArtist, cleanTitle)
+            }
+            ensureActive()
+            val activeState = music.state.value
+            if (activeState.currentTrack?.key != extKey || !activeState.playing) return@launch
+            if (resolved != null) {
+                val finalEntry = placeholderEntry.copy(streamUrl = resolved.streamUrl)
+                val finalTrack = placeholder.copy(
+                    entry = finalEntry,
+                    streamUserAgent = resolved.userAgent,
+                    externalStreamSource = cleanSource,
+                    externalSaveUrl = resolved.watchUrl,
+                    externalSaveKind = "youtube",
+                    externalVideoId = resolved.videoId,
+                )
+                music.playTrackList(listOf(finalTrack), 0, cleanSource, shuffleOn = false)
+                if (cleanAlbum.isBlank()) {
+                    enrichStreamingTrackAlbum(finalTrack)
+                }
+            } else {
+                music.stopMusic()
+                notice.value = "Could not load full stream for $cleanTitle"
+            }
+        }
+    }
+
+    private fun bindStreamingSaveJob(trackKeys: Set<String>, job: AcquireJob) {
+        streamingSubmittingKeys.value = streamingSubmittingKeys.value - trackKeys
+        if (job.isDone) {
+            streamingSavedKeys.value = streamingSavedKeys.value + trackKeys
+            streamingSaveJobs.value = streamingSaveJobs.value - trackKeys
+        } else if (!job.isFailed) {
+            streamingSaveJobs.value = streamingSaveJobs.value + trackKeys.associateWith { job.jobId }
+        }
+    }
+
+    fun saveStreamingTrackToLibrary(track: TrackItem) {
+        val videoId = track.externalVideoId.trim()
+        val saveUrl = track.externalSaveUrl?.trim()?.takeIf { it.isNotBlank() }
+        val initialArtist = track.artist.trim().ifBlank { "YouTube" }
+        val initialAlbum = track.album.trim()
+        val cleanTitle = track.title.trim().ifBlank { videoId.ifBlank { "Track" } }
+        val trackKeys = streamSaveLookupKeys(track.key, videoId, initialArtist, cleanTitle)
+        val currentState = resolveStreamSaveState(
+            track = track,
+            catalog = catalog.value,
+            jobs = acquireJobs.value,
+            saveJobMap = streamingSaveJobs.value,
+            submittingKeys = streamingSubmittingKeys.value,
+            savedKeys = streamingSavedKeys.value,
+        )
+        if (currentState != StreamSaveState.Unsaved) return
+
+        if (videoId.isNotBlank()) {
+            streamingSubmittingKeys.value = streamingSubmittingKeys.value + trackKeys
+            notice.value = "Saving $cleanTitle to Music library…"
+            scope.launch {
+                val needsAlbumResolve = initialAlbum.isBlank() ||
+                    initialAlbum.equals(cleanTitle, ignoreCase = true) ||
+                    track.artUrl.isBlank()
+                val resolvedMeta = if (needsAlbumResolve) {
+                    withTimeoutOrNull(5_000L) {
+                        runCatching {
+                            ExternalDiscoveryApi.resolveTrackAlbumMeta(
+                                videoId = videoId,
+                                artist = track.artist,
+                                title = cleanTitle,
+                                albumBrowseId = track.albumBrowseId,
+                            )
+                        }.getOrNull()
+                    }
+                } else {
+                    null
+                }
+                val cleanArtist = resolvedMeta?.artist?.trim()?.takeIf { it.isNotBlank() && track.artist.isBlank() }
+                    ?: initialArtist
+                val cleanAlbum = when {
+                    initialAlbum.isNotBlank() && !initialAlbum.equals(cleanTitle, ignoreCase = true) -> initialAlbum
+                    !resolvedMeta?.album.isNullOrBlank() -> resolvedMeta?.album.orEmpty().trim()
+                    initialAlbum.isNotBlank() -> initialAlbum
+                    else -> cleanTitle
+                }
+                val year = resolvedMeta?.year?.trim()?.takeIf { it.length == 4 }
+                val bestArtUrl = track.artUrl.trim().ifBlank { resolvedMeta?.artUrl.orEmpty().trim() }
+                if (bestArtUrl.isNotBlank()) {
+                    ExternalDiscoveryApi.rememberAlbumArtUrl(cleanArtist, cleanAlbum, bestArtUrl)
+                }
+                if (cleanAlbum != track.album || bestArtUrl != track.artUrl) {
+                    music.updateTrackMetadata(
+                        trackKey = track.key,
+                        album = cleanAlbum,
+                        artist = cleanArtist.takeIf { track.artist.isBlank() },
+                        artUrl = bestArtUrl.takeIf { it.isNotBlank() },
+                        albumBrowseId = resolvedMeta?.albumBrowseId?.takeIf { it.isNotBlank() },
+                        trackNumber = resolvedMeta?.trackNumber,
+                    )
+                }
+                val resolvedTrackNo = track.track?.takeIf { it > 0 }
+                    ?: resolvedMeta?.trackNumber?.takeIf { it > 0 }
+                    ?: nextTrackNumberForAlbum(cleanArtist, cleanAlbum)
+                val resolvedDisc = track.disc?.takeIf { it > 0 } ?: 1
+                if (status.value?.apiUrl.isNullOrBlank()) {
+                    withTimeoutOrNull(4_000L) {
+                        status.first { !it?.apiUrl.isNullOrBlank() }
+                    }
+                }
+                if (status.value?.apiUrl.isNullOrBlank()) {
+                    if (saveUrl != null) {
+                        acquireMusicUrlDirectly(
+                            url = saveUrl,
+                            title = cleanTitle,
+                            artist = cleanArtist,
+                            album = cleanAlbum,
+                            trackKeys = trackKeys,
+                        )
+                    } else {
+                        streamingSubmittingKeys.value = streamingSubmittingKeys.value - trackKeys
+                        openSearchForStreamingTrack(track)
+                    }
+                    return@launch
+                }
+                loopbackApi.mirrorYouTube(
+                    artist = cleanArtist,
+                    album = cleanAlbum,
+                    year = year,
+                    tracks = listOf(
+                        YouTubeTrackInput(
+                            videoId = videoId,
+                            title = cleanTitle,
+                            track = resolvedTrackNo,
+                            disc = resolvedDisc,
+                        ),
+                    ),
+                ).fold(
+                    onSuccess = { job ->
+                        bindStreamingSaveJob(trackKeys, job)
+                        recordSubmittedJob(job)
+                        notice.value = "Saving $cleanTitle to Music library…"
+                    },
+                    onFailure = {
+                        if (saveUrl != null) {
+                            acquireMusicUrlDirectly(
+                                url = saveUrl,
+                                title = cleanTitle,
+                                artist = cleanArtist,
+                                album = cleanAlbum,
+                                trackKeys = trackKeys,
+                            )
+                        } else {
+                            streamingSubmittingKeys.value = streamingSubmittingKeys.value - trackKeys
+                            openSearchForStreamingTrack(track)
+                        }
+                    },
+                )
+            }
+        } else if (saveUrl != null) {
+            streamingSubmittingKeys.value = streamingSubmittingKeys.value + trackKeys
+            val cleanAlbum = initialAlbum.ifBlank { cleanTitle }
+            if (track.artUrl.isNotBlank()) {
+                ExternalDiscoveryApi.rememberAlbumArtUrl(initialArtist, cleanAlbum, track.artUrl)
+            }
+            acquireMusicUrlDirectly(
+                url = saveUrl,
+                title = cleanTitle,
+                artist = initialArtist,
+                album = cleanAlbum,
+                trackKeys = trackKeys,
+            )
+        } else {
+            openSearchForStreamingTrack(track)
+        }
+    }
+
+    private fun acquireMusicUrlDirectly(
+        url: String,
+        title: String,
+        artist: String,
+        album: String,
+        trackKeys: Set<String> = emptySet(),
+    ) {
+        val cleanUrl = url.trim()
+        if (cleanUrl.isBlank()) {
+            if (trackKeys.isNotEmpty()) streamingSubmittingKeys.value = streamingSubmittingKeys.value - trackKeys
+            return
+        }
+        val cleanTitle = title.trim().ifBlank { "Track" }
+        val cleanArtist = artist.trim()
+        val cleanAlbum = album.trim().ifBlank { cleanTitle }
+        scope.launch {
+            if (status.value?.apiUrl.isNullOrBlank()) {
+                withTimeoutOrNull(12_000L) {
+                    status.first { !it?.apiUrl.isNullOrBlank() }
+                }
+            }
+            val musicId = normalizeAcquireId("", cleanAlbum, cleanArtist, cleanUrl, audio = true)
+            loopbackApi.acquire(
+                id = musicId,
+                title = cleanAlbum,
+                url = cleanUrl,
+                page = true,
+                audio = true,
+                music = MusicMeta(
+                    title = cleanTitle,
+                    artist = cleanArtist.takeIf { it.isNotBlank() },
+                ),
+            ).fold(
+                onSuccess = { job ->
+                    if (trackKeys.isNotEmpty()) bindStreamingSaveJob(trackKeys, job)
+                    recordSubmittedJob(job)
+                    notice.value = "Saving $cleanTitle to Music library…"
+                },
+                onFailure = { err ->
+                    if (trackKeys.isNotEmpty()) streamingSubmittingKeys.value = streamingSubmittingKeys.value - trackKeys
+                    error.value = err.message ?: "Could not save $cleanTitle to Music library."
+                },
+            )
+        }
+    }
+
+    private fun openSearchForStreamingTrack(track: TrackItem) {
+        closeMusicPlayer()
+        if (screen.value is Screen.MusicPlayerFull) {
+            popScreen()
+        }
+        val queryText = listOf(track.artist, track.title)
+            .filter { it.isNotBlank() }
+            .joinToString(" ")
+            .ifBlank { track.album }
+        if (queryText.isNotBlank()) {
+            openSearchFor(queryText, askRelays = true)
+        }
     }
 
     fun openCastSheet() {
@@ -321,7 +1679,9 @@ class AppModel(private val app: Application) {
             notice.value = "Ready on ${receiver.name}"
             scope.launch {
                 runCatching { worker.castAttach(receiver.id) }.onSuccess { st ->
-                    if (st.session?.state?.entry != null) cast.value = st
+                    if (st.session != null && isCastSessionLive(st.session)) {
+                        handleCastStatusUpdate(st)
+                    }
                 }
             }
         }
@@ -336,14 +1696,13 @@ class AppModel(private val app: Application) {
     }
 
     fun switchCastToPhone() {
-        val session = cast.value.session ?: return
+        val session = cast.value.session ?: lastCastSession.value ?: return
         val entry = entries.value.firstOrNull { it.key == session.state.entry?.key } ?: return
         recordWatchProgress(entry, session.state.positionMs, session.state.durationMs)
         selectedCastReceiver.value = null
         stopCasting()
         showTvsDialog.value = false
-        music.pauseForVideo()
-        pushScreen(Screen.Play(entry))
+        openVideo(entry)
     }
 
     @Volatile var inForeground: Boolean = true
@@ -383,8 +1742,7 @@ class AppModel(private val app: Application) {
                         settings.value = next
                     }
                     is Worker.Event.Cast -> {
-                        cast.value = event.status
-                        applyBackgroundPolicy()
+                        handleCastStatusUpdate(event.status)
                     }
                     is Worker.Event.Fatal -> error.value = event.message
                     Worker.Event.Exited -> error.value = "The P2P worker stopped"
@@ -453,6 +1811,16 @@ class AppModel(private val app: Application) {
                 }
             }
         }
+        scope.launch {
+            musicState.collect { ms ->
+                if (ms.playing) {
+                    musicSessionActive = true
+                } else if (!ms.hasQueue) {
+                    musicSessionActive = false
+                }
+                syncMediaService()
+            }
+        }
         starts.trySend(settings.value)
         registerNetworkRecoveryCallback()
     }
@@ -462,10 +1830,12 @@ class AppModel(private val app: Application) {
             val cm = app.getSystemService(ConnectivityManager::class.java) ?: return
             cm.registerDefaultNetworkCallback(object : ConnectivityManager.NetworkCallback() {
                 override fun onAvailable(network: Network) {
-                    if (status.value?.apiUrl.isNullOrBlank()) return
                     scope.launch {
-                        loopbackApi.resumeJobs()
-                        refreshAcquireJobs()
+                        if (!status.value?.apiUrl.isNullOrBlank()) {
+                            loopbackApi.resumeJobs()
+                            refreshAcquireJobs()
+                        }
+                        verifyOrReattachCast()
                     }
                 }
             })
@@ -474,12 +1844,13 @@ class AppModel(private val app: Application) {
 
     fun onForeground() {
         inForeground = true
-        applyBackgroundPolicy()
-        if (!status.value?.apiUrl.isNullOrBlank()) {
-            scope.launch {
+        applyBackgroundPolicy(forceResume = true)
+        scope.launch {
+            if (!status.value?.apiUrl.isNullOrBlank()) {
                 loopbackApi.resumeJobs()
                 refreshAcquireJobs()
             }
+            verifyOrReattachCast()
         }
     }
 
@@ -522,8 +1893,10 @@ class AppModel(private val app: Application) {
     }
 
     private fun shouldKeepWorkerAwake(): Boolean =
-        cast.value.session != null ||
+        isCastSessionLive(cast.value.session) ||
+            (castReconnecting.value && System.currentTimeMillis() < castReconnectUntilMs) ||
             musicState.value.playing ||
+            (activeVideo.value != null && videoMode.value != VideoDisplayMode.Closed) ||
             downloads.value.isNotEmpty() ||
             acquireJobs.value.any { it.isActive } ||
             System.currentTimeMillis() < backgroundSyncUntil
@@ -531,19 +1904,138 @@ class AppModel(private val app: Application) {
     // The one rule for the background: in front, or behind with a cast, active music, a download or
     // the sync window open, the worklet runs and both locks are held; otherwise both stop.
     // While any download or acquire/Soulseek job is active, keep a dataSync Foreground Service
-    // running so Android's Cached App Freezer does not stall sockets with the screen off.
+    // running; while playing media or casting to a TV, keep MediaPlaybackService in foreground
+    // so Android's Cached App Freezer does not freeze sockets with the screen off.
     @Synchronized
-    fun applyBackgroundPolicy() {
+    fun applyBackgroundPolicy(forceResume: Boolean = false) {
         if (inForeground || shouldKeepWorkerAwake()) {
             multicastLock.acquire()
             wifiLock.acquire()
-            worker.resume()
+            if (workerSuspended || forceResume) {
+                workerSuspended = false
+                worker.resume()
+            }
         } else {
-            worker.suspend()
+            if (!workerSuspended) {
+                workerSuspended = true
+                worker.suspend()
+            }
             if (wifiLock.isHeld) wifiLock.release()
             if (multicastLock.isHeld) multicastLock.release()
         }
         TransferService.sync(app, acquireJobs.value, downloads.value)
+        MediaPlaybackService.sync(app, currentMediaSnapshot())
+    }
+
+    private fun clearStickyCast(cancelJob: Boolean = true) {
+        stickyCastReceiverId = null
+        lastCastSession.value = null
+        castReconnecting.value = false
+        castReconnectUntilMs = 0L
+        if (cancelJob) {
+            castReconnectJob?.cancel()
+            castReconnectJob = null
+        }
+    }
+
+    private fun markCastConnected(session: CastSession) {
+        stickyCastReceiverId = session.receiverId
+        lastCastSession.value = session
+        castReconnecting.value = false
+        castReconnectUntilMs = 0L
+        castReconnectJob?.cancel()
+        castReconnectJob = null
+    }
+
+    private fun handleCastStatusUpdate(status: CastStatus) {
+        cast.value = status
+        val session = status.session
+        if (session != null) {
+            if (isCastSessionLive(session)) {
+                markCastConnected(session)
+            } else {
+                clearStickyCast()
+            }
+        } else {
+            val targetId = stickyCastReceiverId
+            if (targetId != null) {
+                scheduleCastReconnect(targetId)
+            }
+        }
+        applyBackgroundPolicy()
+    }
+
+    private fun scheduleCastReconnect(receiverId: String, immediate: Boolean = false) {
+        castReconnectUntilMs = System.currentTimeMillis() + castReconnectWindowMs
+        castReconnecting.value = true
+        if (castReconnectJob?.isActive == true) {
+            if (!immediate) return
+            castReconnectJob?.cancel()
+            castReconnectJob = null
+        }
+        castReconnectJob = scope.launch {
+            // Give the engine's own immediate on_close reattach a beat before issuing another attach.
+            if (!immediate) delay(1_500L)
+            var attempt = 0
+            while (stickyCastReceiverId == receiverId &&
+                cast.value.session == null &&
+                System.currentTimeMillis() < castReconnectUntilMs
+            ) {
+                val cur = runCatching { worker.castStatus() }.getOrNull()
+                if (cur?.session != null) {
+                    handleCastStatusUpdate(cur)
+                    return@launch
+                }
+                val attached = runCatching { worker.castAttach(receiverId) }.getOrNull()
+                val attachedSession = attached?.session
+                if (attached != null && attachedSession != null) {
+                    if (isCastSessionLive(attachedSession)) {
+                        handleCastStatusUpdate(attached)
+                    } else {
+                        runCatching { worker.castStop(false) }
+                        clearStickyCast(cancelJob = false)
+                        cast.value = attached.copy(session = null)
+                        applyBackgroundPolicy()
+                    }
+                    return@launch
+                }
+                delay(nextCastReconnectDelayMs(attempt))
+                attempt++
+            }
+            if (cast.value.session == null) {
+                castReconnecting.value = false
+                castReconnectUntilMs = 0L
+                applyBackgroundPolicy()
+            }
+        }
+    }
+
+    private suspend fun verifyOrReattachCast() {
+        val liveSession = cast.value.session
+        if (liveSession != null) {
+            if (!isCastSessionLive(liveSession)) return
+            val probed = runCatching { worker.castControl(JSONObject().put("action", "status")) }
+            probed
+                .onSuccess { handleCastStatusUpdate(it) }
+                .onFailure {
+                    if (stickyCastReceiverId == liveSession.receiverId) {
+                        scheduleCastReconnect(liveSession.receiverId, immediate = true)
+                    }
+                }
+            return
+        }
+        val stickyId = stickyCastReceiverId
+        if (stickyId != null) {
+            scheduleCastReconnect(stickyId, immediate = true)
+            applyBackgroundPolicy()
+            return
+        }
+        val selectedId = selectedCastReceiver.value?.id ?: return
+        runCatching { worker.castAttach(selectedId) }.onSuccess { st ->
+            if (st.session != null && isCastSessionLive(st.session)) {
+                handleCastStatusUpdate(st)
+            }
+        }
     }
 
     fun openUriOrKey(raw: String) {
@@ -570,7 +2062,15 @@ class AppModel(private val app: Application) {
                     if (status.value == null) starts.trySend(next)
                 }
                 res.entry?.let { entry ->
-                    val isAudioTrack = !entry.id.startsWith("imdb:") && entry.season != null
+                    val isAudioTrack = !entry.id.startsWith("imdb:") && (
+                        entry.season != null ||
+                            entry.music != null ||
+                            entry.id.startsWith("yt:") ||
+                            entry.id.startsWith("sc:") ||
+                            entry.id.startsWith("album:") ||
+                            entry.id.startsWith("mb:") ||
+                            entry.id.startsWith("discogs:")
+                        )
                     if (isAudioTrack) {
                         val item = TrackItem(
                             entry = entry,
@@ -606,6 +2106,7 @@ class AppModel(private val app: Application) {
     fun searchGlobal(query: String) {
         val q = query.trim()
         if (q.length < 2) return
+        recordRecentSearch(q)
         val prev = global.value
         global.value = GlobalSearch(query = q, rows = if (prev.query == q) prev.rows else emptyList(), askedAt = System.currentTimeMillis())
         fetchGlobal()
@@ -644,7 +2145,7 @@ class AppModel(private val app: Application) {
 
     fun refreshCast() {
         scope.launch {
-            runCatching { worker.castStatus() }.onSuccess { cast.value = it }.onFailure { error.value = it.message }
+            runCatching { worker.castStatus() }.onSuccess { handleCastStatusUpdate(it) }.onFailure { error.value = it.message }
         }
     }
 
@@ -697,19 +2198,33 @@ class AppModel(private val app: Application) {
     }
 
     fun removeCastReceiver(id: String) {
+        if (stickyCastReceiverId == id) clearStickyCast()
         scope.launch {
-            runCatching { worker.castRemove(id) }.onSuccess { cast.value = it }
+            runCatching { worker.castRemove(id) }.onSuccess {
+                cast.value = it
+                applyBackgroundPolicy()
+            }
         }
     }
 
     fun castToReceiver(receiverId: String, key: String, preferMode: String = "auto", startPositionMs: Long = 0L) {
+        castReconnectJob?.cancel()
+        castReconnectJob = null
+        castReconnecting.value = false
+        stickyCastReceiverId = receiverId
         scope.launch {
             try {
-                cast.value = worker.castPlay(receiverId, key, preferMode, startPositionMs)
+                val result = worker.castPlay(receiverId, key, preferMode, startPositionMs)
+                result.receivers.firstOrNull { it.id == receiverId }?.let { selectedCastReceiver.value = it }
+                handleCastStatusUpdate(result)
                 pendingCast.value = null
                 showTvsDialog.value = false
-                if (screen.value is Screen.Play) popScreen()
+                if (activeVideo.value != null || screen.value is Screen.Play) closeVideo()
             } catch (e: Exception) {
+                if (cast.value.session == null && lastCastSession.value == null) {
+                    clearStickyCast()
+                    applyBackgroundPolicy()
+                }
                 error.value = e.message
             }
         }
@@ -717,12 +2232,32 @@ class AppModel(private val app: Application) {
 
     fun sendCastControl(params: JSONObject) {
         scope.launch {
-            runCatching { worker.castControl(params) }.onSuccess { cast.value = it }.onFailure { error.value = it.message }
+            val first = runCatching { worker.castControl(params) }
+            if (first.isSuccess) {
+                first.getOrNull()?.let { handleCastStatusUpdate(it) }
+                return@launch
+            }
+            val targetId = cast.value.session?.receiverId ?: stickyCastReceiverId ?: selectedCastReceiver.value?.id
+            if (targetId != null) {
+                val retried = runCatching {
+                    worker.castAttach(targetId)
+                    worker.castControl(params)
+                }
+                if (retried.isSuccess) {
+                    retried.getOrNull()?.let { handleCastStatusUpdate(it) }
+                    return@launch
+                }
+                error.value = retried.exceptionOrNull()?.message ?: first.exceptionOrNull()?.message
+            } else {
+                error.value = first.exceptionOrNull()?.message
+            }
         }
     }
 
     fun stopCasting() {
         selectedCastReceiver.value = null
+        clearStickyCast()
+        applyBackgroundPolicy()
         scope.launch {
             runCatching { worker.castStop(true) }.onSuccess {
                 cast.value = it
@@ -733,6 +2268,8 @@ class AppModel(private val app: Application) {
 
     fun detachCasting() {
         selectedCastReceiver.value = null
+        clearStickyCast()
+        applyBackgroundPolicy()
         scope.launch {
             runCatching { worker.castStop(false) }.onSuccess {
                 cast.value = it
@@ -910,15 +2447,172 @@ class AppModel(private val app: Application) {
             return
         }
         val addTarget = parsePeartubeAddUrl(extracted)
-        if (addTarget != null) {
-            openAddSheet(prefillUrl = addTarget, autoIdentify = true)
-            return
+        val targetUrl = when {
+            addTarget != null -> addTarget
+            extracted.startsWith("http://", ignoreCase = true) || extracted.startsWith("https://", ignoreCase = true) -> extracted
+            else -> null
         }
-        if (extracted.startsWith("http://", ignoreCase = true) || extracted.startsWith("https://", ignoreCase = true)) {
-            openAddSheet(prefillUrl = extracted, autoIdentify = true)
+        if (targetUrl != null) {
+            if (shareImportMode.value == ShareImportMode.Auto) {
+                autoAcquireSharedUrl(targetUrl)
+            } else {
+                openAddSheet(prefillUrl = targetUrl, autoIdentify = true)
+            }
         } else {
             openUriOrKey(extracted)
         }
+    }
+
+    fun autoAcquireSharedUrl(url: String) {
+        val cleanUrl = url.trim()
+        if (!cleanUrl.startsWith("http://", ignoreCase = true) && !cleanUrl.startsWith("https://", ignoreCase = true)) {
+            openAddSheet(prefillUrl = cleanUrl, autoIdentify = false)
+            return
+        }
+        notice.value = "Inspecting link…"
+        scope.launch {
+            if (status.value?.apiUrl.isNullOrBlank()) {
+                withTimeoutOrNull(12_000L) {
+                    status.first { !it?.apiUrl.isNullOrBlank() }
+                }
+            }
+            val identified = loopbackApi.identify(cleanUrl)
+            identified.fold(
+                onSuccess = { info ->
+                    val plan = classifyLinkAcquisition(cleanUrl, info, podcastImportFormat.value)
+                    val music = if (plan.audioOnly) {
+                        MusicMeta(
+                            title = plan.title.takeIf { it.isNotBlank() },
+                            artist = plan.artist.takeIf { it.isNotBlank() },
+                        )
+                    } else {
+                        null
+                    }
+                    val announceTitle = if (plan.audioOnly) plan.album.ifBlank { plan.title } else plan.title
+                    loopbackApi.acquire(
+                        id = normalizeAcquireId(info.effectiveId, announceTitle, plan.artist, cleanUrl, plan.audioOnly),
+                        title = announceTitle,
+                        url = cleanUrl,
+                        page = info.isPage,
+                        audio = plan.audioOnly,
+                        music = music,
+                    ).fold(
+                        onSuccess = { job ->
+                            recordSubmittedJob(job)
+                            notice.value = null
+                            showAutoAcquireBanner(
+                                AutoAcquireBanner(
+                                    jobId = job.jobId,
+                                    url = cleanUrl,
+                                    info = info,
+                                    plan = plan,
+                                ),
+                            )
+                        },
+                        onFailure = { err ->
+                            notice.value = null
+                            addSheet.value = AddSheetState(
+                                rawInput = cleanUrl,
+                                identified = info,
+                                detectedKind = plan.kind,
+                                titleInput = plan.title,
+                                artistInput = plan.artist,
+                                audioOnly = plan.audioOnly,
+                                submitError = err.message ?: "Could not start download.",
+                            )
+                            showAddSheet.value = true
+                            refreshAcquireJobs()
+                        },
+                    )
+                },
+                onFailure = { err ->
+                    notice.value = null
+                    addSheet.value = AddSheetState(
+                        rawInput = cleanUrl,
+                        identifyError = err.message ?: "Could not identify that link.",
+                    )
+                    showAddSheet.value = true
+                    refreshAcquireJobs()
+                },
+            )
+        }
+    }
+
+    fun flipAutoAcquireFormat() {
+        val banner = autoAcquireBanner.value ?: return
+        val flippedAudio = !banner.plan.audioOnly
+        val flippedKind = when {
+            flippedAudio && banner.plan.kind == DetectedMediaKind.Video -> DetectedMediaKind.Music
+            !flippedAudio && banner.plan.kind == DetectedMediaKind.Music -> DetectedMediaKind.Video
+            else -> banner.plan.kind
+        }
+        val flippedPlan = banner.plan.copy(
+            kind = flippedKind,
+            audioOnly = flippedAudio,
+            reason = if (flippedAudio) "Switched to audio" else "Switched to video",
+        )
+        autoAcquireBannerJob?.cancel()
+        scope.launch {
+            loopbackApi.cancelJob(banner.jobId)
+            acquireJobs.value = acquireJobs.value.filterNot { it.jobId == banner.jobId }
+            previousActiveJobIds = previousActiveJobIds - banner.jobId
+            val music = if (flippedPlan.audioOnly) {
+                MusicMeta(
+                    title = flippedPlan.title.takeIf { it.isNotBlank() },
+                    artist = flippedPlan.artist.takeIf { it.isNotBlank() },
+                )
+            } else {
+                null
+            }
+            loopbackApi.acquire(
+                id = normalizeAcquireId(banner.info.effectiveId, flippedPlan.title, flippedPlan.artist, banner.url, flippedPlan.audioOnly),
+                title = flippedPlan.title,
+                url = banner.url,
+                page = banner.info.isPage,
+                audio = flippedPlan.audioOnly,
+                music = music,
+            ).fold(
+                onSuccess = { job ->
+                    recordSubmittedJob(job)
+                    showAutoAcquireBanner(banner.copy(jobId = job.jobId, plan = flippedPlan))
+                },
+                onFailure = { err ->
+                    dismissAutoAcquireBanner()
+                    addSheet.value = AddSheetState(
+                        rawInput = banner.url,
+                        identified = banner.info,
+                        detectedKind = flippedPlan.kind,
+                        titleInput = flippedPlan.title,
+                        artistInput = flippedPlan.artist,
+                        audioOnly = flippedPlan.audioOnly,
+                        submitError = err.message ?: "Could not switch format.",
+                    )
+                    showAddSheet.value = true
+                    refreshAcquireJobs()
+                },
+            )
+        }
+    }
+
+    fun editAutoAcquire() {
+        val banner = autoAcquireBanner.value ?: return
+        dismissAutoAcquireBanner()
+        scope.launch {
+            loopbackApi.cancelJob(banner.jobId)
+            acquireJobs.value = acquireJobs.value.filterNot { it.jobId == banner.jobId }
+            previousActiveJobIds = previousActiveJobIds - banner.jobId
+            applyBackgroundPolicy()
+            refreshAcquireJobs()
+        }
+        addSheet.value = AddSheetState(
+            rawInput = banner.url,
+            identified = banner.info,
+            detectedKind = banner.plan.kind,
+            titleInput = banner.plan.title,
+            artistInput = banner.plan.artist,
+            audioOnly = banner.plan.audioOnly,
+        )
+        showAddSheet.value = true
     }
 
     fun openAddSheet(prefillUrl: String? = null, autoIdentify: Boolean = false) {
@@ -947,6 +2641,7 @@ class AppModel(private val app: Application) {
             prev.copy(
                 rawInput = raw,
                 identified = null,
+                detectedKind = null,
                 identifyError = null,
                 submitError = null,
             )
@@ -978,6 +2673,7 @@ class AppModel(private val app: Application) {
             rawInput = url,
             identifying = true,
             identified = null,
+            detectedKind = null,
             identifyError = null,
             submitError = null,
         )
@@ -991,19 +2687,22 @@ class AppModel(private val app: Application) {
             if (addSheet.value.rawInput.trim() != url) return@launch
             result.fold(
                 onSuccess = { info ->
+                    val plan = classifyLinkAcquisition(url, info, podcastImportFormat.value)
                     addSheet.value = addSheet.value.copy(
                         identifying = false,
                         identified = info,
+                        detectedKind = plan.kind,
                         identifyError = null,
-                        titleInput = info.effectiveTitle,
-                        artistInput = info.effectiveArtist,
-                        audioOnly = info.audioOnly,
+                        titleInput = plan.title,
+                        artistInput = plan.artist,
+                        audioOnly = plan.audioOnly,
                     )
                 },
                 onFailure = { err ->
                     addSheet.value = addSheet.value.copy(
                         identifying = false,
                         identified = null,
+                        detectedKind = null,
                         identifyError = err.message ?: "Could not identify that link.",
                     )
                 },
@@ -1025,10 +2724,16 @@ class AppModel(private val app: Application) {
             .ifBlank { identified?.effectiveTitle.orEmpty() }
             .ifBlank { url }
         val artist = state.artistInput.trim().ifBlank { identified?.effectiveArtist.orEmpty() }
-        val id = identified?.effectiveId?.takeIf { it.isNotBlank() } ?: ""
+        val id = normalizeAcquireId(
+            rawId = identified?.effectiveId?.takeIf { it.isNotBlank() } ?: "",
+            title = title,
+            artist = artist,
+            url = url,
+            audio = state.audioOnly,
+        )
         val page = identified?.isPage ?: true
         val audio = state.audioOnly
-        val music = if (audio || identified?.music != null || artist.isNotBlank()) {
+        val music = if (audio) {
             MusicMeta(
                 title = title.takeIf { it.isNotBlank() },
                 artist = artist.takeIf { it.isNotBlank() },
@@ -1061,11 +2766,24 @@ class AppModel(private val app: Application) {
         }
     }
 
+    private fun scheduleCatalogRefreshBurst() {
+        refreshes.trySend(Unit)
+        catalogRefreshBurstJob?.cancel()
+        catalogRefreshBurstJob = scope.launch {
+            delay(1_500L)
+            refreshes.trySend(Unit)
+            delay(2_500L)
+            refreshes.trySend(Unit)
+        }
+    }
+
     private fun recordSubmittedJob(job: AcquireJob) {
         val current = acquireJobs.value.filterNot { it.jobId == job.jobId }
         acquireJobs.value = listOf(job) + current
         if (job.isActive) {
             previousActiveJobIds = previousActiveJobIds + job.jobId
+        } else if (job.isDone) {
+            scheduleCatalogRefreshBurst()
         }
         applyBackgroundPolicy()
         refreshAcquireJobs()
@@ -1077,10 +2795,32 @@ class AppModel(private val app: Application) {
             loopbackApi.listJobs().onSuccess { jobs ->
                 val newlyCompleted = jobs.filter { it.isDone && it.jobId in previousActiveJobIds }
                 val vanishedDone = previousActiveJobIds.filter { oldId -> jobs.none { it.jobId == oldId } }
+                val jobsById = jobs.associateBy { it.jobId }
+                val trackedSaves = streamingSaveJobs.value
+                if (trackedSaves.isNotEmpty()) {
+                    val remaining = LinkedHashMap<String, String>(trackedSaves.size)
+                    val newlySavedKeys = HashSet<String>()
+                    for ((trackKey, jobId) in trackedSaves) {
+                        val job = jobsById[jobId]
+                        when {
+                            job == null && jobId in vanishedDone -> newlySavedKeys.add(trackKey)
+                            job == null -> Unit
+                            job.isDone -> newlySavedKeys.add(trackKey)
+                            job.isFailed -> Unit
+                            else -> remaining[trackKey] = jobId
+                        }
+                    }
+                    if (newlySavedKeys.isNotEmpty()) {
+                        streamingSavedKeys.value = streamingSavedKeys.value + newlySavedKeys
+                    }
+                    if (remaining.size != trackedSaves.size) {
+                        streamingSaveJobs.value = remaining
+                    }
+                }
                 if (newlyCompleted.isNotEmpty() || vanishedDone.isNotEmpty()) {
-                    refreshes.trySend(Unit)
+                    scheduleCatalogRefreshBurst()
                     newlyCompleted.firstOrNull()?.let { done ->
-                        notice.value = "Added ${done.title.ifBlank { "to library" }}"
+                        notice.value = "Saved ${done.title.ifBlank { "track" }} in library"
                     }
                 }
                 previousActiveJobIds = jobs.filter { it.isActive }.map { it.jobId }.toSet()
@@ -1137,6 +2877,7 @@ class AppModel(private val app: Application) {
     fun searchAll(rawQuery: String) {
         val q = rawQuery.trim()
         if (q.length < 2) return
+        recordRecentSearch(q)
         searchGlobal(q)
         searchSources(q, selectedSources.value)
     }
@@ -1144,6 +2885,7 @@ class AppModel(private val app: Application) {
     fun searchSources(rawQuery: String, sources: Set<SearchSource> = selectedSources.value) {
         val q = rawQuery.trim()
         if (q.length < 2) return
+        recordRecentSearch(q)
         if (sources.isEmpty()) {
             sourceSearch.value = SourceSearchState(
                 query = q,
@@ -1475,6 +3217,7 @@ class AppModel(private val app: Application) {
     fun unfollowDiscoverCreator(id: String) {
         val clean = id.trim()
         if (clean.isEmpty()) return
+        val unfollowedLabel = discoverCreators.value.firstOrNull { it.id == clean }?.displayName?.takeIf { it.isNotBlank() }
         discoverError.value = null
         scope.launch {
             loopbackApi.unfollowDiscoverCreator(clean).fold(
@@ -1508,7 +3251,7 @@ class AppModel(private val app: Application) {
                             loadDiscoverFeed(refresh = false)
                         }
                     }
-                    notice.value = "Unfollowed creator"
+                    notice.value = if (unfollowedLabel != null) "Unfollowed $unfollowedLabel" else "Unfollowed creator"
                 },
                 onFailure = { err ->
                     discoverError.value = err.message ?: "Could not unfollow creator."
@@ -1524,6 +3267,7 @@ class AppModel(private val app: Application) {
         discoverActiveTopic.value = q
         discoverLoading.value = true
         discoverError.value = null
+        loadExternalVideos(q)
         discoverBrowseJob = scope.launch {
             val res = loopbackApi.browseDiscover(
                 query = q,
@@ -1550,6 +3294,9 @@ class AppModel(private val app: Application) {
         discoverBrowse.value = null
         discoverError.value = null
         discoverLoading.value = false
+        if (externalVideosTopic.value != "Featured") {
+            loadExternalVideos("Featured")
+        }
         if (discoverCreators.value.isNotEmpty()) {
             loadDiscoverFeed(refresh = false)
         }
@@ -1586,23 +3333,19 @@ class AppModel(private val app: Application) {
     fun addDiscoverItemToLibrary(item: DiscoverItem, audioOverride: Boolean? = null) {
         if (item.url.isBlank()) return
         val audio = audioOverride ?: item.audioOnly
-        val music = when {
-            audioOverride == true -> MusicMeta(
+        val music = if (audio) {
+            item.music ?: MusicMeta(
                 title = item.title.takeIf { it.isNotBlank() },
                 artist = item.creatorName.takeIf { it.isNotBlank() },
             )
-            item.music != null -> item.music
-            audio -> MusicMeta(
-                title = item.title.takeIf { it.isNotBlank() },
-                artist = item.creatorName.takeIf { it.isNotBlank() },
-            )
-            else -> null
+        } else {
+            null
         }
         discoverSubmittingIds.value = discoverSubmittingIds.value + item.id
         scope.launch {
             try {
                 loopbackApi.acquire(
-                    id = item.acquireId,
+                    id = normalizeAcquireId(item.acquireId, item.title, item.creatorName, item.url, audio),
                     title = item.title,
                     url = item.url,
                     page = true,
@@ -1623,6 +3366,254 @@ class AppModel(private val app: Application) {
         }
     }
 
+    fun setDiscoverTab(tab: DiscoverTab) {
+        if (discoverTab.value == tab) return
+        if (tab != DiscoverTab.Music) {
+            previewPlayer.stop()
+        }
+        discoverTab.value = tab
+        if ((tab == DiscoverTab.Music || tab == DiscoverTab.All) && musicDiscoverData.value == null && !musicDiscoverLoading.value) {
+            loadMusicDiscover(musicDiscoverMood.value, musicDiscoverQuery.value)
+        }
+        if ((tab == DiscoverTab.Cinema || tab == DiscoverTab.All) && cinemaDiscoverData.value == null && !cinemaDiscoverLoading.value) {
+            loadCinemaDiscover(cinemaDiscoverGenre.value)
+        }
+        if (tab == DiscoverTab.Videos || tab == DiscoverTab.All) {
+            loadFeaturedCreatorsIfNeeded()
+        }
+        if (tab == DiscoverTab.Videos && externalVideos.value.isEmpty() && !externalVideosLoading.value) {
+            loadExternalVideos(externalVideosTopic.value)
+        }
+    }
+
+    fun loadExternalVideos(topic: String = externalVideosTopic.value) {
+        val normTopic = topic.trim().ifBlank { "Featured" }
+        externalVideosTopic.value = normTopic
+        externalVideosJob?.cancel()
+        externalVideosLoading.value = true
+        externalVideosJob = scope.launch {
+            try {
+                val picks = ExternalDiscoveryApi.discoverYouTubeVideos(normTopic)
+                if (externalVideosTopic.value == normTopic) {
+                    externalVideos.value = picks
+                }
+            } catch (e: Exception) {
+                if (e is CancellationException) throw e
+            } finally {
+                if (externalVideosTopic.value == normTopic) {
+                    externalVideosLoading.value = false
+                }
+            }
+        }
+    }
+
+    fun addExternalVideoToLibrary(video: ExternalVideoPick, audioOnly: Boolean) {
+        val apiUrl = status.value?.apiUrl
+        if (apiUrl.isNullOrBlank()) {
+            openAddSheet(prefillUrl = video.watchUrl)
+            return
+        }
+        val submitKey = "yt:${video.videoId}"
+        val parsed = if (audioOnly) {
+            smartParseYouTubeCandidate(
+                YouTubeCandidate(
+                    videoId = video.videoId,
+                    title = video.title,
+                    channel = video.channelName,
+                    url = video.watchUrl,
+                ),
+            )
+        } else {
+            null
+        }
+        val cleanTitle = parsed?.title?.takeIf { it.isNotBlank() } ?: video.title
+        val cleanArtist = parsed?.artist?.takeIf { it.isNotBlank() } ?: cleanChannelName(video.channelName)
+        val announceTitle = if (audioOnly) parsed?.album?.ifBlank { cleanTitle } ?: cleanTitle else video.title
+        val acquireId = normalizeAcquireId("", announceTitle, cleanArtist, video.watchUrl, audioOnly)
+        val music = if (audioOnly) {
+            MusicMeta(
+                title = cleanTitle.takeIf { it.isNotBlank() },
+                artist = cleanArtist.takeIf { it.isNotBlank() },
+            )
+        } else {
+            null
+        }
+        discoverSubmittingIds.value = discoverSubmittingIds.value + submitKey
+        scope.launch {
+            try {
+                loopbackApi.acquire(
+                    id = acquireId,
+                    title = announceTitle,
+                    url = video.watchUrl,
+                    page = true,
+                    audio = audioOnly,
+                    music = music,
+                ).fold(
+                    onSuccess = { job ->
+                        recordSubmittedJob(job)
+                        notice.value = if (audioOnly) "Saving $cleanTitle to Music library…" else "Saving ${video.title}…"
+                    },
+                    onFailure = { err ->
+                        error.value = err.message ?: "Could not add ${video.title} to PearTube."
+                    },
+                )
+            } finally {
+                discoverSubmittingIds.value = discoverSubmittingIds.value - submitKey
+            }
+        }
+    }
+
+    fun loadCinemaDiscover(genre: String = cinemaDiscoverGenre.value) {
+        val normGenre = genre.trim().ifBlank { "Popular" }
+        cinemaDiscoverGenre.value = normGenre
+        val cached = cinemaDiscoverCache[normGenre]
+        if (cached != null) {
+            cinemaDiscoverJob?.cancel()
+            cinemaDiscoverData.value = cached
+            cinemaDiscoverLoading.value = false
+            cinemaDiscoverError.value = null
+            return
+        }
+        cinemaDiscoverJob?.cancel()
+        cinemaDiscoverLoading.value = true
+        cinemaDiscoverError.value = null
+        cinemaDiscoverJob = scope.launch {
+            try {
+                val data = ExternalDiscoveryApi.discoverCinema(normGenre)
+                if (data.movies.isNotEmpty() || data.series.isNotEmpty()) {
+                    cinemaDiscoverCache[normGenre] = data
+                }
+                if (cinemaDiscoverGenre.value == normGenre) {
+                    cinemaDiscoverData.value = data
+                    cinemaDiscoverError.value = null
+                }
+            } catch (e: Exception) {
+                if (e is CancellationException) throw e
+                if (cinemaDiscoverGenre.value == normGenre) {
+                    cinemaDiscoverError.value = e.message ?: "Could not load cinema picks."
+                }
+            } finally {
+                if (cinemaDiscoverGenre.value == normGenre) {
+                    cinemaDiscoverLoading.value = false
+                }
+            }
+        }
+    }
+
+    fun loadFeaturedCreatorsIfNeeded() {
+        if (featuredCreatorsLoaded || featuredCreatorsLoading.value) return
+        if (featuredCreators.value.isEmpty()) {
+            featuredCreators.value = FEATURED_CREATORS
+        }
+        featuredCreatorsLoading.value = true
+        scope.launch {
+            try {
+                val loaded = ExternalDiscoveryApi.fetchFeaturedCreators()
+                if (loaded.isNotEmpty()) {
+                    featuredCreators.value = loaded
+                    featuredCreatorsLoaded = true
+                }
+            } catch (e: Exception) {
+                if (e is CancellationException) throw e
+            } finally {
+                featuredCreatorsLoading.value = false
+            }
+        }
+    }
+
+    fun searchCreatorSuggestions(rawQuery: String) {
+        val q = rawQuery.trim()
+        creatorSuggestJob?.cancel()
+        if (q.length < 2 ||
+            q.startsWith("http://", ignoreCase = true) ||
+            q.startsWith("https://", ignoreCase = true) ||
+            q.startsWith("peartube://", ignoreCase = true)
+        ) {
+            creatorSuggestions.value = emptyList()
+            creatorSuggestBusy.value = false
+            return
+        }
+        val localMatches = status.value?.discoveredSources.orEmpty()
+            .filter { src ->
+                src.title.contains(q, ignoreCase = true) || src.key.startsWith(q, ignoreCase = true)
+            }
+            .take(3)
+            .map { src ->
+                CreatorSuggestion(
+                    id = "peartube:${src.key}",
+                    name = src.title.ifBlank { "Channel ${src.key.take(8)}" },
+                    handle = src.via.ifBlank { "LAN channel" },
+                    subscribers = "PearTube swarm",
+                    avatarUrl = "",
+                    url = "peartube://channel/${src.key}",
+                    source = "peartube",
+                    peartubeChannel = src,
+                )
+            }
+        creatorSuggestions.value = localMatches
+        creatorSuggestBusy.value = true
+        creatorSuggestJob = scope.launch {
+            try {
+                val remote = ExternalDiscoveryApi.searchCreatorsTypeahead(q)
+                creatorSuggestions.value = (remote + localMatches).distinctBy { it.id }
+            } catch (e: Exception) {
+                if (e is CancellationException) throw e
+            } finally {
+                creatorSuggestBusy.value = false
+            }
+        }
+    }
+
+    fun clearCreatorSuggestions() {
+        creatorSuggestJob?.cancel()
+        creatorSuggestions.value = emptyList()
+        creatorSuggestBusy.value = false
+    }
+
+    fun loadMusicDiscover(mood: String = musicDiscoverMood.value, query: String = musicDiscoverQuery.value) {
+        val normMood = mood.trim().lowercase().ifBlank { "featured" }
+        val cleanQuery = query.trim()
+        musicDiscoverMood.value = normMood
+        musicDiscoverQuery.value = cleanQuery
+        if (cleanQuery.isEmpty()) {
+            selectedSuggestedArtist.value = null
+        }
+        musicDiscoverJob?.cancel()
+        musicDiscoverLoading.value = true
+        musicDiscoverError.value = null
+        val seeds = catalog.value.artists
+            .map { it.name }
+            .filter { it.isNotBlank() && it != "Unknown artist" }
+        musicDiscoverJob = scope.launch {
+            try {
+                val data = ExternalDiscoveryApi.discoverMusic(
+                    mood = normMood,
+                    query = cleanQuery,
+                    seedArtists = seeds,
+                )
+                musicDiscoverData.value = data
+                musicDiscoverError.value = null
+            } catch (e: Exception) {
+                if (e is CancellationException) throw e
+                musicDiscoverError.value = e.message ?: "Could not load music suggestions."
+            } finally {
+                musicDiscoverLoading.value = false
+            }
+        }
+    }
+
+    fun exploreSuggestedArtist(artist: SuggestedArtist) {
+        previewPlayer.stop()
+        selectedSuggestedArtist.value = artist
+        loadMusicDiscover(mood = musicDiscoverMood.value, query = artist.name)
+    }
+
+    fun clearSuggestedArtist() {
+        previewPlayer.stop()
+        selectedSuggestedArtist.value = null
+        loadMusicDiscover(mood = musicDiscoverMood.value, query = "")
+    }
+
     @Volatile
     var playStarted: Boolean = false
 
@@ -1634,7 +3625,8 @@ class AppModel(private val app: Application) {
     private suspend fun refresh() {
         try {
             // Keep the worklet's QuickJS thread wide open once video frames are flowing.
-            if (screen.value is Screen.Play && playStarted) {
+            val videoOpen = activeVideo.value != null && videoMode.value != VideoDisplayMode.Closed
+            if ((videoOpen || screen.value is Screen.Play) && playStarted) {
                 recordStatus(worker.status())
             } else {
                 coroutineScope {

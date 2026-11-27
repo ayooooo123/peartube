@@ -38,7 +38,8 @@ icon_assets!(PlayerIcons, [
     Ellipsis, ChevronDown, ChevronRight, ChevronLeft, Sparkles, Share2,
     SlidersHorizontal, Check, Plus, Search, Download, X,
     Play, Pause, SkipBack, SkipForward, Shuffle, Repeat, Repeat1, ListMusic,
-    ArrowUp, ArrowDown
+    ArrowUp, ArrowDown,
+    Minimize2, Maximize2, Music, Film, Video, Compass, UserPlus, Disc3, Headphones, Globe
 ]);
 /// gpui-component's icons plus the player's.
 struct AppAssets;

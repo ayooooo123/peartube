@@ -1864,6 +1864,22 @@ impl PearTube {
         } else {
             entry.title.clone()
         };
+        let saved_here = is_saved(entry);
+        let partly_saved = !saved_here && entry.cached_bytes > 0;
+        let dot_color = if saved_here {
+            rgb(ACCENT)
+        } else if partly_saved {
+            rgb(BRAND)
+        } else {
+            rgb(DIM)
+        };
+        let avail_label = if saved_here {
+            "Saved"
+        } else if partly_saved {
+            "Partly saved"
+        } else {
+            "On relay"
+        };
         let mut meta = vec![format_bytes(entry.size)];
         if let Some((got, tot)) = active_dl {
             if tot > 0 {
@@ -1871,12 +1887,6 @@ impl PearTube {
             } else {
                 meta.push(format!("Downloading {}", format_bytes(got)));
             }
-        } else if is_saved(entry) {
-            meta.push("Saved here".into());
-        } else if entry.cached_bytes > 0 {
-            meta.push("Partly saved".into());
-        } else {
-            meta.push("On the network".into());
         }
         if entry.locked {
             meta.push("Subscriber pass needed".into());
@@ -1900,7 +1910,15 @@ impl PearTube {
                     .min_w_0()
                     .gap_0p5()
                     .child(div().text_sm().font_weight(FontWeight::MEDIUM).truncate().child(row_title))
-                    .child(div().text_xs().text_color(rgb(DIM)).truncate().child(meta.join(" · "))),
+                    .child(
+                        h_flex()
+                            .items_center()
+                            .gap_1p5()
+                            .child(div().size(px(6.)).rounded(px(99.)).bg(dot_color))
+                            .child(div().text_xs().text_color(rgb(DIM)).child(avail_label))
+                            .child(div().text_xs().text_color(rgb(DIM)).child("·"))
+                            .child(div().text_xs().text_color(rgb(DIM)).truncate().child(meta.join(" · "))),
+                    ),
             )
             .child(
                 h_flex()

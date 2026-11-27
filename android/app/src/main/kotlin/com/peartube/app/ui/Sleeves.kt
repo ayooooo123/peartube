@@ -1,6 +1,7 @@
 package com.peartube.app.ui
 
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
@@ -17,9 +18,14 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.produceState
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -28,16 +34,22 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.rotate
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.peartube.app.ExternalDiscoveryApi
+import com.peartube.app.ExternalImageCache
 import com.peartube.app.LibraryKind
 import com.peartube.app.LibraryTile
+import com.peartube.app.imdbBackdropUrl
+import com.peartube.app.imdbPosterUrl
 import com.peartube.app.sleeveHash
 import java.util.Locale
 import kotlin.math.PI
@@ -50,16 +62,16 @@ import kotlin.math.sin
 internal fun normalizeHue(seed: Long): Int = ((seed % 360L).toInt() + 360) % 360
 
 internal fun posterKindLabel(kind: LibraryKind): String = when (kind) {
-    LibraryKind.Series -> "Series"
-    LibraryKind.Movie -> "Film"
-    LibraryKind.Clip -> "Clip"
+    LibraryKind.Series -> "TV Show"
+    LibraryKind.Movie -> "Movie"
+    LibraryKind.Clip -> "Video"
     LibraryKind.Album -> "Album"
 }
 
 /**
- * Rich atmospheric hero surface matching sketch.css (.hero):
- * 120deg hue gradient, optional right-side glowing radial orb, diagonal pinstripe texture,
- * left legibility scrim, and crisp bottom-aligned content slot.
+ * Rich atmospheric hero surface matching LUMEN obsidian cinema:
+ * real 16:9 IMDb backdrop when [backdropImdb] is present, else 120deg hue gradient + radial orb,
+ * with obsidian readability scrim and crisp bottom-aligned content slot.
  */
 @Composable
 fun HeroPanel(
@@ -67,6 +79,7 @@ fun HeroPanel(
     modifier: Modifier = Modifier,
     small: Boolean = false,
     showOrb: Boolean = true,
+    backdropImdb: String? = null,
     backgroundOverlay: (@Composable BoxScope.() -> Unit)? = null,
     content: @Composable ColumnScope.() -> Unit,
 ) {
@@ -77,78 +90,122 @@ fun HeroPanel(
     val orbCore = Color.hsl(((hInt + 165) % 360).toFloat(), 0.84f, 0.66f, alpha = 0.82f)
     val orbEdge = Color.hsl(((hInt + 120) % 360).toFloat(), 0.80f, 0.40f, alpha = 0.16f)
 
+    val backdropUrl = remember(backdropImdb) { imdbBackdropUrl(backdropImdb) }
+    val posterFallbackUrl = remember(backdropImdb) { imdbPosterUrl(backdropImdb) }
+    val backdropBitmap by produceState<ImageBitmap?>(
+        initialValue = backdropUrl?.let { ExternalImageCache.get(it) }
+            ?: posterFallbackUrl?.let { ExternalImageCache.get(it) },
+        key1 = backdropUrl,
+        key2 = posterFallbackUrl,
+    ) {
+        value = when {
+            backdropUrl != null -> ExternalImageCache.load(backdropUrl)
+                ?: posterFallbackUrl?.let { ExternalImageCache.load(it) }
+            posterFallbackUrl != null -> ExternalImageCache.load(posterFallbackUrl)
+            else -> null
+        }
+    }
+
     Box(
         modifier = modifier
             .heightIn(min = if (small) 196.dp else 248.dp)
             .clip(shape)
             .border(1.dp, Color.White.copy(alpha = 0.10f), shape),
     ) {
-        Canvas(Modifier.matchParentSize()) {
-            val w = size.width
-            val h = size.height
-            val rad = 120.0 * PI / 180.0
-            val vx = sin(rad).toFloat()
-            val vy = (-cos(rad)).toFloat()
-            val halfSpan = hypot(w, h) * 0.5f
-            val cx = w * 0.5f
-            val cy = h * 0.5f
-            drawRect(
-                Brush.linearGradient(
-                    colors = listOf(startColor, endColor),
-                    start = Offset(cx - vx * halfSpan, cy - vy * halfSpan),
-                    end = Offset(cx + vx * halfSpan, cy + vy * halfSpan),
-                ),
+        val loadedBackdrop = backdropBitmap
+        if (loadedBackdrop != null) {
+            Image(
+                bitmap = loadedBackdrop,
+                contentDescription = null,
+                contentScale = ContentScale.Crop,
+                modifier = Modifier.matchParentSize(),
             )
-            if (showOrb) {
-                val orbCenter = Offset(w * 0.82f, h * 0.14f)
-                val orbRadius = max(w, h) * 0.46f
-                drawCircle(
-                    brush = Brush.radialGradient(
-                        0.0f to orbCore,
-                        0.68f to orbEdge,
-                        1.0f to Color.Transparent,
-                        center = Offset(orbCenter.x - orbRadius * 0.22f, orbCenter.y - orbRadius * 0.22f),
-                        radius = orbRadius,
+            // Rich LUMEN obsidian bottom + left gradient scrim over real cinema backdrop
+            Canvas(Modifier.matchParentSize()) {
+                drawRect(
+                    Brush.horizontalGradient(
+                        0.0f to Bg.copy(alpha = 0.86f),
+                        0.55f to Bg.copy(alpha = 0.42f),
+                        1.0f to Bg.copy(alpha = 0.18f),
                     ),
-                    radius = orbRadius,
-                    center = orbCenter,
+                )
+                drawRect(
+                    Brush.verticalGradient(
+                        0.0f to Bg.copy(alpha = 0.14f),
+                        0.45f to Bg.copy(alpha = 0.36f),
+                        1.0f to Bg.copy(alpha = 0.90f),
+                    ),
                 )
             }
-        }
-
-        backgroundOverlay?.invoke(this)
-
-        Canvas(Modifier.matchParentSize()) {
-            val w = size.width
-            val h = size.height
-            val diag = hypot(w, h)
-            val step = 46.dp.toPx()
-            val strokeW = 1.5.dp.toPx()
-            rotate(degrees = 28f, pivot = Offset(w * 0.5f, h * 0.5f)) {
-                var x = -diag
-                while (x <= w + diag) {
-                    drawLine(
-                        color = Color.White.copy(alpha = 0.045f),
-                        start = Offset(x, -diag),
-                        end = Offset(x, h + diag),
-                        strokeWidth = strokeW,
+            backgroundOverlay?.invoke(this)
+        } else {
+            Canvas(Modifier.matchParentSize()) {
+                val w = size.width
+                val h = size.height
+                val rad = 120.0 * PI / 180.0
+                val vx = sin(rad).toFloat()
+                val vy = (-cos(rad)).toFloat()
+                val halfSpan = hypot(w, h) * 0.5f
+                val cx = w * 0.5f
+                val cy = h * 0.5f
+                drawRect(
+                    Brush.linearGradient(
+                        colors = listOf(startColor, endColor),
+                        start = Offset(cx - vx * halfSpan, cy - vy * halfSpan),
+                        end = Offset(cx + vx * halfSpan, cy + vy * halfSpan),
+                    ),
+                )
+                if (showOrb) {
+                    val orbCenter = Offset(w * 0.82f, h * 0.14f)
+                    val orbRadius = max(w, h) * 0.46f
+                    drawCircle(
+                        brush = Brush.radialGradient(
+                            0.0f to orbCore,
+                            0.68f to orbEdge,
+                            1.0f to Color.Transparent,
+                            center = Offset(orbCenter.x - orbRadius * 0.22f, orbCenter.y - orbRadius * 0.22f),
+                            radius = orbRadius,
+                        ),
+                        radius = orbRadius,
+                        center = orbCenter,
                     )
-                    x += step
                 }
             }
-            drawRect(
-                Brush.horizontalGradient(
-                    0.0f to Color.Black.copy(alpha = 0.50f),
-                    0.72f to Color.Transparent,
-                ),
-            )
-            drawRect(
-                Brush.verticalGradient(
-                    0.0f to Color.Transparent,
-                    0.55f to Color.Transparent,
-                    1.0f to Color.Black.copy(alpha = 0.26f),
-                ),
-            )
+
+            backgroundOverlay?.invoke(this)
+
+            Canvas(Modifier.matchParentSize()) {
+                val w = size.width
+                val h = size.height
+                val diag = hypot(w, h)
+                val step = 46.dp.toPx()
+                val strokeW = 1.5.dp.toPx()
+                rotate(degrees = 28f, pivot = Offset(w * 0.5f, h * 0.5f)) {
+                    var x = -diag
+                    while (x <= w + diag) {
+                        drawLine(
+                            color = Color.White.copy(alpha = 0.045f),
+                            start = Offset(x, -diag),
+                            end = Offset(x, h + diag),
+                            strokeWidth = strokeW,
+                        )
+                        x += step
+                    }
+                }
+                drawRect(
+                    Brush.horizontalGradient(
+                        0.0f to Color.Black.copy(alpha = 0.50f),
+                        0.72f to Color.Transparent,
+                    ),
+                )
+                drawRect(
+                    Brush.verticalGradient(
+                        0.0f to Color.Transparent,
+                        0.55f to Color.Transparent,
+                        1.0f to Color.Black.copy(alpha = 0.26f),
+                    ),
+                )
+            }
         }
 
         Column(
@@ -163,8 +220,8 @@ fun HeroPanel(
 }
 
 /**
- * Deterministic drawn album sleeve matching src/ui.js (albumArt):
- * three cuts (sweep, vinyl record grooves, split), deterministic hue pair, and album monogram.
+ * Album cover sleeve with optional real cover art (from [artUrl] or cached iTunes lookup by [artist]/[albumName]),
+ * falling back cleanly to the deterministic drawn vinyl/sweep sleeve and monogram.
  */
 @Composable
 fun AlbumSleeve(
@@ -174,6 +231,10 @@ fun AlbumSleeve(
     modifier: Modifier = Modifier,
     cornerRadius: Dp = 12.dp,
     fontSize: TextUnit = 26.sp,
+    artist: String? = null,
+    albumName: String? = null,
+    artUrl: String? = null,
+    borderless: Boolean = false,
     overlay: (@Composable BoxScope.() -> Unit)? = null,
 ) {
     val h1 = ((hue % 360) + 360) % 360
@@ -186,87 +247,112 @@ fun AlbumSleeve(
     val deep = Color.hsl(h2.toFloat(), 0.64f, 0.20f)
     val shape = RoundedCornerShape(cornerRadius)
 
+    val initialUrl = remember(artUrl, artist, albumName) {
+        artUrl?.takeIf { it.isNotBlank() }
+            ?: if (!albumName.isNullOrBlank()) ExternalDiscoveryApi.cachedAlbumArtUrl(artist.orEmpty(), albumName) else null
+    }
+    val coverBitmap by produceState<ImageBitmap?>(
+        initialValue = initialUrl?.let { ExternalImageCache.get(it) },
+        key1 = artUrl,
+        key2 = artist,
+        key3 = albumName,
+    ) {
+        val url = artUrl?.takeIf { it.isNotBlank() }
+            ?: if (!albumName.isNullOrBlank()) ExternalDiscoveryApi.resolveAlbumArtUrl(artist.orEmpty(), albumName) else null
+        value = if (!url.isNullOrBlank()) ExternalImageCache.load(url) else null
+    }
+
     Box(
         modifier = modifier
             .aspectRatio(1f)
             .clip(shape)
-            .border(1.dp, Color.White.copy(alpha = 0.08f), shape),
+            .then(if (borderless) Modifier else Modifier.border(0.75.dp, Color.White.copy(alpha = 0.08f), shape)),
         contentAlignment = Alignment.Center,
     ) {
-        Canvas(Modifier.fillMaxSize()) {
-            val w = size.width
-            val h = size.height
-            val rad = (angleDeg - 90.0) * PI / 180.0
-            val dx = (cos(rad) * w * 0.5f).toFloat()
-            val dy = (sin(rad) * h * 0.5f).toFloat()
-            val start = Offset(w * 0.5f - dx, h * 0.5f - dy)
-            val end = Offset(w * 0.5f + dx, h * 0.5f + dy)
+        val loadedCover = coverBitmap
+        if (loadedCover != null) {
+            Image(
+                bitmap = loadedCover,
+                contentDescription = albumName ?: monogramText,
+                contentScale = ContentScale.Crop,
+                modifier = Modifier.fillMaxSize(),
+            )
+        } else {
+            Canvas(Modifier.fillMaxSize()) {
+                val w = size.width
+                val h = size.height
+                val rad = (angleDeg - 90.0) * PI / 180.0
+                val dx = (cos(rad) * w * 0.5f).toFloat()
+                val dy = (sin(rad) * h * 0.5f).toFloat()
+                val start = Offset(w * 0.5f - dx, h * 0.5f - dy)
+                val end = Offset(w * 0.5f + dx, h * 0.5f + dy)
 
-            when (cut) {
-                0 -> {
-                    drawRect(Brush.linearGradient(listOf(base, deep), start, end))
-                    drawRect(
-                        Brush.radialGradient(
-                            colors = listOf(Color.White.copy(alpha = 0.22f), Color.Transparent),
-                            center = Offset(w * 0.78f, h * 0.18f),
-                            radius = min(w, h) * 0.65f,
-                        ),
-                    )
-                }
-                1 -> {
-                    val center = Offset(w * 0.5f, h * 0.5f)
-                    val radius = min(w, h) * 0.5f
-                    drawRect(
-                        Brush.radialGradient(
-                            0.0f to base,
-                            0.31f to base,
-                            0.32f to deep,
-                            1.0f to deep,
-                            center = center,
-                            radius = radius * 1.42f,
-                        ),
-                    )
-                    var r = radius * 0.42f
-                    val step = (radius * 0.09f).coerceAtLeast(3f)
-                    while (r < radius * 1.4f) {
-                        drawCircle(
-                            color = Color.Black.copy(alpha = 0.16f),
-                            radius = r,
-                            center = center,
-                            style = Stroke(width = 1.dp.toPx()),
+                when (cut) {
+                    0 -> {
+                        drawRect(Brush.linearGradient(listOf(base, deep), start, end))
+                        drawRect(
+                            Brush.radialGradient(
+                                colors = listOf(Color.White.copy(alpha = 0.22f), Color.Transparent),
+                                center = Offset(w * 0.78f, h * 0.18f),
+                                radius = min(w, h) * 0.65f,
+                            ),
                         )
-                        r += step
+                    }
+                    1 -> {
+                        val center = Offset(w * 0.5f, h * 0.5f)
+                        val radius = min(w, h) * 0.5f
+                        drawRect(
+                            Brush.radialGradient(
+                                0.0f to base,
+                                0.31f to base,
+                                0.32f to deep,
+                                1.0f to deep,
+                                center = center,
+                                radius = radius * 1.42f,
+                            ),
+                        )
+                        var r = radius * 0.42f
+                        val step = (radius * 0.09f).coerceAtLeast(3f)
+                        while (r < radius * 1.4f) {
+                            drawCircle(
+                                color = Color.Black.copy(alpha = 0.16f),
+                                radius = r,
+                                center = center,
+                                style = Stroke(width = 1.dp.toPx()),
+                            )
+                            r += step
+                        }
+                    }
+                    else -> {
+                        drawRect(
+                            Brush.linearGradient(
+                                0.0f to base,
+                                0.535f to base,
+                                0.545f to deep,
+                                1.0f to deep,
+                                start = start,
+                                end = end,
+                            ),
+                        )
+                        drawRect(
+                            Brush.radialGradient(
+                                colors = listOf(Color.White.copy(alpha = 0.22f), Color.Transparent),
+                                center = Offset(w * 0.78f, h * 0.18f),
+                                radius = min(w, h) * 0.65f,
+                            ),
+                        )
                     }
                 }
-                else -> {
-                    drawRect(
-                        Brush.linearGradient(
-                            0.0f to base,
-                            0.535f to base,
-                            0.545f to deep,
-                            1.0f to deep,
-                            start = start,
-                            end = end,
-                        ),
-                    )
-                    drawRect(
-                        Brush.radialGradient(
-                            colors = listOf(Color.White.copy(alpha = 0.22f), Color.Transparent),
-                            center = Offset(w * 0.78f, h * 0.18f),
-                            radius = min(w, h) * 0.65f,
-                        ),
-                    )
-                }
             }
+            Text(
+                text = monogramText,
+                color = Color.White.copy(alpha = 0.92f),
+                fontSize = fontSize,
+                fontWeight = FontWeight.Bold,
+                letterSpacing = (-0.5).sp,
+                maxLines = 1,
+            )
         }
-        Text(
-            text = monogramText,
-            color = Color.White.copy(alpha = 0.92f),
-            fontSize = fontSize,
-            fontWeight = FontWeight.Bold,
-            letterSpacing = (-0.5).sp,
-            maxLines = 1,
-        )
         overlay?.invoke(this)
     }
 }
@@ -289,6 +375,8 @@ fun ArtistSleeveStack(
                 hue = shown[2].hue,
                 seed = shown[2].seed,
                 monogramText = shown[2].monogramText,
+                artist = shown[2].artist,
+                albumName = shown[2].album.ifBlank { shown[2].title },
                 cornerRadius = 10.dp,
                 fontSize = 16.sp,
                 modifier = Modifier
@@ -301,6 +389,8 @@ fun ArtistSleeveStack(
                 hue = shown[1].hue,
                 seed = shown[1].seed,
                 monogramText = shown[1].monogramText,
+                artist = shown[1].artist,
+                albumName = shown[1].album.ifBlank { shown[1].title },
                 cornerRadius = 10.dp,
                 fontSize = 18.sp,
                 modifier = Modifier
@@ -315,6 +405,8 @@ fun ArtistSleeveStack(
                 hue = front.hue,
                 seed = front.seed,
                 monogramText = front.monogramText,
+                artist = front.artist,
+                albumName = front.album.ifBlank { front.title },
                 cornerRadius = 12.dp,
                 fontSize = 24.sp,
                 modifier = Modifier
@@ -418,7 +510,7 @@ private fun GeometricPosterCanvas(
     }
 }
 
-/** Wide art for clips and unfinished videos (16:9 aspect) with 4-variant geometric poster art. */
+/** Wide art for clips and unfinished videos (16:9 aspect), loading real IMDb backdrop when available. */
 @Composable
 fun WideTitleArt(
     title: String,
@@ -427,30 +519,50 @@ fun WideTitleArt(
     badge: String? = null,
     progress: Float = 0f,
     kindLabel: String? = null,
+    imdb: String? = null,
+    showTitleOverlay: Boolean = true,
+    borderless: Boolean = false,
 ) {
     val hue = normalizeHue(seed)
     val eyebrow = (
         kindLabel ?: when (badge?.lowercase(Locale.ROOT)) {
-            "clip" -> "Clip"
-            "movie", "film" -> "Film"
-            "series" -> "Series"
-            else -> if (badge.isNullOrBlank()) "Clip" else "Series"
+            "clip", "video" -> "Video"
+            "movie", "film" -> "Movie"
+            "series", "tv show" -> "TV Show"
+            else -> if (badge.isNullOrBlank()) "Video" else "TV Show"
         }
         ).uppercase(Locale.ROOT)
     val extraPill = badge?.takeIf {
         it.isNotBlank() &&
             !it.equals("Clip", ignoreCase = true) &&
+            !it.equals("Video", ignoreCase = true) &&
             !it.equals("Movie", ignoreCase = true) &&
             !it.equals("Film", ignoreCase = true) &&
-            !it.equals("Series", ignoreCase = true)
+            !it.equals("Series", ignoreCase = true) &&
+            !it.equals("TV Show", ignoreCase = true)
     }
     val isLong = title.length > 34
+    val backdropUrl = remember(imdb) { imdbBackdropUrl(imdb) }
+    val posterFallbackUrl = remember(imdb) { imdbPosterUrl(imdb) }
+    val loadedBitmap by produceState<ImageBitmap?>(
+        initialValue = backdropUrl?.let { ExternalImageCache.get(it) }
+            ?: posterFallbackUrl?.let { ExternalImageCache.get(it) },
+        key1 = backdropUrl,
+        key2 = posterFallbackUrl,
+    ) {
+        value = when {
+            backdropUrl != null -> ExternalImageCache.load(backdropUrl)
+                ?: posterFallbackUrl?.let { ExternalImageCache.load(it) }
+            posterFallbackUrl != null -> ExternalImageCache.load(posterFallbackUrl)
+            else -> null
+        }
+    }
 
     BoxWithConstraints(
         modifier = modifier
             .aspectRatio(16f / 9f)
             .clip(CardShape)
-            .border(1.dp, Color.White.copy(alpha = 0.08f), CardShape),
+            .then(if (borderless) Modifier else Modifier.border(0.75.dp, Color.White.copy(alpha = 0.08f), CardShape)),
     ) {
         val pad = (maxWidth * 0.055f).coerceIn(8.dp, 14.dp)
         val kindSp = (maxWidth.value * 0.042f).coerceIn(8.5f, 11f).sp
@@ -458,7 +570,27 @@ fun WideTitleArt(
         val titleSp = (maxWidth.value * titleRatio).coerceIn(11f, 19f).sp
         val titleLineSp = (titleSp.value * 1.04f).sp
 
-        GeometricPosterCanvas(hue = hue, modifier = Modifier.matchParentSize())
+        val realArt = loadedBitmap
+        if (realArt != null) {
+            Image(
+                bitmap = realArt,
+                contentDescription = title,
+                contentScale = ContentScale.Crop,
+                modifier = Modifier.matchParentSize(),
+            )
+            // Subtle bottom dark scrim so progress bar (and optional overlay) stay legible over backdrops
+            Canvas(Modifier.matchParentSize()) {
+                drawRect(
+                    Brush.verticalGradient(
+                        0.0f to Color.Transparent,
+                        0.55f to Color.Transparent,
+                        1.0f to Color.Black.copy(alpha = if (showTitleOverlay) 0.72f else 0.48f),
+                    ),
+                )
+            }
+        } else {
+            GeometricPosterCanvas(hue = hue, modifier = Modifier.matchParentSize())
+        }
 
         Row(
             modifier = Modifier
@@ -468,14 +600,18 @@ fun WideTitleArt(
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Text(
-                text = eyebrow,
-                color = Color.White.copy(alpha = 0.86f),
-                fontSize = kindSp,
-                fontWeight = FontWeight.ExtraBold,
-                letterSpacing = 1.4.sp,
-                maxLines = 1,
-            )
+            if (realArt == null) {
+                Text(
+                    text = eyebrow,
+                    color = Color.White.copy(alpha = 0.86f),
+                    fontSize = kindSp,
+                    fontWeight = FontWeight.ExtraBold,
+                    letterSpacing = 1.4.sp,
+                    maxLines = 1,
+                )
+            } else {
+                Box(Modifier)
+            }
             if (extraPill != null) {
                 Text(
                     text = extraPill,
@@ -485,47 +621,49 @@ fun WideTitleArt(
                     maxLines = 1,
                     modifier = Modifier
                         .clip(RoundedCornerShape(6.dp))
-                        .background(Color.Black.copy(alpha = 0.56f))
+                        .background(Color.Black.copy(alpha = 0.62f))
                         .padding(horizontal = 6.dp, vertical = 2.dp),
                 )
             }
         }
 
-        Text(
-            text = title.uppercase(Locale.ROOT),
-            color = Color.White,
-            fontSize = titleSp,
-            lineHeight = titleLineSp,
-            fontWeight = FontWeight.ExtraBold,
-            letterSpacing = (-0.4).sp,
-            maxLines = if (isLong) 3 else 2,
-            overflow = TextOverflow.Ellipsis,
-            modifier = Modifier
-                .align(Alignment.BottomStart)
-                .fillMaxWidth(0.84f)
-                .padding(
-                    start = pad,
-                    end = pad,
-                    bottom = if (progress > 0f) pad + 8.dp else pad,
-                ),
-        )
+        if (realArt == null || showTitleOverlay) {
+            Text(
+                text = if (realArt != null) title else title.uppercase(Locale.ROOT),
+                color = Color.White,
+                fontSize = if (realArt != null) (maxWidth.value * 0.065f).coerceIn(11f, 15f).sp else titleSp,
+                lineHeight = if (realArt != null) (maxWidth.value * 0.075f).coerceIn(13f, 18f).sp else titleLineSp,
+                fontWeight = if (realArt != null) FontWeight.SemiBold else FontWeight.ExtraBold,
+                letterSpacing = if (realArt != null) 0.sp else (-0.4).sp,
+                maxLines = if (realArt != null) 1 else if (isLong) 3 else 2,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier
+                    .align(Alignment.BottomStart)
+                    .fillMaxWidth(0.88f)
+                    .padding(
+                        start = pad,
+                        end = pad,
+                        bottom = if (progress > 0f) pad + 8.dp else pad,
+                    ),
+            )
+        }
 
         if (progress > 0f) {
             Canvas(
                 Modifier
                     .align(Alignment.BottomStart)
                     .fillMaxWidth()
-                    .padding(horizontal = pad, vertical = 6.dp)
-                    .height(3.5.dp),
+                    .padding(horizontal = pad, vertical = 7.dp)
+                    .height(3.dp),
             ) {
                 val r = CornerRadius(size.height / 2f, size.height / 2f)
                 drawRoundRect(
-                    color = Color.White.copy(alpha = 0.30f),
+                    color = Color.White.copy(alpha = 0.28f),
                     size = size,
                     cornerRadius = r,
                 )
                 drawRoundRect(
-                    color = BrandHover,
+                    color = Pearl,
                     size = Size(size.width * progress.coerceIn(0.03f, 1f), size.height),
                     cornerRadius = r,
                 )
@@ -534,72 +672,103 @@ fun WideTitleArt(
     }
 }
 
-/** 2:3 geometric poster fallback matching sketch.css (.poster.v0-.poster.v3). */
+/** 2:3 movie/series poster loading real IMDb/Cinemeta poster art with a calm obsidian fallback. */
 @Composable
 fun PosterArt(
     title: String,
     year: String?,
     modifier: Modifier = Modifier,
     seed: Long = sleeveHash(title),
-    kindLabel: String = "Film",
+    kindLabel: String = "Movie",
+    imdb: String? = null,
+    posterUrlOverride: String? = null,
+    cornerRadius: Dp = 12.dp,
+    borderless: Boolean = false,
 ) {
     val hue = normalizeHue(seed)
-    val isLong = title.length > 34
+    val shape = RoundedCornerShape(cornerRadius)
+    val isSeries = kindLabel.equals("Series", ignoreCase = true) || kindLabel.equals("TV Show", ignoreCase = true)
+    val isClip = kindLabel.equals("Clip", ignoreCase = true) || kindLabel.equals("Video", ignoreCase = true)
 
-    BoxWithConstraints(
+    val initialUrl = remember(posterUrlOverride, imdb, title, isSeries, isClip) {
+        posterUrlOverride?.takeIf { it.isNotBlank() }
+            ?: imdbPosterUrl(imdb)
+            ?: if (!isClip) {
+                ExternalDiscoveryApi.cachedTitleImdb(title, isSeries = isSeries)?.let { imdbPosterUrl(it) }
+            } else {
+                null
+            }
+    }
+    val loadedBitmap by produceState<ImageBitmap?>(
+        initialValue = initialUrl?.let { ExternalImageCache.get(it) },
+        key1 = posterUrlOverride,
+        key2 = imdb,
+        key3 = "$title|$isSeries|$isClip",
+    ) {
+        val directUrl = posterUrlOverride?.takeIf { it.isNotBlank() } ?: imdbPosterUrl(imdb)
+        val resolvedUrl = directUrl ?: if (!isClip) {
+            ExternalDiscoveryApi.resolveTitleImdb(title, isSeries = isSeries)?.let { imdbPosterUrl(it) }
+        } else {
+            null
+        }
+        value = if (!resolvedUrl.isNullOrBlank()) ExternalImageCache.load(resolvedUrl) else null
+    }
+
+    Box(
         modifier = modifier
             .aspectRatio(2f / 3f)
-            .clip(CardShape)
-            .border(1.dp, Color.White.copy(alpha = 0.08f), CardShape),
+            .clip(shape),
+        contentAlignment = Alignment.Center,
     ) {
-        val pad = (maxWidth * 0.09f).coerceIn(6.dp, 14.dp)
-        val kindSp = (maxWidth.value * 0.068f).coerceIn(7.5f, 11f).sp
-        val titleRatio = if (isLong) 0.10f else 0.145f
-        val titleSp = (maxWidth.value * titleRatio).coerceIn(9f, 21f).sp
-        val titleLineSp = (titleSp.value * 1.02f).sp
-        val showYear = maxWidth >= 96.dp && !year.isNullOrBlank()
-
-        GeometricPosterCanvas(hue = hue, modifier = Modifier.matchParentSize())
-
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .align(Alignment.TopStart)
-                .padding(pad),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Text(
-                text = kindLabel.uppercase(Locale.ROOT),
-                color = Color.White.copy(alpha = 0.86f),
-                fontSize = kindSp,
-                fontWeight = FontWeight.ExtraBold,
-                letterSpacing = 1.3.sp,
-                maxLines = 1,
+        val realPoster = loadedBitmap
+        if (realPoster != null) {
+            Image(
+                bitmap = realPoster,
+                contentDescription = title,
+                contentScale = ContentScale.Crop,
+                modifier = Modifier.fillMaxSize(),
             )
-            if (showYear && year != null) {
-                Text(
-                    text = year,
-                    color = Color.White.copy(alpha = 0.72f),
-                    fontSize = kindSp,
-                    fontWeight = FontWeight.SemiBold,
-                    maxLines = 1,
-                )
-            }
+            // Razor-thin edge so dark movie posters remain cleanly framed against obsidian Bg
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .border(
+                        width = if (borderless) 0.5.dp else 0.75.dp,
+                        color = GlassBorder.copy(alpha = 0.55f),
+                        shape = shape,
+                    ),
+            )
+            return@Box
         }
 
-        Text(
-            text = title.uppercase(Locale.ROOT),
-            color = Color.White,
-            fontSize = titleSp,
-            lineHeight = titleLineSp,
-            fontWeight = FontWeight.ExtraBold,
-            letterSpacing = (-0.4).sp,
-            maxLines = if (isLong) 5 else 4,
-            overflow = TextOverflow.Ellipsis,
+        // Calm, refined LUMEN obsidian cinema placeholder (no screaming neon or duplicated ALL-CAPS title)
+        val tintWash = Color.hsl(hue.toFloat(), 0.44f, 0.36f, alpha = 0.14f)
+        Canvas(Modifier.fillMaxSize()) {
+            drawRect(
+                Brush.verticalGradient(
+                    0.0f to CardElevated,
+                    1.0f to CardBg,
+                ),
+            )
+            drawRect(
+                Brush.radialGradient(
+                    0.0f to tintWash,
+                    1.0f to Color.Transparent,
+                    center = Offset(size.width * 0.25f, size.height * 0.20f),
+                    radius = max(size.width, size.height) * 0.85f,
+                ),
+            )
+        }
+        Box(
             modifier = Modifier
-                .align(Alignment.BottomStart)
-                .padding(pad),
+                .fillMaxSize()
+                .border(0.75.dp, GlassBorder, shape),
+        )
+        Icon(
+            imageVector = if (isSeries) TvIcon else WatchIcon,
+            contentDescription = title,
+            tint = Pearl.copy(alpha = 0.30f),
+            modifier = Modifier.size(26.dp),
         )
     }
 }

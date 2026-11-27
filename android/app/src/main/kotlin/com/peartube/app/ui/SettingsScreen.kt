@@ -2,65 +2,74 @@ package com.peartube.app.ui
 
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.foundation.horizontalScroll
-import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.toggleable
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.HorizontalDivider
-import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.Icon
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
-import androidx.compose.runtime.rememberCoroutineScope
-import kotlinx.coroutines.launch
-import org.json.JSONObject
-import com.peartube.shared.formatBytes
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.peartube.app.AppModel
-import androidx.compose.foundation.border
-import androidx.compose.foundation.layout.statusBarsPadding
-import androidx.compose.foundation.layout.navigationBarsPadding
-import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.foundation.clickable
-import androidx.compose.foundation.background
-import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.Icon
+import com.peartube.app.PodcastImportFormat
+import com.peartube.app.ShareImportMode
+import com.peartube.shared.formatBytes
+import kotlinx.coroutines.launch
+import org.json.JSONObject
 
-
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun SettingsScreen(model: AppModel) {
     val settings by model.settings.collectAsState()
+    val status by model.status.collectAsState()
+    val shareImportMode by model.shareImportMode.collectAsState()
+    val podcastImportFormat by model.podcastImportFormat.collectAsState()
     var tracker by rememberSaveable { mutableStateOf(settings.tracker) }
     var sources by rememberSaveable { mutableStateOf(settings.sources.joinToString("\n") { it.key }) }
     var mnemonic by rememberSaveable { mutableStateOf(settings.mnemonic) }
@@ -70,7 +79,9 @@ fun SettingsScreen(model: AppModel) {
     var privateRouting by rememberSaveable { mutableStateOf(settings.privateRouting) }
     var cacheMaxGb by rememberSaveable { mutableStateOf(settings.cacheMaxGb) }
     var problem by remember { mutableStateOf<String?>(null) }
+    var editChannels by rememberSaveable { mutableStateOf(false) }
     var advanced by rememberSaveable { mutableStateOf(false) }
+
     val bankSelected by model.soundFontSelected.collectAsState()
     val bankBusy by model.soundFontBusy.collectAsState()
     val bankError by model.soundFontError.collectAsState()
@@ -83,6 +94,8 @@ fun SettingsScreen(model: AppModel) {
     var slskPass by rememberSaveable { mutableStateOf("") }
     var slskShare by rememberSaveable { mutableStateOf(soulseek.sharePublicMusic) }
     var slskInitialized by remember { mutableStateOf(false) }
+
+    val scope = rememberCoroutineScope()
 
     LaunchedEffect(Unit) {
         model.refreshSoulseekSettings()
@@ -100,53 +113,231 @@ fun SettingsScreen(model: AppModel) {
         uri?.let(model::importSoundFont)
     }
 
-    Column(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding()) {
-        Row(Modifier.fillMaxWidth().padding(start = 16.dp, end = 4.dp, top = 8.dp, bottom = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-            Text("Settings", fontSize = 24.sp, fontWeight = FontWeight.Bold, color = Ink, modifier = Modifier.weight(1f))
-            TextButton(onClick = { model.popScreen() }) { Text("Cancel", color = Ink) }
+    fun saveSettings() {
+        scope.launch {
+            problem = try {
+                val raw = JSONObject()
+                    .put("tracker", tracker)
+                    .put("sources", sources)
+                    .put("mnemonic", mnemonic)
+                    .put("relayThrough", relays)
+                    .put("bootstrap", bootstrap)
+                    .put("lanDiscovery", lan)
+                    .put("privateRouting", privateRouting)
+                    .put("cacheMaxGb", cacheMaxGb)
+                val normalized = model.worker.normalizeSettings(raw, requireChannel = false)
+                model.save(normalized)
+                null
+            } catch (e: Exception) {
+                e.message
+            }
         }
-        HorizontalDivider(color = Line)
-        Column(
-            Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(20.dp),
+    }
+
+    Column(
+        Modifier
+            .fillMaxSize()
+            .background(Bg)
+            .statusBarsPadding()
+            .navigationBarsPadding(),
+    ) {
+        // LUMEN top bar: Circular Back + bold Settings + Pearl Save pill
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 20.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            problem?.let { Text(it, color = Danger) }
-            Text("Channels & Account", color = Ink, fontSize = 20.sp, fontWeight = FontWeight.SemiBold)
-            Text("A home for everything you love watching.", color = Dim, fontSize = 14.sp)
-            Field("Primary channel key (optional)", "64-character channel key to connect directly. Leave empty if following channels below or linking with your 12-word phrase.") {
-                KeyField(tracker, singleLine = true) { tracker = it }
-            }
-            settings.sources.forEach { source ->
-                Text(source.alias.ifBlank { "Channel ${source.key.take(8)}" }, color = Ink)
-            }
-            Field("Follow channels", "One peartube://channel/… link per line. Your library brings them together.") {
-                KeyField(sources, singleLine = false) { sources = it }
-            }
-            Field("12-word recovery phrase (link account)", "Optional: paste your 12-word recovery phrase to link this phone as an owner device on your channel.") {
-                KeyField(mnemonic, singleLine = false) { mnemonic = it }
-            }
-            HorizontalDivider(color = Line)
-            Column(
-                Modifier
-                    .fillMaxWidth()
-                    .clip(CardShape)
-                    .background(CardBg)
-                    .border(1.dp, Line, CardShape)
-                    .padding(16.dp),
-                verticalArrangement = Arrangement.spacedBy(12.dp),
+            Box(
+                modifier = Modifier
+                    .size(38.dp)
+                    .clip(CircleShape)
+                    .background(GlassBg)
+                    .border(0.75.dp, GlassBorder, CircleShape)
+                    .semantics { contentDescription = "Back" }
+                    .clickable { model.popScreen() },
+                contentAlignment = Alignment.Center,
             ) {
-                Text("Soulseek", color = Ink, fontSize = 20.sp, fontWeight = FontWeight.SemiBold)
-                val connectedUser = slskPlugin?.user?.takeIf { it.isNotBlank() } ?: soulseek.username
-                val statusLine = when {
-                    slskPlugin?.connected == true && connectedUser.isNotBlank() -> "Connected as $connectedUser"
-                    soulseek.isConfigured && connectedUser.isNotBlank() -> "Connected as $connectedUser"
-                    else -> "Sign in to search Soulseek peers directly from this phone"
-                }
+                Icon(BackIcon, null, tint = Ink, modifier = Modifier.size(19.dp))
+            }
+            Text(
+                text = "Settings",
+                fontSize = 24.sp,
+                fontWeight = FontWeight.Bold,
+                letterSpacing = (-0.6).sp,
+                color = Ink,
+                modifier = Modifier.weight(1f),
+            )
+            Box(
+                modifier = Modifier
+                    .height(36.dp)
+                    .clip(PillShape)
+                    .background(Pearl)
+                    .clickable { saveSettings() }
+                    .padding(horizontal = 18.dp),
+                contentAlignment = Alignment.Center,
+            ) {
                 Text(
-                    text = statusLine,
-                    color = if (soulseek.isConfigured || slskPlugin?.connected == true) Accent else Dim,
-                    fontSize = 13.sp,
+                    text = "Save",
+                    color = PearlInk,
+                    fontSize = 13.5.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 1,
                 )
+            }
+        }
+
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .verticalScroll(rememberScrollState())
+                .padding(horizontal = 20.dp, vertical = 8.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp),
+        ) {
+            problem?.let { err ->
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(CardShape)
+                        .background(Danger.copy(alpha = 0.14f))
+                        .border(0.75.dp, Danger.copy(alpha = 0.45f), CardShape)
+                        .padding(horizontal = 14.dp, vertical = 10.dp),
+                ) {
+                    Text(err, color = Danger, fontSize = 13.sp)
+                }
+            }
+
+            // Card 1 — Channels & Account
+            SettingsGroupCard {
+                Text("Channels & Account", color = Ink, fontSize = 17.sp, fontWeight = FontWeight.SemiBold)
+                if (settings.sources.isEmpty()) {
+                    Text("No channels followed yet", color = Dim, fontSize = 13.sp)
+                } else {
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        settings.sources.forEach { source ->
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clip(ControlShape)
+                                    .background(CardElevated)
+                                    .border(0.5.dp, GlassBorder, ControlShape)
+                                    .padding(horizontal = 12.dp, vertical = 10.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                            ) {
+                                Text(
+                                    text = source.alias.ifBlank { "Channel ${source.key.take(8)}" },
+                                    color = Ink,
+                                    fontSize = 14.sp,
+                                    fontWeight = FontWeight.Medium,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                    modifier = Modifier.weight(1f),
+                                )
+                                Text(
+                                    text = "${source.key.take(12)}…",
+                                    color = Dim,
+                                    fontSize = 11.5.sp,
+                                    fontFamily = FontFamily.Monospace,
+                                    maxLines = 1,
+                                )
+                            }
+                        }
+                    }
+                }
+
+                HorizontalDivider(color = Line.copy(alpha = 0.55f))
+
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(ControlShape)
+                        .clickable { editChannels = !editChannels }
+                        .padding(vertical = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        text = "Edit channel keys & recovery phrase",
+                        color = Ink,
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.Medium,
+                        modifier = Modifier.weight(1f),
+                    )
+                    Icon(
+                        imageVector = if (editChannels) ChevronDownIcon else ChevronRightIcon,
+                        contentDescription = null,
+                        tint = Dim,
+                        modifier = Modifier.size(18.dp),
+                    )
+                }
+
+                AnimatedVisibility(editChannels) {
+                    Column(
+                        modifier = Modifier.padding(top = 6.dp),
+                        verticalArrangement = Arrangement.spacedBy(14.dp),
+                    ) {
+                        Field(
+                            "Primary channel key (optional)",
+                            "64-character channel key to connect directly. Leave empty if following channels below or linking with your 12-word phrase.",
+                        ) {
+                            KeyField(tracker, singleLine = true) { tracker = it }
+                        }
+                        Field(
+                            "Follow channels",
+                            "One peartube://channel/… link per line. Your library brings them together.",
+                        ) {
+                            KeyField(sources, singleLine = false) { sources = it }
+                        }
+                        Field(
+                            "12-word recovery phrase (link account)",
+                            "Optional: paste your 12-word recovery phrase to link this phone as an owner device on your channel.",
+                        ) {
+                            KeyField(mnemonic, singleLine = false) { mnemonic = it }
+                        }
+                    }
+                }
+            }
+
+            // Card 2 — Soulseek Music Network
+            SettingsGroupCard {
+                val connectedUser = slskPlugin?.user?.takeIf { it.isNotBlank() } ?: soulseek.username
+                val isConnected = (slskPlugin?.connected == true || soulseek.isConfigured) && connectedUser.isNotBlank()
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    Text("Soulseek", color = Ink, fontSize = 17.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
+                    Row(
+                        modifier = Modifier
+                            .clip(PillShape)
+                            .background(if (isConnected) Accent.copy(alpha = 0.14f) else GlassBg)
+                            .border(
+                                width = 0.75.dp,
+                                color = if (isConnected) Accent.copy(alpha = 0.45f) else GlassBorder,
+                                shape = PillShape,
+                            )
+                            .padding(horizontal = 10.dp, vertical = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(6.dp)
+                                .clip(CircleShape)
+                                .background(if (isConnected) Accent else Dim),
+                        )
+                        Text(
+                            text = if (isConnected) "Connected as $connectedUser" else "Not signed in",
+                            color = if (isConnected) Accent else Dim,
+                            fontSize = 11.5.sp,
+                            fontWeight = FontWeight.Medium,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                }
                 OutlinedTextField(
                     value = slskUser,
                     onValueChange = { slskUser = it },
@@ -156,7 +347,7 @@ fun SettingsScreen(model: AppModel) {
                         capitalization = KeyboardCapitalization.None,
                         autoCorrectEnabled = false,
                     ),
-                    shape = ControlShape,
+                    shape = CardShape,
                     colors = fieldColors(),
                     modifier = Modifier.fillMaxWidth(),
                 )
@@ -172,7 +363,7 @@ fun SettingsScreen(model: AppModel) {
                         autoCorrectEnabled = false,
                         keyboardType = KeyboardType.Password,
                     ),
-                    shape = ControlShape,
+                    shape = CardShape,
                     colors = fieldColors(),
                     modifier = Modifier.fillMaxWidth(),
                 )
@@ -182,17 +373,18 @@ fun SettingsScreen(model: AppModel) {
                         .toggleable(value = slskShare, role = Role.Switch, onValueChange = { slskShare = it }),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    Column(Modifier.weight(1f)) {
-                        Text("Share public music", color = Ink, fontSize = 15.sp, fontWeight = FontWeight.Medium)
+                    Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                        Text("Share public music", color = Ink, fontSize = 14.5.sp, fontWeight = FontWeight.Medium)
                         Hint("Offer public albums in your library to Soulseek peers.")
                     }
                     Switch(checked = slskShare, onCheckedChange = null, colors = SwitchDefaults.colors(checkedTrackColor = Brand))
                 }
                 soulseekError?.let { Text(it, color = Danger, fontSize = 13.sp) }
                 soulseekMessage?.let { Text(it, color = Accent, fontSize = 13.sp) }
-                PrimaryLightButton(
-                    text = if (soulseekBusy) "Saving…" else "Save Soulseek settings",
+                HeroPrimaryButton(
+                    text = if (soulseekBusy) "Saving…" else "Save Soulseek",
                     enabled = !soulseekBusy,
+                    shape = PillShape,
                     onClick = {
                         model.saveSoulseekSettings(
                             username = slskUser,
@@ -201,137 +393,278 @@ fun SettingsScreen(model: AppModel) {
                         )
                         slskPass = ""
                     },
-                    modifier = Modifier.fillMaxWidth(),
+                    modifier = Modifier.fillMaxWidth().height(44.dp),
                 )
             }
-            HorizontalDivider(color = Line)
-            Text("Playback & MIDI", color = Ink, fontSize = 20.sp, fontWeight = FontWeight.SemiBold)
-            Field("MIDI SoundFont", "Choose your own SoundFont 2 (.sf2), up to 256 MiB. No bank is bundled. Changes are saved immediately, only on this device.") {
-                bankError?.let { Text(it, color = Danger) }
-                Hint(if (bankSelected) "A SoundFont is selected." else "No SoundFont selected. MIDI needs one to play.")
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    OutlinedButton(enabled = !bankBusy, onClick = { pickBank.launch(arrayOf("*/*")) }) {
-                        Text(if (bankBusy) "Importing…" else "Choose .sf2 file", color = Ink)
+
+            // Card 3 — Smart Sharing & Imports
+            SettingsGroupCard {
+                Text("Smart Sharing & Imports", color = Ink, fontSize = 17.sp, fontWeight = FontWeight.SemiBold)
+                Hint("Music links auto-detect artist & save as audio. Podcasts follow your preference below.")
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("Shared links", color = Ink, fontSize = 14.sp, fontWeight = FontWeight.Medium)
+                    FlowRow(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        ShareImportMode.entries.forEach { mode ->
+                            val selected = shareImportMode == mode
+                            Box(
+                                modifier = Modifier
+                                    .clip(PillShape)
+                                    .background(if (selected) Pearl else GlassBg)
+                                    .then(
+                                        if (selected) Modifier else Modifier.border(0.75.dp, GlassBorder, PillShape),
+                                    )
+                                    .clickable { model.setShareImportMode(mode) }
+                                    .padding(horizontal = 14.dp, vertical = 8.dp),
+                                contentAlignment = Alignment.Center,
+                            ) {
+                                Text(
+                                    text = mode.label,
+                                    color = if (selected) PearlInk else Dim,
+                                    fontSize = 12.5.sp,
+                                    fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Medium,
+                                    maxLines = 1,
+                                )
+                            }
+                        }
                     }
-                    if (bankSelected) {
-                        OutlinedButton(enabled = !bankBusy, onClick = model::clearSoundFont) { Text("Remove SoundFont", color = Ink) }
+                }
+                HorizontalDivider(color = Line.copy(alpha = 0.55f))
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("Podcasts & long talks", color = Ink, fontSize = 14.sp, fontWeight = FontWeight.Medium)
+                    FlowRow(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        PodcastImportFormat.entries.forEach { format ->
+                            val selected = podcastImportFormat == format
+                            Box(
+                                modifier = Modifier
+                                    .clip(PillShape)
+                                    .background(if (selected) Pearl else GlassBg)
+                                    .then(
+                                        if (selected) Modifier else Modifier.border(0.75.dp, GlassBorder, PillShape),
+                                    )
+                                    .clickable { model.setPodcastImportFormat(format) }
+                                    .padding(horizontal = 14.dp, vertical = 8.dp),
+                                contentAlignment = Alignment.Center,
+                            ) {
+                                Text(
+                                    text = format.label,
+                                    color = if (selected) PearlInk else Dim,
+                                    fontSize = 12.5.sp,
+                                    fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Medium,
+                                    maxLines = 1,
+                                )
+                            }
+                        }
                     }
                 }
             }
-            Field("Storage contribution", "How much playback cache this phone keeps to help the network. The film you are watching always keeps a window around the playhead.") {
+
+            // Card 4 — Storage & Cache
+            SettingsGroupCard {
                 val choices = listOf(5, 10, 25, 50, 100, 0)
-                val status by model.status.collectAsState()
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Row(
-                        Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    ) {
-                        choices.forEach { gb ->
-                            val selected = cacheMaxGb == gb
-                            Button(
-                                onClick = {
-                                    cacheMaxGb = gb
-                                    model.setCacheLimit(gb)
-                                },
-                                shape = RoundedCornerShape(99.dp),
-                                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
-                                colors = ButtonDefaults.buttonColors(
-                                    containerColor = if (selected) Brand else CardBg,
-                                    contentColor = if (selected) Color.White else Ink,
-                                ),
-                            ) { Text(if (gb == 0) "Unlimited" else "$gb GB") }
-                        }
-                    }
-                    val currentStatus = status
-                    Hint(
-                        when {
-                            cacheMaxGb == 0 -> "Unlimited: cached blocks are only freed when you clear them."
-                            currentStatus != null -> "Using ${formatBytes(currentStatus.cachedBytes)} of $cacheMaxGb GB."
-                            else -> "At most $cacheMaxGb GB of cached blocks."
-                        }
+                val cachedBytes = status?.cachedBytes ?: 0L
+                val usageText = when {
+                    cachedBytes <= 0L -> "No cached files yet"
+                    cacheMaxGb == 0 -> "${formatBytes(cachedBytes)} cached · Unlimited"
+                    else -> "${formatBytes(cachedBytes)} of $cacheMaxGb GB"
+                }
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                ) {
+                    Text("Storage & Cache", color = Ink, fontSize = 17.sp, fontWeight = FontWeight.SemiBold)
+                    Text(usageText, color = Dim, fontSize = 12.5.sp, fontWeight = FontWeight.Medium)
+                }
+                if (cacheMaxGb > 0) {
+                    val limitBytes = cacheMaxGb.toLong() * 1_000_000_000L
+                    val progress = (cachedBytes.toFloat() / limitBytes.toFloat()).coerceIn(0f, 1f)
+                    LinearProgressIndicator(
+                        progress = { progress },
+                        color = Pearl,
+                        trackColor = GlassBorder,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(4.dp)
+                            .clip(PillShape),
                     )
                 }
-            }
-            HorizontalDivider(color = Line)
-            Row(
-                Modifier.fillMaxWidth().background(CardBg, RoundedCornerShape(16.dp))
-                    .clickable { advanced = !advanced }.padding(16.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Text("Advanced Network & Engine", color = Ink, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
-                Icon(if (advanced) ChevronDownIcon else ChevronRightIcon, null, tint = Dim)
-            }
-            AnimatedVisibility(advanced) {
-                Column(verticalArrangement = Arrangement.spacedBy(20.dp)) {
-            Field("Blind relays", "Optional relay keys, for networks where peers cannot connect directly") {
-                KeyField(relays, singleLine = false) { relays = it }
-            }
-            Field("DHT bootstrap", "Optional host:port list for a private DHT. Empty uses the public DHT.") {
-                KeyField(bootstrap, singleLine = false) { bootstrap = it }
-            }
-            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                Row(
-                    Modifier.fillMaxWidth().toggleable(value = lan, role = Role.Switch, onValueChange = { lan = it }),
-                    verticalAlignment = Alignment.CenterVertically,
+                Hint("How much playback cache this phone keeps to help the swarm. The title you are watching always keeps a window around the playhead.")
+                FlowRow(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
-                    Text("Find relays on this network", color = Ink, fontSize = 16.sp, modifier = Modifier.weight(1f))
-                    Switch(checked = lan, onCheckedChange = null, colors = SwitchDefaults.colors(checkedTrackColor = Brand))
-                }
-                Hint("Over mDNS, on this device's Wi-Fi or Ethernet, for relays that run with PEARTUBE_LAN_HOST. Turn it on where peers on one network cannot reach each other through the internet.")
-            }
-            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                Row(
-                    Modifier.fillMaxWidth().toggleable(value = privateRouting, role = Role.Switch, onValueChange = { privateRouting = it }),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Text("Private DHT routing", color = Ink, fontSize = 16.sp, modifier = Modifier.weight(1f))
-                    Switch(checked = privateRouting, onCheckedChange = null, colors = SwitchDefaults.colors(checkedTrackColor = Brand))
-                }
-                Hint("Route peer connections over 2-hop encrypted guard circuits. Every peer you connect to must also run with private routing.")
-            }
-            }
-            }
-            val scope = rememberCoroutineScope()
-            Button(
-                onClick = {
-                    scope.launch {
-                        problem = try {
-                            val raw = JSONObject()
-                                .put("tracker", tracker)
-                                .put("sources", sources)
-                                .put("mnemonic", mnemonic)
-                                .put("relayThrough", relays)
-                                .put("bootstrap", bootstrap)
-                                .put("lanDiscovery", lan)
-                                .put("privateRouting", privateRouting)
-                                .put("cacheMaxGb", cacheMaxGb)
-                            val normalized = model.worker.normalizeSettings(raw, requireChannel = false)
-                            model.save(normalized)
-                            null
-                        } catch (e: Exception) {
-                            e.message
+                    choices.forEach { gb ->
+                        val selected = cacheMaxGb == gb
+                        Box(
+                            modifier = Modifier
+                                .clip(PillShape)
+                                .background(if (selected) Pearl else GlassBg)
+                                .then(
+                                    if (selected) Modifier else Modifier.border(0.75.dp, GlassBorder, PillShape),
+                                )
+                                .clickable {
+                                    cacheMaxGb = gb
+                                    model.setCacheLimit(gb)
+                                }
+                                .padding(horizontal = 14.dp, vertical = 8.dp),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Text(
+                                text = if (gb == 0) "Unlimited" else "$gb GB",
+                                color = if (selected) PearlInk else Dim,
+                                fontSize = 12.5.sp,
+                                fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Medium,
+                                maxLines = 1,
+                            )
                         }
                     }
-                },
-                colors = ButtonDefaults.buttonColors(containerColor = Brand),
-                modifier = Modifier.fillMaxWidth(),
-            ) { Text("Save") }
-            Spacer(Modifier.padding(8.dp))
+                }
+            }
+
+            // Card 4 — Playback & MIDI
+            SettingsGroupCard {
+                Text("Playback & MIDI", color = Ink, fontSize = 17.sp, fontWeight = FontWeight.SemiBold)
+                Hint("Choose your own SoundFont 2 (.sf2), up to 256 MiB. Saved immediately on this device.")
+                bankError?.let { Text(it, color = Danger, fontSize = 13.sp) }
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(7.dp),
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(6.dp)
+                            .clip(CircleShape)
+                            .background(if (bankSelected) Accent else Dim),
+                    )
+                    Text(
+                        text = if (bankSelected) "SoundFont (.sf2) selected" else "No SoundFont selected",
+                        color = if (bankSelected) Accent else Dim,
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.Medium,
+                    )
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    HeroGlassButton(
+                        text = if (bankBusy) "Importing…" else "Choose .sf2 file",
+                        enabled = !bankBusy,
+                        shape = PillShape,
+                        onClick = { pickBank.launch(arrayOf("*/*")) },
+                    )
+                    if (bankSelected) {
+                        HeroGlassButton(
+                            text = "Remove",
+                            enabled = !bankBusy,
+                            shape = PillShape,
+                            onClick = model::clearSoundFont,
+                        )
+                    }
+                }
+            }
+
+            // Card 5 — Advanced Network & Engine (collapsible)
+            SettingsGroupCard {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(ControlShape)
+                        .clickable { advanced = !advanced }
+                        .padding(vertical = 2.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        text = "Advanced Network & Engine",
+                        color = Ink,
+                        fontSize = 16.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        modifier = Modifier.weight(1f),
+                    )
+                    Icon(
+                        imageVector = if (advanced) ChevronDownIcon else ChevronRightIcon,
+                        contentDescription = null,
+                        tint = Dim,
+                        modifier = Modifier.size(18.dp),
+                    )
+                }
+                AnimatedVisibility(advanced) {
+                    Column(
+                        modifier = Modifier.padding(top = 8.dp),
+                        verticalArrangement = Arrangement.spacedBy(16.dp),
+                    ) {
+                        Field("Blind relays", "Optional relay keys, for networks where peers cannot connect directly") {
+                            KeyField(relays, singleLine = false) { relays = it }
+                        }
+                        Field("DHT bootstrap", "Optional host:port list for a private DHT. Empty uses the public DHT.") {
+                            KeyField(bootstrap, singleLine = false) { bootstrap = it }
+                        }
+                        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                            Row(
+                                Modifier
+                                    .fillMaxWidth()
+                                    .toggleable(value = lan, role = Role.Switch, onValueChange = { lan = it }),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Text("Find relays on this network", color = Ink, fontSize = 14.5.sp, fontWeight = FontWeight.Medium, modifier = Modifier.weight(1f))
+                                Switch(checked = lan, onCheckedChange = null, colors = SwitchDefaults.colors(checkedTrackColor = Brand))
+                            }
+                            Hint("Over mDNS, on this device's Wi-Fi or Ethernet, for relays that run with PEARTUBE_LAN_HOST.")
+                        }
+                        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                            Row(
+                                Modifier
+                                    .fillMaxWidth()
+                                    .toggleable(value = privateRouting, role = Role.Switch, onValueChange = { privateRouting = it }),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Text("Private DHT routing", color = Ink, fontSize = 14.5.sp, fontWeight = FontWeight.Medium, modifier = Modifier.weight(1f))
+                                Switch(checked = privateRouting, onCheckedChange = null, colors = SwitchDefaults.colors(checkedTrackColor = Brand))
+                            }
+                            Hint("Route peer connections over 2-hop encrypted guard circuits. Every peer you connect to must also run with private routing.")
+                        }
+                    }
+                }
+            }
+
+            Spacer(Modifier.height(16.dp))
         }
     }
 }
 
 @Composable
+private fun SettingsGroupCard(
+    content: @Composable ColumnScope.() -> Unit,
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(CardShape)
+            .background(CardBg)
+            .border(0.75.dp, GlassBorder, CardShape)
+            .padding(16.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+        content = content,
+    )
+}
+
+@Composable
 private fun Field(label: String, hint: String, input: @Composable () -> Unit) {
-    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-        Text(label, color = Ink, fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
+    Column(verticalArrangement = Arrangement.spacedBy(5.dp)) {
+        Text(label, color = Ink, fontSize = 14.5.sp, fontWeight = FontWeight.SemiBold)
         Hint(hint)
         input()
     }
 }
 
 @Composable
-private fun Hint(text: String) = Text(text, color = Dim, fontSize = 13.sp)
+private fun Hint(text: String) = Text(text, color = Dim, fontSize = 12.5.sp, lineHeight = 17.sp)
 
 @Composable
 private fun KeyField(value: String, singleLine: Boolean, onChange: (String) -> Unit) {
@@ -340,6 +673,7 @@ private fun KeyField(value: String, singleLine: Boolean, onChange: (String) -> U
         onValueChange = onChange,
         singleLine = singleLine,
         minLines = if (singleLine) 1 else 3,
+        shape = CardShape,
         keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.None, autoCorrectEnabled = false),
         colors = fieldColors(),
         modifier = Modifier.fillMaxWidth(),

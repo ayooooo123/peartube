@@ -15,12 +15,14 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use futures_channel::mpsc::UnboundedReceiver;
 use futures_util::StreamExt;
 use futures_util::future::{Either, select};
+use gpui_kit::assets::IconName as Lucide;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::input::{InputEvent, InputState};
 use gpui_kit::component::slider::{SliderEvent, SliderState};
-use gpui_kit::component::{IconName, Sizable as _, v_flex};
+use gpui_kit::component::{Icon, IconName, Sizable as _, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
+use peartube::playback::clock;
 use peartube::settings::{Settings, SourceSpec};
 use peartube::soundfont;
 use peartube::worker::{CastStatus, DATA_DIR, DiscoveredSource, Entry, Event, GlobalHit, MusicMeta, Status, worker};
@@ -29,19 +31,21 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 
 use crate::api::{
-    ALL_SOURCES, AcquireJob, AcquireRequest, ApiClient, DiscoverBrowseResult, DiscoverCreator,
-    DiscoverFeed, DiscoverFollowRequest, DiscoverItem, PluginInfo, RumbleCandidate,
-    SoulseekCandidate, SoulseekShelf, SoundcloudCandidate, SourceSearchResult, VisitedShelf,
-    YoutubeCandidate, extract_shared_url, is_web_url, load_visited_shelves, parse_mirror_job,
-    record_visited_shelf, run_blocking, save_visited_shelves, unwrap_peartube_add,
+    ALL_SOURCES, AcquireJob, AcquireRequest, ApiClient, CreatorSuggestion, DiscoverBrowseResult,
+    DiscoverCreator, DiscoverFeed, DiscoverFollowRequest, DiscoverItem, MusicDiscoverResult,
+    PluginInfo, PreviewPlayer, RumbleCandidate, SoulseekCandidate, SoulseekShelf,
+    SoundcloudCandidate, SourceSearchResult, SuggestedSong, VisitedShelf, YoutubeCandidate,
+    download_preview_m4a, extract_shared_url, fetch_external_image_bytes, fetch_music_discover,
+    is_web_url, load_visited_shelves, parse_mirror_job, record_visited_shelf, run_blocking,
+    save_visited_shelves, search_creators_typeahead, unwrap_peartube_add,
 };
 use crate::cast_screen::CastSheetForm;
 use crate::catalog::{Catalog, VideoTile, build_catalog, is_music_entry};
-use crate::list::AddModalForm;
+use crate::list::{AddModalForm, label};
 use crate::music::{MusicAudio, MusicQueue, PreviousAction, TrackItem};
 use crate::play::{PlayEvent, PlayScreen};
 use crate::settings_screen::SettingsForm;
-use crate::theme::{BG, INK};
+use crate::theme::{ACCENT, BG, BRAND, BRAND_HOVER, CARD, DIM, GLASS_BORDER, INK, PEARL};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ListenTab {
@@ -73,6 +77,15 @@ pub enum NetworkTab {
     Globe,
     Swarm,
     Flow,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum DiscoverTab {
+    #[default]
+    All,
+    Cinema,
+    Videos,
+    Music,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -223,7 +236,22 @@ pub struct PearTube {
     pub cast_modal: Option<CastSheetForm>,
     pub cast: CastStatus,
     pub search: Entity<InputState>,
+    pub discover_tab: DiscoverTab,
     pub discover_follow_input: Entity<InputState>,
+    pub discover_suggestions: Vec<CreatorSuggestion>,
+    pub discover_suggest_busy: bool,
+    discover_suggest_seq: u64,
+    pub discover_music_input: Entity<InputState>,
+    pub discover_music_mood: String,
+    pub discover_music_query: String,
+    pub discover_music_artist_focus: Option<String>,
+    pub discover_music: Option<MusicDiscoverResult>,
+    pub discover_music_loading: bool,
+    discover_music_seq: u64,
+    pub preview_player: PreviewPlayer,
+    pub preview_loading_id: Option<String>,
+    preview_seq: u64,
+    preview_poll: Option<Task<()>>,
     pub discover_creators: Vec<DiscoverCreator>,
     pub discover_feed: Option<DiscoverFeed>,
     pub discover_browse: Option<DiscoverBrowseResult>,
@@ -236,6 +264,8 @@ pub struct PearTube {
     pub discover_thumbs: HashMap<String, Arc<Image>>,
     discover_thumbs_pending: HashSet<String>,
     discover_clear_input: bool,
+    pub minimized_video: Option<Entity<PlayScreen>>,
+    player_observer: Option<Subscription>,
     pub bank: Bank,
     pub selected_seasons: HashMap<String, u32>,
     pub hood_open: bool,
@@ -266,6 +296,7 @@ pub struct PearTube {
     _search: Subscription,
     _track_filter: Subscription,
     _discover_follow: Subscription,
+    _discover_music: Subscription,
 }
 
 fn load_watch_history() -> HashMap<String, WatchProgress> {
@@ -340,14 +371,33 @@ impl PearTube {
 
         let discover_follow_input = cx.new(|cx| {
             InputState::new(window, cx)
-                .placeholder("YouTube @handle or link, SoundCloud artist, or Rumble channel")
+                .placeholder("Search creators (@veritasium, 3Blue1Brown) or paste channel URL")
         });
         let discover_follow_sub = cx.subscribe_in(
             &discover_follow_input,
             window,
-            |this, _, event: &InputEvent, window, cx| {
-                if matches!(event, InputEvent::PressEnter { .. }) {
+            |this, state, event: &InputEvent, window, cx| match event {
+                InputEvent::Change => {
+                    let raw = state.read(cx).value().to_string();
+                    this.trigger_creator_typeahead(raw, cx);
+                }
+                InputEvent::PressEnter { .. } => {
                     this.submit_discover_follow_input(window, cx);
+                }
+                _ => {}
+            },
+        );
+
+        let discover_music_input = cx.new(|cx| {
+            InputState::new(window, cx)
+                .placeholder("Search artists, albums, or songs to preview & discover…")
+        });
+        let discover_music_sub = cx.subscribe_in(
+            &discover_music_input,
+            window,
+            |this, _, event: &InputEvent, _, cx| {
+                if matches!(event, InputEvent::PressEnter { .. }) {
+                    this.search_music_discover_input(cx);
                 }
             },
         );
@@ -389,7 +439,22 @@ impl PearTube {
             cast_modal: None,
             cast: CastStatus::default(),
             search,
+            discover_tab: DiscoverTab::All,
             discover_follow_input,
+            discover_suggestions: Vec::new(),
+            discover_suggest_busy: false,
+            discover_suggest_seq: 0,
+            discover_music_input,
+            discover_music_mood: "featured".to_string(),
+            discover_music_query: String::new(),
+            discover_music_artist_focus: None,
+            discover_music: None,
+            discover_music_loading: false,
+            discover_music_seq: 0,
+            preview_player: PreviewPlayer::default(),
+            preview_loading_id: None,
+            preview_seq: 0,
+            preview_poll: None,
             discover_creators: Vec::new(),
             discover_feed: None,
             discover_browse: None,
@@ -402,6 +467,8 @@ impl PearTube {
             discover_thumbs: HashMap::new(),
             discover_thumbs_pending: HashSet::new(),
             discover_clear_input: false,
+            minimized_video: None,
+            player_observer: None,
             bank: Bank {
                 selected: soundfont::path().is_some(),
                 busy: false,
@@ -437,6 +504,7 @@ impl PearTube {
             _search: search_sub,
             _track_filter: track_filter_sub,
             _discover_follow: discover_follow_sub,
+            _discover_music: discover_music_sub,
         }
     }
 
@@ -475,15 +543,23 @@ impl PearTube {
 
     pub fn open_room(&mut self, room: Room, cx: &mut Context<Self>) {
         let entering_discover = matches!(room, Room::Discover);
+        if !entering_discover {
+            self.stop_music_preview(cx);
+        }
         self.detail = None;
         self.watch_cover_key = None;
         self.room = room;
         self.screen = Screen::List;
-        if entering_discover && self.discover_feed.is_none() && !self.discover_loading {
-            self.refresh_discover_feed(false, cx);
-        } else {
-            cx.notify();
+        if entering_discover {
+            if self.discover_feed.is_none() && !self.discover_loading {
+                self.refresh_discover_feed(false, cx);
+            }
+            if self.discover_music.is_none() && !self.discover_music_loading {
+                let mood = self.discover_music_mood.clone();
+                self.load_music_discover(mood, String::new(), None, cx);
+            }
         }
+        cx.notify();
     }
 
     pub fn set_watch_view(&mut self, mode: WatchViewMode, cx: &mut Context<Self>) {
@@ -1102,15 +1178,18 @@ impl PearTube {
         self.music_audio.is_open() && self.music_state.playing
     }
 
-    /// Rule 4: Starting music while a video is open closes the video (saving its
-    /// progress for `Keep playing` and restoring an opaque window).
+    /// Rule 4: Starting music while a video is open closes the fullscreen video
+    /// (saving its progress), pauses any minimized mini-player video, and stops any 30s preview.
     fn close_video_for_music(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.stop_music_preview(cx);
         if let Screen::Play(play) = &self.screen {
             let (id, key, pos, dur) = play.read(cx).progress_snapshot();
             if dur > 0 {
                 self.record_watch_progress(id, key, pos, dur);
             }
             self.close_player(window, cx);
+        } else if let Some(mini) = &self.minimized_video {
+            mini.update(cx, |p, cx| p.pause_playback(cx));
         }
     }
 
@@ -2048,11 +2127,18 @@ impl PearTube {
         let raw = self.discover_follow_input.read(cx).value().trim().to_string();
         if raw.is_empty() {
             self.discover_error = Some(
-                "Paste a YouTube @handle or channel link, SoundCloud artist link, or Rumble channel link.".into(),
+                "Type a creator name, @handle, or paste a YouTube, SoundCloud, or Rumble channel link.".into(),
             );
             cx.notify();
             return;
         }
+        let lower = raw.to_ascii_lowercase();
+        let is_direct = is_web_url(&raw) || lower.starts_with("peartube:") || raw.starts_with('@');
+        if !is_direct && let Some(first) = self.discover_suggestions.first().cloned() {
+            self.follow_creator_suggestion(first, cx);
+            return;
+        }
+        self.clear_creator_suggestions(cx);
         self.follow_discover_creator(DiscoverFollowRequest::from_url(raw), true, cx);
     }
 
@@ -2301,6 +2387,392 @@ impl PearTube {
                             this.discover_thumbs.clear();
                         }
                         this.discover_thumbs.insert(path, img);
+                        changed = true;
+                    }
+                }
+                if changed {
+                    cx.notify();
+                }
+            });
+        })
+        .detach();
+    }
+
+    // ---- LUMEN v4.4 Discover tabs, live typeahead, music discovery & 30s previews ----
+
+    pub fn set_discover_tab(&mut self, tab: DiscoverTab, cx: &mut Context<Self>) {
+        if self.discover_tab == tab {
+            return;
+        }
+        if self.discover_tab == DiscoverTab::Music && tab != DiscoverTab::Music {
+            self.stop_music_preview(cx);
+        }
+        self.discover_tab = tab;
+        if matches!(tab, DiscoverTab::Music | DiscoverTab::All)
+            && self.discover_music.is_none()
+            && !self.discover_music_loading
+        {
+            let mood = self.discover_music_mood.clone();
+            self.load_music_discover(mood, String::new(), None, cx);
+        }
+        cx.notify();
+    }
+
+    pub fn clear_creator_suggestions(&mut self, cx: &mut Context<Self>) {
+        self.discover_suggest_seq = self.discover_suggest_seq.wrapping_add(1);
+        self.discover_suggest_busy = false;
+        self.discover_suggestions.clear();
+        cx.notify();
+    }
+
+    pub fn trigger_creator_typeahead(&mut self, raw: String, cx: &mut Context<Self>) {
+        let trimmed = raw.trim().to_string();
+        self.discover_suggest_seq = self.discover_suggest_seq.wrapping_add(1);
+        let seq = self.discover_suggest_seq;
+
+        let lower = trimmed.to_ascii_lowercase();
+        let is_direct_url = lower.starts_with("http://")
+            || lower.starts_with("https://")
+            || lower.starts_with("peartube:");
+        if trimmed.chars().count() < 2 || is_direct_url {
+            self.discover_suggest_busy = false;
+            self.discover_suggestions.clear();
+            cx.notify();
+            return;
+        }
+
+        // Immediately surface matching local PearTube swarm channels while remote YouTube typeahead runs.
+        let local_hits = self.matching_peartube_suggestions(&trimmed);
+        self.discover_suggestions = local_hits.clone();
+        self.discover_suggest_busy = true;
+        cx.notify();
+
+        let q = trimmed.clone();
+        cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(Duration::from_millis(280)).await;
+            let still_current = this
+                .read_with(cx, |this, _| this.discover_suggest_seq == seq)
+                .unwrap_or(false);
+            if !still_current {
+                return;
+            }
+            let query_owned = q.clone();
+            let remote = run_blocking(move || search_creators_typeahead(&query_owned))
+                .await
+                .unwrap_or_default();
+
+            let _ = this.update(cx, |this, cx| {
+                if this.discover_suggest_seq != seq {
+                    return;
+                }
+                this.discover_suggest_busy = false;
+                let mut merged = remote;
+                for local in this.matching_peartube_suggestions(&q) {
+                    if !merged.iter().any(|m| m.url == local.url) {
+                        merged.push(local);
+                    }
+                }
+                let avatar_urls: Vec<String> = merged
+                    .iter()
+                    .map(|c| c.avatar_url.clone())
+                    .filter(|u| u.starts_with("https://"))
+                    .collect();
+                this.discover_suggestions = merged;
+                this.prefetch_external_thumbs(avatar_urls, cx);
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    fn matching_peartube_suggestions(&self, query: &str) -> Vec<CreatorSuggestion> {
+        let needle = query.trim().trim_start_matches('@').to_ascii_lowercase();
+        if needle.is_empty() {
+            return Vec::new();
+        }
+        let Some(status) = &self.status else {
+            return Vec::new();
+        };
+        status
+            .discovered_sources
+            .iter()
+            .filter(|d| {
+                d.title.to_ascii_lowercase().contains(&needle)
+                    || d.key.to_ascii_lowercase().starts_with(&needle)
+            })
+            .take(3)
+            .map(|d| {
+                let name = if d.title.trim().is_empty() {
+                    format!("{}…", &d.key[..8.min(d.key.len())])
+                } else {
+                    d.title.clone()
+                };
+                let via = if d.via.is_empty() { "Local network".to_string() } else { d.via.clone() };
+                CreatorSuggestion {
+                    source: "peartube".to_string(),
+                    name,
+                    handle: format!("{}…", &d.key[..10.min(d.key.len())]),
+                    subtitle: format!("PearTube channel · {via}"),
+                    url: format!("peartube://{}/{}?name={}", d.kind, d.key, d.title),
+                    avatar_url: String::new(),
+                }
+            })
+            .collect()
+    }
+
+    pub fn follow_creator_suggestion(&mut self, suggestion: CreatorSuggestion, cx: &mut Context<Self>) {
+        self.clear_creator_suggestions(cx);
+        self.discover_clear_input = true;
+        if suggestion.source == "peartube" {
+            self.open_uri_or_key(suggestion.url, cx);
+            return;
+        }
+        let req = DiscoverFollowRequest {
+            url: suggestion.url,
+            source: Some(suggestion.source),
+            name: Some(suggestion.name),
+            channel_id: None,
+            handle: (!suggestion.handle.is_empty()).then_some(suggestion.handle),
+        };
+        self.follow_discover_creator(req, true, cx);
+    }
+
+    pub fn library_seed_artists(&self) -> Vec<String> {
+        self.catalog
+            .artists
+            .iter()
+            .filter(|a| !a.name.trim().is_empty() && a.name != "Unknown artist")
+            .take(8)
+            .map(|a| a.name.clone())
+            .collect()
+    }
+
+    pub fn load_music_discover(
+        &mut self,
+        mood: String,
+        query: String,
+        artist_focus: Option<String>,
+        cx: &mut Context<Self>,
+    ) {
+        self.discover_music_seq = self.discover_music_seq.wrapping_add(1);
+        let seq = self.discover_music_seq;
+        self.discover_music_mood = mood.clone();
+        self.discover_music_query = query.clone();
+        self.discover_music_artist_focus = artist_focus;
+        self.discover_music_loading = true;
+        cx.notify();
+
+        let seeds = self.library_seed_artists();
+        cx.spawn(async move |this, cx| {
+            let res = run_blocking(move || fetch_music_discover(&mood, &query, &seeds)).await;
+            let _ = this.update(cx, |this, cx| {
+                if this.discover_music_seq != seq {
+                    return;
+                }
+                this.discover_music_loading = false;
+                if let Ok(data) = res {
+                    let mut art_urls = Vec::new();
+                    for a in &data.artists {
+                        if a.art_url.starts_with("https://") {
+                            art_urls.push(a.art_url.clone());
+                        }
+                    }
+                    for s in &data.songs {
+                        if s.art_url.starts_with("https://") {
+                            art_urls.push(s.art_url.clone());
+                        }
+                    }
+                    for alb in &data.albums {
+                        if alb.art_url.starts_with("https://") {
+                            art_urls.push(alb.art_url.clone());
+                        }
+                    }
+                    this.discover_music = Some(data);
+                    this.prefetch_external_thumbs(art_urls, cx);
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    pub fn select_music_mood(&mut self, mood: &str, window: &mut Window, cx: &mut Context<Self>) {
+        self.discover_music_input
+            .update(cx, |inp, cx| inp.set_value("", window, cx));
+        self.load_music_discover(mood.to_string(), String::new(), None, cx);
+    }
+
+    pub fn explore_music_artist(&mut self, artist: String, window: &mut Window, cx: &mut Context<Self>) {
+        let clean = artist.trim().to_string();
+        if clean.is_empty() {
+            return;
+        }
+        self.discover_tab = DiscoverTab::Music;
+        self.discover_music_input
+            .update(cx, |inp, cx| inp.set_value(clean.clone(), window, cx));
+        let mood = self.discover_music_mood.clone();
+        self.load_music_discover(mood, clean.clone(), Some(clean), cx);
+    }
+
+    pub fn search_music_discover_input(&mut self, cx: &mut Context<Self>) {
+        let q = self.discover_music_input.read(cx).value().trim().to_string();
+        let mood = self.discover_music_mood.clone();
+        if q.is_empty() {
+            self.load_music_discover(mood, String::new(), None, cx);
+        } else {
+            self.load_music_discover(mood, q, None, cx);
+        }
+    }
+
+    pub fn stop_music_preview(&mut self, cx: &mut Context<Self>) {
+        let had = self.preview_player.active_id().is_some() || self.preview_loading_id.is_some();
+        self.preview_seq = self.preview_seq.wrapping_add(1);
+        self.preview_player.stop();
+        self.preview_loading_id = None;
+        self.preview_poll = None;
+        if had {
+            cx.notify();
+        }
+    }
+
+    pub fn toggle_song_preview(&mut self, song: SuggestedSong, cx: &mut Context<Self>) {
+        if song.preview_url.is_empty() {
+            self.show_notice("No 30-second preview available for this track.".into(), cx);
+            return;
+        }
+        if self.preview_player.is_playing_id(&song.id) || self.preview_loading_id.as_deref() == Some(song.id.as_str()) {
+            self.stop_music_preview(cx);
+            return;
+        }
+
+        // Pause real library music and any minimized video cleanly before starting preview.
+        if self.music_is_playing() {
+            self.music_audio.pause();
+            self.music_state.playing = false;
+            self.music_queue.saved_position_ms = self.music_state.position.as_millis() as u64;
+            self.music_queue.save();
+        }
+        if let Some(mini) = &self.minimized_video {
+            mini.update(cx, |p, cx| p.pause_playback(cx));
+        }
+
+        self.preview_player.stop();
+        self.preview_seq = self.preview_seq.wrapping_add(1);
+        let seq = self.preview_seq;
+        let song_id = song.id.clone();
+        let preview_url = song.preview_url.clone();
+        self.preview_loading_id = Some(song_id.clone());
+        cx.notify();
+
+        cx.spawn(async move |this, cx| {
+            let id_for_dl = song_id.clone();
+            let dl = run_blocking(move || download_preview_m4a(&preview_url, &id_for_dl)).await;
+            let _ = this.update(cx, |this, cx| {
+                if this.preview_seq != seq {
+                    if let Ok(Ok(path)) = dl {
+                        let _ = std::fs::remove_file(path);
+                    }
+                    return;
+                }
+                this.preview_loading_id = None;
+                match dl {
+                    Ok(Ok(path)) => match this.preview_player.play_file(song_id.clone(), path) {
+                        Ok(()) => {
+                            this.ensure_preview_poller(cx);
+                        }
+                        Err(err) => {
+                            this.show_notice(err.into(), cx);
+                        }
+                    },
+                    Ok(Err(err)) | Err(err) => {
+                        this.show_notice(err.into(), cx);
+                    }
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    fn ensure_preview_poller(&mut self, cx: &mut Context<Self>) {
+        self.preview_poll = Some(cx.spawn(async move |this, cx| {
+            loop {
+                cx.background_executor().timer(Duration::from_millis(500)).await;
+                let keep_going = this
+                    .update(cx, |this, cx| {
+                        if this.preview_player.poll_finished() {
+                            cx.notify();
+                            return false;
+                        }
+                        this.preview_player.active_id().is_some()
+                    })
+                    .unwrap_or(false);
+                if !keep_going {
+                    break;
+                }
+            }
+        }));
+    }
+
+    pub fn prefetch_external_thumbs(&mut self, urls: Vec<String>, cx: &mut Context<Self>) {
+        let mut to_fetch = Vec::new();
+        for url in urls {
+            if !url.starts_with("https://") {
+                continue;
+            }
+            if self.discover_thumbs.contains_key(&url) || self.discover_thumbs_pending.contains(&url) {
+                continue;
+            }
+            self.discover_thumbs_pending.insert(url.clone());
+            to_fetch.push(url);
+            if to_fetch.len() >= 36 {
+                break;
+            }
+        }
+        if to_fetch.is_empty() {
+            return;
+        }
+        cx.spawn(async move |this, cx| {
+            let fetched = run_blocking(move || {
+                // Fetch in small parallel chunks so avatars & 600x600 iTunes covers appear rapidly.
+                let mut results = Vec::with_capacity(to_fetch.len());
+                for chunk in to_fetch.chunks(6) {
+                    let chunk_res: Vec<(String, Option<Arc<Image>>)> = std::thread::scope(|s| {
+                        let handles: Vec<_> = chunk
+                            .iter()
+                            .map(|u| {
+                                let url = u.clone();
+                                s.spawn(move || {
+                                    let img = fetch_external_image_bytes(&url).ok().and_then(|bytes| {
+                                        let fmt = detect_image_format(&bytes)?;
+                                        Some(Arc::new(Image::from_bytes(fmt, bytes)))
+                                    });
+                                    (url, img)
+                                })
+                            })
+                            .collect();
+                        handles
+                            .into_iter()
+                            .filter_map(|h| h.join().ok())
+                            .collect()
+                    });
+                    results.extend(chunk_res);
+                }
+                results
+            })
+            .await;
+            let Ok(results) = fetched else {
+                return;
+            };
+            let _ = this.update(cx, |this, cx| {
+                let mut changed = false;
+                for (url, maybe_img) in results {
+                    this.discover_thumbs_pending.remove(&url);
+                    if let Some(img) = maybe_img {
+                        if this.discover_thumbs.len() >= 256 {
+                            this.discover_thumbs.clear();
+                        }
+                        this.discover_thumbs.insert(url, img);
                         changed = true;
                     }
                 }
@@ -2676,6 +3148,8 @@ impl PearTube {
     /// Rule 3: if music is open/playing, pause music (keeping track, position,
     /// and queue) and mark `paused_for_video = true`; never auto-resume on close.
     pub fn play(&mut self, entry: Entry, start_pos_ms: u64, window: &mut Window, cx: &mut Context<Self>) {
+        self.stop_music_preview(cx);
+        self.close_minimized_video(window, cx);
         self.hood_open = false;
         self.cast_modal = None;
         self.add_modal = None;
@@ -2727,8 +3201,20 @@ impl PearTube {
             })
             .detach();
         }
+        self.player_observer = Some(cx.observe(&screen, |this, _, cx| {
+            if this.minimized_video.is_some() {
+                cx.notify();
+            }
+        }));
         self.player_events = Some(cx.subscribe_in(&screen, window, |this, _, event: &PlayEvent, window, cx| match event {
-            PlayEvent::Back => this.close_player(window, cx),
+            PlayEvent::Back => {
+                if this.minimized_video.is_some() && !matches!(this.screen, Screen::Play(_)) {
+                    this.close_minimized_video(window, cx);
+                } else {
+                    this.close_player(window, cx);
+                }
+            }
+            PlayEvent::Minimize => this.minimize_player(window, cx),
             PlayEvent::DismissCast => this.close_cast_modal(cx),
             PlayEvent::Progress(id, key, pos, dur) => {
                 this.record_watch_progress(id.clone(), key.clone(), *pos, *dur);
@@ -2738,6 +3224,7 @@ impl PearTube {
                 let at = *pos_ms;
                 window.set_background_appearance(WindowBackgroundAppearance::Opaque);
                 this.player_events = None;
+                this.player_observer = None;
                 this.play(target, at, window, cx);
             }
             PlayEvent::Cast(entry, pos_ms) => {
@@ -2748,10 +3235,66 @@ impl PearTube {
         cx.notify();
     }
 
+    pub fn minimize_player(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !matches!(self.screen, Screen::Play(_)) {
+            return;
+        }
+        if window.is_fullscreen() {
+            window.toggle_fullscreen();
+        }
+        let prev = std::mem::replace(&mut self.screen, Screen::List);
+        if let Screen::Play(play) = prev {
+            play.update(cx, |p, cx| p.set_minimized(true, cx));
+            self.minimized_video = Some(play);
+            window.set_background_appearance(WindowBackgroundAppearance::Transparent);
+        }
+        self.cast_modal = None;
+        cx.notify();
+    }
+
+    pub fn restore_minimized_video(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(play) = self.minimized_video.take() else {
+            return;
+        };
+        self.stop_music_preview(cx);
+        self.hood_open = false;
+        self.cast_modal = None;
+        self.add_modal = None;
+        play.update(cx, |p, cx| {
+            p.set_minimized(false, cx);
+            p.focus_player(window, cx);
+        });
+        self.screen = Screen::Play(play);
+        cx.notify();
+    }
+
+    pub fn close_minimized_video(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(play) = self.minimized_video.take() {
+            let (id, key, pos, dur) = play.read(cx).progress_snapshot();
+            if dur > 0 {
+                self.record_watch_progress(id, key, pos, dur);
+            }
+            drop(play);
+            self.player_events = None;
+            self.player_observer = None;
+            window.set_background_appearance(WindowBackgroundAppearance::Opaque);
+            cx.background_executor()
+                .spawn(async move {
+                    if let Ok(w) = worker() {
+                        let _ = w.set_player_active(false).await;
+                    }
+                })
+                .detach();
+            cx.notify();
+        }
+    }
+
     fn close_player(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.cast_modal = None;
+        self.minimized_video = None;
         window.set_background_appearance(WindowBackgroundAppearance::Opaque);
         self.player_events = None;
+        self.player_observer = None;
         cx.background_executor()
             .spawn(async move {
                 if let Ok(w) = worker() {
@@ -2761,6 +3304,230 @@ impl PearTube {
             .detach();
         self.show_list(cx);
         cx.spawn(async move |this, cx| refresh(&this, cx).await).detach();
+    }
+
+    fn render_video_mini_player(&self, mini: &Entity<PlayScreen>, cx: &mut Context<Self>) -> impl IntoElement {
+        let st = mini.read(cx);
+        let entry = st.entry().clone();
+        let playing = st.is_playing();
+        let buffering = st.is_buffering();
+        let pos = st.position();
+        let dur = st.duration();
+        let ratio = dur
+            .filter(|d| !d.is_zero())
+            .map(|d| (pos.as_secs_f32() / d.as_secs_f32()).clamp(0.0, 1.0))
+            .unwrap_or(0.0);
+        let time_txt = match dur {
+            Some(d) => format!("{} / {}", clock(pos), clock(d)),
+            None => clock(pos),
+        };
+        let title = if !entry.base_title.is_empty() {
+            entry.base_title.clone()
+        } else {
+            entry.title.clone()
+        };
+        let ep_badge = if entry.season.is_some() {
+            Some(label(&entry))
+        } else {
+            None
+        };
+        let status_txt = if buffering {
+            "Buffering…"
+        } else if playing {
+            "Playing"
+        } else {
+            "Paused"
+        };
+        let placer = mini.downgrade();
+        let mini_for_play = mini.clone();
+        let mini_for_back = mini.clone();
+        let mini_for_fwd = mini.clone();
+
+        h_flex()
+            .id("video-mini-player")
+            .w_full()
+            .h(px(142.))
+            .border_t_1()
+            .border_color(GLASS_BORDER)
+            // Left opaque frame margin
+            .child(div().flex_none().w(px(12.)).h_full().bg(rgb(CARD)))
+            // Live 224x126 16:9 transparent video cutout framed by opaque CARD strips top/bottom
+            .child(
+                v_flex()
+                    .flex_none()
+                    .w(px(224.))
+                    .h_full()
+                    .child(div().w_full().h(px(8.)).bg(rgb(CARD)))
+                    .child(
+                        div()
+                            .id("mini-video-viewport")
+                            .relative()
+                            .w(px(224.))
+                            .h(px(126.))
+                            .bg(transparent_black())
+                            .border_1()
+                            .border_color(hsla(0., 0., 1., 0.16))
+                            .cursor_pointer()
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.restore_minimized_video(window, cx);
+                            }))
+                            .child(
+                                canvas(
+                                    move |bounds, window, cx| {
+                                        let _ = placer.update(cx, |p, _| p.place_mini(bounds, window));
+                                    },
+                                    |_, _, _, _| {},
+                                )
+                                .absolute()
+                                .size_full(),
+                            ),
+                    )
+                    .child(div().w_full().h(px(8.)).bg(rgb(CARD))),
+            )
+            // Right opaque controls surface
+            .child(
+                v_flex()
+                    .flex_1()
+                    .min_w_0()
+                    .h_full()
+                    .bg(rgb(CARD))
+                    .px_5()
+                    .py_3()
+                    .justify_between()
+                    .child(
+                        h_flex()
+                            .items_start()
+                            .justify_between()
+                            .gap_3()
+                            .child(
+                                v_flex()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .gap_0p5()
+                                    .child(
+                                        h_flex()
+                                            .items_center()
+                                            .gap_2()
+                                            .child(
+                                                div()
+                                                    .size(px(7.))
+                                                    .rounded(px(99.))
+                                                    .bg(if playing { rgb(ACCENT) } else { rgb(DIM) }),
+                                            )
+                                            .child(
+                                                div()
+                                                    .text_sm()
+                                                    .font_weight(FontWeight::BOLD)
+                                                    .text_color(rgb(PEARL))
+                                                    .truncate()
+                                                    .child(title),
+                                            )
+                                            .when_some(ep_badge, |row, tag| {
+                                                row.child(
+                                                    div()
+                                                        .px_2()
+                                                        .py_0p5()
+                                                        .rounded(px(6.))
+                                                        .bg(hsla(256. / 360., 0.85, 0.72, 0.16))
+                                                        .text_xs()
+                                                        .font_weight(FontWeight::SEMIBOLD)
+                                                        .text_color(rgb(BRAND_HOVER))
+                                                        .child(tag),
+                                                )
+                                            }),
+                                    )
+                                    .child(
+                                        div()
+                                            .text_xs()
+                                            .text_color(rgb(DIM))
+                                            .child(format!("{status_txt} · {time_txt}")),
+                                    ),
+                            )
+                            .child(
+                                h_flex()
+                                    .items_center()
+                                    .gap_1()
+                                    .child(
+                                        Button::new("mini-expand")
+                                            .ghost()
+                                            .small()
+                                            .icon(Icon::new(Lucide::Maximize2))
+                                            .label("Expand")
+                                            .tooltip("Return to full player")
+                                            .on_click(cx.listener(|this, _, window, cx| {
+                                                this.restore_minimized_video(window, cx);
+                                            })),
+                                    )
+                                    .child(
+                                        Button::new("mini-close")
+                                            .ghost()
+                                            .small()
+                                            .icon(IconName::Close)
+                                            .tooltip("Close video")
+                                            .on_click(cx.listener(|this, _, window, cx| {
+                                                this.close_minimized_video(window, cx);
+                                            })),
+                                    ),
+                            ),
+                    )
+                    // 2px hairline progress track
+                    .child(
+                        div()
+                            .w_full()
+                            .h(px(2.))
+                            .rounded(px(99.))
+                            .bg(hsla(0., 0., 1., 0.10))
+                            .overflow_hidden()
+                            .child(div().h_full().w(relative(ratio)).bg(rgb(BRAND))),
+                    )
+                    // Transport controls: -10s, Play/Pause, +10s
+                    .child(
+                        h_flex()
+                            .items_center()
+                            .justify_between()
+                            .child(
+                                h_flex()
+                                    .items_center()
+                                    .gap_2()
+                                    .child(
+                                        Button::new("mini-skip-back")
+                                            .ghost()
+                                            .small()
+                                            .icon(Icon::new(Lucide::RotateCcw))
+                                            .label("-10s")
+                                            .on_click(move |_, _, cx| {
+                                                mini_for_back.update(cx, |p, cx| p.skip_mini(false, cx));
+                                            }),
+                                    )
+                                    .child(
+                                        Button::new("mini-toggle-play")
+                                            .primary()
+                                            .small()
+                                            .icon(Icon::new(if playing { Lucide::Pause } else { Lucide::Play }))
+                                            .label(if playing { "Pause" } else { "Play" })
+                                            .on_click(move |_, _, cx| {
+                                                mini_for_play.update(cx, |p, cx| p.toggle_play_mini(cx));
+                                            }),
+                                    )
+                                    .child(
+                                        Button::new("mini-skip-fwd")
+                                            .ghost()
+                                            .small()
+                                            .icon(Icon::new(IconName::RotateCw))
+                                            .label("+10s")
+                                            .on_click(move |_, _, cx| {
+                                                mini_for_fwd.update(cx, |p, cx| p.skip_mini(true, cx));
+                                            }),
+                                    ),
+                            )
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .text_color(rgb(DIM))
+                                    .child("Click preview or Expand to watch full screen"),
+                            ),
+                    ),
+            )
     }
 
     pub fn download_entry(&mut self, entry: Entry, label_override: Option<String>, cx: &mut Context<Self>) {
@@ -3206,6 +3973,9 @@ impl Render for PearTube {
         }
         let is_video = matches!(self.screen, Screen::Play(_));
         let is_list = matches!(self.screen, Screen::List);
+        if !is_list && let Some(mini) = &self.minimized_video {
+            mini.update(cx, |p, _| p.hide_mini_frame());
+        }
         let screen = match &self.screen {
             Screen::List => self.render_list(window, cx).into_any_element(),
             Screen::Settings(form) => self.render_settings(form, cx).into_any_element(),
@@ -3224,6 +3994,14 @@ impl Render for PearTube {
             .as_deref()
             .and_then(|key| self.render_watch_cover_modal(key, cx).map(IntoElement::into_any_element));
         let transparent_video = matches!(&self.screen, Screen::Play(play) if play.read(cx).has_picture());
+        let video_mini_bar = if is_list {
+            self.minimized_video
+                .as_ref()
+                .map(|mini| self.render_video_mini_player(mini, cx).into_any_element())
+        } else {
+            None
+        };
+        let transparent_root = transparent_video || video_mini_bar.is_some();
         let remote_bar = if is_list {
             self.render_cast_remote_bar(cx).map(IntoElement::into_any_element)
         } else {
@@ -3238,7 +4016,7 @@ impl Render for PearTube {
         v_flex()
             .size_full()
             .text_color(rgb(INK))
-            .when(!transparent_video, |this| this.bg(rgb(BG)))
+            .when(!transparent_root, |this| this.bg(rgb(BG)))
             .on_key_down(cx.listener(|this, ev: &KeyDownEvent, _, cx| {
                 if ev.keystroke.key == "escape" {
                     if this.cast_modal.is_some() {
@@ -3251,6 +4029,8 @@ impl Render for PearTube {
                     } else if this.hood_open {
                         this.hood_open = false;
                         cx.notify();
+                    } else if !this.discover_suggestions.is_empty() {
+                        this.clear_creator_suggestions(cx);
                     }
                 }
             }))
@@ -3329,11 +4109,13 @@ impl Render for PearTube {
                     .relative()
                     .flex_1()
                     .min_h_0()
+                    .when(!is_video, |d| d.bg(rgb(BG)))
                     .child(screen)
                     .when_some(cover_popup, |this, popup| this.child(popup))
                     .when_some(add_popup, |this, popup| this.child(popup))
                     .when_some(cast_popup, |this, popup| this.child(popup)),
             )
+            .when_some(video_mini_bar, |this, bar| this.child(bar))
             .when_some(remote_bar, |this, bar| this.child(bar))
             .when_some(music_dock, |this, dock| this.child(dock))
     }

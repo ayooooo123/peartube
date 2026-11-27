@@ -19,7 +19,8 @@ use crate::catalog::{AlbumTile, VideoKind, VideoTile, format_time_left, is_music
 use crate::list::{column, format_bytes, label};
 use crate::music::TrackItem;
 use crate::sleeves::{
-    album_sleeve, hero_primary_btn, hero_progress_bar, hero_secondary_btn, hero_surface, video_art,
+    album_sleeve, hero_primary_btn, hero_progress_bar, hero_secondary_btn, hero_surface,
+    hero_surface_with_backdrop, video_art_with_poster,
 };
 use crate::theme::{BRAND, CARD, CARD_ELEVATED, DIM, INK, LINE};
 
@@ -334,7 +335,25 @@ impl PearTube {
             }
         };
 
-        hero_surface(hue_deg, true)
+        let hero_imdb: Option<&str> = unfinished
+            .and_then(|first| {
+                self.catalog
+                    .movies
+                    .iter()
+                    .chain(self.catalog.series.iter())
+                    .find(|t| t.items.iter().any(|i| i.entry.key == first.entry.key || i.entry.id == first.entry.id))
+                    .and_then(|t| t.imdb.as_deref())
+            })
+            .or_else(|| {
+                self.catalog
+                    .movies
+                    .iter()
+                    .chain(self.catalog.series.iter())
+                    .find_map(|t| t.imdb.as_deref())
+            });
+        let hero_backdrop = self.video_backdrop_image(hero_imdb);
+
+        hero_surface_with_backdrop(hue_deg, true, hero_backdrop)
             .id("home-hero-watch")
             .flex_1()
             .when(single_card, |card| card.w_full())
@@ -513,7 +532,13 @@ impl PearTube {
                             .on_click(cx.listener(move |this, _, _, cx| {
                                 this.open_detail(DetailView::Title(t_key.clone()), cx);
                             }))
-                            .child(video_art(&tile.title, badge, w, h))
+                            .child(video_art_with_poster(
+                                &tile.title,
+                                badge,
+                                if show_clips_instead { None } else { self.video_poster_image(&tile) },
+                                w,
+                                h,
+                            ))
                             .child(
                                 v_flex()
                                     .gap_0p5()

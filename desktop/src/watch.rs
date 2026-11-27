@@ -23,7 +23,8 @@ use crate::catalog::{VideoKind, VideoTile, format_time_left, is_saved, monogram,
 use crate::home::ResumeVideo;
 use crate::list::{column, format_bytes, grid_columns, label};
 use crate::sleeves::{
-    held_dot, hero_primary_btn, hero_progress_bar, hero_secondary_btn, hero_surface, video_art,
+    held_dot, hero_primary_btn, hero_progress_bar, hero_secondary_btn, hero_surface,
+    hero_surface_with_backdrop, video_art_with_poster,
 };
 use crate::theme::{ACCENT, BRAND, CARD, CARD_ELEVATED, DIM, INK, LINE};
 
@@ -491,6 +492,8 @@ impl PearTube {
                 .cloned()
         };
 
+        let hero_imdb = tile.as_ref().and_then(|t| t.imdb.as_deref());
+        let hero_backdrop = self.video_backdrop_image(hero_imdb);
         let (eyebrow, title, facts, saved_counts, state_txt, ratio, primary_play, details_key) =
             featured_hero_data(resume, tile)?;
 
@@ -499,7 +502,7 @@ impl PearTube {
         let display_title = title.to_uppercase();
 
         Some(
-            hero_surface(hue_deg, true)
+            hero_surface_with_backdrop(hue_deg, true, hero_backdrop)
                 .w_full()
                 .min_h(px(300.))
                 .p_7()
@@ -1220,9 +1223,10 @@ impl PearTube {
             .p_5()
             .gap_5()
             .items_start()
-            .child(video_art(
+            .child(video_art_with_poster(
                 &tile.title,
                 Some(kind_word),
+                self.video_poster_image(&tile),
                 if is_clip { 184. } else { 132. },
                 if is_clip { 104. } else { 196. },
             ))
@@ -1546,7 +1550,13 @@ impl PearTube {
             .on_click(cx.listener(move |this, _, _, cx| {
                 this.open_detail(DetailView::Title(tk.clone()), cx);
             }))
-            .child(video_art(&tile.title, badge, card_w, art_h))
+            .child(video_art_with_poster(
+                &tile.title,
+                badge,
+                if is_clip { None } else { self.video_poster_image(tile) },
+                card_w,
+                art_h,
+            ))
             .child(
                 v_flex()
                     .gap_0p5()
@@ -1742,7 +1752,13 @@ impl PearTube {
                 h_flex()
                     .items_start()
                     .gap_6()
-                    .child(video_art(&tile.title, Some(kind_word), art_w, art_h))
+                    .child(video_art_with_poster(
+                        &tile.title,
+                        Some(kind_word),
+                        self.video_poster_image(&tile),
+                        art_w,
+                        art_h,
+                    ))
                     .child(
                         v_flex()
                             .flex_1()

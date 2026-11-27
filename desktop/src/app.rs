@@ -263,6 +263,7 @@ pub struct PearTube {
     pub discover_active_topic: Option<String>,
     pub discover_thumbs: HashMap<String, Arc<Image>>,
     discover_thumbs_pending: HashSet<String>,
+    discover_thumbs_failed: HashSet<String>,
     discover_clear_input: bool,
     pub minimized_video: Option<Entity<PlayScreen>>,
     player_observer: Option<Subscription>,
@@ -466,6 +467,7 @@ impl PearTube {
             discover_active_topic: None,
             discover_thumbs: HashMap::new(),
             discover_thumbs_pending: HashSet::new(),
+            discover_thumbs_failed: HashSet::new(),
             discover_clear_input: false,
             minimized_video: None,
             player_observer: None,
@@ -2714,18 +2716,53 @@ impl PearTube {
         }));
     }
 
+    pub fn video_poster_image(&self, tile: &crate::catalog::VideoTile) -> Option<Arc<Image>> {
+        let imdb = tile.imdb.as_deref()?;
+        let url = crate::api::imdb_poster_url(imdb)?;
+        self.discover_thumbs.get(&url).cloned()
+    }
+
+    pub fn video_backdrop_image(&self, imdb: Option<&str>) -> Option<Arc<Image>> {
+        let url = crate::api::imdb_backdrop_url(imdb?)?;
+        self.discover_thumbs.get(&url).cloned()
+    }
+
+    pub fn prefetch_catalog_posters(&mut self, cx: &mut Context<Self>) {
+        let mut urls = Vec::new();
+        for tile in self.catalog.movies.iter().chain(self.catalog.series.iter()).take(12) {
+            if let Some(imdb) = tile.imdb.as_deref() {
+                if let Some(bg) = crate::api::imdb_backdrop_url(imdb) {
+                    urls.push(bg);
+                }
+            }
+        }
+        for tile in self.catalog.movies.iter().chain(self.catalog.series.iter()) {
+            if let Some(imdb) = tile.imdb.as_deref() {
+                if let Some(poster) = crate::api::imdb_poster_url(imdb) {
+                    urls.push(poster);
+                }
+            }
+        }
+        if !urls.is_empty() {
+            self.prefetch_external_thumbs(urls, cx);
+        }
+    }
+
     pub fn prefetch_external_thumbs(&mut self, urls: Vec<String>, cx: &mut Context<Self>) {
         let mut to_fetch = Vec::new();
         for url in urls {
             if !url.starts_with("https://") {
                 continue;
             }
-            if self.discover_thumbs.contains_key(&url) || self.discover_thumbs_pending.contains(&url) {
+            if self.discover_thumbs.contains_key(&url)
+                || self.discover_thumbs_pending.contains(&url)
+                || self.discover_thumbs_failed.contains(&url)
+            {
                 continue;
             }
             self.discover_thumbs_pending.insert(url.clone());
             to_fetch.push(url);
-            if to_fetch.len() >= 36 {
+            if to_fetch.len() >= 180 {
                 break;
             }
         }
@@ -2733,12 +2770,13 @@ impl PearTube {
             return;
         }
         cx.spawn(async move |this, cx| {
-            let fetched = run_blocking(move || {
-                // Fetch in small parallel chunks so avatars & 600x600 iTunes covers appear rapidly.
-                let mut results = Vec::with_capacity(to_fetch.len());
-                for chunk in to_fetch.chunks(6) {
-                    let chunk_res: Vec<(String, Option<Arc<Image>>)> = std::thread::scope(|s| {
-                        let handles: Vec<_> = chunk
+            // Fetch in 6-wide parallel chunks and notify after each chunk so posters pop in
+            // progressively within ~200 ms instead of waiting for the whole catalog.
+            for chunk in to_fetch.chunks(6) {
+                let batch: Vec<String> = chunk.to_vec();
+                let fetched = run_blocking(move || {
+                    std::thread::scope(|s| {
+                        let handles: Vec<_> = batch
                             .iter()
                             .map(|u| {
                                 let url = u.clone();
@@ -2754,32 +2792,34 @@ impl PearTube {
                         handles
                             .into_iter()
                             .filter_map(|h| h.join().ok())
-                            .collect()
-                    });
-                    results.extend(chunk_res);
-                }
-                results
-            })
-            .await;
-            let Ok(results) = fetched else {
-                return;
-            };
-            let _ = this.update(cx, |this, cx| {
-                let mut changed = false;
-                for (url, maybe_img) in results {
-                    this.discover_thumbs_pending.remove(&url);
-                    if let Some(img) = maybe_img {
-                        if this.discover_thumbs.len() >= 256 {
-                            this.discover_thumbs.clear();
+                            .collect::<Vec<_>>()
+                    })
+                })
+                .await;
+                let Ok(results) = fetched else {
+                    break;
+                };
+                let updated = this.update(cx, |this, cx| {
+                    let mut changed = false;
+                    for (url, maybe_img) in results {
+                        this.discover_thumbs_pending.remove(&url);
+                        if let Some(img) = maybe_img {
+                            if this.discover_thumbs.len() < 1024 {
+                                this.discover_thumbs.insert(url, img);
+                                changed = true;
+                            }
+                        } else {
+                            this.discover_thumbs_failed.insert(url);
                         }
-                        this.discover_thumbs.insert(url, img);
-                        changed = true;
                     }
+                    if changed {
+                        cx.notify();
+                    }
+                });
+                if updated.is_err() {
+                    break;
                 }
-                if changed {
-                    cx.notify();
-                }
-            });
+            }
         })
         .detach();
     }
@@ -3770,6 +3810,7 @@ async fn refresh(this: &WeakEntity<PearTube>, cx: &mut AsyncApp) {
                 this.record_status_sample(status);
                 this.catalog = build_catalog(&entries);
                 this.entries = entries;
+                this.prefetch_catalog_posters(cx);
             }
             (Err(err), _) | (_, Err(err)) => this.error = Some(err.into()),
         }

@@ -1932,6 +1932,24 @@ fn url_host_matches(url: &str, allowed_suffixes: &[&str]) -> bool {
         .any(|suffix| host == *suffix || host.ends_with(&format!(".{suffix}")))
 }
 
+pub fn imdb_poster_url(imdb: &str) -> Option<String> {
+    let trimmed = imdb.trim();
+    if trimmed.starts_with("tt") && trimmed.len() >= 4 && trimmed[2..].bytes().all(|b| b.is_ascii_digit()) {
+        Some(format!("https://images.metahub.space/poster/medium/{trimmed}/img"))
+    } else {
+        None
+    }
+}
+
+pub fn imdb_backdrop_url(imdb: &str) -> Option<String> {
+    let trimmed = imdb.trim();
+    if trimmed.starts_with("tt") && trimmed.len() >= 4 && trimmed[2..].bytes().all(|b| b.is_ascii_digit()) {
+        Some(format!("https://images.metahub.space/background/medium/{trimmed}/img"))
+    } else {
+        None
+    }
+}
+
 pub fn is_allowed_image_url(url: &str) -> bool {
     url_host_matches(url, ALLOWED_IMAGE_HOSTS)
 }
@@ -3310,6 +3328,17 @@ mod tests {
         assert!(is_allowed_preview_url("https://audio-ssl.itunes.apple.com/itunes-assets/x.m4a"));
         assert!(is_allowed_preview_url("https://a1.mzstatic.com/preview.m4a"));
         assert!(!is_allowed_preview_url("https://example.com/preview.m4a"));
+
+        assert_eq!(
+            imdb_poster_url("tt0133093").as_deref(),
+            Some("https://images.metahub.space/poster/medium/tt0133093/img")
+        );
+        assert_eq!(
+            imdb_backdrop_url("tt0903747").as_deref(),
+            Some("https://images.metahub.space/background/medium/tt0903747/img")
+        );
+        assert_eq!(imdb_poster_url("clip:abc"), None);
+        assert_eq!(imdb_backdrop_url("tt"), None);
     }
 
     #[test]

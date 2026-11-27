@@ -21,7 +21,7 @@ use crate::app::{DetailView, DiscoverItemStatus, DiscoverTab, PearTube};
 use crate::catalog::{AlbumTile, TrackRow, VideoTile, monogram, plural, sleeve_hash};
 use crate::list::{column, format_bytes};
 use crate::music::TrackItem;
-use crate::sleeves::{album_sleeve, video_art};
+use crate::sleeves::{album_sleeve, video_art, video_art_with_poster};
 use crate::theme::{
     ACCENT, BG, BRAND, BRAND_HOVER, CARD, CARD_ELEVATED, DANGER, DIM, GLASS_BG, GLASS_BORDER, INK,
     LINE, PEARL,
@@ -1978,13 +1978,14 @@ impl PearTube {
                                                 .on_click(cx.listener(move |this, _, _, cx| {
                                                     this.open_detail(DetailView::Title(tk.clone()), cx);
                                                 }))
-                                                .child(video_art(
+                                                .child(video_art_with_poster(
                                                     &tile.title,
                                                     Some(match tile.kind {
                                                         crate::catalog::VideoKind::Series => "Series",
                                                         crate::catalog::VideoKind::Movie => "Film",
                                                         crate::catalog::VideoKind::Clip => "Clip",
                                                     }),
+                                                    self.video_poster_image(tile),
                                                     136.,
                                                     200.,
                                                 ))

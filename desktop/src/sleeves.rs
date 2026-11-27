@@ -4,6 +4,8 @@
 
 #![forbid(unsafe_code)]
 
+use std::sync::Arc;
+
 use gpui_kit::assets::IconName as Lucide;
 use gpui_kit::component::{Icon, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
@@ -266,9 +268,40 @@ pub fn video_art(title: &str, badge: Option<&str>, width_px: f32, height_px: f32
         )
 }
 
+/// Real Metahub/Cinemeta poster image when loaded, falling back smoothly to the
+/// deterministic geometric `video_art` card while loading or for non-IMDb clips.
+pub fn video_art_with_poster(
+    title: &str,
+    badge: Option<&str>,
+    poster: Option<Arc<Image>>,
+    width_px: f32,
+    height_px: f32,
+) -> Div {
+    let Some(image) = poster else {
+        return video_art(title, badge, width_px, height_px);
+    };
+    div()
+        .relative()
+        .flex_none()
+        .w(px(width_px))
+        .h(px(height_px))
+        .rounded(px(14.))
+        .overflow_hidden()
+        .bg(rgb(CARD_ELEVATED))
+        .border_1()
+        .border_color(hsla(0., 0., 1., 0.10))
+        .child(img(image).size_full().object_fit(ObjectFit::Cover))
+}
+
 /// Shared rich `.hero` backdrop surface: 120° deep hue gradient, optional glowing
 /// orb on the right, subtle 118° diagonal pinstripes, and left readability scrim.
 pub fn hero_surface(hue_deg: u32, show_orb: bool) -> Div {
+    hero_surface_with_backdrop(hue_deg, show_orb, None)
+}
+
+/// Hero backdrop surface with an optional real movie/series backdrop image layered
+/// beneath a rich cinematic readability scrim.
+pub fn hero_surface_with_backdrop(hue_deg: u32, show_orb: bool, backdrop: Option<Arc<Image>>) -> Div {
     let h1 = (hue_deg % 360) as f32 / 360.0;
     let h2 = ((hue_deg + 55) % 360) as f32 / 360.0;
     let base_grad = linear_gradient(
@@ -278,9 +311,15 @@ pub fn hero_surface(hue_deg: u32, show_orb: bool) -> Div {
     );
     let left_scrim = linear_gradient(
         90.,
-        linear_color_stop(hsla(0., 0., 0., 0.52), 0.0),
-        linear_color_stop(hsla(0., 0., 0., 0.0), 0.72),
+        linear_color_stop(hsla(0., 0., 0., if backdrop.is_some() { 0.84 } else { 0.52 }), 0.0),
+        linear_color_stop(hsla(0., 0., 0., if backdrop.is_some() { 0.20 } else { 0.0 }), 0.78),
     );
+    let bottom_scrim = linear_gradient(
+        0.,
+        linear_color_stop(hsla(0., 0., 0., 0.72), 0.0),
+        linear_color_stop(hsla(0., 0., 0., 0.0), 0.65),
+    );
+    let has_backdrop = backdrop.is_some();
 
     v_flex()
         .relative()
@@ -289,16 +328,27 @@ pub fn hero_surface(hue_deg: u32, show_orb: bool) -> Div {
         .bg(base_grad)
         .border_1()
         .border_color(hsla(0., 0., 1., 0.12))
-        .child(
-            div().absolute().inset_0().child(
-                canvas(
-                    move |_, _, _| (hue_deg, show_orb),
-                    move |bounds, (h, orb), window, _| paint_hero_backdrop(bounds, h, orb, window),
-                )
-                .size_full(),
-            ),
-        )
+        .when_some(backdrop, |el, image| {
+            el.child(
+                div()
+                    .absolute()
+                    .inset_0()
+                    .child(img(image).size_full().object_fit(ObjectFit::Cover)),
+            )
+        })
+        .when(!has_backdrop, |el| {
+            el.child(
+                div().absolute().inset_0().child(
+                    canvas(
+                        move |_, _, _| (hue_deg, show_orb),
+                        move |bounds, (h, orb), window, _| paint_hero_backdrop(bounds, h, orb, window),
+                    )
+                    .size_full(),
+                ),
+            )
+        })
         .child(div().absolute().inset_0().bg(left_scrim))
+        .when(has_backdrop, |el| el.child(div().absolute().inset_0().bg(bottom_scrim)))
 }
 
 /// Crisp pearl primary action button for LUMEN hero cards (`#eae6dd` bg, `#0b0c10` ink).

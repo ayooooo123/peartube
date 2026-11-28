@@ -5,6 +5,7 @@ import { join } from 'node:path'
 import b4a from 'b4a'
 import { page } from './ui.js'
 import { mediaInfo, resolutionLabel } from './resolution.js'
+import { handleArtRequest, handleLegacyArtRequest, handleMetaApiRoute } from './meta-http.js'
 import { MEDIA_FILE, ipv6Groups, mediaFormat, parseUri, safeEqual } from './protocol.js'
 
 const MAX_BODY = 64 * 1024
@@ -360,6 +361,9 @@ export function createApi (state) {
     if (req.method === 'POST' && path === '/v1/entries/remove') {
       return removeEntries(requireNode(node), state, srv, await body(req))
     }
+    if (path.startsWith('/v1/meta/')) {
+      return handleMetaApiRoute(req, url, state, { body, requireNode, srv })
+    }
     if (req.method === 'GET' && path === '/v1/sources') {
       if (!node) return { tracker: state.fallbackStatus?.tracker || '', channel: '', sources: [], discovered: [], published: [] }
       const st = node.status()
@@ -401,6 +405,10 @@ export function createApi (state) {
       const n = requireNode(node)
       const res = await n.openUri(uri)
       if (res.action === 'source' || res.action === 'access') await state.onSourcesChanged?.(n.listSources())
+      else if (res.action === 'meta') {
+        await state.onMetaSourcesChanged?.(n.meta?.listSources?.() || [])
+        srv.notify('update')
+      }
       return res
     }
     if (req.method === 'POST' && path === '/v1/cache/clear') {
@@ -491,9 +499,9 @@ export function createApi (state) {
         const meta = pearToStremioMeta(e)
         if (meta?.type === catMatch[1] && !seen.has(meta.id)) seen.set(meta.id, meta)
       }
-      // Stremio requires a poster on every catalog item; /v1/poster redirects to Cinemeta's.
+      // Stremio requires a poster on every catalog item; /v1/poster checks P2P metadata before Cinemeta.
       const host = req.headers.host
-      if (state.posterUrl && host) for (const meta of seen.values()) meta.poster = `${reqProto(req)}://${host}/v1/poster/${meta.id}`
+      if ((state.posterUrl || state.node?.meta) && host) for (const meta of seen.values()) meta.poster = `${reqProto(req)}://${host}/v1/poster/${meta.id}`
       return { metas: [...seen.values()] }
     }
     const streamMatch = req.method === 'GET' && path.match(/^\/stream\/[^/]+\/(.+)\.json$/)
@@ -606,15 +614,8 @@ export function createApi (state) {
       req.once('close', () => sse.delete(res))
       return
     }
-    const artMatch = req.method === 'GET' && url.pathname.match(/^\/v1\/(poster|backdrop)\/(tt\d{5,10})$/)
-    if (artMatch && (state.posterUrl || state.backdropUrl)) {
-      // Cinemeta's art for an identified entry; a redirect keeps image bytes off the relay.
-      const lookup = artMatch[1] === 'poster' ? state.posterUrl : state.backdropUrl
-      const art = lookup ? await lookup(artMatch[2]).catch(() => null) : null
-      res.writeHead(art ? 302 : 404, art ? { ...CORS, location: art, 'cache-control': 'max-age=86400' } : CORS)
-      res.end()
-      return
-    }
+    if (await handleArtRequest(req, res, url, state, CORS)) return
+    if (await handleLegacyArtRequest(req, res, url, state, CORS)) return
     if (req.method === 'GET' && url.pathname === '/v1/playlist.m3u') {
       const entries = state.node ? (await state.node.search()).map(e => viaApi(req, e)) : []
       const lines = ['#EXTM3U']

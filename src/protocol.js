@@ -135,6 +135,13 @@ export function formatWatchUri (entry, source = '', sourceKind = '') {
   return `peartube://watch/${entry.blobs}:${b.blockOffset}:${b.blockLength}:${b.byteOffset}:${b.byteLength}?${q.join('&')}`
 }
 
+export function formatMetaUri (key, alias = '') {
+  const k = String(key || '').trim().toLowerCase()
+  if (!HEX64.test(k)) throw new Error('Metadata channel key must be 64 hex characters')
+  const name = cleanText(alias)
+  return name ? `peartube://meta/${k}?name=${encodeURIComponent(name)}` : `peartube://meta/${k}`
+}
+
 export function cleanName (v, fallback = 'PearTube TV') {
   return String(v || fallback).trim().slice(0, 80).toWellFormed() || fallback
 }
@@ -177,6 +184,11 @@ export function parseUri (input) {
     const key = body.toLowerCase()
     if (!HEX64.test(key)) throw new Error('Channel key must be 64 hex characters')
     return { action: 'source', key, kind: 'channel', alias: cleanText(q.name || q.alias || '') }
+  }
+  if (verb === 'meta') {
+    const key = body.toLowerCase()
+    if (!HEX64.test(key)) throw new Error('Metadata channel key must be 64 hex characters')
+    return { action: 'meta', key, alias: cleanText(q.name || q.alias || '') }
   }
   if (verb === 'receiver' || verb === 'cast') return parseReceiver(body, q)
   if (verb === 'access') {

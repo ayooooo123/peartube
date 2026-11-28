@@ -7,6 +7,7 @@ import { createChannel } from './node/channel.js'
 import { createBlobs } from './node/blobs.js'
 import { createNetwork } from './node/network.js'
 import { createSources } from './node/sources.js'
+import { createMeta } from './node/meta.js'
 import { createCatalog } from './node/catalog.js'
 import { createGlobalSearch } from './search.js'
 
@@ -63,6 +64,10 @@ async function openNode ({
   keyPair = null,
   // Set by the apps' worklet (worklet/worker.js): small request windows for phones' UDP buffers.
   worklet: isWorklet = false,
+  metaSources = [],
+  p2pOnlyMetadata = false,
+  seedFullMetadata = false,
+  artCacheMaxBytes = null,
   onchange = null
 }, undo) {
   const life = { closing: false, suspended: false }
@@ -85,6 +90,10 @@ async function openNode ({
     announceCache,
     keyPair,
     worklet: isWorklet,
+    metaSources,
+    p2pOnlyMetadata,
+    seedFullMetadata,
+    artCacheMaxBytes,
     onchange
   }
 
@@ -103,6 +112,7 @@ async function openNode ({
     blobs: null,
     net: null,
     sources: null,
+    meta: null,
     catalog: null,
     status: null
   }
@@ -114,6 +124,7 @@ async function openNode ({
   ctx.blobs = await createBlobs(ctx)
   ctx.net = await createNetwork(ctx)
   ctx.sources = await createSources(ctx)
+  ctx.meta = await createMeta(ctx)
   await ctx.net.initLan(createLan)
   await ctx.blobs.startServer()
   ctx.catalog = createCatalog(ctx)
@@ -306,6 +317,7 @@ async function openNode ({
       ctx.channel.writerCores.clear()
       for (const c of ctx.channel.landedCores.values()) await c.close().catch(() => {})
       ctx.channel.landedCores.clear()
+      await ctx.meta.close()
       ctx.replication.destroy()
       await ctx.net.lan?.destroy()
       await ctx.net.destroySwarm()
@@ -408,6 +420,7 @@ async function openNode ({
     addSource: ctx.sources.addSource,
     removeSource: ctx.sources.removeSource,
     listSources: ctx.sources.listSources,
+    meta: ctx.meta,
     focusSource: key => ctx.sources.wakeSource(key, { touch: true }).then(b => Boolean(b)),
     setPlayerActive: active => { ctx.blobs.setPlayerActive(active); return { ok: true } },
     activeSourceCount: () => ctx.sources.activeSources.size,

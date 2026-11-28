@@ -110,7 +110,11 @@ const state = {
   identify: link => identify(link, { cinemetaUrl: cfg('cinemetaUrl'), configDir: ubitConfigDir }),
   posterUrl: imdb => posterUrl(cfg('cinemetaUrl'), imdb),
   backdropUrl: imdb => backdropUrl(cfg('cinemetaUrl'), imdb),
+  p2pOnlyMetadata: () => cfg('p2pOnlyMetadata'),
   onSourcesChanged: saveSources,
+  onMetaSourcesChanged: list => {
+    try { settings.update({ metaSources: list.map(s => s.key) }) } catch (err) { void err }
+  },
   fallbackStatus: { ...idleStatus(), tracker: cfg('channel') },
   fallbackJobs () {
     try { return JSON.parse(readFileSync(jobsFile, 'utf8')).map(publicJob) } catch { return [] }
@@ -236,6 +240,9 @@ async function start () {
     dhtPort: cfg('dhtPort') || undefined,
     privateRouting: cfg('privateRouting'),
     relayThrough: list(cfg('relayThrough')),
+    metaSources: cfg('metaSources'),
+    p2pOnlyMetadata: cfg('p2pOnlyMetadata'),
+    seedFullMetadata: cfg('seedFullMetadata'),
     lan: lanFactory(),
     announceCache: true,
     onchange: () => {
@@ -464,6 +471,15 @@ state.applySettings = changed => serial(async () => {
       state.mirror?.configure(mirrorConfig())
     }
     if (has('globalSearch')) node.serveSearch(searchServe())
+    if (has('metaSources') && node.meta) {
+      const want = new Set(cfg('metaSources'))
+      for (const s of node.meta.listSources()) {
+        if (!want.has(s.key) && !s.writable) await node.meta.removeSource(s.key)
+      }
+      for (const key of want) await node.meta.addSource(key)
+    }
+    if (has('p2pOnlyMetadata')) node.meta?.setP2pOnly?.(cfg('p2pOnlyMetadata'))
+    if (has('seedFullMetadata')) node.meta?.setSeedFull?.(cfg('seedFullMetadata'))
     if (has('lan', 'lanHost')) {
       await state.cast.setLanHost(lanHost()).catch(() => {})
       assertRunning()

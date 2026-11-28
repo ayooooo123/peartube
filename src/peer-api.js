@@ -82,10 +82,23 @@ export async function openPeerApi ({
     identify: link => identify(link, { cinemetaUrl: cfg('cinemetaUrl') || CINEMETA_URL, configDir: ubitConfigDir }),
     posterUrl: metahub('poster', 'small'),
     backdropUrl: metahub('background', 'medium'),
+    p2pOnlyMetadata: () => cfg('p2pOnlyMetadata'),
     get cast () { return getCast() },
     extraStatus: () => (extraStatus ? extraStatus(url) : {}),
     onSourcesChanged,
+    onMetaSourcesChanged: list => {
+      try { settings.update({ metaSources: list.map(s => s.key) }) } catch (err) { void err }
+    },
     async applySettings (changed) {
+      if (changed.includes('p2pOnlyMetadata')) node.meta?.setP2pOnly?.(cfg('p2pOnlyMetadata'))
+      if (changed.includes('seedFullMetadata')) node.meta?.setSeedFull?.(cfg('seedFullMetadata'))
+      if (changed.includes('metaSources') && node.meta) {
+        const want = new Set(cfg('metaSources'))
+        for (const s of node.meta.listSources()) {
+          if (!want.has(s.key) && !s.writable) await node.meta.removeSource(s.key)
+        }
+        for (const key of want) await node.meta.addSource(key)
+      }
       if (!changed.some(k => SLSK_LIVE_KEYS.has(k))) return
       state.mirror?.configure({
         slskUser: cfg('slskUser'),
@@ -94,6 +107,8 @@ export async function openPeerApi ({
       })
     }
   }
+  node.meta?.setP2pOnly?.(cfg('p2pOnlyMetadata'))
+  node.meta?.setSeedFull?.(cfg('seedFullMetadata'))
 
   const fetchBytes = (targetUrl, opts = {}) => fetchArt(targetUrl, {
     binary: true,

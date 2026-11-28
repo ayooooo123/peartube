@@ -147,7 +147,25 @@ data class LibraryCatalog(
 
 private val IMDB_RE = Regex("^imdb:(tt[0-9]+)(?::s([0-9]+)e([0-9]+))?$")
 private val TRAILING_EP_RE = Regex("\\s+S[0-9]+E[0-9]+$", RegexOption.IGNORE_CASE)
+private val TRAILING_PAREN_YEAR_RE = Regex("\\s+\\((19|20)[0-9]{2}\\)$")
 private val NON_WORD_RE = Regex("[^\\p{L}\\p{N}\\p{M}]+")
+
+internal fun cleanCinemaTitle(rawTitle: String, baseTitle: String, year: String?): String {
+    var cleaned = baseTitle.ifBlank { rawTitle }.trim()
+    cleaned = cleaned.replace(TRAILING_EP_RE, "").trim()
+    if (!year.isNullOrBlank()) {
+        val y = Regex.escape(year.trim())
+        val stripped = cleaned
+            .replace(Regex("\\s*\\($y\\)$"), "")
+            .replace(Regex("\\s+$y$"), "")
+            .trim()
+        if (stripped.isNotEmpty()) cleaned = stripped
+    } else {
+        val stripped = cleaned.replace(TRAILING_PAREN_YEAR_RE, "").trim()
+        if (stripped.isNotEmpty()) cleaned = stripped
+    }
+    return cleaned.ifBlank { rawTitle.trim() }
+}
 private val MONOGRAM_SPLIT_RE = Regex("[\\s·:/-]+")
 private val SMALL_WORDS = setOf(
     "a", "an", "the", "of", "and", "in", "on", "to", "for",
@@ -226,22 +244,22 @@ fun tileFactsLine(t: LibraryTile): String {
         LibraryKind.Clip -> {
             val e = t.items.firstOrNull()?.entry
             val second = if (n > 1) "$n versions" else e?.let { formatBytes(it.size) }.orEmpty()
-            listOfNotNull("Clip", second.takeIf { it.isNotEmpty() }).joinToString(" · ")
+            listOfNotNull("Video", second.takeIf { it.isNotEmpty() }).joinToString(" · ")
         }
     }
 }
 
 fun tileStateLabel(t: LibraryTile): Pair<String, Boolean> {
-    if (t.items.isNotEmpty() && t.saved == t.items.size) return "Saved here" to true
+    if (t.items.isNotEmpty() && t.saved == t.items.size) return "Saved on device" to true
     if (t.saved > 0 || t.partial) {
         val text = when (t.kind) {
-            LibraryKind.Series -> "${t.saved} saved here"
-            LibraryKind.Album -> "${t.saved} of ${t.items.size} saved here"
-            else -> "Partly saved"
+            LibraryKind.Series -> "${t.saved} saved on device"
+            LibraryKind.Album -> "${t.saved} of ${t.items.size} saved"
+            else -> "Partly cached"
         }
         return text to false
     }
-    return "On the network" to false
+    return "Streams over swarm" to false
 }
 
 /**
@@ -348,25 +366,39 @@ fun buildTiles(entries: List<Entry>): List<LibraryTile> {
     val rawTiles = LinkedHashMap<String, RawTile>()
     for (e in entries) {
         val m = IMDB_RE.matchEntire(e.id)
-        val music = m == null && e.season != null
+        val music = m == null && (
+            e.season != null ||
+                e.music != null ||
+                e.id.startsWith("yt:") ||
+                e.id.startsWith("sc:") ||
+                e.id.startsWith("album:") ||
+                e.id.startsWith("mb:") ||
+                e.id.startsWith("discogs:")
+            )
         val kind = when {
             m == null && music -> LibraryKind.Album
             m == null -> LibraryKind.Clip
             m.groupValues[2].isNotEmpty() -> LibraryKind.Series
             else -> LibraryKind.Movie
         }
+        val imdbId = m?.groupValues?.get(1)
         val key = when (kind) {
             LibraryKind.Clip -> "v:${e.id}/${e.sha256}"
             LibraryKind.Album -> "album:${e.seriesKey.ifEmpty { e.id }}"
-            LibraryKind.Series -> "show:${m!!.groupValues[1]}"
-            LibraryKind.Movie -> "movie:${m!!.groupValues[1]}"
+            LibraryKind.Series -> "show:${imdbId ?: e.id}"
+            LibraryKind.Movie -> "movie:${imdbId ?: e.id}"
         }
         val tile = rawTiles.getOrPut(key) {
+            val cleanTitle = if (kind == LibraryKind.Movie || kind == LibraryKind.Series) {
+                cleanCinemaTitle(e.title, e.baseTitle, e.year)
+            } else {
+                e.title.replace(TRAILING_EP_RE, "")
+            }
             RawTile(
                 key = key,
                 kind = kind,
-                imdb = m?.groupValues?.get(1),
-                title = e.title.replace(TRAILING_EP_RE, ""),
+                imdb = imdbId,
+                title = cleanTitle,
             )
         }
         val season = if (m != null) m.groupValues[2].toIntOrNull() else e.season
@@ -418,11 +450,12 @@ private fun mergeAlbums(rawAlbums: List<RawTile>): List<LibraryTile> {
         for (item in t.items) {
             val a = item.entry.music?.artist.orEmpty()
             val prefix = "$a · "
-            val name = if (a.isNotEmpty() && item.entry.title.startsWith(prefix)) {
-                item.entry.title.substring(prefix.length)
-            } else {
-                item.entry.title
-            }
+            val name = when {
+                a.isNotEmpty() && item.entry.title.startsWith(prefix) -> item.entry.title.substring(prefix.length)
+                a.isNotEmpty() && item.entry.title.contains(" · ") &&
+                    fold(item.entry.title.substringBefore(" · ")) == fold(a) -> item.entry.title.substringAfter(" · ")
+                else -> item.entry.title
+            }.ifBlank { item.entry.music?.title.orEmpty() }.ifBlank { t.title }
             val voteKey = "$a\n$name"
             val vote = votes.getOrPut(voteKey) { AlbumVote(a, name) }
             vote.count++

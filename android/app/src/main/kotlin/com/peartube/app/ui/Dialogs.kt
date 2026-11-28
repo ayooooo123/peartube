@@ -14,8 +14,11 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.toggleable
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
@@ -42,7 +45,10 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardCapitalization
@@ -51,7 +57,9 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.peartube.app.AcquireJob
 import com.peartube.app.AppModel
-import com.peartube.app.p2pSummary
+import com.peartube.app.DetectedMediaKind
+import com.peartube.app.ShareImportMode
+import com.peartube.app.classifyLinkAcquisition
 import com.peartube.app.parsePeartubeAddUrl
 import com.peartube.shared.QrCodeView
 import com.peartube.shared.clock
@@ -64,145 +72,312 @@ fun UnderTheHoodSheet(
     onClose: () -> Unit,
     onOpenNetwork: () -> Unit,
     onOpenSettings: () -> Unit,
+    onOpenAdd: () -> Unit = {
+        onClose()
+        model.openAddSheet()
+    },
+    onOpenTvs: () -> Unit = {
+        onClose()
+        model.openCastSheet()
+    },
 ) {
     val status by model.status.collectAsState()
     val identity by model.identity.collectAsState()
-    val settings by model.settings.collectAsState()
+    val cast by model.cast.collectAsState()
+    val castReconnecting by model.castReconnecting.collectAsState()
+    val lastCastSession by model.lastCastSession.collectAsState()
+    val acquireJobs by model.acquireJobs.collectAsState()
+    val downloads by model.downloads.collectAsState()
     val copyText = rememberCopyText()
-    var engine by remember { mutableStateOf(false) }
     var share by remember { mutableStateOf(false) }
-    val peers = status?.let { it.peers + it.lanPeers } ?: 0L
+    val peers = status?.routes?.totalPeers ?: status?.let { it.peers + it.lanPeers } ?: 0L
+    val activeTransfers = acquireJobs.count { it.isActive } + downloads.size
+    val activeCast = cast.session ?: lastCastSession.takeIf { castReconnecting }
+    val casting = activeCast != null
 
     ModalBottomSheet(
         onDismissRequest = onClose,
         containerColor = CardBg,
+        scrimColor = Bg.copy(alpha = 0.78f),
         sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
+        modifier = Modifier.statusBarsPadding(),
     ) {
         Column(
             Modifier
                 .fillMaxWidth()
                 .verticalScroll(rememberScrollState())
                 .navigationBarsPadding()
-                .padding(horizontal = 24.dp)
+                .padding(horizontal = 20.dp)
                 .padding(bottom = 24.dp),
             verticalArrangement = Arrangement.spacedBy(14.dp),
         ) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text("Under the Hood", color = Ink, fontSize = 22.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
-                CinemaIcon(CloseIcon, "Close Under the Hood", Ink, onClick = onClose)
-            }
-            Text(
-                if ((status?.lanPeers ?: 0) > 0) "Local network discovery active"
-                else if (peers > 0) "Connected to $peers peers"
-                else "Looking for peers…",
-                color = Accent,
-                fontSize = 14.sp,
-            )
-            TextButton(onClick = onOpenNetwork) {
-                Icon(GlobeIcon, null, tint = Brand, modifier = Modifier.size(18.dp))
-                Text("Network activity (Globe, Swarm, Flow)", color = Brand, modifier = Modifier.padding(start = 6.dp))
-            }
-            HorizontalDivider(color = Line)
-            Text("Channels", color = Ink, fontWeight = FontWeight.SemiBold)
-            val sources = status?.sources.orEmpty()
-            if (sources.isNotEmpty()) {
-                sources.forEach { Text(it.alias.ifBlank { "Channel ${it.key.take(8)}" }, color = Dim) }
-            } else {
-                if (settings.tracker.isNotEmpty()) Text("Primary channel", color = Dim)
-                settings.sources.forEach { Text(it.alias.ifBlank { "Channel ${it.key.take(8)}" }, color = Dim) }
-            }
-            status?.discoveredSources.orEmpty().forEach { found ->
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(found.title, color = Ink, modifier = Modifier.weight(1f))
-                    TextButton(onClick = { model.subscribeDiscovered(found) }) { Text("Follow", color = Brand) }
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                PearlOrb(size = 28.dp)
+                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    Text(
+                        text = "Pearl Node",
+                        color = Ink,
+                        fontSize = 21.sp,
+                        fontFamily = FontFamily.SansSerif,
+                        fontWeight = FontWeight.Bold,
+                        letterSpacing = (-0.6).sp,
+                    )
+                    Text(
+                        text = when {
+                            (status?.lanPeers ?: 0L) > 0L -> "Local network discovery active · $peers peers"
+                            peers > 0L -> "Connected to $peers peers"
+                            else -> "Looking for peers…"
+                        },
+                        color = if (peers > 0L) Accent else Warn,
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.Medium,
+                    )
                 }
+                CinemaIcon(CloseIcon, "Close Pearl Node", Ink, onClick = onClose)
             }
-            TextButton(onClick = onOpenSettings) {
-                Icon(AddIcon, null, tint = Brand, modifier = Modifier.size(18.dp))
-                Text("Add to library", color = Brand, modifier = Modifier.padding(start = 6.dp))
-            }
-            status?.channel?.takeIf { it.isNotBlank() }?.let { channel ->
-                TextButton(onClick = { share = !share }) {
-                    Icon(ShareIcon, null, tint = Brand, modifier = Modifier.size(18.dp))
-                    Text("Share My Channel", color = Brand, modifier = Modifier.padding(start = 6.dp))
+
+            // Spatial obsidian-glass Quick Action tiles (1 tap to every node control)
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
+                    NodeQuickActionTile(
+                        icon = GlobeIcon,
+                        title = "Network & Swarm",
+                        subtitle = if (peers > 0L) "$peers peers" else "Idle",
+                        accent = if (peers > 0L) Accent else Dim,
+                        onClick = onOpenNetwork,
+                        modifier = Modifier.weight(1f),
+                    )
+                    NodeQuickActionTile(
+                        icon = DownloadIcon,
+                        title = "Activity",
+                        subtitle = if (activeTransfers > 0) "$activeTransfers running" else "Queue empty",
+                        accent = if (activeTransfers > 0) BrandHover else Dim,
+                        onClick = onOpenAdd,
+                        modifier = Modifier.weight(1f),
+                    )
                 }
-                AnimatedVisibility(share) {
-                    Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.fillMaxWidth()) {
-                        QrCodeView("peartube://channel/$channel", Modifier.size(220.dp))
-                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            TextButton(onClick = { copyText("peartube://channel/$channel") }) {
-                                Text("Copy link", color = Brand)
-                            }
-                            status?.writer?.takeIf { it.isNotBlank() }?.let { wKey ->
-                                TextButton(onClick = { copyText(wKey) }) {
-                                    Text("Copy device key", color = Dim)
-                                }
-                            }
-                        }
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
+                    NodeQuickActionTile(
+                        icon = AddIcon,
+                        title = "Add Link / File",
+                        subtitle = "URL, QR, or key",
+                        accent = Pearl,
+                        onClick = onOpenAdd,
+                        modifier = Modifier.weight(1f),
+                    )
+                    NodeQuickActionTile(
+                        icon = TvIcon,
+                        title = "Cast to TV",
+                        subtitle = when {
+                            cast.session != null -> cast.session?.receiverName.orEmpty().ifBlank { "Casting" }
+                            castReconnecting && activeCast != null -> "Reconnecting…"
+                            else -> "Nearby TVs"
+                        },
+                        accent = if (casting) Accent else Dim,
+                        onClick = onOpenTvs,
+                        modifier = Modifier.weight(1f),
+                    )
+                }
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(CardShape)
+                        .background(CardElevated)
+                        .border(1.dp, GlassBorder, CardShape)
+                        .clickable(onClick = onOpenSettings)
+                        .padding(horizontal = 14.dp, vertical = 12.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                    Icon(SettingsIcon, null, tint = Pearl, modifier = Modifier.size(20.dp))
+                    Column(Modifier.weight(1f)) {
+                        Text("Settings", color = Ink, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+                        Text("Channels, Soulseek, routing, storage", color = Dim, fontSize = 12.sp)
                     }
-                }
-                if (identity?.mnemonicSet == true) {
-                    TextButton(onClick = { model.copyRecoveryPhrase { copyText(it) } }) {
-                        Text("Copy 12-word recovery phrase", color = Brand)
-                    }
-                }
-                identity?.accessUri?.takeIf { it.isNotBlank() }?.let { passUri ->
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text("Subscriber pass · Epoch ${identity?.epoch ?: 1L}", color = Dim, modifier = Modifier.weight(1f), fontSize = 13.sp)
-                        TextButton(onClick = { copyText(passUri) }) { Text("Copy pass", color = Brand) }
-                        TextButton(onClick = { model.rotateSubscriberPass() }) { Text("Rotate", color = Dim) }
-                    }
-                }
-                val linkedWriters = identity?.writers.orEmpty()
-                if (linkedWriters.size > 1) {
-                    linkedWriters.forEach { w ->
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Text(
-                                "${w.alias.ifBlank { w.key.take(8) }}${if (w.selfDevice) " (this phone)" else " · ${w.role}"}",
-                                color = Dim,
-                                fontSize = 13.sp,
-                                modifier = Modifier.weight(1f),
-                            )
-                            if (w.key != channel) {
-                                TextButton(onClick = { model.revokeLinkedWriter(w.key) }) { Text("Remove", color = Danger) }
-                            }
-                        }
-                    }
+                    Icon(ChevronRightIcon, null, tint = Dim, modifier = Modifier.size(18.dp))
                 }
             }
-            HorizontalDivider(color = Line)
+
+            // Single calm rounded obsidian card for Your Channel + Storage summary
+            val channel = status?.channel.orEmpty()
+            val passUri = identity?.accessUri.orEmpty()
             val savedCache = status?.cachedBytes ?: 0L
-            Text(
-                if (savedCache > 0L) "Storage · ${formatBytes(savedCache)} cached" else "Storage · No cached files",
-                color = Dim,
-            )
-            TextButton(onClick = { model.clearCache() }) {
-                Icon(DeleteSweepIcon, null, tint = Dim, modifier = Modifier.size(18.dp))
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(CardShape)
+                    .background(CardElevated)
+                    .border(1.dp, GlassBorder, CardShape)
+                    .padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                        Text(
+                            text = "Your Channel",
+                            color = Ink,
+                            fontSize = 14.sp,
+                            fontWeight = FontWeight.SemiBold,
+                        )
+                        Text(
+                            text = if (channel.isNotBlank()) "${channel.take(12)}…" else "Starting node…",
+                            color = Dim,
+                            fontSize = 12.sp,
+                            fontFamily = FontFamily.Monospace,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                    if (channel.isNotBlank()) {
+                        Row(
+                            modifier = Modifier
+                                .clip(PillShape)
+                                .background(if (share) Pearl else GlassBg)
+                                .then(
+                                    if (share) Modifier else Modifier.border(0.75.dp, GlassBorder, PillShape),
+                                )
+                                .clickable { share = !share }
+                                .padding(horizontal = 12.dp, vertical = 6.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(5.dp),
+                        ) {
+                            Icon(
+                                imageVector = ShareIcon,
+                                contentDescription = null,
+                                tint = if (share) PearlInk else Ink,
+                                modifier = Modifier.size(14.dp),
+                            )
+                            Text(
+                                text = "Share",
+                                color = if (share) PearlInk else Ink,
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.SemiBold,
+                            )
+                        }
+                    }
+                    if (passUri.isNotBlank()) {
+                        Box(
+                            modifier = Modifier
+                                .clip(PillShape)
+                                .background(GlassBg)
+                                .border(0.75.dp, GlassBorder, PillShape)
+                                .clickable {
+                                    copyText(passUri)
+                                    model.notice.value = "Subscriber pass copied"
+                                }
+                                .padding(horizontal = 12.dp, vertical = 6.dp),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Text(
+                                text = "Copy pass",
+                                color = Ink,
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.SemiBold,
+                            )
+                        }
+                    }
+                }
+
+                if (channel.isNotBlank()) {
+                    AnimatedVisibility(share) {
+                        Column(
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.spacedBy(10.dp),
+                            modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
+                        ) {
+                            QrCodeView("peartube://channel/$channel", Modifier.size(200.dp))
+                            Box(
+                                modifier = Modifier
+                                    .clip(PillShape)
+                                    .background(Pearl)
+                                    .clickable {
+                                        copyText("peartube://channel/$channel")
+                                        model.notice.value = "Channel link copied"
+                                    }
+                                    .padding(horizontal = 16.dp, vertical = 8.dp),
+                                contentAlignment = Alignment.Center,
+                            ) {
+                                Text(
+                                    text = "Copy channel link",
+                                    color = PearlInk,
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.SemiBold,
+                                )
+                            }
+                        }
+                    }
+                }
+
+                HorizontalDivider(color = Line.copy(alpha = 0.55f))
+
                 Text(
-                    if (savedCache > 0L) "Free up cache" else "Compact storage cache",
-                    color = Ink,
-                    modifier = Modifier.padding(start = 6.dp),
+                    text = if (savedCache > 0L) "Storage · ${formatBytes(savedCache)} cached" else "Storage · No cached files",
+                    color = Dim,
+                    fontSize = 12.sp,
                 )
             }
-            HorizontalDivider(color = Line)
-            Row(
-                Modifier
-                    .fillMaxWidth()
-                    .clickable { engine = !engine }
-                    .padding(vertical = 8.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Text("Engine Room", color = Dim, modifier = Modifier.weight(1f))
-                Icon(if (engine) ChevronDownIcon else ChevronRightIcon, null, tint = Dim)
-            }
-            AnimatedVisibility(engine) {
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text("$peers peers · ${sources.size} sources · ${formatBytes(status?.blobBytes ?: 0L)}", color = Dim, fontSize = 12.sp)
-                    status?.lan?.let { Text("LAN $it", color = Dim, fontSize = 12.sp) }
-                    p2pSummary(status)?.let { Text(it, color = Brand, fontSize = 12.sp) }
-                }
-            }
         }
+    }
+}
+
+@Composable
+private fun NodeQuickActionTile(
+    icon: ImageVector,
+    title: String,
+    subtitle: String,
+    accent: Color,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Column(
+        modifier = modifier
+            .clip(CardShape)
+            .background(CardElevated)
+            .border(1.dp, GlassBorder, CardShape)
+            .clickable(onClick = onClick)
+            .padding(horizontal = 14.dp, vertical = 12.dp),
+        verticalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Box(
+                modifier = Modifier
+                    .size(30.dp)
+                    .clip(CircleShape)
+                    .background(GlassBg)
+                    .border(1.dp, GlassBorder, CircleShape),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(icon, null, tint = accent, modifier = Modifier.size(16.dp))
+            }
+            Text(
+                text = title,
+                color = Ink,
+                fontSize = 13.sp,
+                fontWeight = FontWeight.SemiBold,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+        Text(
+            text = subtitle,
+            color = Dim,
+            fontSize = 11.sp,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
     }
 }
 
@@ -215,6 +390,7 @@ fun AddToLibrarySheet(
 ) {
     val sheet by model.addSheet.collectAsState()
     val jobs by model.acquireJobs.collectAsState()
+    val podcastFormat by model.podcastImportFormat.collectAsState()
     var scanner by remember { mutableStateOf(false) }
     var discardPrompt by remember { mutableStateOf(false) }
 
@@ -254,6 +430,7 @@ fun AddToLibrarySheet(
         onDismissRequest = ::requestClose,
         containerColor = CardBg,
         sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
+        modifier = Modifier.statusBarsPadding(),
     ) {
         if (scanner) {
             QrScannerView(
@@ -261,7 +438,8 @@ fun AddToLibrarySheet(
                     scanner = false
                     if (it.startsWith("peartube:", true) || it.startsWith("http://", true) || it.startsWith("https://", true)) {
                         model.handleSharedText(it)
-                        if (!it.startsWith("http", true) && parsePeartubeAddUrl(it) == null) {
+                        val isWebTarget = it.startsWith("http", true) || parsePeartubeAddUrl(it) != null
+                        if (!isWebTarget || model.shareImportMode.value == ShareImportMode.Auto) {
                             model.closeAddSheet(clearInput = true)
                         }
                     } else {
@@ -384,13 +562,29 @@ fun AddToLibrarySheet(
                             ) {
                                 Text(badge, color = BrandRing, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
                             }
+                            val detected = sheet.detectedKind
+                                ?: classifyLinkAcquisition(unwrappedHttp ?: trimmed, info, podcastFormat).kind
+                            val (kindBg, kindFg) = when (detected) {
+                                DetectedMediaKind.Music -> Accent.copy(alpha = 0.16f) to Accent
+                                DetectedMediaKind.Podcast -> Warn.copy(alpha = 0.16f) to Warn
+                                DetectedMediaKind.Video -> GlassBg to Ink
+                            }
+                            Box(
+                                Modifier
+                                    .clip(PillShape)
+                                    .background(kindBg)
+                                    .border(0.75.dp, GlassBorder, PillShape)
+                                    .padding(horizontal = 9.dp, vertical = 3.dp),
+                            ) {
+                                Text(detected.label, color = kindFg, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
+                            }
                             val facts = buildList {
                                 info.durationSec?.let { add(clock(it * 1000L)) }
                                 if (info.resolution.isNotBlank()) add(info.resolution)
                                 info.size?.let { add(formatBytes(it)) }
                             }.joinToString(" · ")
                             if (facts.isNotBlank()) {
-                                Text(facts, color = Dim, fontSize = 12.sp)
+                                Text(facts, color = Dim, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
                             }
                         }
 
@@ -436,7 +630,7 @@ fun AddToLibrarySheet(
                             Column(Modifier.weight(1f)) {
                                 Text("Audio only", color = Ink, fontSize = 14.sp, fontWeight = FontWeight.Medium)
                                 Text(
-                                    if (sheet.audioOnly) "Saves into Listen as audio" else "Saves video into Watch",
+                                    if (sheet.audioOnly) "Saves into Library → Music" else "Saves video into Library",
                                     color = Dim,
                                     fontSize = 12.sp,
                                 )
@@ -452,13 +646,52 @@ fun AddToLibrarySheet(
                             Text(err, color = Danger, fontSize = 12.sp)
                         }
 
-                        PrimaryLightButton(
-                            text = if (sheet.submitting) "Starting download…" else "Save to library",
-                            icon = DownloadIcon,
-                            enabled = !sheet.submitting,
-                            onClick = model::submitAcquireFromSheet,
-                            modifier = Modifier.fillMaxWidth(),
-                        )
+                        val directStreamUrl = unwrappedHttp.takeIf { sheet.audioOnly && !info.isPage }
+                        if (directStreamUrl != null) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                HeroGlassButton(
+                                    text = "Stream",
+                                    icon = PlayIcon,
+                                    shape = PillShape,
+                                    onClick = {
+                                        val streamTitle = sheet.titleInput.trim()
+                                            .ifBlank { info.effectiveTitle }
+                                            .ifBlank { "Audio stream" }
+                                        val streamArtist = sheet.artistInput.trim()
+                                            .ifBlank { info.effectiveArtist }
+                                        model.streamExternalTrack(
+                                            id = info.effectiveId.ifBlank { directStreamUrl },
+                                            title = streamTitle,
+                                            artist = streamArtist,
+                                            streamUrl = directStreamUrl,
+                                            sourceLabel = "Streaming · ubit",
+                                            saveUrl = directStreamUrl,
+                                            saveKind = "url",
+                                        )
+                                        model.closeAddSheet(clearInput = true)
+                                    },
+                                )
+                                PrimaryLightButton(
+                                    text = if (sheet.submitting) "Starting download…" else "Save to library",
+                                    icon = DownloadIcon,
+                                    enabled = !sheet.submitting,
+                                    onClick = model::submitAcquireFromSheet,
+                                    modifier = Modifier.weight(1f),
+                                )
+                            }
+                        } else {
+                            PrimaryLightButton(
+                                text = if (sheet.submitting) "Starting download…" else "Save to library",
+                                icon = DownloadIcon,
+                                enabled = !sheet.submitting,
+                                onClick = model::submitAcquireFromSheet,
+                                modifier = Modifier.fillMaxWidth(),
+                            )
+                        }
                     }
                 }
 

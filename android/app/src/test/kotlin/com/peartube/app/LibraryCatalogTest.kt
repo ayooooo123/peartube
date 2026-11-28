@@ -193,4 +193,96 @@ class LibraryCatalogTest {
         assertEquals("b", filtered[0].entry.key)
         assertFalse(findIn("notice").matchesTrack("Blue Train", "Coltrane"))
     }
+
+    @Test
+    fun stripsDuplicateTrailingYearFromMovieAndSeriesTitles() {
+        val entries = listOf(
+            entry("m1", "imdb:tt1375666", "Inception 2010", year = "2010"),
+            entry("m2", "imdb:tt0816692", "Interstellar (2014)", year = "2014"),
+            entry("m3", "imdb:tt8579674", "1917", year = "2019"),
+            entry("m4", "imdb:tt1190080", "2012", year = "2012"),
+        )
+        val movies = LibraryCatalog.build(entries).movies.associateBy { it.imdb }
+        assertEquals("Inception", movies["tt1375666"]?.title)
+        assertEquals("Interstellar", movies["tt0816692"]?.title)
+        assertEquals("1917", movies["tt8579674"]?.title)
+        assertEquals("2012", movies["tt1190080"]?.title)
+    }
+
+    @Test
+    fun classifiesSingleAcquiredMusicTrackWithoutSeasonIntoAlbumsAndTracks() {
+        val entries = listOf(
+            entry(
+                key = "yt-humble",
+                id = "yt:abc123",
+                title = "HUMBLE.",
+                season = null,
+                episode = null,
+                seriesKey = "",
+                music = MusicMeta(title = "HUMBLE.", artist = "Kendrick Lamar"),
+            ),
+        )
+        val catalog = LibraryCatalog.build(entries)
+        assertEquals(1, catalog.albums.size)
+        assertEquals(0, catalog.clips.size)
+        assertEquals("Kendrick Lamar", catalog.albums[0].artist)
+        assertEquals("HUMBLE.", catalog.albums[0].album)
+        assertEquals(1, catalog.artists.size)
+        assertEquals("Kendrick Lamar", catalog.artists[0].name)
+        assertEquals(1, catalog.allTracks.size)
+        assertEquals("HUMBLE.", catalog.allTracks[0].name)
+        assertEquals("Kendrick Lamar", catalog.allTracks[0].artist)
+
+        val protocolIdRe = Regex("^[a-z0-9]+:[a-z0-9]+(?::s\\d{2}e\\d{2,3})?$")
+        val ytAudioId1 = normalizeAcquireId("yt:dQw4w9WgXcQ", "Never Gonna Give You Up", "Rick Astley", "https://www.youtube.com/watch?v=dQw4w9WgXcQ", audio = true)
+        val ytAudioId2 = normalizeAcquireId("", "Never Gonna Give You Up", "Rick Astley", "https://youtu.be/dQw4w9WgXcQ", audio = true)
+        assertTrue(ytAudioId1.startsWith("yt:") && ytAudioId1.endsWith(":s01e01"))
+        assertTrue(protocolIdRe.matches(ytAudioId1))
+        assertEquals(ytAudioId1, ytAudioId2)
+
+        val ytVideoId = normalizeAcquireId("yt:dQw4w9WgXcQ", "Demo Clip", "Channel", "https://www.youtube.com/watch?v=dQw4w9WgXcQ", audio = false)
+        assertTrue(ytVideoId.startsWith("clip:"))
+        assertTrue(protocolIdRe.matches(ytVideoId))
+
+        assertEquals(
+            "sc:12345:s01e01",
+            normalizeAcquireId("sc:12345", "Track", "Artist", "https://soundcloud.com/a/b", audio = true),
+        )
+        assertEquals(
+            "mb:rel1:s01e03",
+            normalizeAcquireId("mb:rel1:s01e03", "Track", "Artist", "https://example.com/a.flac", audio = true),
+        )
+        assertTrue(
+            normalizeAcquireId("", "Track", "Artist", "https://example.com/a.flac", audio = true)
+                .matches(Regex("^album:[0-9a-f]{20}:s01e01$")),
+        )
+        assertEquals(
+            "imdb:tt0133093",
+            normalizeAcquireId("imdb:tt0133093", "The Matrix", "", "https://example.com/matrix.mkv", audio = false),
+        )
+    }
+
+    @Test
+    fun stripsSafeSegmentedArtistPrefixWhenMergingSavedYouTubeAlbum() {
+        val entries = listOf(
+            Entry(
+                key = "yt:abc1234567890abcdef1:s01e01/src/blob:0",
+                id = "yt:abc1234567890abcdef1:s01e01",
+                title = "AC DC · Back in Black",
+                size = 5_000_000L,
+                sha256 = "aaa",
+                local = true,
+                streamUrl = "http://127.0.0.1:8174/v1/blob?a",
+                season = 1,
+                episode = 1,
+                seriesKey = "yt:abc1234567890abcdef1",
+                music = MusicMeta(title = "Hells Bells", artist = "AC/DC"),
+            ),
+        )
+        val cat = LibraryCatalog.build(entries)
+        assertEquals(1, cat.albums.size)
+        assertEquals("Back in Black", cat.albums[0].album)
+        assertEquals("AC/DC", cat.albums[0].artist)
+        assertEquals("Hells Bells", cat.allTracks[0].name)
+    }
 }

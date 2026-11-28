@@ -22,6 +22,11 @@ val lockEngine = (nativeLock["engine"] as Map<*, *>)["android-tv"] as String
 val engine = providers.gradleProperty("peartube.engine").orNull ?: lockEngine
 require(engine == "js" || engine == "rust") { "peartube.engine must be js or rust, not $engine" }
 val nativeLocal = providers.gradleProperty("peartube.nativeLocal").orNull
+val nativePrebuilt = providers.gradleProperty("peartube.nativePrebuilt").orNull
+val targetAbi = providers.gradleProperty("peartube.abi").orNull ?: "arm64-v8a"
+require(targetAbi == "arm64-v8a" || targetAbi == "armeabi-v7a") {
+    "peartube.abi must be arm64-v8a or armeabi-v7a, not $targetAbi"
+}
 
 abstract class TvWorkletTask @Inject constructor(private val exec: ExecOperations) : DefaultTask() {
     @get:InputFiles
@@ -66,6 +71,9 @@ abstract class TvCargoTask @Inject constructor(private val exec: ExecOperations)
     @get:Input
     abstract val profile: Property<String>
 
+    @get:Input
+    abstract val abi: Property<String>
+
     @get:Internal
     abstract val crate: DirectoryProperty
 
@@ -77,21 +85,31 @@ abstract class TvCargoTask @Inject constructor(private val exec: ExecOperations)
 
     @TaskAction
     fun run() {
+        val targetAbi = abi.get()
+        val isArmv7 = targetAbi == "armeabi-v7a"
+        val triple = if (isArmv7) "armv7-linux-androideabi" else "aarch64-linux-android"
+        val tripleEnv = triple.replace('-', '_')
+        val tripleUpper = tripleEnv.uppercase()
         val bin = ndk.get().asFile.resolve("toolchains/llvm/prebuilt").listFiles()!!.single().resolve("bin")
-        val clang = bin.resolve("aarch64-linux-android29-clang").path
+        val clang = bin.resolve(if (isArmv7) "armv7a-linux-androideabi29-clang" else "aarch64-linux-android29-clang").path
         val cargo = File(System.getProperty("user.home"), ".cargo/bin/cargo").takeIf { it.exists() }?.path ?: "cargo"
         val manifest = crate.get().asFile.resolve("Cargo.toml")
         exec.exec {
-            commandLine(cargo, "build", "--manifest-path", manifest.path, "--target", "aarch64-linux-android", "--profile", profile.get())
-            environment("CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER", clang)
-            environment("CC_aarch64_linux_android", clang)
-            environment("CXX_aarch64_linux_android", "$clang++")
-            environment("AR_aarch64_linux_android", bin.resolve("llvm-ar").path)
+            commandLine(cargo, "build", "--manifest-path", manifest.path, "--target", triple, "--profile", profile.get())
+            environment("CARGO_TARGET_${tripleUpper}_LINKER", clang)
+            environment("CC_$tripleEnv", clang)
+            environment("CXX_$tripleEnv", "$clang++")
+            environment("AR_$tripleEnv", bin.resolve("llvm-ar").path)
             val home = System.getProperty("user.home")
-            environment("CARGO_ENCODED_RUSTFLAGS", listOf("-Cllvm-args=-vectorize-loops", "-Cllvm-args=-vectorize-slp", "-Clink-arg=-Wl,-z,max-page-size=16384,--icf=all,--gc-sections,--pack-dyn-relocs=relr,--strip-all", "--remap-path-prefix=$home/.cargo/git/checkouts/=", "--remap-path-prefix=$home/.cargo/registry/src/=", "--remap-path-prefix=$home/projects/=", "--remap-path-prefix=$home=~").joinToString("\u001f"))
+            val linkArg = if (isArmv7) {
+                "-Clink-arg=-Wl,-z,max-page-size=16384,--icf=all,--gc-sections,--strip-all"
+            } else {
+                "-Clink-arg=-Wl,-z,max-page-size=16384,--icf=all,--gc-sections,--pack-dyn-relocs=relr,--strip-all"
+            }
+            environment("CARGO_ENCODED_RUSTFLAGS", listOf("-Cllvm-args=-vectorize-loops", "-Cllvm-args=-vectorize-slp", linkArg, "--remap-path-prefix=$home/.cargo/git/checkouts/=", "--remap-path-prefix=$home/.cargo/registry/src/=", "--remap-path-prefix=$home/projects/=", "--remap-path-prefix=$home=~").joinToString("\u001f"))
         }
-        val built = crate.get().asFile.resolve("target/aarch64-linux-android/${if (profile.get() == "dev") "debug" else "release"}/libpeartube.so")
-        val out = libsDir.get().asFile.resolve("arm64-v8a").apply { deleteRecursively(); mkdirs() }
+        val built = crate.get().asFile.resolve("target/$triple/${if (profile.get() == "dev") "debug" else "release"}/libpeartube.so")
+        val out = libsDir.get().asFile.resolve(targetAbi).apply { deleteRecursively(); mkdirs() }
         built.copyTo(out.resolve("libpeartube.so"))
     }
 }
@@ -112,7 +130,7 @@ android {
         val (major, minor, patch) = appVersion.split(".").map { it.toInt() }
         versionCode = major * 10_000 + minor * 100 + patch
         versionName = appVersion
-        ndk { abiFilters += "arm64-v8a" }
+        ndk { abiFilters += targetAbi }
         buildConfigField("String", "ENGINE", "\"$engine\"")
     }
     ndkVersion = "29.0.14206865"
@@ -180,13 +198,21 @@ androidComponents {
             variant.sources.assets?.addGeneratedSourceDirectory(workletTask, TvWorkletTask::assetsDir)
             variant.sources.jniLibs?.addGeneratedSourceDirectory(workletTask, TvWorkletTask::libsDir)
         } else {
-            val native = registerNativeEngine(variant.name, variant.buildType, nativeLocal, androidComponents.sdkComponents.ndkDirectory)
+            val native = registerNativeEngine(
+                variant = variant.name,
+                buildType = variant.buildType,
+                local = nativeLocal,
+                ndk = androidComponents.sdkComponents.ndkDirectory,
+                abi = targetAbi,
+                prebuilt = nativePrebuilt,
+            )
             variant.sources.jniLibs?.addGeneratedSourceDirectory(native, NativeEngineTask::libsDir)
         }
         val cargo = tasks.register<TvCargoTask>("cargo${variant.name.replaceFirstChar { it.uppercase() }}") {
             crate.set(nativeCrate)
             sources.from(fileTree(nativeCrate.resolve("src")), nativeCrate.resolve("Cargo.toml"), nativeCrate.resolve("Cargo.lock"), checkout.parentFile.resolve("peartube-media/crates").takeIf { it.isDirectory }?.let { fileTree(it) } ?: files())
             profile.set(if (variant.buildType == "release") "release" else "dev")
+            abi.set(targetAbi)
             ndk.set(androidComponents.sdkComponents.ndkDirectory)
             libsDir.set(layout.buildDirectory.dir("cargo/${variant.name}"))
         }

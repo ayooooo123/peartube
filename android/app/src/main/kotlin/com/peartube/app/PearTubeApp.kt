@@ -11,6 +11,7 @@ class PearTubeApp : Application() {
 
     override fun onCreate() {
         super.onCreate()
+        ExternalImageCache.init(this)
         model = AppModel(this)
         ProcessLifecycleOwner.get().lifecycle.addObserver(object : DefaultLifecycleObserver {
             override fun onStart(owner: LifecycleOwner) {

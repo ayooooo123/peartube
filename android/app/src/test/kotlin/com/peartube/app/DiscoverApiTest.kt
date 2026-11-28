@@ -227,4 +227,36 @@ class DiscoverApiTest {
         assertNull(resolveLoopbackThumbUrl(null, "/v1/discover/thumb/0123456789abcdef0123"))
         assertNull(resolveLoopbackThumbUrl("http://127.0.0.1:8174", ""))
     }
+
+    @Test
+    fun matchesFollowedCreatorByIdHandleUrlOrNameForUnfollow() {
+        val followed = listOf(
+            DiscoverCreator(
+                id = "youtube:UCBJycsmduvYEL83R_U4JriQ",
+                source = "youtube",
+                handle = "@mkbhd",
+                name = "Marques Brownlee",
+                url = "https://www.youtube.com/channel/UCBJycsmduvYEL83R_U4JriQ",
+                followed = true,
+            ),
+        )
+        val byHandle = com.peartube.app.ui.findFollowedCreator(
+            creators = followed,
+            id = "youtube:@mkbhd",
+            url = "https://www.youtube.com/@mkbhd",
+            handle = "@mkbhd",
+            source = "youtube",
+            name = "Marques Brownlee",
+        )
+        assertEquals("youtube:UCBJycsmduvYEL83R_U4JriQ", byHandle?.id)
+        val missing = com.peartube.app.ui.findFollowedCreator(
+            creators = followed,
+            id = "youtube:@veritasium",
+            url = "https://www.youtube.com/@veritasium",
+            handle = "@veritasium",
+            source = "youtube",
+            name = "Veritasium",
+        )
+        assertNull(missing)
+    }
 }

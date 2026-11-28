@@ -43,6 +43,14 @@ abstract class NativeEngineTask @Inject constructor(private val exec: ExecOperat
     @get:Input
     abstract val local: Property<String>
 
+    /** Optional prebuilt libpeartube_native_ffi.so path for non-default ABIs (e.g. armeabi-v7a). */
+    @get:Input
+    abstract val prebuilt: Property<String>
+
+    /** Target Android ABI: arm64-v8a (default) or armeabi-v7a. */
+    @get:Input
+    abstract val abi: Property<String>
+
     /** The native.lock asset key this variant links. */
     @get:Input
     abstract val asset: Property<String>
@@ -68,37 +76,50 @@ abstract class NativeEngineTask @Inject constructor(private val exec: ExecOperat
 
     @TaskAction
     fun run() {
+        val targetAbi = abi.get()
+        val prebuiltPath = prebuilt.get()
         // A pinned engine must match this checkout's engine contract; a local checkout is the developer's call.
-        if (local.get().isEmpty()) {
+        if (local.get().isEmpty() && prebuiltPath.isEmpty()) {
             exec.exec {
                 it.workingDir = repo.get().asFile
                 it.commandLine("python3", script.get().asFile.path, "check", "--strict")
             }
         }
         val fetched = fetchDir.get().asFile.apply { deleteRecursively(); mkdirs() }
-        val out = libsDir.get().asFile.resolve("arm64-v8a").apply { deleteRecursively(); mkdirs() }
+        val out = libsDir.get().asFile.resolve(targetAbi).apply { deleteRecursively(); mkdirs() }
         exec.exec {
             it.workingDir = repo.get().asFile
             it.commandLine(
                 buildList {
                     add("python3"); add(script.get().asFile.path); add("fetch")
                     if (local.get().isNotEmpty()) { add("--local"); add(local.get()) }
-                    add(asset.get()); add("header"); add(fetched.path)
+                    if (prebuiltPath.isEmpty()) { add(asset.get()) }
+                    add("header"); add(fetched.path)
                 },
             )
             // ffi/build.sh reads the NDK from this; the module's is the one Gradle resolved.
             it.environment("ANDROID_NDK_HOME", ndk.get().asFile.path)
         }
-        val prefix = ndk.get().asFile.resolve("toolchains/llvm/prebuilt").listFiles()!!.single()
+        val prefix = requireNotNull(ndk.get().asFile.resolve("toolchains/llvm/prebuilt").listFiles()) {
+            "NDK prebuilt toolchain directory not found"
+        }.single()
         val bin = prefix.resolve("bin")
-        val clang = bin.resolve("aarch64-linux-android29-clang").path
+        val (clangName, sysrootArch) = when (targetAbi) {
+            "armeabi-v7a" -> "armv7a-linux-androideabi29-clang" to "arm-linux-androideabi"
+            else -> "aarch64-linux-android29-clang" to "aarch64-linux-android"
+        }
+        val clang = bin.resolve(clangName).path
         if (!fetched.resolve(header.get()).isFile) {
             throw GradleException("sync-native.py did not fetch ${header.get()}")
         }
         // The release's names become the ones the linker and System.loadLibrary() use.
         val link = fetched.resolve("link").apply { mkdirs() }
-        fetched.resolve(library.get()).copyTo(link.resolve("libpeartube_native_ffi.so"), overwrite = true)
-        prefix.resolve("sysroot/usr/lib/aarch64-linux-android/libc++_shared.so")
+        val sourceLib = if (prebuiltPath.isNotEmpty()) File(prebuiltPath) else fetched.resolve(library.get())
+        if (!sourceLib.isFile) {
+            throw GradleException("Native engine library not found: ${sourceLib.path}")
+        }
+        sourceLib.copyTo(link.resolve("libpeartube_native_ffi.so"), overwrite = true)
+        prefix.resolve("sysroot/usr/lib/$sysrootArch/libc++_shared.so")
             .copyTo(out.resolve("libc++_shared.so"), overwrite = true)
         exec.exec {
             it.commandLine(
@@ -117,7 +138,14 @@ abstract class NativeEngineTask @Inject constructor(private val exec: ExecOperat
  * `android-arm64-dev` asset (dev cargo profile), every other build type `android-arm64`.
  * The module wires the returned task's [NativeEngineTask.libsDir] into its jniLibs sources.
  */
-fun Project.registerNativeEngine(variant: String, buildType: String?, local: String?, ndk: Provider<Directory>): TaskProvider<NativeEngineTask> {
+fun Project.registerNativeEngine(
+    variant: String,
+    buildType: String?,
+    local: String?,
+    ndk: Provider<Directory>,
+    abi: String = "arm64-v8a",
+    prebuilt: String? = null,
+): TaskProvider<NativeEngineTask> {
     val checkout = rootDir.parentFile
     val lockFile = File(checkout, "native.lock")
     val assets = (JsonSlurper().parseText(lockFile.readText()) as Map<*, *>)["assets"] as Map<*, *>
@@ -129,6 +157,8 @@ fun Project.registerNativeEngine(variant: String, buildType: String?, local: Str
         it.lock.set(lockFile)
         it.jni.set(File(checkout, "android/jni/peartube_jni.c"))
         it.local.set(local ?: "")
+        it.prebuilt.set(prebuilt ?: "")
+        it.abi.set(abi)
         it.asset.set(asset)
         it.library.set(assetFile(asset))
         it.header.set(assetFile("header"))

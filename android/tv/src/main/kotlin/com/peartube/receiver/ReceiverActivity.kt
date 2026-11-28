@@ -112,6 +112,7 @@ private val TvScrim = Brush.verticalGradient(
 
 class ReceiverActivity : ComponentActivity() {
     private lateinit var player: PlayerHost
+    @Volatile internal var activePlayerHandle: Long = 0L
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -136,6 +137,14 @@ class ReceiverActivity : ComponentActivity() {
         }
     }
 
+    override fun onStart() {
+        super.onStart()
+        val h = activePlayerHandle
+        if (h != 0L) {
+            runCatching { NativePlayer.resume(h) }
+        }
+    }
+
     override fun onResume() {
         super.onResume()
         (application as ReceiverApp).worker.activityResumed = true
@@ -146,7 +155,17 @@ class ReceiverActivity : ComponentActivity() {
         super.onPause()
     }
 
+    override fun onStop() {
+        val h = activePlayerHandle
+        if (h != 0L) {
+            runCatching { NativePlayer.pause(h) }
+            runCatching { NativePlayer.suspend(h) }
+        }
+        super.onStop()
+    }
+
     override fun onDestroy() {
+        activePlayerHandle = 0L
         player.destroy()
         super.onDestroy()
     }
@@ -398,6 +417,7 @@ private fun DumbTvReceiverScreen(activity: Activity, worker: ReceiverWorker, hos
     fun closeStream() {
         val h = handle
         handle = 0L
+        (activity as? ReceiverActivity)?.activePlayerHandle = 0L
         overlaySheet = null
         worker.isStreaming = false
         pendingSeekMs = null
@@ -487,6 +507,7 @@ private fun DumbTvReceiverScreen(activity: Activity, worker: ReceiverWorker, hos
                         .getOrDefault(0L)
                     if (opened != 0L) {
                         handle = opened
+                        (activity as? ReceiverActivity)?.activePlayerHandle = opened
                     } else {
                         worker.isStreaming = false
                         host.close()
@@ -547,7 +568,6 @@ private fun DumbTvReceiverScreen(activity: Activity, worker: ReceiverWorker, hos
                     latestHolder.snap = snap
                     snap.displayAspect?.let { host.fit(it) }
                     snap.videoFps?.let { host.matchFrameRate(it) }
-                    host.shown(snap.positionMs)
                     // Keep AndroidComposeView dead-still while the HUD is tucked away unless playback status visibly shifted.
                     val visibleChange = uiOpen ||
                         snap.playing != state.playing ||

@@ -1,18 +1,17 @@
 package com.peartube.app.ui
 
+import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.ExperimentalLayoutApi
-import androidx.compose.foundation.layout.FlowRow
-import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -23,42 +22,52 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Icon
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import java.util.Locale
 import com.peartube.app.AppModel
-import com.peartube.app.Entry
+import com.peartube.app.ExternalDiscoveryApi
+import com.peartube.app.ExternalImageCache
 import com.peartube.app.LibraryCatalog
 import com.peartube.app.LibraryKind
+import com.peartube.app.LibrarySubTab
 import com.peartube.app.LibraryTile
 import com.peartube.app.MusicState
+import com.peartube.app.PeekTarget
 import com.peartube.app.Room
 import com.peartube.app.Screen
 import com.peartube.app.VideoResumeInfo
 import com.peartube.app.WatchProgress
 import com.peartube.app.findStartedVideos
 import com.peartube.app.formatTimeLeft
+import com.peartube.app.imdbBackdropUrl
+import com.peartube.app.imdbPosterUrl
 import com.peartube.app.plural
+import com.peartube.app.primaryEntryForVideo
 import com.peartube.app.tileFactsLine
 import com.peartube.app.tileStateLabel
-import com.peartube.app.toTrackItem
 import com.peartube.app.toTrackItems
 import com.peartube.shared.formatBytes
 
@@ -72,10 +81,20 @@ private data class KeepItem(
     val hue: Int = 0,
     val seed: Long = 0L,
     val monogram: String = "",
-    val badge: String? = null,
-    val kindLabel: String = "Clip",
+    val artist: String = "",
+    val albumName: String = "",
+    val artUrl: String = "",
+    val imdb: String? = null,
+    val kindLabel: String = "Video",
     val onClick: () -> Unit,
+    val onLongClick: (() -> Unit)? = null,
 )
+
+private sealed interface HomeSpotlight {
+    data class ContinueVideo(val info: VideoResumeInfo) : HomeSpotlight
+    data class FeaturedVideo(val tile: LibraryTile) : HomeSpotlight
+    data class FeaturedAlbum(val album: LibraryTile, val isActiveTrack: Boolean, val playing: Boolean) : HomeSpotlight
+}
 
 @Composable
 fun HomeScreen(
@@ -84,11 +103,15 @@ fun HomeScreen(
     onOpenAlbum: (String) -> Unit,
     onOpenTitle: (String) -> Unit,
     onOpenMusicPlayer: () -> Unit,
+    topPadding: Dp = 0.dp,
+    heroTopInset: Dp = 64.dp,
+    bottomPadding: Dp = 24.dp,
 ) {
     val settings by model.settings.collectAsState()
     val status by model.status.collectAsState()
     val history by model.watchHistory.collectAsState()
     val musicState by model.musicState.collectAsState()
+    val haptics = LocalHapticFeedback.current
 
     val keepItems = remember(catalog, history, musicState) {
         buildKeepPlaying(catalog, history, musicState, model, onOpenMusicPlayer)
@@ -96,35 +119,89 @@ fun HomeScreen(
     val startedVideos = remember(catalog.videos, history) {
         findStartedVideos(catalog.videos, history)
     }
-    val allTrackItems = remember(catalog.allTracks) {
-        catalog.allTracks.map { it.toTrackItem() }
-    }
-    val homeAlbums = remember(catalog.albums) { catalog.albums.take(10) }
+    val homeAlbums = remember(catalog.albums) { catalog.albums.take(12) }
     val films = remember(catalog.movies, catalog.series) {
         (catalog.movies + catalog.series).sortedBy { it.title.lowercase() }
     }
     val homeVideos = remember(films, catalog.clips) {
-        (if (films.isNotEmpty()) films else catalog.clips).take(10)
+        (if (films.isNotEmpty()) films else catalog.clips).take(12)
     }
     val showingClipsOnly = films.isEmpty() && catalog.clips.isNotEmpty()
 
+    val spotlight: HomeSpotlight? = remember(startedVideos, films, catalog.clips, catalog.albums, musicState) {
+        val resume = startedVideos.firstOrNull()
+        if (resume != null) {
+            HomeSpotlight.ContinueVideo(resume)
+        } else {
+            val featuredVideo = films.firstOrNull { !it.imdb.isNullOrBlank() }
+                ?: films.firstOrNull()
+                ?: catalog.clips.firstOrNull()
+            if (featuredVideo != null) {
+                HomeSpotlight.FeaturedVideo(featuredVideo)
+            } else {
+                val activeAlbum = musicState.currentTrack?.let { cur ->
+                    catalog.albums.firstOrNull { it.key == cur.albumKey }
+                }
+                val album = activeAlbum ?: catalog.albums.firstOrNull()
+                album?.let {
+                    HomeSpotlight.FeaturedAlbum(
+                        album = it,
+                        isActiveTrack = activeAlbum != null,
+                        playing = activeAlbum != null && musicState.playing,
+                    )
+                }
+            }
+        }
+    }
+
     if (catalog.tiles.isEmpty() && keepItems.isEmpty()) {
-        Box(Modifier.fillMaxSize().padding(24.dp), contentAlignment = Alignment.Center) {
+        Box(
+            Modifier
+                .fillMaxSize()
+                .padding(top = topPadding, bottom = bottomPadding, start = 24.dp, end = 24.dp),
+            contentAlignment = Alignment.Center,
+        ) {
             Column(
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.spacedBy(12.dp),
             ) {
-                Text("Nothing in your library yet.", color = Ink, fontSize = 18.sp, fontWeight = FontWeight.SemiBold)
-                if (settings.hasSources && status == null) {
-                    Text("Connecting to your channels…", color = Dim, fontSize = 14.sp)
-                } else {
-                    Text("Follow a channel or paste a link to fill your library.", color = Dim, fontSize = 14.sp)
-                }
-                Spacer(Modifier.height(4.dp))
-                PrimaryLightButton(
-                    text = "Add to library",
-                    onClick = { model.pushScreen(Screen.Settings) },
+                Text(
+                    text = "Nothing in your library yet.",
+                    color = Ink,
+                    fontSize = 20.sp,
+                    fontFamily = FontFamily.SansSerif,
+                    fontWeight = FontWeight.Bold,
+                    letterSpacing = (-0.5).sp,
+                    textAlign = TextAlign.Center,
                 )
+                Text(
+                    text = if (settings.hasSources && status == null) {
+                        "Connecting to your channels…"
+                    } else {
+                        "Explore creators & music on Discover, or paste a link to add to your library."
+                    },
+                    color = Dim,
+                    fontSize = 14.sp,
+                    textAlign = TextAlign.Center,
+                )
+                Spacer(Modifier.height(6.dp))
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    HeroPrimaryButton(
+                        text = "Explore Discover",
+                        icon = DiscoverIcon,
+                        shape = PillShape,
+                        onClick = { model.selectRoom(Room.Discover) },
+                    )
+                    HeroGlassButton(
+                        text = "Add link",
+                        icon = AddIcon,
+                        shape = PillShape,
+                        onClick = { model.openAddSheet() },
+                    )
+                }
             }
         }
         return
@@ -132,39 +209,55 @@ fun HomeScreen(
 
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
-        contentPadding = PaddingValues(top = 12.dp, bottom = 24.dp),
-        verticalArrangement = Arrangement.spacedBy(22.dp),
+        contentPadding = PaddingValues(top = topPadding, bottom = bottomPadding),
+        verticalArrangement = Arrangement.spacedBy(28.dp),
     ) {
-        if (catalog.albums.isNotEmpty() || catalog.videos.isNotEmpty()) {
-            item(key = "home-heroes") {
-                HomeQuickStartPair(
-                    catalog = catalog,
-                    musicState = musicState,
-                    startedVideo = startedVideos.firstOrNull(),
-                    onToggleMusic = { model.music.togglePlayPause() },
-                    onPlayAllMusic = {
-                        if (allTrackItems.isNotEmpty()) {
-                            model.music.playTrackList(allTrackItems, 0, "Library", shuffleOn = false)
+        if (spotlight != null) {
+            item(key = "home-editorial-hero") {
+                HomeEditorialHero(
+                    spotlight = spotlight,
+                    heroTopInset = heroTopInset,
+                    fullBleed = topPadding == 0.dp,
+                    onPlayVideo = { tile ->
+                        val entry = primaryEntryForVideo(tile, history)
+                        if (entry != null) model.playEntry(entry) else onOpenTitle(tile.key)
+                    },
+                    onResumeVideo = { info -> model.playEntry(info.entry) },
+                    onOpenTitle = onOpenTitle,
+                    onPlayAlbum = { album, isActive ->
+                        if (isActive) {
+                            model.music.togglePlayPause()
+                        } else {
+                            val tracks = album.toTrackItems()
+                            if (tracks.isNotEmpty()) {
+                                model.music.playTrackList(
+                                    tracks,
+                                    0,
+                                    album.album.ifBlank { album.title },
+                                    shuffleOn = false,
+                                )
+                            }
                         }
                     },
-                    onShuffleMusic = {
-                        if (allTrackItems.isNotEmpty()) {
-                            model.music.playTrackList(allTrackItems, -1, "Library", shuffleOn = true)
+                    onOpenAlbum = onOpenAlbum,
+                    onLongPress = {
+                        when (spotlight) {
+                            is HomeSpotlight.ContinueVideo -> model.openPeek(PeekTarget.LibraryTitle(spotlight.info.tile))
+                            is HomeSpotlight.FeaturedVideo -> model.openPeek(PeekTarget.LibraryTitle(spotlight.tile))
+                            is HomeSpotlight.FeaturedAlbum -> model.openPeek(PeekTarget.LibraryAlbum(spotlight.album))
                         }
                     },
-                    onContinueVideo = { info -> model.playEntry(info.entry) },
-                    onPlaySomething = { model.playSurpriseVideo(catalog.videos) },
                 )
             }
         }
 
         if (keepItems.isNotEmpty()) {
-            item(key = "keep-playing") {
-                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    SectionHeader(title = "Keep playing")
+            item(key = "jump-back-in") {
+                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    SectionHeader(title = "Jump Back In")
                     LazyRow(
-                        contentPadding = PaddingValues(horizontal = 16.dp),
-                        horizontalArrangement = Arrangement.spacedBy(12.dp),
+                        contentPadding = PaddingValues(horizontal = 20.dp),
+                        horizontalArrangement = Arrangement.spacedBy(14.dp),
                     ) {
                         items(keepItems, key = { it.key }) { item ->
                             KeepPlayingCard(item)
@@ -174,17 +267,63 @@ fun HomeScreen(
             }
         }
 
+        if (homeVideos.isNotEmpty()) {
+            item(key = "home-videos") {
+                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    SectionHeader(
+                        title = if (showingClipsOnly) "Videos" else "Movies & TV",
+                        actionLabel = "See all",
+                        onAction = {
+                            val targetTab = when {
+                                showingClipsOnly -> LibrarySubTab.Videos
+                                catalog.movies.isNotEmpty() -> LibrarySubTab.Movies
+                                else -> LibrarySubTab.Series
+                            }
+                            model.selectLibraryTab(targetTab)
+                        },
+                    )
+                    LazyRow(
+                        contentPadding = PaddingValues(horizontal = 20.dp),
+                        horizontalArrangement = Arrangement.spacedBy(14.dp),
+                    ) {
+                        items(homeVideos, key = { it.key }) { tile ->
+                            if (tile.kind == LibraryKind.Clip) {
+                                WideVideoShelfCard(
+                                    tile = tile,
+                                    onClick = { onOpenTitle(tile.key) },
+                                    onLongClick = {
+                                        haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                                        model.openPeek(PeekTarget.LibraryTitle(tile))
+                                    },
+                                )
+                            } else {
+                                CinemaPosterCard(
+                                    tile = tile,
+                                    onOpen = { onOpenTitle(tile.key) },
+                                    onLongClick = {
+                                        haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                                        model.openPeek(PeekTarget.LibraryTitle(tile))
+                                    },
+                                    modifier = Modifier.width(128.dp),
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
         if (homeAlbums.isNotEmpty()) {
             item(key = "home-albums") {
-                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                     SectionHeader(
                         title = "Albums",
-                        actionLabel = "All albums",
+                        actionLabel = "See all",
                         onAction = { model.selectRoom(Room.Listen) },
                     )
                     LazyRow(
-                        contentPadding = PaddingValues(horizontal = 16.dp),
-                        horizontalArrangement = Arrangement.spacedBy(12.dp),
+                        contentPadding = PaddingValues(horizontal = 20.dp),
+                        horizontalArrangement = Arrangement.spacedBy(14.dp),
                     ) {
                         items(homeAlbums, key = { it.key }) { album ->
                             AlbumShelfCard(
@@ -196,368 +335,296 @@ fun HomeScreen(
                                         model.music.playTrackList(tracks, 0, album.album.ifBlank { album.title }, shuffleOn = false)
                                     }
                                 },
+                                onLongClick = {
+                                    haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                                    model.openPeek(PeekTarget.LibraryAlbum(album))
+                                },
+                                modifier = Modifier.width(136.dp),
+                                showPlayOverlay = false,
+                                showStateLine = false,
                             )
                         }
                     }
                 }
             }
         }
-
-        if (homeVideos.isNotEmpty()) {
-            item(key = "home-videos") {
-                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    SectionHeader(
-                        title = if (showingClipsOnly) "Clips" else "Movies and series",
-                        actionLabel = if (showingClipsOnly) "All clips" else "All video",
-                        onAction = { model.selectRoom(Room.Watch) },
-                    )
-                    LazyRow(
-                        contentPadding = PaddingValues(horizontal = 16.dp),
-                        horizontalArrangement = Arrangement.spacedBy(12.dp),
-                    ) {
-                        items(homeVideos, key = { it.key }) { tile ->
-                            if (tile.kind == LibraryKind.Clip) {
-                                WideVideoShelfCard(tile = tile, onClick = { onOpenTitle(tile.key) })
-                            } else {
-                                VideoShelfCard(
-                                    tile = tile,
-                                    history = history,
-                                    onOpen = { onOpenTitle(tile.key) },
-                                    onQuickPlay = { entry -> model.playEntry(entry) },
-                                )
-                            }
-                        }
-                    }
-                }
-            }
-        }
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun HomeQuickStartPair(
-    catalog: LibraryCatalog,
-    musicState: MusicState,
-    startedVideo: VideoResumeInfo?,
-    onToggleMusic: () -> Unit,
-    onPlayAllMusic: () -> Unit,
-    onShuffleMusic: () -> Unit,
-    onContinueVideo: (VideoResumeInfo) -> Unit,
-    onPlaySomething: () -> Unit,
+private fun HomeEditorialHero(
+    spotlight: HomeSpotlight,
+    heroTopInset: Dp,
+    fullBleed: Boolean,
+    onPlayVideo: (LibraryTile) -> Unit,
+    onResumeVideo: (VideoResumeInfo) -> Unit,
+    onOpenTitle: (String) -> Unit,
+    onPlayAlbum: (LibraryTile, Boolean) -> Unit,
+    onOpenAlbum: (String) -> Unit,
+    onLongPress: (() -> Unit)? = null,
 ) {
-    val hasMusic = catalog.albums.isNotEmpty()
-    val hasVideo = catalog.videos.isNotEmpty()
-    BoxWithConstraints(Modifier.fillMaxWidth().padding(horizontal = 16.dp)) {
-        if (maxWidth >= 600.dp && hasMusic && hasVideo) {
-            Row(
-                Modifier
-                    .fillMaxWidth()
-                    .height(IntrinsicSize.Max),
-                horizontalArrangement = Arrangement.spacedBy(14.dp),
-            ) {
-                ListenHeroCard(
-                    catalog = catalog,
-                    musicState = musicState,
-                    onToggle = onToggleMusic,
-                    onPlayAll = onPlayAllMusic,
-                    onShuffle = onShuffleMusic,
-                    modifier = Modifier.weight(1f).fillMaxHeight(),
-                )
-                WatchHeroCard(
-                    catalog = catalog,
-                    startedVideo = startedVideo,
-                    onContinue = onContinueVideo,
-                    onPlaySomething = onPlaySomething,
-                    modifier = Modifier.weight(1f).fillMaxHeight(),
-                )
-            }
-        } else {
-            Column(
-                Modifier.fillMaxWidth(),
-                verticalArrangement = Arrangement.spacedBy(14.dp),
-            ) {
-                if (hasMusic) {
-                    ListenHeroCard(
-                        catalog = catalog,
-                        musicState = musicState,
-                        onToggle = onToggleMusic,
-                        onPlayAll = onPlayAllMusic,
-                        onShuffle = onShuffleMusic,
-                        modifier = Modifier.fillMaxWidth(),
-                    )
-                }
-                if (hasVideo) {
-                    WatchHeroCard(
-                        catalog = catalog,
-                        startedVideo = startedVideo,
-                        onContinue = onContinueVideo,
-                        onPlaySomething = onPlaySomething,
-                        modifier = Modifier.fillMaxWidth(),
-                    )
-                }
-            }
-        }
+    val imdb = when (spotlight) {
+        is HomeSpotlight.ContinueVideo -> spotlight.info.tile.imdb
+        is HomeSpotlight.FeaturedVideo -> spotlight.tile.imdb
+        is HomeSpotlight.FeaturedAlbum -> null
     }
-}
-
-@OptIn(ExperimentalLayoutApi::class)
-@Composable
-private fun ListenHeroCard(
-    catalog: LibraryCatalog,
-    musicState: MusicState,
-    onToggle: () -> Unit,
-    onPlayAll: () -> Unit,
-    onShuffle: () -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    val cur = musicState.currentTrack
-    val collage = remember(catalog.albums) { catalog.albums.take(4) }
-    val rawTitle = cur?.title ?: plural(catalog.allTracks.size, "track", "tracks")
-    val isLong = rawTitle.length > 22
-    val sub = when {
-        cur != null && musicState.pausedForVideo -> "Paused for a video"
-        cur != null -> cur.artist.ifBlank { cur.album.ifBlank { plural(catalog.albums.size, "album", "albums") } }
-        else -> plural(catalog.albums.size, "album", "albums")
+    val albumForArt = (spotlight as? HomeSpotlight.FeaturedAlbum)?.album
+    val hue = when (spotlight) {
+        is HomeSpotlight.ContinueVideo -> normalizeHue(spotlight.info.tile.seed)
+        is HomeSpotlight.FeaturedVideo -> normalizeHue(spotlight.tile.seed)
+        is HomeSpotlight.FeaturedAlbum -> ((spotlight.album.hue % 360) + 360) % 360
     }
 
-    HeroPanel(
-        hue = 258,
-        showOrb = false,
-        modifier = modifier,
-        backgroundOverlay = if (collage.isNotEmpty()) {
-            {
-                SleeveCollage(
-                    albums = collage,
-                    modifier = Modifier
-                        .align(Alignment.TopEnd)
-                        .padding(top = 14.dp, end = 14.dp),
-                )
-            }
-        } else {
-            null
-        },
+    val backdropUrl = remember(imdb) { imdbBackdropUrl(imdb) }
+    val posterFallbackUrl = remember(imdb) { imdbPosterUrl(imdb) }
+    val cachedAlbumUrl = remember(albumForArt) {
+        albumForArt?.let { ExternalDiscoveryApi.cachedAlbumArtUrl(it.artist, it.album.ifBlank { it.title }) }
+    }
+    val heroArt by produceState<ImageBitmap?>(
+        initialValue = backdropUrl?.let { ExternalImageCache.get(it) }
+            ?: posterFallbackUrl?.let { ExternalImageCache.get(it) }
+            ?: cachedAlbumUrl?.let { ExternalImageCache.get(it) },
+        key1 = backdropUrl,
+        key2 = posterFallbackUrl,
+        key3 = albumForArt?.key,
     ) {
-        Text(
-            text = "LISTEN",
-            color = Color.White.copy(alpha = 0.80f),
-            fontSize = 11.sp,
-            fontWeight = FontWeight.Bold,
-            letterSpacing = 1.6.sp,
-        )
-        Text(
-            text = rawTitle.uppercase(Locale.ROOT),
-            color = Color.White,
-            fontSize = if (isLong) 22.sp else 28.sp,
-            lineHeight = if (isLong) 24.sp else 29.sp,
-            fontWeight = FontWeight.ExtraBold,
-            letterSpacing = (-0.6).sp,
-            maxLines = 2,
-            overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.fillMaxWidth(if (collage.isNotEmpty()) 0.72f else 1f),
-        )
-        Text(
-            text = sub,
-            color = if (cur != null && musicState.pausedForVideo) Warn else Color.White.copy(alpha = 0.90f),
-            fontSize = 14.sp,
-            fontWeight = FontWeight.SemiBold,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-        )
-        Spacer(Modifier.height(2.dp))
-        FlowRow(
-            horizontalArrangement = Arrangement.spacedBy(10.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            if (cur != null) {
-                HeroPrimaryButton(
-                    text = if (musicState.playing) "Pause" else "Resume",
-                    icon = if (musicState.playing) PauseIcon else PlayIcon,
-                    onClick = onToggle,
+        value = when {
+            backdropUrl != null -> ExternalImageCache.load(backdropUrl)
+                ?: posterFallbackUrl?.let { ExternalImageCache.load(it) }
+            posterFallbackUrl != null -> ExternalImageCache.load(posterFallbackUrl)
+            albumForArt != null -> {
+                val url = ExternalDiscoveryApi.resolveAlbumArtUrl(
+                    albumForArt.artist,
+                    albumForArt.album.ifBlank { albumForArt.title },
                 )
+                if (!url.isNullOrBlank()) ExternalImageCache.load(url) else null
+            }
+            else -> null
+        }
+    }
+
+    val eyebrow = when (spotlight) {
+        is HomeSpotlight.ContinueVideo -> "CONTINUE WATCHING"
+        is HomeSpotlight.FeaturedVideo -> when (spotlight.tile.kind) {
+            LibraryKind.Series -> "FEATURED TV SHOW"
+            LibraryKind.Clip -> "FEATURED VIDEO"
+            else -> "FEATURED MOVIE"
+        }
+        is HomeSpotlight.FeaturedAlbum -> if (spotlight.isActiveTrack) "NOW PLAYING" else "FEATURED ALBUM"
+    }
+
+    val title = when (spotlight) {
+        is HomeSpotlight.ContinueVideo -> spotlight.info.tile.title
+        is HomeSpotlight.FeaturedVideo -> spotlight.tile.title
+        is HomeSpotlight.FeaturedAlbum -> spotlight.album.album.ifBlank { spotlight.album.title }
+    }
+
+    val metadata = when (spotlight) {
+        is HomeSpotlight.ContinueVideo -> {
+            val info = spotlight.info
+            val epPrefix = if (info.tile.kind == LibraryKind.Series && info.entry.isEpisode) {
+                "${info.entry.episodeLabel} · "
             } else {
-                HeroPrimaryButton(
-                    text = "Play all",
-                    icon = PlayIcon,
-                    onClick = onPlayAll,
-                    enabled = catalog.allTracks.isNotEmpty(),
+                ""
+            }
+            val leftPart = if (info.progress.durationMs > 0L) {
+                formatTimeLeft(info.progress.durationMs - info.progress.positionMs)
+            } else {
+                "In progress"
+            }
+            "$epPrefix$leftPart"
+        }
+        is HomeSpotlight.FeaturedVideo -> {
+            val tile = spotlight.tile
+            when (tile.kind) {
+                LibraryKind.Movie -> listOfNotNull("Movie", tile.year).joinToString(" · ")
+                LibraryKind.Series -> listOfNotNull(
+                    "TV Show",
+                    tileFactsLine(tile).takeIf { it.isNotBlank() },
+                ).joinToString(" · ")
+                else -> tileFactsLine(tile).ifBlank { "Video" }
+            }
+        }
+        is HomeSpotlight.FeaturedAlbum -> {
+            val a = spotlight.album
+            listOfNotNull(
+                a.artist.takeIf { it.isNotBlank() },
+                plural(a.items.size, "track", "tracks"),
+            ).joinToString(" · ")
+        }
+    }
+
+    val progressFraction: Float? = when (spotlight) {
+        is HomeSpotlight.ContinueVideo -> {
+            val p = spotlight.info.progress
+            if (p.positionMs > 0L && p.durationMs > 0L) spotlight.info.fraction.coerceIn(0.03f, 1f) else null
+        }
+        else -> null
+    }
+
+    val primaryLabel = when (spotlight) {
+        is HomeSpotlight.ContinueVideo -> "Resume"
+        is HomeSpotlight.FeaturedVideo -> "Play"
+        is HomeSpotlight.FeaturedAlbum -> when {
+            spotlight.playing -> "Pause"
+            spotlight.isActiveTrack -> "Resume"
+            else -> "Play"
+        }
+    }
+    val primaryIcon = if (spotlight is HomeSpotlight.FeaturedAlbum && spotlight.playing) PauseIcon else PlayIcon
+
+    val statusBarBleed = if (fullBleed) (heroTopInset - 56.dp).coerceAtLeast(0.dp) else 0.dp
+    val heroHeight = 320.dp + statusBarBleed
+    val haptics = LocalHapticFeedback.current
+
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(heroHeight)
+            .then(
+                if (onLongPress != null) {
+                    Modifier.combinedClickable(
+                        onClick = {
+                            when (spotlight) {
+                                is HomeSpotlight.ContinueVideo -> onOpenTitle(spotlight.info.tile.key)
+                                is HomeSpotlight.FeaturedVideo -> onOpenTitle(spotlight.tile.key)
+                                is HomeSpotlight.FeaturedAlbum -> onOpenAlbum(spotlight.album.key)
+                            }
+                        },
+                        onLongClick = {
+                            haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                            onLongPress()
+                        },
+                    )
+                } else {
+                    Modifier
+                },
+            ),
+    ) {
+        val loadedArt = heroArt
+        if (loadedArt != null) {
+            Image(
+                bitmap = loadedArt,
+                contentDescription = title,
+                contentScale = ContentScale.Crop,
+                modifier = Modifier.fillMaxSize(),
+            )
+            // Soft obsidian scrim: gentle top veil for floating bar + seamless melt into Bg at bottom
+            Canvas(Modifier.fillMaxSize()) {
+                drawRect(
+                    Brush.verticalGradient(
+                        0.0f to Bg.copy(alpha = 0.28f),
+                        0.34f to Color.Transparent,
+                        0.62f to Bg.copy(alpha = 0.70f),
+                        0.86f to Bg.copy(alpha = 0.94f),
+                        1.0f to Bg,
+                    ),
                 )
             }
-            HeroGlassButton(
-                text = "Shuffle",
-                icon = ShuffleIcon,
-                onClick = onShuffle,
-                enabled = catalog.allTracks.isNotEmpty(),
-            )
-        }
-    }
-}
-
-@Composable
-private fun SleeveCollage(
-    albums: List<LibraryTile>,
-    modifier: Modifier = Modifier,
-) {
-    val sleeveShape = RoundedCornerShape(10.dp)
-    if (albums.size == 1) {
-        val a = albums[0]
-        AlbumSleeve(
-            hue = a.hue,
-            seed = a.seed,
-            monogramText = a.monogramText,
-            cornerRadius = 10.dp,
-            fontSize = 24.sp,
-            modifier = modifier
-                .size(96.dp)
-                .graphicsLayer { rotationZ = 6f }
-                .alpha(0.92f)
-                .shadow(10.dp, sleeveShape),
-        )
-        return
-    }
-    Column(
-        modifier = modifier
-            .size(134.dp)
-            .graphicsLayer { rotationZ = 6f }
-            .alpha(0.92f),
-        verticalArrangement = Arrangement.spacedBy(6.dp),
-    ) {
-        Row(Modifier.weight(1f), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            val a0 = albums[0]
-            AlbumSleeve(
-                hue = a0.hue,
-                seed = a0.seed,
-                monogramText = a0.monogramText,
-                modifier = Modifier.weight(1f).shadow(8.dp, sleeveShape),
-                cornerRadius = 10.dp,
-                fontSize = 14.sp,
-            )
-            val a1 = albums.getOrElse(1) { a0 }
-            AlbumSleeve(
-                hue = a1.hue,
-                seed = a1.seed,
-                monogramText = a1.monogramText,
-                modifier = Modifier.weight(1f).shadow(8.dp, sleeveShape),
-                cornerRadius = 10.dp,
-                fontSize = 14.sp,
-            )
-        }
-        Row(Modifier.weight(1f), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            val a2 = albums.getOrElse(2) { albums[0] }
-            AlbumSleeve(
-                hue = a2.hue,
-                seed = a2.seed,
-                monogramText = a2.monogramText,
-                modifier = Modifier.weight(1f).shadow(8.dp, sleeveShape),
-                cornerRadius = 10.dp,
-                fontSize = 14.sp,
-            )
-            val a3 = albums.getOrElse(3) { albums.getOrElse(1) { albums[0] } }
-            AlbumSleeve(
-                hue = a3.hue,
-                seed = a3.seed,
-                monogramText = a3.monogramText,
-                modifier = Modifier.weight(1f).shadow(8.dp, sleeveShape),
-                cornerRadius = 10.dp,
-                fontSize = 14.sp,
-            )
-        }
-    }
-}
-
-@OptIn(ExperimentalLayoutApi::class)
-@Composable
-private fun WatchHeroCard(
-    catalog: LibraryCatalog,
-    startedVideo: VideoResumeInfo?,
-    onContinue: (VideoResumeInfo) -> Unit,
-    onPlaySomething: () -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    val hue = normalizeHue(startedVideo?.tile?.seed ?: 20L)
-    val rawTitle = startedVideo?.tile?.title ?: plural(catalog.videos.size, "title", "titles")
-    val isLong = rawTitle.length > 22
-    val facts = if (startedVideo != null) {
-        val epPrefix = if (startedVideo.tile.kind == LibraryKind.Series && startedVideo.entry.isEpisode) {
-            "${startedVideo.entry.episodeLabel} · "
         } else {
-            ""
-        }
-        val leftPart = if (startedVideo.progress.durationMs > 0L) {
-            formatTimeLeft(startedVideo.progress.durationMs - startedVideo.progress.positionMs)
-        } else {
-            "In progress"
-        }
-        "$epPrefix$leftPart"
-    } else {
-        val parts = buildList {
-            if (catalog.movies.isNotEmpty()) add(plural(catalog.movies.size, "movie", "movies"))
-            if (catalog.series.isNotEmpty()) add(plural(catalog.series.size, "series", "series"))
-            if (catalog.clips.isNotEmpty()) add(plural(catalog.clips.size, "clip", "clips"))
-        }
-        parts.joinToString(" · ").ifEmpty { "Movies, series and clips" }
-    }
-
-    HeroPanel(
-        hue = hue,
-        showOrb = true,
-        modifier = modifier,
-    ) {
-        Text(
-            text = "WATCH",
-            color = Color.White.copy(alpha = 0.80f),
-            fontSize = 11.sp,
-            fontWeight = FontWeight.Bold,
-            letterSpacing = 1.6.sp,
-        )
-        Text(
-            text = rawTitle.uppercase(Locale.ROOT),
-            color = Color.White,
-            fontSize = if (isLong) 22.sp else 28.sp,
-            lineHeight = if (isLong) 24.sp else 29.sp,
-            fontWeight = FontWeight.ExtraBold,
-            letterSpacing = (-0.6).sp,
-            maxLines = 2,
-            overflow = TextOverflow.Ellipsis,
-        )
-        Text(
-            text = facts,
-            color = Color.White.copy(alpha = 0.90f),
-            fontSize = 14.sp,
-            fontWeight = FontWeight.SemiBold,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-        )
-
-        if (startedVideo != null && startedVideo.progress.positionMs > 0L && startedVideo.progress.durationMs > 0L) {
-            LinearProgressIndicator(
-                progress = { startedVideo.fraction.coerceIn(0.03f, 1f) },
-                modifier = Modifier.fillMaxWidth().height(4.dp).clip(PillShape),
-                color = BrandHover,
-                trackColor = Color.White.copy(alpha = 0.30f),
-            )
+            val glowA = Color.hsl(hue.toFloat(), 0.50f, 0.24f)
+            val glowB = Color.hsl(((hue + 48) % 360).toFloat(), 0.56f, 0.12f)
+            Canvas(Modifier.fillMaxSize()) {
+                drawRect(
+                    Brush.verticalGradient(
+                        0.0f to glowA,
+                        0.55f to glowB,
+                        1.0f to Bg,
+                    ),
+                )
+                drawCircle(
+                    brush = Brush.radialGradient(
+                        0.0f to Color.hsl(((hue + 150) % 360).toFloat(), 0.65f, 0.48f, alpha = 0.24f),
+                        1.0f to Color.Transparent,
+                        center = Offset(size.width * 0.78f, size.height * 0.24f),
+                        radius = size.width * 0.65f,
+                    ),
+                    radius = size.width * 0.65f,
+                    center = Offset(size.width * 0.78f, size.height * 0.24f),
+                )
+            }
         }
 
-        Spacer(Modifier.height(2.dp))
-        FlowRow(
-            horizontalArrangement = Arrangement.spacedBy(10.dp),
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .align(Alignment.BottomStart)
+                .padding(
+                    start = 20.dp,
+                    end = 20.dp,
+                    top = if (fullBleed) heroTopInset else 16.dp,
+                    bottom = 14.dp,
+                ),
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            if (startedVideo != null) {
+            Text(
+                text = eyebrow,
+                color = Pearl.copy(alpha = 0.78f),
+                fontSize = 11.sp,
+                fontWeight = FontWeight.SemiBold,
+                letterSpacing = 1.6.sp,
+                maxLines = 1,
+            )
+            Text(
+                text = title,
+                color = Ink,
+                fontSize = 30.sp,
+                lineHeight = 34.sp,
+                fontFamily = FontFamily.SansSerif,
+                fontWeight = FontWeight.Bold,
+                letterSpacing = (-0.8).sp,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+            )
+            if (metadata.isNotBlank()) {
+                Text(
+                    text = metadata,
+                    color = Ink.copy(alpha = 0.78f),
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.Medium,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+            if (progressFraction != null) {
+                LinearProgressIndicator(
+                    progress = { progressFraction },
+                    modifier = Modifier
+                        .fillMaxWidth(0.55f)
+                        .height(3.dp)
+                        .clip(PillShape),
+                    color = Pearl,
+                    trackColor = Color.White.copy(alpha = 0.24f),
+                )
+            }
+            Spacer(Modifier.height(4.dp))
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
                 HeroPrimaryButton(
-                    text = "Continue",
-                    icon = PlayIcon,
-                    onClick = { onContinue(startedVideo) },
+                    text = primaryLabel,
+                    icon = primaryIcon,
+                    shape = PillShape,
+                    onClick = {
+                        when (spotlight) {
+                            is HomeSpotlight.ContinueVideo -> onResumeVideo(spotlight.info)
+                            is HomeSpotlight.FeaturedVideo -> onPlayVideo(spotlight.tile)
+                            is HomeSpotlight.FeaturedAlbum -> onPlayAlbum(spotlight.album, spotlight.isActiveTrack)
+                        }
+                    },
                 )
                 HeroGlassButton(
-                    text = "Play something",
-                    icon = DiceIcon,
-                    onClick = onPlaySomething,
-                )
-            } else {
-                HeroPrimaryButton(
-                    text = "Play something",
-                    icon = DiceIcon,
-                    onClick = onPlaySomething,
+                    text = "Details",
+                    shape = PillShape,
+                    onClick = {
+                        when (spotlight) {
+                            is HomeSpotlight.ContinueVideo -> onOpenTitle(spotlight.info.tile.key)
+                            is HomeSpotlight.FeaturedVideo -> onOpenTitle(spotlight.tile.key)
+                            is HomeSpotlight.FeaturedAlbum -> onOpenAlbum(spotlight.album.key)
+                        }
+                    },
                 )
             }
         }
@@ -603,9 +670,10 @@ private fun buildKeepPlaying(
                 progress = pct,
                 isMusic = false,
                 seed = tile.seed,
-                badge = if (tile.kind == LibraryKind.Series) entry.episodeLabel else null,
+                imdb = tile.imdb,
                 kindLabel = posterKindLabel(tile.kind),
                 onClick = { model.playEntry(entry) },
+                onLongClick = { model.openPeek(PeekTarget.LibraryTitle(tile)) },
             ),
         )
     }
@@ -614,9 +682,12 @@ private fun buildKeepPlaying(
     if (curTrack != null && (musicState.playing || musicState.positionMs > 0L || musicState.index > 0 || musicState.pausedForVideo)) {
         val sub = if (musicState.pausedForVideo) {
             "Paused for a video"
+        } else if (curTrack.isExternalStream) {
+            curTrack.externalStreamSource ?: "Streaming"
         } else {
             "Track ${musicState.index + 1} of ${musicState.order.size}"
         }
+        val albumTile = catalog.albumByKey(curTrack.albumKey)
         result.add(
             KeepItem(
                 key = "m:${curTrack.albumKey}:${curTrack.key}",
@@ -628,7 +699,28 @@ private fun buildKeepPlaying(
                 hue = curTrack.hue,
                 seed = curTrack.seed,
                 monogram = curTrack.monogramText,
+                artist = curTrack.artist,
+                albumName = curTrack.album.ifBlank { curTrack.title },
+                artUrl = curTrack.artUrl,
                 onClick = onOpenMusicPlayer,
+                onLongClick = albumTile?.let { alb ->
+                    { model.openPeek(PeekTarget.LibraryAlbum(alb)) }
+                } ?: if (curTrack.isExternalStream) {
+                    {
+                        model.openPeek(
+                            PeekTarget.DiscoverAlbum(
+                                com.peartube.app.SuggestedAlbum(
+                                    title = curTrack.album.ifBlank { curTrack.title },
+                                    artist = curTrack.artist,
+                                    year = "",
+                                    artUrl = curTrack.artUrl,
+                                ),
+                            ),
+                        )
+                    }
+                } else {
+                    null
+                },
             ),
         )
     }
@@ -636,12 +728,22 @@ private fun buildKeepPlaying(
     return result.sortedByDescending { it.updatedAt }.take(6)
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun KeepPlayingCard(item: KeepItem) {
+    val haptics = LocalHapticFeedback.current
     Column(
         modifier = Modifier
-            .width(if (item.isMusic) 144.dp else 210.dp)
-            .clickable(onClick = item.onClick),
+            .width(if (item.isMusic) 136.dp else 208.dp)
+            .combinedClickable(
+                onClick = item.onClick,
+                onLongClick = item.onLongClick?.let { cb ->
+                    {
+                        haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                        cb()
+                    }
+                },
+            ),
         verticalArrangement = Arrangement.spacedBy(6.dp),
     ) {
         if (item.isMusic) {
@@ -649,6 +751,10 @@ private fun KeepPlayingCard(item: KeepItem) {
                 hue = item.hue,
                 seed = item.seed,
                 monogramText = item.monogram,
+                artist = item.artist,
+                albumName = item.albumName,
+                artUrl = item.artUrl.takeIf { it.isNotBlank() },
+                borderless = true,
                 modifier = Modifier.fillMaxWidth(),
                 fontSize = 24.sp,
             )
@@ -656,15 +762,25 @@ private fun KeepPlayingCard(item: KeepItem) {
             WideTitleArt(
                 title = item.title,
                 seed = item.seed,
-                badge = item.badge,
+                badge = null,
                 progress = item.progress,
                 kindLabel = item.kindLabel,
+                imdb = item.imdb,
+                showTitleOverlay = false,
+                borderless = true,
                 modifier = Modifier.fillMaxWidth(),
             )
         }
-        Text(item.title, color = Ink, fontSize = 14.sp, fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis)
         Text(
-            item.subtitle,
+            text = item.title,
+            color = Ink,
+            fontSize = 14.sp,
+            fontWeight = FontWeight.Medium,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+        Text(
+            text = item.subtitle,
             color = if (item.subtitle == "Paused for a video") Warn else Dim,
             fontSize = 12.sp,
             maxLines = 1,
@@ -673,36 +789,51 @@ private fun KeepPlayingCard(item: KeepItem) {
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun AlbumShelfCard(
     album: LibraryTile,
     onOpen: () -> Unit,
     onPlay: () -> Unit,
-    modifier: Modifier = Modifier.width(148.dp),
+    modifier: Modifier = Modifier.width(136.dp),
+    showPlayOverlay: Boolean = false,
+    showStateLine: Boolean = false,
+    onLongClick: (() -> Unit)? = null,
 ) {
     val (stateText, isOk) = tileStateLabel(album)
     Column(
-        modifier = modifier.clickable(onClick = onOpen),
+        modifier = modifier.combinedClickable(
+            onClick = onOpen,
+            onLongClick = onLongClick,
+        ),
         verticalArrangement = Arrangement.spacedBy(6.dp),
     ) {
         AlbumSleeve(
             hue = album.hue,
             seed = album.seed,
             monogramText = album.monogramText,
+            artist = album.artist,
+            albumName = album.album.ifBlank { album.title },
+            cornerRadius = 14.dp,
+            borderless = true,
             modifier = Modifier.fillMaxWidth(),
-            overlay = {
-                Box(
-                    modifier = Modifier
-                        .align(Alignment.BottomEnd)
-                        .padding(8.dp)
-                        .size(34.dp)
-                        .clip(CircleShape)
-                        .background(Bg.copy(alpha = 0.80f))
-                        .clickable(onClick = onPlay),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Icon(PlayIcon, "Play ${album.album.ifBlank { album.title }}", tint = Ink, modifier = Modifier.size(18.dp))
+            overlay = if (showPlayOverlay) {
+                {
+                    Box(
+                        modifier = Modifier
+                            .align(Alignment.BottomEnd)
+                            .padding(8.dp)
+                            .size(32.dp)
+                            .clip(CircleShape)
+                            .background(Bg.copy(alpha = 0.78f))
+                            .clickable(onClick = onPlay),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Icon(PlayIcon, "Play ${album.album.ifBlank { album.title }}", tint = Ink, modifier = Modifier.size(16.dp))
+                    }
                 }
+            } else {
+                null
             },
         )
         Text(
@@ -720,102 +851,39 @@ fun AlbumShelfCard(
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
         )
-        if (isOk) {
+        if (showStateLine && isOk) {
             Text(stateText, color = Accent, fontSize = 11.sp, maxLines = 1)
         }
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun VideoShelfCard(
+private fun WideVideoShelfCard(
     tile: LibraryTile,
-    history: Map<String, WatchProgress>,
-    onOpen: () -> Unit,
-    onQuickPlay: (Entry) -> Unit,
+    onClick: () -> Unit,
+    onLongClick: (() -> Unit)? = null,
 ) {
-    val nextEntry = remember(tile, history) {
-        if (tile.kind == LibraryKind.Series) {
-            val episodes = tile.items.map { it.entry }
-            val latest = episodes.mapNotNull { e -> history[e.key]?.let { e to it } }.maxByOrNull { it.second.updatedAt }
-            val resume = latest?.takeIf { it.second.partial }?.first
-                ?: latest?.let { pair -> episodes.getOrNull(episodes.indexOf(pair.first) + 1) }
-            resume ?: episodes.firstOrNull()
-        } else {
-            tile.items.firstOrNull()?.entry
-        }
-    }
-    val hasResume = remember(tile, history, nextEntry) {
-        nextEntry != null && history[nextEntry.key]?.partial == true
-    }
-    val actionTag = when {
-        tile.kind == LibraryKind.Series && nextEntry != null -> "${if (hasResume) "Resume" else "Play"} ${nextEntry.episodeLabel}"
-        tile.kind == LibraryKind.Movie -> "Movie"
-        else -> "Clip"
-    }
-    val (stateText, isOk) = tileStateLabel(tile)
-
-    Column(
-        modifier = Modifier
-            .width(142.dp)
-            .clickable(onClick = onOpen),
-        verticalArrangement = Arrangement.spacedBy(6.dp),
-    ) {
-        PosterArt(
-            title = tile.title,
-            year = tile.year,
-            seed = tile.seed,
-            kindLabel = posterKindLabel(tile.kind),
-            modifier = Modifier.fillMaxWidth(),
-        )
-        Text(tile.title, color = Ink, fontSize = 14.sp, fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis)
-        if (nextEntry != null) {
-            Text(
-                text = actionTag,
-                color = if (tile.kind == LibraryKind.Series) Brand else Dim,
-                fontSize = 12.sp,
-                fontWeight = if (tile.kind == LibraryKind.Series) FontWeight.Medium else FontWeight.Normal,
-                maxLines = 1,
-                modifier = if (tile.kind == LibraryKind.Series) {
-                    Modifier.clickable { onQuickPlay(nextEntry) }
-                } else {
-                    Modifier
-                },
-            )
-        }
-        val subFacts = if (isOk) {
-            stateText
-        } else if (tile.kind == LibraryKind.Movie) {
-            listOfNotNull(
-                tile.year,
-                tile.items.firstOrNull()?.entry?.size?.takeIf { it > 0L }?.let { com.peartube.shared.formatBytes(it) },
-            ).joinToString(" · ").ifBlank { stateText }
-        } else {
-            tileFactsLine(tile)
-        }
-        Text(
-            text = subFacts,
-            color = if (isOk) Accent else Dim,
-            fontSize = 11.sp,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-        )
-    }
-}
-
-@Composable
-private fun WideVideoShelfCard(tile: LibraryTile, onClick: () -> Unit) {
     val sizeText = tile.items.firstOrNull()?.entry?.size?.takeIf { it > 0L }?.let { formatBytes(it) }
     Column(
-        modifier = Modifier.width(204.dp).clickable(onClick = onClick),
+        modifier = Modifier
+            .width(204.dp)
+            .combinedClickable(
+                onClick = onClick,
+                onLongClick = onLongClick,
+            ),
         verticalArrangement = Arrangement.spacedBy(6.dp),
     ) {
         WideTitleArt(
             title = tile.title,
             seed = tile.seed,
             kindLabel = posterKindLabel(tile.kind),
+            imdb = tile.imdb,
+            showTitleOverlay = false,
+            borderless = true,
             modifier = Modifier.fillMaxWidth(),
         )
         Text(tile.title, color = Ink, fontSize = 14.sp, fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis)
-        Text(listOfNotNull("Clip", sizeText).joinToString(" · "), color = Dim, fontSize = 12.sp, maxLines = 1)
+        Text(listOfNotNull("Video", sizeText).joinToString(" · "), color = Dim, fontSize = 12.sp, maxLines = 1)
     }
 }

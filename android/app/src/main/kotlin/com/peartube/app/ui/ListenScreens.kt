@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -25,14 +26,15 @@ import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -45,14 +47,27 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.peartube.app.AppModel
 import com.peartube.app.ArtistGroup
 import com.peartube.app.LibraryCatalog
 import com.peartube.app.LibraryTile
+import com.peartube.app.PeekTarget
 import com.peartube.app.Screen
 import com.peartube.app.TrackRow
 import com.peartube.app.TrackSort
@@ -81,6 +96,8 @@ fun ListenScreen(
     catalog: LibraryCatalog,
     onOpenAlbum: (String) -> Unit,
     onOpenArtist: (String) -> Unit,
+    embedded: Boolean = false,
+    bottomPadding: Dp = 24.dp,
 ) {
     var tab by rememberSaveable { mutableStateOf(ListenTab.Albums) }
     var savedOnly by rememberSaveable { mutableStateOf(false) }
@@ -137,100 +154,199 @@ fun ListenScreen(
     val actionLabel = if (tab == ListenTab.Tracks) "Tracks" else "Library"
 
     Column(Modifier.fillMaxSize()) {
-        // Listen display header + count
-        Row(
-            Modifier
-                .fillMaxWidth()
-                .padding(start = 16.dp, end = 16.dp, top = 12.dp, bottom = 4.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
-        ) {
-            Text(
-                text = "Listen",
-                color = Ink,
-                fontSize = 28.sp,
-                fontWeight = FontWeight.ExtraBold,
-                letterSpacing = (-0.5).sp,
-                modifier = Modifier.weight(1f),
-            )
-            Text(
-                text = countLabel,
-                color = Dim,
-                fontSize = 13.sp,
-                fontWeight = FontWeight.Medium,
-            )
+        if (!embedded) {
+            // Listen display header + count
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .padding(start = 16.dp, end = 16.dp, top = 12.dp, bottom = 4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                Text(
+                    text = "Listen",
+                    color = Ink,
+                    fontSize = 28.sp,
+                    fontWeight = FontWeight.ExtraBold,
+                    letterSpacing = (-0.5).sp,
+                    modifier = Modifier.weight(1f),
+                )
+                Text(
+                    text = countLabel,
+                    color = Dim,
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.Medium,
+                )
+            }
         }
 
-        // Top actions row: Play all (or Resume when paused) violet primary + Shuffle
-        Row(
-            Modifier
-                .fillMaxWidth()
-                .padding(start = 16.dp, end = 16.dp, top = 4.dp, bottom = 4.dp),
-            horizontalArrangement = Arrangement.spacedBy(10.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            PrimaryBrandButton(
-                text = if (waitingPaused) "Resume" else "Play all",
-                icon = PlayIcon,
-                enabled = waitingPaused || actionItems.isNotEmpty(),
-                onClick = {
-                    if (waitingPaused) {
-                        model.music.togglePlayPause()
-                    } else if (actionItems.isNotEmpty()) {
-                        model.music.playTrackList(actionItems, 0, actionLabel, shuffleOn = false)
+        if (embedded) {
+            // Single compact LUMEN row: ▶ Play (Pearl) + ⇄ Shuffle (glass) + quiet Albums/Artists/Songs when multi-album
+            LazyRow(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(bottom = 8.dp),
+                contentPadding = PaddingValues(horizontal = 20.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                item(key = "embedded-play") {
+                    val playEnabled = waitingPaused || actionItems.isNotEmpty()
+                    Row(
+                        modifier = Modifier
+                            .height(34.dp)
+                            .clip(PillShape)
+                            .background(if (playEnabled) Pearl else CardElevated)
+                            .clickable(enabled = playEnabled) {
+                                if (waitingPaused) {
+                                    model.music.togglePlayPause()
+                                } else if (actionItems.isNotEmpty()) {
+                                    model.music.playTrackList(actionItems, 0, actionLabel, shuffleOn = false)
+                                }
+                            }
+                            .padding(horizontal = 13.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(5.dp),
+                    ) {
+                        Icon(PlayIcon, null, tint = if (playEnabled) PearlInk else Dim, modifier = Modifier.size(15.dp))
+                        Text(
+                            text = if (waitingPaused) "Resume" else "Play",
+                            color = if (playEnabled) PearlInk else Dim,
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            maxLines = 1,
+                        )
                     }
-                },
-            )
-            QuietActionButton(
-                text = "Shuffle",
-                icon = ShuffleIcon,
-                enabled = actionItems.isNotEmpty(),
-                onClick = {
-                    if (actionItems.isNotEmpty()) {
-                        model.music.playTrackList(actionItems, -1, actionLabel, shuffleOn = true)
-                    }
-                },
-            )
-            Spacer(Modifier.weight(1f))
-            FilterChip(
-                selected = savedOnly,
-                onClick = { savedOnly = !savedOnly },
-                label = { Text("Saved here", fontSize = 12.sp) },
-                colors = FilterChipDefaults.filterChipColors(
-                    selectedContainerColor = Brand.copy(alpha = 0.22f),
-                    selectedLabelColor = Ink,
-                ),
-            )
-        }
+                }
 
-        // Segmented control: Albums / Artists / Tracks
-        Row(
-            Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 16.dp, vertical = 8.dp)
-                .clip(ControlShape)
-                .background(CardBg)
-                .border(1.dp, Line, ControlShape)
-                .padding(3.dp),
-            horizontalArrangement = Arrangement.spacedBy(4.dp),
-        ) {
-            ListenTab.entries.forEach { item ->
-                val selected = tab == item
-                Box(
-                    modifier = Modifier
-                        .weight(1f)
-                        .clip(RoundedCornerShape(8.dp))
-                        .background(if (selected) CardElevated else Bg.copy(alpha = 0f))
-                        .clickable { tab = item }
-                        .padding(vertical = 8.dp),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Text(
-                        text = item.label,
-                        color = if (selected) Ink else Dim,
-                        fontSize = 13.sp,
-                        fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Medium,
-                    )
+                item(key = "embedded-shuffle") {
+                    Row(
+                        modifier = Modifier
+                            .height(34.dp)
+                            .clip(PillShape)
+                            .background(GlassBg)
+                            .border(0.75.dp, GlassBorder, PillShape)
+                            .clickable(enabled = actionItems.isNotEmpty()) {
+                                if (actionItems.isNotEmpty()) {
+                                    model.music.playTrackList(actionItems, -1, actionLabel, shuffleOn = true)
+                                }
+                            }
+                            .padding(horizontal = 13.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(5.dp),
+                    ) {
+                        Icon(ShuffleIcon, null, tint = if (actionItems.isNotEmpty()) Ink else Dim, modifier = Modifier.size(15.dp))
+                        Text(
+                            text = "Shuffle",
+                            color = if (actionItems.isNotEmpty()) Ink else Dim,
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Medium,
+                            maxLines = 1,
+                        )
+                    }
+                }
+
+                if (catalog.albums.size > 1 || catalog.allTracks.size > 1) {
+                    items(ListenTab.entries, key = { "em-ltab-${it.name}" }) { item ->
+                        val selected = tab == item
+                        val label = if (item == ListenTab.Tracks) "Songs" else item.label
+                        Box(
+                            modifier = Modifier
+                                .height(34.dp)
+                                .clip(PillShape)
+                                .background(if (selected) GlassHighlight else Color.Transparent)
+                                .border(
+                                    width = 0.75.dp,
+                                    color = if (selected) GlassBorder else Line.copy(alpha = 0.5f),
+                                    shape = PillShape,
+                                )
+                                .clickable { tab = item }
+                                .padding(horizontal = 12.dp),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Text(
+                                text = label,
+                                color = if (selected) Ink else Dim,
+                                fontSize = 12.sp,
+                                fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Medium,
+                                maxLines = 1,
+                            )
+                        }
+                    }
+                }
+            }
+        } else {
+            // Top actions row: Play all (or Resume when paused) violet primary + Shuffle
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .padding(start = 16.dp, end = 16.dp, top = 4.dp, bottom = 4.dp),
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                PrimaryBrandButton(
+                    text = if (waitingPaused) "Resume" else "Play all",
+                    icon = PlayIcon,
+                    enabled = waitingPaused || actionItems.isNotEmpty(),
+                    onClick = {
+                        if (waitingPaused) {
+                            model.music.togglePlayPause()
+                        } else if (actionItems.isNotEmpty()) {
+                            model.music.playTrackList(actionItems, 0, actionLabel, shuffleOn = false)
+                        }
+                    },
+                )
+                QuietActionButton(
+                    text = "Shuffle",
+                    icon = ShuffleIcon,
+                    enabled = actionItems.isNotEmpty(),
+                    onClick = {
+                        if (actionItems.isNotEmpty()) {
+                            model.music.playTrackList(actionItems, -1, actionLabel, shuffleOn = true)
+                        }
+                    },
+                )
+                Spacer(Modifier.weight(1f))
+                FilterChip(
+                    selected = savedOnly,
+                    onClick = { savedOnly = !savedOnly },
+                    label = { Text("Saved here", fontSize = 12.sp) },
+                    colors = FilterChipDefaults.filterChipColors(
+                        selectedContainerColor = Brand.copy(alpha = 0.22f),
+                        selectedLabelColor = Ink,
+                    ),
+                )
+            }
+
+            // Segmented control: Albums / Artists / Tracks
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 8.dp)
+                    .clip(ControlShape)
+                    .background(CardBg)
+                    .border(1.dp, Line, ControlShape)
+                    .padding(3.dp),
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+                ListenTab.entries.forEach { item ->
+                    val selected = tab == item
+                    Box(
+                        modifier = Modifier
+                            .weight(1f)
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(if (selected) CardElevated else Bg.copy(alpha = 0f))
+                            .clickable { tab = item }
+                            .padding(vertical = 8.dp),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Text(
+                            text = item.label,
+                            color = if (selected) Ink else Dim,
+                            fontSize = 13.sp,
+                            fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Medium,
+                        )
+                    }
                 }
             }
         }
@@ -242,33 +358,94 @@ fun ListenScreen(
             return
         }
 
+        val edgePad = if (embedded) 20.dp else 16.dp
+
         if (tab == ListenTab.Tracks) {
             Row(
                 Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 16.dp, vertical = 6.dp),
+                    .padding(horizontal = edgePad, vertical = 6.dp),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                OutlinedTextField(
-                    value = trackFilter,
-                    onValueChange = { trackFilter = it },
-                    singleLine = true,
-                    placeholder = { Text("Filter tracks", fontSize = 13.sp) },
-                    leadingIcon = { Icon(SearchIcon, null, tint = Dim, modifier = Modifier.size(18.dp)) },
-                    trailingIcon = if (trackFilter.isNotEmpty()) {
-                        { CinemaIcon(CloseIcon, "Clear filter") { trackFilter = "" } }
-                    } else null,
-                    shape = ControlShape,
-                    colors = fieldColors(),
-                    modifier = Modifier.weight(1f),
-                )
-                Box {
-                    QuietActionButton(
-                        text = trackSort.label,
-                        icon = SortIcon,
-                        onClick = { sortMenu = true },
+                Row(
+                    modifier = Modifier
+                        .weight(1f)
+                        .height(42.dp)
+                        .clip(PillShape)
+                        .background(CardElevated)
+                        .border(0.75.dp, GlassBorder, PillShape)
+                        .padding(start = 14.dp, end = 6.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    Icon(SearchIcon, null, tint = Dim, modifier = Modifier.size(17.dp))
+                    BasicTextField(
+                        value = trackFilter,
+                        onValueChange = { trackFilter = it },
+                        singleLine = true,
+                        textStyle = TextStyle(color = Ink, fontSize = 13.5.sp),
+                        cursorBrush = SolidColor(Pearl),
+                        modifier = Modifier.weight(1f),
+                        decorationBox = { innerTextField ->
+                            Box(contentAlignment = Alignment.CenterStart) {
+                                if (trackFilter.isEmpty()) {
+                                    Text(
+                                        text = "Filter songs…",
+                                        color = Dim,
+                                        fontSize = 13.5.sp,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                    )
+                                }
+                                innerTextField()
+                            }
+                        },
                     )
+                    if (trackFilter.isNotEmpty()) {
+                        Box(
+                            modifier = Modifier
+                                .size(28.dp)
+                                .clip(CircleShape)
+                                .background(GlassHighlight)
+                                .semantics { contentDescription = "Clear filter" }
+                                .clickable { trackFilter = "" },
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Icon(CloseIcon, null, tint = Dim, modifier = Modifier.size(14.dp))
+                        }
+                    }
+                }
+                Box {
+                    val isDefaultSort = trackSort == TrackSort.LibraryOrder && sortAsc
+                    Row(
+                        modifier = Modifier
+                            .height(42.dp)
+                            .clip(PillShape)
+                            .background(GlassBg)
+                            .border(0.75.dp, GlassBorder, PillShape)
+                            .clickable { sortMenu = true }
+                            .padding(horizontal = 12.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    ) {
+                        Icon(SortIcon, null, tint = Ink, modifier = Modifier.size(16.dp))
+                        Text(
+                            text = if (trackSort != TrackSort.LibraryOrder) trackSort.label else "Sort",
+                            color = Ink,
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.Medium,
+                            maxLines = 1,
+                        )
+                        if (!isDefaultSort) {
+                            Icon(
+                                imageVector = if (sortAsc) ArrowUpIcon else ArrowDownIcon,
+                                contentDescription = if (sortAsc) "Sort ascending" else "Sort descending",
+                                tint = Dim,
+                                modifier = Modifier.size(13.dp),
+                            )
+                        }
+                    }
                     DropdownMenu(expanded = sortMenu, onDismissRequest = { sortMenu = false }) {
                         TrackSort.entries.forEach { option ->
                             val selected = option == trackSort
@@ -299,30 +476,15 @@ fun ListenScreen(
                         }
                     }
                 }
-                Box(
-                    modifier = Modifier
-                        .size(44.dp)
-                        .clip(ControlShape)
-                        .background(CardElevated)
-                        .border(1.dp, Line, ControlShape)
-                        .clickable { sortAsc = !sortAsc },
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Icon(
-                        imageVector = if (sortAsc) ArrowUpIcon else ArrowDownIcon,
-                        contentDescription = if (sortAsc) "Sort ascending" else "Sort descending",
-                        tint = Ink,
-                        modifier = Modifier.size(18.dp),
-                    )
-                }
             }
         }
 
         when (tab) {
             ListenTab.Albums -> {
+                val haptics = LocalHapticFeedback.current
                 LazyVerticalGrid(
                     columns = GridCells.Fixed(2),
-                    contentPadding = PaddingValues(16.dp),
+                    contentPadding = PaddingValues(start = edgePad, end = edgePad, top = 12.dp, bottom = bottomPadding),
                     horizontalArrangement = Arrangement.spacedBy(14.dp),
                     verticalArrangement = Arrangement.spacedBy(18.dp),
                     modifier = Modifier.fillMaxSize(),
@@ -337,7 +499,13 @@ fun ListenScreen(
                                     model.music.playTrackList(list, 0, album.album.ifBlank { album.title }, shuffleOn = false)
                                 }
                             },
+                            onLongClick = {
+                                haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                                model.openPeek(PeekTarget.LibraryAlbum(album))
+                            },
                             modifier = Modifier.fillMaxWidth(),
+                            showPlayOverlay = !embedded,
+                            showStateLine = !embedded,
                         )
                     }
                 }
@@ -345,7 +513,7 @@ fun ListenScreen(
             ListenTab.Artists -> {
                 LazyVerticalGrid(
                     columns = GridCells.Fixed(2),
-                    contentPadding = PaddingValues(16.dp),
+                    contentPadding = PaddingValues(start = edgePad, end = edgePad, top = 12.dp, bottom = bottomPadding),
                     horizontalArrangement = Arrangement.spacedBy(14.dp),
                     verticalArrangement = Arrangement.spacedBy(18.dp),
                     modifier = Modifier.fillMaxSize(),
@@ -370,7 +538,7 @@ fun ListenScreen(
                 } else {
                     val activeKey = musicState.currentTrack?.key
                     LazyColumn(
-                        contentPadding = PaddingValues(bottom = 24.dp),
+                        contentPadding = PaddingValues(bottom = bottomPadding),
                         modifier = Modifier.fillMaxSize(),
                     ) {
                         itemsIndexed(tracks, key = { idx, row -> "${row.entry.key}-$idx" }) { idx, row ->
@@ -415,13 +583,15 @@ private fun FlatTrackRow(
         Modifier
             .fillMaxWidth()
             .clickable(onClick = onPlay)
-            .padding(start = 16.dp, end = 4.dp, top = 10.dp, bottom = 10.dp),
+            .padding(start = 20.dp, end = 8.dp, top = 10.dp, bottom = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         AlbumSleeve(
             hue = row.album.hue,
             seed = row.album.seed,
             monogramText = row.album.monogramText,
+            artist = row.album.artist,
+            albumName = row.albumName,
             cornerRadius = 6.dp,
             fontSize = 12.sp,
             modifier = Modifier.size(40.dp),
@@ -430,7 +600,7 @@ private fun FlatTrackRow(
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
             Text(
                 text = row.name,
-                color = if (isPlaying) Brand else Ink,
+                color = if (isPlaying) BrandHover else Ink,
                 fontSize = 14.sp,
                 fontWeight = if (isPlaying) FontWeight.SemiBold else FontWeight.Medium,
                 maxLines = 1,
@@ -452,7 +622,7 @@ private fun FlatTrackRow(
             val metaLine = listOfNotNull(
                 row.effectiveQualityLabel,
                 row.size.takeIf { it > 0L }?.let { formatBytes(it) },
-                if (!isSaved(row.entry)) "On the network" else null,
+                if (!isSaved(row.entry)) "Streams over swarm" else null,
             ).joinToString(" · ")
             if (metaLine.isNotEmpty()) {
                 Text(
@@ -494,11 +664,17 @@ fun AlbumDetailScreen(
     onOpenAlbum: (String) -> Unit,
 ) {
     if (album == null) {
-        Column(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding()) {
-            DetailTopBar(title = "Album", onBack = onBack)
+        Box(Modifier.fillMaxSize().background(Bg)) {
             Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                Text("Album not found.", color = Dim)
+                Text("Album not found.", color = Dim, fontSize = 14.sp)
             }
+            FloatingDetailBackButton(
+                onBack = onBack,
+                modifier = Modifier
+                    .align(Alignment.TopStart)
+                    .statusBarsPadding()
+                    .padding(start = 16.dp, top = 8.dp),
+            )
         }
         return
     }
@@ -514,93 +690,176 @@ fun AlbumDetailScreen(
     val (stateLabel, isOk) = tileStateLabel(album)
     val facts = listOfNotNull(
         plural(album.items.size, "track", "tracks"),
-        album.totalSize.takeIf { it > 0L }?.let { formatBytes(it) },
         stateLabel,
     ).joinToString(" · ")
     val activeKey = musicState.currentTrack?.key
     val albumTitle = album.album.ifBlank { album.title }
+    val hue = ((album.hue % 360) + 360) % 360
+    val bloomColor = Color.hsl(hue.toFloat(), 0.50f, 0.24f)
 
-    Column(Modifier.fillMaxSize().statusBarsPadding()) {
-        DetailTopBar(title = "", onBack = onBack)
+    Box(Modifier.fillMaxSize().background(Bg)) {
         LazyColumn(
-            modifier = Modifier.weight(1f).fillMaxWidth(),
-            contentPadding = PaddingValues(bottom = 28.dp),
+            modifier = Modifier.fillMaxSize(),
+            contentPadding = PaddingValues(bottom = 32.dp),
         ) {
             item(key = "header") {
-                Column(
-                    Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 8.dp),
-                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(
+                            Brush.verticalGradient(
+                                0.0f to bloomColor,
+                                0.62f to bloomColor.copy(alpha = 0.22f),
+                                1.0f to Bg,
+                            ),
+                        ),
                 ) {
-                    Row(horizontalArrangement = Arrangement.spacedBy(16.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .statusBarsPadding()
+                            .padding(top = 52.dp, bottom = 14.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(10.dp),
+                    ) {
+                        val sleeveShape = RoundedCornerShape(16.dp)
                         AlbumSleeve(
                             hue = album.hue,
                             seed = album.seed,
                             monogramText = album.monogramText,
-                            fontSize = 32.sp,
-                            modifier = Modifier.size(124.dp),
+                            artist = album.artist,
+                            albumName = albumTitle,
+                            cornerRadius = 16.dp,
+                            fontSize = 44.sp,
+                            borderless = true,
+                            modifier = Modifier
+                                .size(210.dp)
+                                .shadow(24.dp, sleeveShape)
+                                .border(0.5.dp, GlassBorder, sleeveShape),
                         )
-                        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                            Text("Album", color = Dim, fontSize = 12.sp, fontWeight = FontWeight.Medium)
-                            Text(albumTitle, color = Ink, fontSize = 20.sp, fontWeight = FontWeight.Bold, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                            if (album.artist.isNotBlank()) {
-                                Text(
-                                    text = album.artist,
-                                    color = Brand,
-                                    fontSize = 15.sp,
-                                    fontWeight = FontWeight.Medium,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis,
-                                    modifier = Modifier.clickable { onOpenArtist(fold(album.artist)) },
-                                )
-                            }
-                            Text(facts, color = if (isOk) Accent else Dim, fontSize = 12.sp)
-                            if (album.isYoutubeOnly) {
-                                Text("YouTube · Lossy", color = Warn, fontSize = 12.sp)
-                            }
-                        }
-                    }
 
-                    Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
-                        PrimaryLightButton(
-                            text = "Play",
-                            icon = PlayIcon,
-                            onClick = {
-                                if (trackItems.isNotEmpty()) {
-                                    model.music.playTrackList(trackItems, 0, albumTitle, shuffleOn = false)
-                                }
-                            },
+                        Spacer(Modifier.height(4.dp))
+
+                        Text(
+                            text = albumTitle,
+                            color = Ink,
+                            fontSize = 24.sp,
+                            lineHeight = 28.sp,
+                            fontWeight = FontWeight.Bold,
+                            letterSpacing = (-0.6).sp,
+                            textAlign = TextAlign.Center,
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.padding(horizontal = 24.dp),
                         )
-                        QuietActionButton(
-                            text = "Shuffle",
-                            icon = ShuffleIcon,
-                            onClick = {
-                                if (trackItems.isNotEmpty()) {
-                                    model.music.playTrackList(trackItems, -1, albumTitle, shuffleOn = true)
+
+                        if (album.artist.isNotBlank()) {
+                            Text(
+                                text = album.artist,
+                                color = BrandHover,
+                                fontSize = 15.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                textAlign = TextAlign.Center,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier
+                                    .clip(PillShape)
+                                    .clickable { onOpenArtist(fold(album.artist)) }
+                                    .padding(horizontal = 10.dp, vertical = 2.dp),
+                            )
+                        }
+
+                        Row(
+                            modifier = Modifier.padding(horizontal = 24.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        ) {
+                            if (album.allSaved) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(6.dp)
+                                        .clip(CircleShape)
+                                        .background(Accent),
+                                )
+                            }
+                            Text(
+                                text = facts,
+                                color = if (isOk) Accent else Dim,
+                                fontSize = 12.5.sp,
+                                fontWeight = FontWeight.Medium,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                        }
+
+                        if (album.isYoutubeOnly) {
+                            Text("YouTube · AAC 128 kbps", color = Warn, fontSize = 11.5.sp, fontWeight = FontWeight.Medium)
+                        }
+
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 20.dp)
+                                .padding(top = 6.dp),
+                            horizontalArrangement = Arrangement.spacedBy(10.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            HeroPrimaryButton(
+                                text = "Play",
+                                icon = PlayIcon,
+                                shape = PillShape,
+                                onClick = {
+                                    if (trackItems.isNotEmpty()) {
+                                        model.music.playTrackList(trackItems, 0, albumTitle, shuffleOn = false)
+                                    }
+                                },
+                                modifier = Modifier.weight(1f).height(46.dp),
+                            )
+                            HeroGlassButton(
+                                text = "Shuffle",
+                                icon = ShuffleIcon,
+                                shape = PillShape,
+                                onClick = {
+                                    if (trackItems.isNotEmpty()) {
+                                        model.music.playTrackList(trackItems, -1, albumTitle, shuffleOn = true)
+                                    }
+                                },
+                                modifier = Modifier.weight(1f).height(46.dp),
+                            )
+                            Box {
+                                Box(
+                                    modifier = Modifier
+                                        .size(46.dp)
+                                        .clip(CircleShape)
+                                        .background(GlassBg)
+                                        .border(0.75.dp, GlassBorder, CircleShape)
+                                        .semantics { contentDescription = "More options" }
+                                        .clickable { moreMenu = true },
+                                    contentAlignment = Alignment.Center,
+                                ) {
+                                    Icon(MoreVertIcon, null, tint = Ink, modifier = Modifier.size(20.dp))
                                 }
-                            },
-                        )
-                        Box {
-                            QuietActionButton(text = "More", onClick = { moreMenu = true })
-                            DropdownMenu(expanded = moreMenu, onDismissRequest = { moreMenu = false }) {
-                                DropdownMenuItem(
-                                    text = { Text("Play next") },
-                                    onClick = { moreMenu = false; model.music.playNext(trackItems, albumTitle) },
-                                )
-                                DropdownMenuItem(
-                                    text = { Text("Play last") },
-                                    onClick = { moreMenu = false; model.music.playLast(trackItems, albumTitle) },
-                                )
-                                album.items.firstOrNull()?.entry?.magnetUrl?.takeIf { it.isNotBlank() }?.let { link ->
+                                DropdownMenu(expanded = moreMenu, onDismissRequest = { moreMenu = false }) {
                                     DropdownMenuItem(
-                                        text = { Text("Copy link") },
-                                        onClick = { moreMenu = false; copyText(link) },
+                                        text = { Text("Play next") },
+                                        onClick = { moreMenu = false; model.music.playNext(trackItems, albumTitle) },
                                     )
+                                    DropdownMenuItem(
+                                        text = { Text("Play last") },
+                                        onClick = { moreMenu = false; model.music.playLast(trackItems, albumTitle) },
+                                    )
+                                    album.items.firstOrNull()?.entry?.magnetUrl?.takeIf { it.isNotBlank() }?.let { link ->
+                                        DropdownMenuItem(
+                                            text = { Text("Copy link") },
+                                            onClick = { moreMenu = false; copyText(link) },
+                                        )
+                                    }
                                 }
                             }
                         }
                     }
                 }
-                HorizontalDivider(color = Line, modifier = Modifier.padding(top = 8.dp))
+                HorizontalDivider(color = Line.copy(alpha = 0.35f), modifier = Modifier.padding(horizontal = 20.dp))
             }
 
             itemsIndexed(album.items, key = { idx, item -> "${item.entry.key}-$idx" }) { idx, item ->
@@ -610,7 +869,7 @@ fun AlbumDetailScreen(
                 val canDelete = status?.let { it.writable && it.channel.isNotEmpty() && it.channel == e.source } == true
                 val metaParts = listOfNotNull(
                     e.music?.artist?.takeIf { it.isNotBlank() && it != album.artist },
-                    if (!isSaved(e)) "On the network" else null,
+                    if (!isSaved(e)) "Streams over swarm" else null,
                     if (isYt(e) && !album.isYoutubeOnly) "YouTube" else null,
                     if (item.copies > 1) "${item.copies} copies" else null,
                 ).joinToString(" · ")
@@ -623,22 +882,27 @@ fun AlbumDetailScreen(
                             // Rule 13: A row on an album page plays the album from that row.
                             model.music.playTrackList(trackItems, idx, albumTitle)
                         }
-                        .padding(start = 18.dp, end = 4.dp, top = 11.dp, bottom = 11.dp),
+                        .padding(start = 20.dp, end = 8.dp, top = 12.dp, bottom = 12.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Box(Modifier.width(34.dp), contentAlignment = Alignment.CenterStart) {
                         if (isPlaying) {
-                            Icon(PlayIcon, "Playing", tint = Brand, modifier = Modifier.size(16.dp))
+                            Icon(PlayIcon, "Playing", tint = BrandHover, modifier = Modifier.size(16.dp))
                         } else {
-                            Text(trackNo(e).ifEmpty { "${idx + 1}" }, color = Dim, fontSize = 13.sp)
+                            Text(
+                                text = trackNo(e).ifEmpty { "${idx + 1}" },
+                                color = Dim,
+                                fontSize = 12.5.sp,
+                                fontFamily = FontFamily.Monospace,
+                            )
                         }
                     }
                     Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                         Text(
                             text = trackName(e),
-                            color = if (isPlaying) Brand else Ink,
+                            color = if (isPlaying) BrandHover else Ink,
                             fontSize = 15.sp,
-                            fontWeight = if (isPlaying) FontWeight.SemiBold else FontWeight.Normal,
+                            fontWeight = if (isPlaying) FontWeight.SemiBold else FontWeight.Medium,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
                         )
@@ -691,15 +955,16 @@ fun AlbumDetailScreen(
                         }
                     }
                 }
-                HorizontalDivider(color = Line.copy(alpha = 0.4f))
+                HorizontalDivider(color = Line.copy(alpha = 0.30f), modifier = Modifier.padding(horizontal = 20.dp))
             }
 
             if (moreByArtist.isNotEmpty()) {
                 item(key = "more-by-artist") {
-                    Column(Modifier.padding(top = 20.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    val haptics = LocalHapticFeedback.current
+                    Column(Modifier.padding(top = 22.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                         SectionHeader(title = "More by ${album.artist}")
                         LazyRow(
-                            contentPadding = PaddingValues(horizontal = 16.dp),
+                            contentPadding = PaddingValues(horizontal = 20.dp),
                             horizontalArrangement = Arrangement.spacedBy(12.dp),
                         ) {
                             items(moreByArtist, key = { it.key }) { sibling ->
@@ -712,6 +977,10 @@ fun AlbumDetailScreen(
                                             model.music.playTrackList(list, 0, sibling.album.ifBlank { sibling.title }, shuffleOn = false)
                                         }
                                     },
+                                    onLongClick = {
+                                        haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                                        model.openPeek(PeekTarget.LibraryAlbum(sibling))
+                                    },
                                 )
                             }
                         }
@@ -719,6 +988,14 @@ fun AlbumDetailScreen(
                 }
             }
         }
+
+        FloatingDetailBackButton(
+            onBack = onBack,
+            modifier = Modifier
+                .align(Alignment.TopStart)
+                .statusBarsPadding()
+                .padding(start = 16.dp, top = 8.dp),
+        )
     }
 }
 
@@ -730,11 +1007,17 @@ fun ArtistDetailScreen(
     onOpenAlbum: (String) -> Unit,
 ) {
     if (artist == null) {
-        Column(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding()) {
-            DetailTopBar(title = "Artist", onBack = onBack)
+        Box(Modifier.fillMaxSize().background(Bg)) {
             Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                Text("Artist not found.", color = Dim)
+                Text("Artist not found.", color = Dim, fontSize = 14.sp)
             }
+            FloatingDetailBackButton(
+                onBack = onBack,
+                modifier = Modifier
+                    .align(Alignment.TopStart)
+                    .statusBarsPadding()
+                    .padding(start = 16.dp, top = 8.dp),
+            )
         }
         return
     }
@@ -745,55 +1028,111 @@ fun ArtistDetailScreen(
     val allItems = remember(artist) { artist.tracks.map { it.toTrackItem() } }
     val visibleTracks = if (showAllTracks) artist.tracks else artist.tracks.take(8)
     val activeKey = musicState.currentTrack?.key
+    val firstHue = artist.albums.firstOrNull()?.hue ?: 255
+    val hue = ((firstHue % 360) + 360) % 360
+    val bloomColor = Color.hsl(hue.toFloat(), 0.50f, 0.24f)
 
-    Column(Modifier.fillMaxSize().statusBarsPadding()) {
-        DetailTopBar(title = "", onBack = onBack)
+    Box(Modifier.fillMaxSize().background(Bg)) {
         LazyColumn(
-            modifier = Modifier.weight(1f).fillMaxWidth(),
-            contentPadding = PaddingValues(bottom = 28.dp),
+            modifier = Modifier.fillMaxSize(),
+            contentPadding = PaddingValues(bottom = 32.dp),
         ) {
             item(key = "artist-header") {
-                Column(
-                    Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 8.dp),
-                    verticalArrangement = Arrangement.spacedBy(10.dp),
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(
+                            Brush.verticalGradient(
+                                0.0f to bloomColor,
+                                0.62f to bloomColor.copy(alpha = 0.22f),
+                                1.0f to Bg,
+                            ),
+                        ),
                 ) {
-                    Text("Artist", color = Dim, fontSize = 12.sp, fontWeight = FontWeight.Medium)
-                    Text(artist.name, color = Ink, fontSize = 26.sp, fontWeight = FontWeight.Bold)
-                    Text(
-                        "${plural(artist.albumCount, "album", "albums")} · ${plural(artist.trackCount, "track", "tracks")}",
-                        color = Dim,
-                        fontSize = 13.sp,
-                    )
-                    Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
-                        PrimaryLightButton(
-                            text = "Play",
-                            icon = PlayIcon,
-                            onClick = {
-                                if (allItems.isNotEmpty()) {
-                                    model.music.playTrackList(allItems, 0, artist.name, shuffleOn = false)
-                                }
-                            },
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .statusBarsPadding()
+                            .padding(top = 52.dp, bottom = 14.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(10.dp),
+                    ) {
+                        ArtistSleeveStack(
+                            albums = artist.albums,
+                            modifier = Modifier.size(132.dp),
                         )
-                        QuietActionButton(
-                            text = "Shuffle",
-                            icon = ShuffleIcon,
-                            onClick = {
-                                if (allItems.isNotEmpty()) {
-                                    model.music.playTrackList(allItems, -1, artist.name, shuffleOn = true)
-                                }
-                            },
+                        Spacer(Modifier.height(2.dp))
+                        Text(
+                            text = artist.name,
+                            color = Ink,
+                            fontSize = 26.sp,
+                            lineHeight = 30.sp,
+                            fontWeight = FontWeight.Bold,
+                            letterSpacing = (-0.7).sp,
+                            textAlign = TextAlign.Center,
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.padding(horizontal = 24.dp),
                         )
-                        Box {
-                            QuietActionButton(text = "More", onClick = { moreMenu = true })
-                            DropdownMenu(expanded = moreMenu, onDismissRequest = { moreMenu = false }) {
-                                DropdownMenuItem(
-                                    text = { Text("Play next") },
-                                    onClick = { moreMenu = false; model.music.playNext(allItems, artist.name) },
-                                )
-                                DropdownMenuItem(
-                                    text = { Text("Play last") },
-                                    onClick = { moreMenu = false; model.music.playLast(allItems, artist.name) },
-                                )
+                        Text(
+                            text = "${plural(artist.albumCount, "album", "albums")} · ${plural(artist.trackCount, "track", "tracks")}",
+                            color = Dim,
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.Medium,
+                        )
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 20.dp)
+                                .padding(top = 6.dp),
+                            horizontalArrangement = Arrangement.spacedBy(10.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            HeroPrimaryButton(
+                                text = "Play",
+                                icon = PlayIcon,
+                                shape = PillShape,
+                                onClick = {
+                                    if (allItems.isNotEmpty()) {
+                                        model.music.playTrackList(allItems, 0, artist.name, shuffleOn = false)
+                                    }
+                                },
+                                modifier = Modifier.weight(1f).height(46.dp),
+                            )
+                            HeroGlassButton(
+                                text = "Shuffle",
+                                icon = ShuffleIcon,
+                                shape = PillShape,
+                                onClick = {
+                                    if (allItems.isNotEmpty()) {
+                                        model.music.playTrackList(allItems, -1, artist.name, shuffleOn = true)
+                                    }
+                                },
+                                modifier = Modifier.weight(1f).height(46.dp),
+                            )
+                            Box {
+                                Box(
+                                    modifier = Modifier
+                                        .size(46.dp)
+                                        .clip(CircleShape)
+                                        .background(GlassBg)
+                                        .border(0.75.dp, GlassBorder, CircleShape)
+                                        .semantics { contentDescription = "More options" }
+                                        .clickable { moreMenu = true },
+                                    contentAlignment = Alignment.Center,
+                                ) {
+                                    Icon(MoreVertIcon, null, tint = Ink, modifier = Modifier.size(20.dp))
+                                }
+                                DropdownMenu(expanded = moreMenu, onDismissRequest = { moreMenu = false }) {
+                                    DropdownMenuItem(
+                                        text = { Text("Play next") },
+                                        onClick = { moreMenu = false; model.music.playNext(allItems, artist.name) },
+                                    )
+                                    DropdownMenuItem(
+                                        text = { Text("Play last") },
+                                        onClick = { moreMenu = false; model.music.playLast(allItems, artist.name) },
+                                    )
+                                }
                             }
                         }
                     }
@@ -801,10 +1140,11 @@ fun ArtistDetailScreen(
             }
 
             item(key = "artist-albums") {
-                Column(Modifier.padding(top = 12.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                val haptics = LocalHapticFeedback.current
+                Column(Modifier.padding(top = 10.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                     SectionHeader(title = "Albums")
                     LazyRow(
-                        contentPadding = PaddingValues(horizontal = 16.dp),
+                        contentPadding = PaddingValues(horizontal = 20.dp),
                         horizontalArrangement = Arrangement.spacedBy(12.dp),
                     ) {
                         items(artist.albums, key = { it.key }) { album ->
@@ -817,6 +1157,10 @@ fun ArtistDetailScreen(
                                         model.music.playTrackList(list, 0, album.album.ifBlank { album.title }, shuffleOn = false)
                                     }
                                 },
+                                onLongClick = {
+                                    haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                                    model.openPeek(PeekTarget.LibraryAlbum(album))
+                                },
                             )
                         }
                     }
@@ -824,7 +1168,7 @@ fun ArtistDetailScreen(
             }
 
             item(key = "tracks-heading") {
-                SectionHeader(title = "Tracks", modifier = Modifier.padding(top = 18.dp))
+                SectionHeader(title = "Top Tracks", modifier = Modifier.padding(top = 20.dp, bottom = 4.dp))
             }
 
             itemsIndexed(visibleTracks, key = { idx, row -> "${row.entry.key}-$idx" }) { idx, row ->
@@ -840,19 +1184,46 @@ fun ArtistDetailScreen(
                     onOpenAlbum = { onOpenAlbum(row.album.key) },
                     onOpenArtist = {},
                 )
-                HorizontalDivider(color = Line.copy(alpha = 0.4f))
+                HorizontalDivider(color = Line.copy(alpha = 0.30f), modifier = Modifier.padding(horizontal = 20.dp))
             }
 
             if (!showAllTracks && artist.tracks.size > 8) {
                 item(key = "show-all") {
                     Box(Modifier.fillMaxWidth().padding(16.dp), contentAlignment = Alignment.Center) {
                         TextButton(onClick = { showAllTracks = true }) {
-                            Text("Show all ${artist.tracks.size}", color = Brand, fontWeight = FontWeight.Medium)
+                            Text("Show all ${artist.tracks.size}", color = BrandHover, fontWeight = FontWeight.Medium)
                         }
                     }
                 }
             }
         }
+
+        FloatingDetailBackButton(
+            onBack = onBack,
+            modifier = Modifier
+                .align(Alignment.TopStart)
+                .statusBarsPadding()
+                .padding(start = 16.dp, top = 8.dp),
+        )
+    }
+}
+
+@Composable
+private fun FloatingDetailBackButton(
+    onBack: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Box(
+        modifier = modifier
+            .size(38.dp)
+            .clip(CircleShape)
+            .background(Bg.copy(alpha = 0.56f))
+            .border(0.75.dp, GlassBorder, CircleShape)
+            .semantics { contentDescription = "Back" }
+            .clickable(onClick = onBack),
+        contentAlignment = Alignment.Center,
+    ) {
+        Icon(BackIcon, null, tint = Ink, modifier = Modifier.size(19.dp))
     }
 }
 

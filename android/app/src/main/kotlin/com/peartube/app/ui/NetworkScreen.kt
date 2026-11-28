@@ -15,14 +15,15 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -173,17 +174,81 @@ fun NetworkScreen(
         }
     }
 
-    Column(Modifier.fillMaxSize().statusBarsPadding()) {
-        DetailTopBar(title = "Network", onBack = onBack)
+    val statusPillLabel = when {
+        totalPeers == 1L -> "1 peer"
+        totalPeers > 1L -> "$totalPeers peers"
+        else -> "Idle"
+    }
 
-        // Segmented switcher: Globe / Swarm / Flow
+    Column(
+        Modifier
+            .fillMaxSize()
+            .background(Bg)
+            .statusBarsPadding()
+            .navigationBarsPadding(),
+    ) {
+        // LUMEN crisp header: circular Back + bold Network + live status pill
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 20.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(38.dp)
+                    .clip(CircleShape)
+                    .background(GlassBg)
+                    .border(0.75.dp, GlassBorder, CircleShape)
+                    .semantics { contentDescription = "Back" }
+                    .clickable(onClick = onBack),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(BackIcon, null, tint = Ink, modifier = Modifier.size(19.dp))
+            }
+            Text(
+                text = "Network",
+                color = Ink,
+                fontSize = 24.sp,
+                fontWeight = FontWeight.Bold,
+                letterSpacing = (-0.6).sp,
+                modifier = Modifier.weight(1f),
+            )
+            Row(
+                modifier = Modifier
+                    .height(34.dp)
+                    .clip(PillShape)
+                    .background(GlassBg)
+                    .border(0.75.dp, GlassBorder, PillShape)
+                    .padding(horizontal = 12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(7.dp),
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(8.dp)
+                        .clip(CircleShape)
+                        .background(if (totalPeers > 0L) Accent else Warn),
+                )
+                Text(
+                    text = statusPillLabel,
+                    color = Ink,
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 1,
+                )
+            }
+        }
+
+        // Full-capsule LUMEN switcher: Globe | Swarm | Flow
         Row(
             Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 16.dp, vertical = 6.dp)
-                .clip(ControlShape)
-                .background(CardBg)
-                .border(1.dp, Line, ControlShape)
+                .padding(horizontal = 20.dp, vertical = 6.dp)
+                .clip(PillShape)
+                .background(GlassBg)
+                .border(0.75.dp, GlassBorder, PillShape)
                 .padding(3.dp),
             horizontalArrangement = Arrangement.spacedBy(4.dp),
         ) {
@@ -192,15 +257,15 @@ fun NetworkScreen(
                 Box(
                     modifier = Modifier
                         .weight(1f)
-                        .clip(RoundedCornerShape(8.dp))
-                        .background(if (selected) CardElevated else Color.Transparent)
+                        .clip(PillShape)
+                        .background(if (selected) Pearl else Color.Transparent)
                         .clickable { mode = item }
                         .padding(vertical = 8.dp),
                     contentAlignment = Alignment.Center,
                 ) {
                     Text(
                         text = item.label,
-                        color = if (selected) Ink else Dim,
+                        color = if (selected) PearlInk else Dim,
                         fontSize = 13.sp,
                         fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Medium,
                     )
@@ -219,7 +284,7 @@ fun NetworkScreen(
                 Row(
                     Modifier
                         .fillMaxSize()
-                        .padding(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 16.dp),
+                        .padding(start = 20.dp, end = 20.dp, top = 8.dp, bottom = 16.dp),
                     horizontalArrangement = Arrangement.spacedBy(16.dp),
                     verticalAlignment = Alignment.Top,
                 ) {
@@ -276,7 +341,7 @@ fun NetworkScreen(
             } else {
                 LazyColumn(
                     modifier = Modifier.fillMaxSize(),
-                    contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 28.dp),
+                    contentPadding = PaddingValues(start = 20.dp, end = 20.dp, top = 8.dp, bottom = 28.dp),
                     verticalArrangement = Arrangement.spacedBy(14.dp),
                 ) {
                     item(key = "scene") {
@@ -359,7 +424,7 @@ private fun NetworkSceneCard(
                     ),
                 )
             }
-            .border(1.dp, Line, HeroShape)
+            .border(0.75.dp, GlassBorder, HeroShape)
             .semantics { contentDescription = sceneDesc },
     ) {
         when (mode) {
@@ -803,7 +868,7 @@ private fun RateSparkCard(
         modifier
             .clip(CardShape)
             .background(CardBg)
-            .border(1.dp, Line, CardShape)
+            .border(0.75.dp, GlassBorder, CardShape)
             .padding(14.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
@@ -895,7 +960,7 @@ private fun ReciprocityCard(
             .fillMaxWidth()
             .clip(CardShape)
             .background(CardBg)
-            .border(1.dp, Line, CardShape)
+            .border(0.75.dp, GlassBorder, CardShape)
             .padding(14.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
@@ -942,7 +1007,7 @@ private fun RoutesCard(
             .fillMaxWidth()
             .clip(CardShape)
             .background(CardBg)
-            .border(1.dp, Line, CardShape)
+            .border(0.75.dp, GlassBorder, CardShape)
             .padding(14.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {

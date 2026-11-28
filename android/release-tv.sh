@@ -10,21 +10,26 @@ self="./$(basename "$0")"
 cd "$(dirname "$0")"
 engine="${PEARTUBE_ENGINE:-}"
 native_local=""
+native_prebuilt=""
+abi="arm64-v8a"
 while [ $# -gt 0 ]; do
   case "$1" in
     --engine) shift; [ $# -gt 0 ] || { echo "--engine needs js, rust or both" >&2; exit 2; }; engine="$1" ;;
     --native-local) shift; [ $# -gt 0 ] || { echo "--native-local needs a path" >&2; exit 2; }; native_local="$1" ;;
+    --native-prebuilt) shift; [ $# -gt 0 ] || { echo "--native-prebuilt needs a path" >&2; exit 2; }; native_prebuilt="$1" ;;
+    --abi) shift; [ $# -gt 0 ] || { echo "--abi needs arm64-v8a or armeabi-v7a" >&2; exit 2; }; abi="$1" ;;
     *) echo "unknown argument: $1" >&2; exit 2 ;;
   esac
   shift
 done
 [ -n "$engine" ] || engine=$(node -p 'JSON.parse(fs.readFileSync("../native.lock", "utf8")).engine["android-tv"]')
 if [ "$engine" = "both" ]; then
-  sh "$self" --engine js ${native_local:+--native-local "$native_local"}
-  sh "$self" --engine rust ${native_local:+--native-local "$native_local"}
+  sh "$self" --engine js --abi "$abi" ${native_local:+--native-local "$native_local"} ${native_prebuilt:+--native-prebuilt "$native_prebuilt"}
+  sh "$self" --engine rust --abi "$abi" ${native_local:+--native-local "$native_local"} ${native_prebuilt:+--native-prebuilt "$native_prebuilt"}
   exit 0
 fi
 case "$engine" in js|rust) ;; *) echo "--engine must be js, rust or both, not $engine" >&2; exit 2 ;; esac
+case "$abi" in arm64-v8a|armeabi-v7a) ;; *) echo "--abi must be arm64-v8a or armeabi-v7a, not $abi" >&2; exit 2 ;; esac
 props="${GRADLE_USER_HOME:-$HOME/.gradle}/gradle.properties"
 for key in keystore keyAlias; do
   grep -q "^peartube\.$key=" "$props" 2>/dev/null || { echo "peartube.$key is not set in $props" >&2; exit 1; }
@@ -38,11 +43,13 @@ if [ -x /usr/libexec/java_home ]; then JAVA_HOME=$(/usr/libexec/java_home -v 17)
 export ANDROID_HOME
 version=$(node -p 'require("../package.json").version')
 
-./gradlew --console=plain :tv:assembleRelease -Ppeartube.signRelease "-Ppeartube.engine=$engine" ${native_local:+"-Ppeartube.nativeLocal=$native_local"}
+./gradlew --console=plain :tv:assembleRelease -Ppeartube.signRelease "-Ppeartube.engine=$engine" "-Ppeartube.abi=$abi" ${native_local:+"-Ppeartube.nativeLocal=$native_local"} ${native_prebuilt:+"-Ppeartube.nativePrebuilt=$native_prebuilt"}
 mkdir -p build/release-apk
 suffix=""
 [ "$engine" = "rust" ] && suffix="-rust"
-out="build/release-apk/PearTubeReceiver-$version$suffix-arm64.apk"
+abi_tag="arm64"
+[ "$abi" = "armeabi-v7a" ] && abi_tag="armv7"
+out="build/release-apk/PearTubeReceiver-$version$suffix-$abi_tag.apk"
 cp tv/build/outputs/apk/release/tv-release.apk "$out"
 sh ./check-signer.sh "$out" || { rm -f "$out"; exit 1; }
 echo "$out"

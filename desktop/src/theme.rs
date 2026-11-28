@@ -1,22 +1,33 @@
-//! Both apps' palette, mirroring design/tokens.json (dark side): the Mac, Android and TV
-//! surfaces share one violet brand, one ink/dim pair, one green, and one radius language.
+//! LUMEN Obsidian & Pearl palette, shared across desktop surfaces: deep obsidian
+//! grounds, warm pearl highlights, luminous violet accent, and refined 12px radii.
 
 use gpui_kit::component::{Theme, ThemeMode};
-use gpui_kit::{App, Hsla, px, rgb};
+use gpui_kit::{App, Hsla, hsla, px, rgb};
 
-pub const BG: u32 = 0x08090c;
-pub const CARD: u32 = 0x101218;
-pub const CARD_ELEVATED: u32 = 0x171a22;
-pub const LINE: u32 = 0x232733;
-pub const INK: u32 = 0xf2f4f8;
-pub const DIM: u32 = 0x98a0b3;
-pub const BRAND: u32 = 0x9147ff;
-pub const BRAND_HOVER: u32 = 0xa866ff;
-pub const RING: u32 = 0xb98bff;
+pub const BG: u32 = 0x06070a;
+pub const CARD: u32 = 0x0e1017;
+pub const CARD_ELEVATED: u32 = 0x161923;
+pub const LINE: u32 = 0x222634;
+pub const INK: u32 = 0xf4f5f7;
+pub const DIM: u32 = 0x959cb0;
+pub const PEARL: u32 = 0xeae6dd;
+pub const BRAND: u32 = 0x9b7bff;
+pub const BRAND_HOVER: u32 = 0xb096ff;
+pub const RING: u32 = 0xc2adff;
 pub const ACCENT: u32 = 0x45d08a;
 #[allow(dead_code)]
-pub const WARN: u32 = 0xf5a623;
+pub const WARN: u32 = 0xe8b45c;
 pub const DANGER: u32 = 0xff7d7d;
+
+/// Subtle translucent glass surface fill and hairline border for floating LUMEN pills & popovers.
+pub const GLASS_BG: Hsla = Hsla { h: 228.0 / 360.0, s: 0.24, l: 0.14, a: 0.72 };
+pub const GLASS_BORDER: Hsla = Hsla { h: 0.0, s: 0.0, l: 1.0, a: 0.10 };
+
+#[allow(dead_code)]
+pub fn glass_pill_bg() -> Hsla {
+    hsla(0., 0., 1., 0.06)
+}
+
 pub fn apply(cx: &mut App) {
     Theme::change(ThemeMode::Dark, None, cx);
     Theme::update(cx, |theme| {
@@ -38,9 +49,9 @@ pub fn apply(cx: &mut App) {
         theme.caret = brand;
         theme.selection = brand.opacity(0.35);
         theme.slider_bar = brand;
-        theme.slider_thumb = color(0xffffff);
+        theme.slider_thumb = color(PEARL);
         theme.danger = color(DANGER);
         theme.font_size = px(15.);
-        theme.radius = px(10.);
+        theme.radius = px(12.);
     });
 }

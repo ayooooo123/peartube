@@ -384,6 +384,17 @@ pub extern "system" fn Java_com_peartube_app_player_NativePlayer_surfaceRetireme
     surface_result(&mut env, result)
 }
 
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_com_peartube_app_player_NativePlayer_setDisplayVsync(
+    _env: JNIEnv, _class: JClass, hw_vsync_ns: jlong, period_ns: jlong,
+) {
+    if period_ns > 0 {
+        BACKEND.set_display_vsync(hw_vsync_ns, period_ns);
+    } else {
+        BACKEND.clear_display_vsync();
+    }
+}
+
 fn surface_result(env: &mut JNIEnv, result: Result<jint, String>) -> jint {
     match result {
         Ok(status) => status,

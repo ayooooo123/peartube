@@ -4,10 +4,13 @@
 
 #![forbid(unsafe_code)]
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::io::{Read, Write};
 use std::net::{TcpStream, ToSocketAddrs};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::path::PathBuf;
+use std::process::{Child, Command, Stdio};
+use std::sync::{Mutex, OnceLock};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use futures_channel::oneshot;
 use peartube::worker::{DATA_DIR, MusicMeta};
@@ -42,6 +45,18 @@ pub const DISCOVER_TOPICS: &[&str] = &[
     "Podcasts",
     "Gaming",
     "Documentary",
+];
+
+/// Mood chips shown in Discover -> Music.
+pub const MUSIC_DISCOVER_MOODS: &[(&str, &str)] = &[
+    ("featured", "Essential"),
+    ("jazz", "Jazz"),
+    ("electronic", "Electronic"),
+    ("indie", "Indie & Alt"),
+    ("hiphop", "Hip-Hop"),
+    ("ambient", "Ambient"),
+    ("soul", "Soul & R&B"),
+    ("rock", "Rock"),
 ];
 
 /// Runs a blocking closure on a dedicated OS thread and resolves via a futures oneshot
@@ -1827,6 +1842,959 @@ pub fn split_artist_title(raw: &str, fallback_artist: Option<&str>) -> (String, 
     (artist, title)
 }
 
+// ---- External HTTPS discovery helpers (macOS curl + afplay, zero unsafe_code) ----
+
+const YT_CONSENT_COOKIE: &str = "CONSENT=YES+cb.20210328-17-p0.en+FX+417";
+const BROWSER_UA: &str =
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36";
+
+const ALLOWED_IMAGE_HOSTS: &[&str] = &[
+    "ytimg.com",
+    "ggpht.com",
+    "googleusercontent.com",
+    "mzstatic.com",
+    "sndcdn.com",
+    "metahub.space",
+    "coverartarchive.org",
+];
+
+const ALLOWED_PREVIEW_HOSTS: &[&str] = &["mzstatic.com", "apple.com", "itunes.apple.com"];
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct CreatorSuggestion {
+    pub source: String,
+    pub name: String,
+    pub handle: String,
+    pub subtitle: String,
+    pub url: String,
+    pub avatar_url: String,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct SuggestedArtist {
+    pub name: String,
+    pub genre: String,
+    pub art_url: String,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct SuggestedSong {
+    pub id: String,
+    pub title: String,
+    pub artist: String,
+    pub album: String,
+    pub duration_secs: u64,
+    pub art_url: String,
+    pub preview_url: String,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct SuggestedAlbum {
+    pub title: String,
+    pub artist: String,
+    pub year: String,
+    pub art_url: String,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct MusicDiscoverResult {
+    pub mood: String,
+    pub query: String,
+    pub artists: Vec<SuggestedArtist>,
+    pub songs: Vec<SuggestedSong>,
+    pub albums: Vec<SuggestedAlbum>,
+    pub error: Option<String>,
+}
+
+fn url_host_matches(url: &str, allowed_suffixes: &[&str]) -> bool {
+    let trimmed = url.trim();
+    let Some(rest) = trimmed.strip_prefix("https://") else {
+        return false;
+    };
+    if trimmed.chars().any(|c| c.is_control() || c.is_whitespace()) {
+        return false;
+    }
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or("");
+    if authority.is_empty() || authority.contains('@') {
+        return false;
+    }
+    let host = authority
+        .split(':')
+        .next()
+        .unwrap_or("")
+        .trim_end_matches('.')
+        .to_ascii_lowercase();
+    if host.is_empty() {
+        return false;
+    }
+    allowed_suffixes
+        .iter()
+        .any(|suffix| host == *suffix || host.ends_with(&format!(".{suffix}")))
+}
+
+pub fn imdb_poster_url(imdb: &str) -> Option<String> {
+    let trimmed = imdb.trim();
+    if trimmed.starts_with("tt") && trimmed.len() >= 4 && trimmed[2..].bytes().all(|b| b.is_ascii_digit()) {
+        Some(format!("https://images.metahub.space/poster/medium/{trimmed}/img"))
+    } else {
+        None
+    }
+}
+
+pub fn imdb_backdrop_url(imdb: &str) -> Option<String> {
+    let trimmed = imdb.trim();
+    if trimmed.starts_with("tt") && trimmed.len() >= 4 && trimmed[2..].bytes().all(|b| b.is_ascii_digit()) {
+        Some(format!("https://images.metahub.space/background/medium/{trimmed}/img"))
+    } else {
+        None
+    }
+}
+
+pub fn is_allowed_image_url(url: &str) -> bool {
+    url_host_matches(url, ALLOWED_IMAGE_HOSTS)
+}
+
+pub fn is_allowed_preview_url(url: &str) -> bool {
+    url_host_matches(url, ALLOWED_PREVIEW_HOSTS)
+}
+
+fn curl_get(url: &str, max_time_secs: u32, extra_headers: &[&str], max_bytes: usize) -> Result<Vec<u8>, String> {
+    let mut cmd = Command::new("/usr/bin/curl");
+    cmd.arg("-fsSL")
+        .arg("--max-time")
+        .arg(max_time_secs.to_string())
+        .arg("--max-filesize")
+        .arg(max_bytes.to_string())
+        .arg("-A")
+        .arg(BROWSER_UA);
+    for header in extra_headers {
+        cmd.arg("-H").arg(header);
+    }
+    cmd.arg("--").arg(url);
+    let output = cmd
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .map_err(|e| format!("Run curl: {e}"))?;
+    if !output.status.success() {
+        let err = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        return Err(if err.is_empty() {
+            format!("HTTP fetch failed ({})", output.status)
+        } else {
+            err
+        });
+    }
+    if output.stdout.len() > max_bytes {
+        return Err("External response exceeded size limit".into());
+    }
+    Ok(output.stdout)
+}
+
+/// Fetches an allowlisted HTTPS image (creator avatar or iTunes cover art) via macOS `/usr/bin/curl`.
+pub fn fetch_external_image_bytes(url: &str) -> Result<Vec<u8>, String> {
+    let clean = normalize_https_url(url);
+    if !is_allowed_image_url(&clean) {
+        return Err("Image host not in allowlist".into());
+    }
+    let bytes = curl_get(&clean, 4, &[], 4 * 1024 * 1024)?;
+    if bytes.is_empty() {
+        return Err("Empty image response".into());
+    }
+    Ok(bytes)
+}
+
+fn normalize_https_url(raw: &str) -> String {
+    let t = raw.trim();
+    if let Some(rest) = t.strip_prefix("//") {
+        format!("https://{rest}")
+    } else if let Some(rest) = t.strip_prefix("http://") {
+        format!("https://{rest}")
+    } else {
+        t.to_string()
+    }
+}
+
+/// Extracts the `ytInitialData` JSON object embedded in a YouTube HTML page.
+pub fn extract_yt_initial_data(html: &str) -> Option<Value> {
+    let markers = [
+        "var ytInitialData = ",
+        "window[\"ytInitialData\"] = ",
+        "window['ytInitialData'] = ",
+        "ytInitialData = ",
+    ];
+    for marker in markers {
+        if let Some(pos) = html.find(marker) {
+            let tail = &html[pos + marker.len()..];
+            let trimmed = tail.trim_start();
+            if let Some(json_slice) = extract_balanced_json_object(trimmed)
+                && let Ok(val) = serde_json::from_str::<Value>(json_slice)
+            {
+                return Some(val);
+            }
+        }
+    }
+    None
+}
+
+fn extract_balanced_json_object(s: &str) -> Option<&str> {
+    let bytes = s.as_bytes();
+    if bytes.first().copied() != Some(b'{') {
+        return None;
+    }
+    let mut depth = 0usize;
+    let mut in_str = false;
+    let mut escaped = false;
+    for (idx, &b) in bytes.iter().enumerate() {
+        if in_str {
+            if escaped {
+                escaped = false;
+            } else if b == b'\\' {
+                escaped = true;
+            } else if b == b'"' {
+                in_str = false;
+            }
+        } else {
+            match b {
+                b'"' => in_str = true,
+                b'{' => depth += 1,
+                b'}' => {
+                    depth = depth.saturating_sub(1);
+                    if depth == 0 {
+                        return Some(&s[..=idx]);
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    None
+}
+
+fn yt_text(val: &Value) -> Option<String> {
+    if let Some(s) = val.as_str() {
+        let t = s.trim();
+        return (!t.is_empty()).then(|| t.to_string());
+    }
+    if let Some(s) = val.get("simpleText").and_then(Value::as_str) {
+        let t = s.trim();
+        return (!t.is_empty()).then(|| t.to_string());
+    }
+    if let Some(runs) = val.get("runs").and_then(Value::as_array) {
+        let joined: String = runs
+            .iter()
+            .filter_map(|r| r.get("text").and_then(Value::as_str))
+            .collect();
+        let t = joined.trim();
+        return (!t.is_empty()).then(|| t.to_string());
+    }
+    None
+}
+
+fn best_yt_thumbnail(thumbs: &Value) -> String {
+    let arr = thumbs
+        .as_array()
+        .or_else(|| thumbs.get("thumbnails").and_then(Value::as_array))
+        .or_else(|| thumbs.get("sources").and_then(Value::as_array));
+    arr.and_then(|list| list.last())
+        .and_then(|item| item.get("url").and_then(Value::as_str))
+        .map(normalize_https_url)
+        .unwrap_or_default()
+}
+
+pub fn parse_yt_handle_page(data: &Value, fallback_handle: &str) -> Option<CreatorSuggestion> {
+    let meta = data.get("metadata")?.get("channelMetadataRenderer")?;
+    let name = meta.get("title").and_then(Value::as_str)?.trim().to_string();
+    if name.is_empty() {
+        return None;
+    }
+    let url = meta
+        .get("vanityChannelUrl")
+        .and_then(Value::as_str)
+        .or_else(|| meta.get("channelUrl").and_then(Value::as_str))
+        .map(normalize_https_url)
+        .unwrap_or_else(|| format!("https://www.youtube.com/@{fallback_handle}"));
+
+    let mut avatar_url = meta
+        .get("avatar")
+        .map(best_yt_thumbnail)
+        .unwrap_or_default();
+
+    let mut handle = url
+        .split('/')
+        .rfind(|seg| seg.starts_with('@'))
+        .map(str::to_string)
+        .unwrap_or_else(|| format!("@{fallback_handle}"));
+    let mut subscribers = String::new();
+
+    if let Some(ph) = data
+        .get("header")
+        .and_then(|h| h.get("pageHeaderRenderer"))
+        .and_then(|p| p.get("content"))
+        .and_then(|c| c.get("pageHeaderViewModel"))
+    {
+        if avatar_url.is_empty()
+            && let Some(src) = ph
+                .get("image")
+                .and_then(|i| i.get("decoratedAvatarViewModel"))
+                .and_then(|a| a.get("avatar"))
+                .and_then(|a| a.get("avatarViewModel"))
+                .and_then(|a| a.get("image"))
+        {
+            avatar_url = best_yt_thumbnail(src);
+        }
+        if let Some(rows) = ph
+            .get("metadata")
+            .and_then(|m| m.get("contentMetadataViewModel"))
+            .and_then(|m| m.get("metadataRows"))
+            .and_then(Value::as_array)
+        {
+            for row in rows {
+                if let Some(parts) = row.get("metadataParts").and_then(Value::as_array) {
+                    for part in parts {
+                        if let Some(txt) = part
+                            .get("text")
+                            .and_then(|t| t.get("content"))
+                            .and_then(Value::as_str)
+                            .map(str::trim)
+                        {
+                            if txt.starts_with('@') {
+                                handle = txt.to_string();
+                            } else if txt.to_ascii_lowercase().contains("subscriber") && subscribers.is_empty() {
+                                subscribers = txt.to_string();
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    let subtitle = match (handle.is_empty(), subscribers.is_empty()) {
+        (false, false) => format!("{handle} · {subscribers}"),
+        (false, true) => handle.clone(),
+        (true, false) => subscribers,
+        (true, true) => "YouTube channel".to_string(),
+    };
+
+    Some(CreatorSuggestion {
+        source: "youtube".to_string(),
+        name,
+        handle,
+        subtitle,
+        url,
+        avatar_url,
+    })
+}
+
+fn collect_channel_renderers<'a>(val: &'a Value, out: &mut Vec<&'a Value>, limit: usize) {
+    if out.len() >= limit {
+        return;
+    }
+    match val {
+        Value::Object(map) => {
+            if let Some(cr) = map.get("channelRenderer") {
+                out.push(cr);
+                if out.len() >= limit {
+                    return;
+                }
+            }
+            for v in map.values() {
+                collect_channel_renderers(v, out, limit);
+                if out.len() >= limit {
+                    return;
+                }
+            }
+        }
+        Value::Array(arr) => {
+            for v in arr {
+                collect_channel_renderers(v, out, limit);
+                if out.len() >= limit {
+                    return;
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+pub fn parse_yt_channel_search_results(data: &Value, limit: usize) -> Vec<CreatorSuggestion> {
+    let mut renderers = Vec::new();
+    collect_channel_renderers(data, &mut renderers, limit.saturating_mul(2).max(limit));
+
+    let mut out = Vec::new();
+    for cr in renderers {
+        if out.len() >= limit {
+            break;
+        }
+        let Some(name) = cr.get("title").and_then(yt_text) else {
+            continue;
+        };
+        let canonical = cr
+            .get("navigationEndpoint")
+            .and_then(|n| n.get("browseEndpoint"))
+            .and_then(|b| b.get("canonicalBaseUrl"))
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .unwrap_or("");
+        let channel_id = cr
+            .get("channelId")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .unwrap_or("");
+        let url = if !canonical.is_empty() {
+            if canonical.starts_with("http") {
+                normalize_https_url(canonical)
+            } else {
+                format!("https://www.youtube.com{canonical}")
+            }
+        } else if !channel_id.is_empty() {
+            format!("https://www.youtube.com/channel/{channel_id}")
+        } else {
+            continue;
+        };
+
+        let stripped = canonical.trim_start_matches('/');
+        let mut handle = if stripped.starts_with('@') {
+            stripped.to_string()
+        } else {
+            String::new()
+        };
+        let mut subscribers = String::new();
+        for field in ["subscriberCountText", "videoCountText"] {
+            if let Some(txt) = cr.get(field).and_then(yt_text) {
+                if txt.starts_with('@') {
+                    if handle.is_empty() {
+                        handle = txt;
+                    }
+                } else if txt.to_ascii_lowercase().contains("subscriber") && subscribers.is_empty() {
+                    subscribers = txt;
+                }
+            }
+        }
+        let subtitle = match (handle.is_empty(), subscribers.is_empty()) {
+            (false, false) => format!("{handle} · {subscribers}"),
+            (false, true) => handle.clone(),
+            (true, false) => subscribers,
+            (true, true) => "YouTube channel".to_string(),
+        };
+        let avatar_url = cr.get("thumbnail").map(best_yt_thumbnail).unwrap_or_default();
+
+        out.push(CreatorSuggestion {
+            source: "youtube".to_string(),
+            name,
+            handle,
+            subtitle,
+            url,
+            avatar_url,
+        });
+    }
+    out
+}
+
+fn is_handle_like(query: &str) -> Option<String> {
+    let trimmed = query.trim();
+    if trimmed.is_empty() || trimmed.contains(char::is_whitespace) {
+        return None;
+    }
+    let clean = trimmed.strip_prefix('@').unwrap_or(trimmed);
+    if clean.len() >= 2
+        && clean.len() <= 64
+        && clean
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.'))
+    {
+        Some(clean.to_string())
+    } else {
+        None
+    }
+}
+
+fn creator_dedup_key(c: &CreatorSuggestion) -> String {
+    if !c.handle.is_empty() {
+        c.handle.to_ascii_lowercase()
+    } else if !c.url.is_empty() {
+        c.url.trim_end_matches('/').to_ascii_lowercase()
+    } else {
+        c.name.to_ascii_lowercase()
+    }
+}
+
+/// Live YouTube channel typeahead: checks exact `@handle` plus YouTube channel search (`sp=EgIQAg%3D%3D`).
+pub fn search_creators_typeahead(query: &str) -> Vec<CreatorSuggestion> {
+    let trimmed = query.trim();
+    if trimmed.chars().count() < 2 {
+        return Vec::new();
+    }
+
+    type CreatorCache = Mutex<HashMap<String, (Instant, Vec<CreatorSuggestion>)>>;
+    static CACHE: OnceLock<CreatorCache> = OnceLock::new();
+    let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    let cache_key = trimmed.to_ascii_lowercase();
+    if let Ok(guard) = cache.lock()
+        && let Some((ts, cached)) = guard.get(&cache_key)
+        && ts.elapsed() < Duration::from_secs(120)
+    {
+        return cached.clone();
+    }
+
+    let handle_candidate = is_handle_like(trimmed);
+    let search_q = trimmed.strip_prefix('@').unwrap_or(trimmed).to_string();
+    let yt_headers = [
+        format!("Cookie: {YT_CONSENT_COOKIE}"),
+        "Accept-Language: en-US,en;q=0.9".to_string(),
+    ];
+    let header_refs: [&str; 2] = [yt_headers[0].as_str(), yt_headers[1].as_str()];
+
+    let (exact_hit, search_hits) = std::thread::scope(|s| {
+        let handle_job = handle_candidate.as_deref().map(|h| {
+            let url = format!("https://www.youtube.com/@{}", percent_encode_component(h));
+            let h_owned = h.to_string();
+            s.spawn(move || {
+                let bytes = curl_get(&url, 5, &header_refs, 4 * 1024 * 1024).ok()?;
+                let html = String::from_utf8_lossy(&bytes);
+                let data = extract_yt_initial_data(&html)?;
+                parse_yt_handle_page(&data, &h_owned)
+            })
+        });
+
+        let search_url = format!(
+            "https://www.youtube.com/results?search_query={}&sp=EgIQAg%3D%3D",
+            percent_encode_component(&search_q)
+        );
+        let search_job = s.spawn(move || {
+            let Ok(bytes) = curl_get(&search_url, 5, &header_refs, 4 * 1024 * 1024) else {
+                return Vec::new();
+            };
+            let html = String::from_utf8_lossy(&bytes);
+            let Some(data) = extract_yt_initial_data(&html) else {
+                return Vec::new();
+            };
+            parse_yt_channel_search_results(&data, 6)
+        });
+
+        let exact = handle_job.and_then(|j| j.join().ok().flatten());
+        let search = search_job.join().ok().unwrap_or_default();
+        (exact, search)
+    });
+
+    let mut seen_keys = HashSet::new();
+    let mut seen_urls = HashSet::new();
+    let mut combined = Vec::new();
+    for item in exact_hit.into_iter().chain(search_hits) {
+        let dk = creator_dedup_key(&item);
+        let uk = item.url.trim_end_matches('/').to_ascii_lowercase();
+        if seen_keys.insert(dk) && (uk.is_empty() || seen_urls.insert(uk)) {
+            combined.push(item);
+            if combined.len() >= 6 {
+                break;
+            }
+        }
+    }
+
+    if !combined.is_empty()
+        && let Ok(mut guard) = cache.lock()
+    {
+        if guard.len() >= 64 {
+            guard.clear();
+        }
+        guard.insert(cache_key, (Instant::now(), combined.clone()));
+    }
+    combined
+}
+
+/// Extracts the primary artist from a credit line by splitting on `,`, `&`, `feat.`, `ft.`, `with`.
+pub fn primary_artist(raw: &str) -> String {
+    let s = raw.trim();
+    if s.is_empty() {
+        return String::new();
+    }
+    let lower = s.to_ascii_lowercase();
+    let mut cut = s.len();
+    for sep in [",", " & ", " feat. ", " feat ", " ft. ", " ft ", " featuring ", " with "] {
+        if let Some(idx) = lower.find(sep)
+            && idx > 0
+            && idx < cut
+        {
+            cut = idx;
+        }
+    }
+    s[..cut].trim().to_string()
+}
+
+pub fn upsize_itunes_art(raw: &str) -> String {
+    let url = normalize_https_url(raw);
+    url.replace("/100x100bb", "/600x600bb")
+        .replace("/60x60bb", "/600x600bb")
+}
+
+fn mood_seed_artists(mood: &str) -> &'static [&'static str] {
+    match mood {
+        "jazz" => &["Miles Davis", "John Coltrane", "Bill Evans", "Herbie Hancock", "Kamasi Washington"],
+        "electronic" => &["Aphex Twin", "Boards of Canada", "Four Tet", "Floating Points", "Daft Punk"],
+        "indie" => &["Radiohead", "Tame Impala", "Beach House", "Khruangbin", "Bon Iver"],
+        "hiphop" => &["MF DOOM", "Nujabes", "J Dilla", "Kendrick Lamar", "A Tribe Called Quest"],
+        "ambient" => &["Brian Eno", "Nils Frahm", "Max Richter", "Ryuichi Sakamoto", "Stars of the Lid"],
+        "soul" => &["Marvin Gaye", "Erykah Badu", "D'Angelo", "Sade", "Anderson .Paak"],
+        "rock" => &["Pink Floyd", "Fleetwood Mac", "Talking Heads", "King Crimson", "The Smiths"],
+        _ => &["Radiohead", "Miles Davis", "Daft Punk", "Khruangbin", "Bonobo"],
+    }
+}
+
+#[derive(Clone, Debug)]
+struct ItunesTrackRow {
+    id: String,
+    title: String,
+    artist: String,
+    primary_artist: String,
+    album: String,
+    genre: String,
+    year: String,
+    duration_secs: u64,
+    art_url: String,
+    preview_url: String,
+}
+
+fn parse_itunes_rows(val: &Value) -> Vec<ItunesTrackRow> {
+    let Some(arr) = val.get("results").and_then(Value::as_array) else {
+        return Vec::new();
+    };
+    let mut rows = Vec::with_capacity(arr.len());
+    for item in arr {
+        let title = item
+            .get("trackName")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .unwrap_or("")
+            .to_string();
+        let artist = item
+            .get("artistName")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .unwrap_or("")
+            .to_string();
+        if title.is_empty() || artist.is_empty() {
+            continue;
+        }
+        let album = item
+            .get("collectionName")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .unwrap_or("")
+            .to_string();
+        let genre = item
+            .get("primaryGenreName")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .unwrap_or("Music")
+            .to_string();
+        let year = item
+            .get("releaseDate")
+            .and_then(Value::as_str)
+            .and_then(|d| d.get(..4))
+            .filter(|y| y.bytes().all(|b| b.is_ascii_digit()))
+            .unwrap_or("")
+            .to_string();
+        let id = item
+            .get("trackId")
+            .and_then(|v| v.as_u64().map(|n| n.to_string()).or_else(|| v.as_str().map(String::from)))
+            .unwrap_or_else(|| format!("{artist}-{title}"));
+        let duration_secs = item
+            .get("trackTimeMillis")
+            .and_then(Value::as_u64)
+            .map(|ms| (ms + 500) / 1000)
+            .unwrap_or(0);
+        let art_url = item
+            .get("artworkUrl100")
+            .or_else(|| item.get("artworkUrl60"))
+            .and_then(Value::as_str)
+            .map(upsize_itunes_art)
+            .unwrap_or_default();
+        let preview_url = item
+            .get("previewUrl")
+            .and_then(Value::as_str)
+            .map(normalize_https_url)
+            .unwrap_or_default();
+
+        rows.push(ItunesTrackRow {
+            id,
+            title,
+            primary_artist: primary_artist(&artist),
+            artist,
+            album,
+            genre,
+            year,
+            duration_secs,
+            art_url,
+            preview_url,
+        });
+    }
+    rows
+}
+
+fn assemble_music_discover(mood: &str, query: &str, buckets: Vec<Vec<ItunesTrackRow>>) -> MusicDiscoverResult {
+    // Round-robin interleave so multi-seed moods stay diverse across artists.
+    let max_len = buckets.iter().map(Vec::len).max().unwrap_or(0);
+    let mut interleaved = Vec::new();
+    for i in 0..max_len {
+        for b in &buckets {
+            if let Some(row) = b.get(i) {
+                interleaved.push(row);
+            }
+        }
+    }
+
+    let mut artists = Vec::new();
+    let mut seen_artists = HashSet::new();
+    let mut songs = Vec::new();
+    let mut seen_songs = HashSet::new();
+    let mut albums = Vec::new();
+    let mut seen_albums = HashSet::new();
+
+    for row in &interleaved {
+        let pa = if row.primary_artist.is_empty() {
+            row.artist.clone()
+        } else {
+            row.primary_artist.clone()
+        };
+        let pa_key = pa.to_ascii_lowercase();
+        if artists.len() < 8 && !pa_key.is_empty() && seen_artists.insert(pa_key) {
+            artists.push(SuggestedArtist {
+                name: pa.clone(),
+                genre: row.genre.clone(),
+                art_url: row.art_url.clone(),
+            });
+        }
+
+        let song_key = format!("{}::{}", row.artist.to_ascii_lowercase(), row.title.to_ascii_lowercase());
+        if songs.len() < 12 && seen_songs.insert(song_key) {
+            songs.push(SuggestedSong {
+                id: row.id.clone(),
+                title: row.title.clone(),
+                artist: row.artist.clone(),
+                album: row.album.clone(),
+                duration_secs: row.duration_secs,
+                art_url: row.art_url.clone(),
+                preview_url: row.preview_url.clone(),
+            });
+        }
+
+        if !row.album.is_empty() && albums.len() < 8 {
+            let alb_key = format!("{}::{}", pa.to_ascii_lowercase(), row.album.to_ascii_lowercase());
+            if seen_albums.insert(alb_key) {
+                albums.push(SuggestedAlbum {
+                    title: row.album.clone(),
+                    artist: pa,
+                    year: row.year.clone(),
+                    art_url: row.art_url.clone(),
+                });
+            }
+        }
+    }
+
+    MusicDiscoverResult {
+        mood: mood.to_string(),
+        query: query.to_string(),
+        artists,
+        songs,
+        albums,
+        error: None,
+    }
+}
+
+fn fetch_itunes_search(term: &str, artist_term: bool, limit: usize) -> Result<Vec<ItunesTrackRow>, String> {
+    let encoded = percent_encode_component(term);
+    let attr = if artist_term { "&attribute=artistTerm" } else { "" };
+    let url = format!(
+        "https://itunes.apple.com/search?term={encoded}&media=music&entity=song{attr}&limit={limit}"
+    );
+    let bytes = curl_get(&url, 5, &["Accept: application/json"], 4 * 1024 * 1024)?;
+    let val: Value = serde_json::from_slice(&bytes).map_err(|e| format!("Parse iTunes response: {e}"))?;
+    Ok(parse_itunes_rows(&val))
+}
+
+/// Live Apple iTunes Search API music discovery with mood seeds, library artist seeds, or freeform query.
+pub fn fetch_music_discover(mood: &str, query: &str, seed_artists: &[String]) -> MusicDiscoverResult {
+    let clean_mood = if mood.trim().is_empty() { "featured" } else { mood.trim() };
+    let clean_query = query.trim();
+
+    static CACHE: OnceLock<Mutex<HashMap<String, (Instant, MusicDiscoverResult)>>> = OnceLock::new();
+    let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    let seeds_sig = if clean_mood == "library" && clean_query.is_empty() {
+        seed_artists.iter().take(5).cloned().collect::<Vec<_>>().join("|")
+    } else {
+        String::new()
+    };
+    let cache_key = format!("{clean_mood}::{}::{seeds_sig}", clean_query.to_ascii_lowercase());
+    if let Ok(guard) = cache.lock()
+        && let Some((ts, cached)) = guard.get(&cache_key)
+        && ts.elapsed() < Duration::from_secs(300)
+    {
+        return cached.clone();
+    }
+
+    let queries: Vec<(String, bool, usize)> = if !clean_query.is_empty() {
+        vec![(clean_query.to_string(), false, 36)]
+    } else if clean_mood == "library" && !seed_artists.is_empty() {
+        let mut uniq = HashSet::new();
+        seed_artists
+            .iter()
+            .map(|a| primary_artist(a))
+            .filter(|a| !a.is_empty() && !a.eq_ignore_ascii_case("Unknown artist"))
+            .filter(|a| uniq.insert(a.to_ascii_lowercase()))
+            .take(5)
+            .map(|a| (a, true, 10))
+            .collect()
+    } else {
+        mood_seed_artists(clean_mood)
+            .iter()
+            .map(|&a| (a.to_string(), true, 10))
+            .collect()
+    };
+
+    let (buckets, last_err): (Vec<Vec<ItunesTrackRow>>, Option<String>) = std::thread::scope(|s| {
+        let handles: Vec<_> = queries
+            .into_iter()
+            .map(|(term, is_artist, limit)| s.spawn(move || fetch_itunes_search(&term, is_artist, limit)))
+            .collect();
+        let mut ok_buckets = Vec::new();
+        let mut err_msg = None;
+        for h in handles {
+            match h.join() {
+                Ok(Ok(rows)) => ok_buckets.push(rows),
+                Ok(Err(e)) => err_msg = Some(e),
+                Err(_) => err_msg = Some("Music discovery request interrupted".into()),
+            }
+        }
+        (ok_buckets, err_msg)
+    });
+
+    let mut result = assemble_music_discover(clean_mood, clean_query, buckets);
+    if result.artists.is_empty() && result.songs.is_empty() && result.albums.is_empty() {
+        result.error = last_err;
+    } else if let Ok(mut guard) = cache.lock() {
+        if guard.len() >= 48 {
+            guard.clear();
+        }
+        guard.insert(cache_key, (Instant::now(), result.clone()));
+    }
+    result
+}
+
+/// Downloads an allowlisted 30-second `.m4a` preview to a temporary file for native `/usr/bin/afplay`.
+pub fn download_preview_m4a(url: &str, id: &str) -> Result<PathBuf, String> {
+    let clean = normalize_https_url(url);
+    if !is_allowed_preview_url(&clean) {
+        return Err("Preview host not in allowlist".into());
+    }
+    let safe_id: String = id
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_'))
+        .take(32)
+        .collect();
+    let stamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or(0);
+    let path = std::env::temp_dir().join(format!(
+        "peartube-preview-{}-{}-{stamp}.m4a",
+        std::process::id(),
+        if safe_id.is_empty() { "track" } else { &safe_id }
+    ));
+    let output = Command::new("/usr/bin/curl")
+        .arg("-fsSL")
+        .arg("--max-time")
+        .arg("6")
+        .arg("--max-filesize")
+        .arg("4194304")
+        .arg("-A")
+        .arg(BROWSER_UA)
+        .arg("-o")
+        .arg(&path)
+        .arg("--")
+        .arg(&clean)
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .output()
+        .map_err(|e| format!("Download preview: {e}"))?;
+    if !output.status.success() {
+        let _ = std::fs::remove_file(&path);
+        return Err("Could not download audio preview".into());
+    }
+    Ok(path)
+}
+
+/// Lightweight macOS 30-second song preview player using `/usr/bin/afplay`.
+/// Always kills the child process and removes its temp `.m4a` file on stop or drop.
+#[derive(Default)]
+pub struct PreviewPlayer {
+    active_id: Option<String>,
+    child: Option<Child>,
+    temp_file: Option<PathBuf>,
+}
+
+impl Drop for PreviewPlayer {
+    fn drop(&mut self) {
+        self.stop();
+    }
+}
+
+impl PreviewPlayer {
+    pub fn active_id(&self) -> Option<&str> {
+        self.active_id.as_deref()
+    }
+
+    pub fn is_playing_id(&self, id: &str) -> bool {
+        self.active_id.as_deref() == Some(id)
+    }
+
+    pub fn stop(&mut self) {
+        if let Some(mut child) = self.child.take() {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+        if let Some(path) = self.temp_file.take() {
+            let _ = std::fs::remove_file(path);
+        }
+        self.active_id = None;
+    }
+
+    pub fn play_file(&mut self, id: String, path: PathBuf) -> Result<(), String> {
+        self.stop();
+        let child = Command::new("/usr/bin/afplay")
+            .arg(&path)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .map_err(|e| {
+                let _ = std::fs::remove_file(&path);
+                format!("Start afplay: {e}")
+            })?;
+        self.active_id = Some(id);
+        self.child = Some(child);
+        self.temp_file = Some(path);
+        Ok(())
+    }
+
+    /// Returns `true` if a previously playing preview has finished naturally and was cleaned up.
+    pub fn poll_finished(&mut self) -> bool {
+        let finished = match &mut self.child {
+            Some(child) => matches!(child.try_wait(), Ok(Some(_)) | Err(_)),
+            None => false,
+        };
+        if finished {
+            self.child = None;
+            if let Some(path) = self.temp_file.take() {
+                let _ = std::fs::remove_file(path);
+            }
+            self.active_id = None;
+            true
+        } else {
+            false
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2345,5 +3313,122 @@ mod tests {
         assert_eq!(snake.username, "peer2");
         assert_eq!(snake.sample_rate, Some(44100));
         assert_eq!(snake.bit_depth, Some(16));
+    }
+
+    #[test]
+    fn allowlisted_image_and_preview_urls_reject_untrusted_hosts() {
+        assert!(is_allowed_image_url("https://is1-ssl.mzstatic.com/image/thumb/x/600x600bb.jpg"));
+        assert!(is_allowed_image_url("https://yt3.ggpht.com/abc123=s88-c-k-c0x00ffffff-no-rj"));
+        assert!(is_allowed_image_url("https://i.ytimg.com/vi/dQw4w9WgXcQ/hqdefault.jpg"));
+        assert!(is_allowed_image_url("https://images.metahub.space/poster/medium/tt0133093/img"));
+        assert!(!is_allowed_image_url("http://is1-ssl.mzstatic.com/foo.jpg"));
+        assert!(!is_allowed_image_url("https://evil.example.com/mzstatic.com/a.jpg"));
+        assert!(!is_allowed_image_url("https://user@ytimg.com/a.jpg"));
+
+        assert!(is_allowed_preview_url("https://audio-ssl.itunes.apple.com/itunes-assets/x.m4a"));
+        assert!(is_allowed_preview_url("https://a1.mzstatic.com/preview.m4a"));
+        assert!(!is_allowed_preview_url("https://example.com/preview.m4a"));
+
+        assert_eq!(
+            imdb_poster_url("tt0133093").as_deref(),
+            Some("https://images.metahub.space/poster/medium/tt0133093/img")
+        );
+        assert_eq!(
+            imdb_backdrop_url("tt0903747").as_deref(),
+            Some("https://images.metahub.space/background/medium/tt0903747/img")
+        );
+        assert_eq!(imdb_poster_url("clip:abc"), None);
+        assert_eq!(imdb_backdrop_url("tt"), None);
+    }
+
+    #[test]
+    fn youtube_initial_data_handle_and_channel_search_parsing() {
+        let html = r#"<html><script>var ytInitialData = {"metadata":{"channelMetadataRenderer":{"title":"Veritasium","vanityChannelUrl":"http://www.youtube.com/@veritasium","avatar":{"thumbnails":[{"url":"https://yt3.ggpht.com/avatar=s176"}]}}},"header":{"pageHeaderRenderer":{"content":{"pageHeaderViewModel":{"metadata":{"contentMetadataViewModel":{"metadataRows":[{"metadataParts":[{"text":{"content":"@veritasium"}}]},{"metadataParts":[{"text":{"content":"16.4M subscribers"}}]}]}}}}}}};</script></html>"#;
+        let data = extract_yt_initial_data(html).expect("ytInitialData");
+        let exact = parse_yt_handle_page(&data, "veritasium").expect("handle page");
+        assert_eq!(exact.name, "Veritasium");
+        assert_eq!(exact.handle, "@veritasium");
+        assert_eq!(exact.subtitle, "@veritasium · 16.4M subscribers");
+        assert_eq!(exact.url, "https://www.youtube.com/@veritasium");
+        assert_eq!(exact.avatar_url, "https://yt3.ggpht.com/avatar=s176");
+
+        let search_json = json!({
+            "contents": {
+                "twoColumnSearchResultsRenderer": {
+                    "primaryContents": {
+                        "sectionListRenderer": {
+                            "contents": [{
+                                "itemSectionRenderer": {
+                                    "contents": [{
+                                        "channelRenderer": {
+                                            "channelId": "UC123",
+                                            "title": { "simpleText": "3Blue1Brown" },
+                                            "navigationEndpoint": { "browseEndpoint": { "canonicalBaseUrl": "/@3blue1brown" } },
+                                            "subscriberCountText": { "simpleText": "@3blue1brown" },
+                                            "videoCountText": { "simpleText": "6.8M subscribers" },
+                                            "thumbnail": { "thumbnails": [{ "url": "//yt3.ggpht.com/3b1b=s176" }] }
+                                        }
+                                    }]
+                                }
+                            }]
+                        }
+                    }
+                }
+            }
+        });
+        let hits = parse_yt_channel_search_results(&search_json, 6);
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].name, "3Blue1Brown");
+        assert_eq!(hits[0].handle, "@3blue1brown");
+        assert_eq!(hits[0].subtitle, "@3blue1brown · 6.8M subscribers");
+        assert_eq!(hits[0].url, "https://www.youtube.com/@3blue1brown");
+        assert_eq!(hits[0].avatar_url, "https://yt3.ggpht.com/3b1b=s176");
+    }
+
+    #[test]
+    fn music_discover_dedupes_primary_artists_and_upsizes_artwork() {
+        assert_eq!(primary_artist("Miles Davis & John Coltrane"), "Miles Davis");
+        assert_eq!(primary_artist("Nujabes feat. Cise Starr"), "Nujabes");
+        assert_eq!(primary_artist("Daft Punk, Pharrell Williams"), "Daft Punk");
+        assert_eq!(
+            upsize_itunes_art("https://is1-ssl.mzstatic.com/image/thumb/a/100x100bb.jpg"),
+            "https://is1-ssl.mzstatic.com/image/thumb/a/600x600bb.jpg"
+        );
+
+        let payload = json!({
+            "results": [
+                {
+                    "trackId": 101,
+                    "trackName": "So What",
+                    "artistName": "Miles Davis & John Coltrane",
+                    "collectionName": "Kind of Blue",
+                    "primaryGenreName": "Jazz",
+                    "releaseDate": "1959-08-17T07:00:00Z",
+                    "trackTimeMillis": 562000,
+                    "artworkUrl100": "https://is1-ssl.mzstatic.com/image/thumb/kob/100x100bb.jpg",
+                    "previewUrl": "https://audio-ssl.itunes.apple.com/preview1.m4a"
+                },
+                {
+                    "trackId": 102,
+                    "trackName": "Blue in Green",
+                    "artistName": "Miles Davis",
+                    "collectionName": "Kind of Blue",
+                    "primaryGenreName": "Jazz",
+                    "releaseDate": "1959-08-17T07:00:00Z",
+                    "trackTimeMillis": 337000,
+                    "artworkUrl100": "https://is1-ssl.mzstatic.com/image/thumb/kob/100x100bb.jpg",
+                    "previewUrl": "https://audio-ssl.itunes.apple.com/preview2.m4a"
+                }
+            ]
+        });
+        let rows = parse_itunes_rows(&payload);
+        let assembled = assemble_music_discover("jazz", "", vec![rows]);
+        assert_eq!(assembled.artists.len(), 1);
+        assert_eq!(assembled.artists[0].name, "Miles Davis");
+        assert_eq!(assembled.artists[0].art_url, "https://is1-ssl.mzstatic.com/image/thumb/kob/600x600bb.jpg");
+        assert_eq!(assembled.songs.len(), 2);
+        assert_eq!(assembled.songs[0].duration_secs, 562);
+        assert_eq!(assembled.albums.len(), 1);
+        assert_eq!(assembled.albums[0].year, "1959");
     }
 }

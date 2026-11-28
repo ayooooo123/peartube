@@ -30,7 +30,7 @@ use crate::video::VideoView;
 const CONTEXT: &str = "Player";
 const SHOW_FOR: Duration = Duration::from_secs(3);
 
-actions!(player, [TogglePlay, SkipBack, SkipForward, ToggleFullscreen, Back]);
+actions!(player, [TogglePlay, SkipBack, SkipForward, ToggleFullscreen, Minimize, Back]);
 
 pub fn bind_keys(cx: &mut App) {
     cx.bind_keys([
@@ -38,12 +38,14 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("left", SkipBack, Some(CONTEXT)),
         KeyBinding::new("right", SkipForward, Some(CONTEXT)),
         KeyBinding::new("f", ToggleFullscreen, Some(CONTEXT)),
+        KeyBinding::new("m", Minimize, Some(CONTEXT)),
         KeyBinding::new("escape", Back, Some(CONTEXT)),
     ]);
 }
 
 pub enum PlayEvent {
     Back,
+    Minimize,
     Cast(Entry, u64),
     DismissCast,
     SwitchEntry(Entry, u64),
@@ -57,6 +59,7 @@ pub struct PlayScreen {
     selected_season: u32,
     info_open: bool,
     cast_open: bool,
+    minimized: bool,
     pending_seek_ms: Option<u64>,
     audio_mode: AudioOutputMode,
     frame_rate_mode: FrameRateMode,
@@ -118,6 +121,107 @@ impl PlayScreen {
         &self.entry.key
     }
 
+    pub fn entry(&self) -> &Entry {
+        &self.entry
+    }
+
+    pub fn is_playing(&self) -> bool {
+        self.state.playing
+    }
+
+    pub fn is_buffering(&self) -> bool {
+        self.state.buffering && self.state.error.is_none()
+    }
+
+    pub fn position(&self) -> Duration {
+        self.state.position
+    }
+
+    pub fn duration(&self) -> Option<Duration> {
+        self.state.duration
+    }
+
+    pub fn set_minimized(&mut self, minimized: bool, cx: &mut Context<Self>) {
+        if self.minimized != minimized {
+            self.minimized = minimized;
+            if minimized {
+                self.info_open = false;
+                self.cast_open = false;
+                self.frame = None;
+            } else {
+                self.frame = None;
+                self.controls_until = Instant::now() + SHOW_FOR;
+            }
+            self.sync_overlay();
+            cx.notify();
+        }
+    }
+
+    pub fn focus_player(&self, window: &mut Window, cx: &mut Context<Self>) {
+        window.focus(&self.focus, cx);
+    }
+
+    pub fn place_mini(&mut self, bounds: Bounds<Pixels>, window: &mut Window) {
+        if self.frame != Some(bounds) {
+            self.frame = Some(bounds);
+            if let Some(video) = &self.video {
+                let [x, y, w, h] = [bounds.origin.x, bounds.origin.y, bounds.size.width, bounds.size.height]
+                    .map(|p| f64::from(f32::from(p)));
+                video.set_frame([x, y, w, h]);
+            }
+        }
+        if !self.transparent_applied {
+            self.transparent_applied = true;
+            window.set_background_appearance(WindowBackgroundAppearance::Transparent);
+        }
+        if let Some(video) = &self.video {
+            video.set_overlay_visible(true);
+        }
+    }
+
+    pub fn hide_mini_frame(&mut self) {
+        let zero = Bounds::default();
+        if self.frame != Some(zero) {
+            self.frame = Some(zero);
+            if let Some(video) = &self.video {
+                video.set_frame([0.0, 0.0, 0.0, 0.0]);
+            }
+        }
+    }
+
+    pub fn pause_playback(&mut self, cx: &mut Context<Self>) {
+        if let Some(player) = &self.player
+            && player.state().playing
+        {
+            player.pause();
+            self.state = player.state();
+            cx.notify();
+        }
+    }
+
+    pub fn toggle_play_mini(&mut self, cx: &mut Context<Self>) {
+        let Some(player) = &self.player else { return };
+        if player.state().playing {
+            player.pause();
+        } else {
+            player.play();
+        }
+        self.state = player.state();
+        cx.notify();
+    }
+
+    pub fn skip_mini(&mut self, forward: bool, cx: &mut Context<Self>) {
+        let (Some(player), Some(duration)) = (&self.player, self.state.duration) else { return };
+        let at = if forward {
+            (self.state.position + SKIP).min(duration)
+        } else {
+            self.state.position.saturating_sub(SKIP)
+        };
+        player.seek(at);
+        self.state = player.state();
+        cx.notify();
+    }
+
     pub fn set_cast_open(&mut self, open: bool, cx: &mut Context<Self>) {
         if self.cast_open != open {
             self.cast_open = open;
@@ -130,12 +234,13 @@ impl PlayScreen {
     }
 
     fn sync_overlay(&self) {
-        let visible = overlay_needed(
-            self.has_picture(),
-            self.state.buffering,
-            self.state.error.is_some() || self.open_error.is_some(),
-            self.controls_shown(),
-        );
+        let visible = self.minimized
+            || overlay_needed(
+                self.has_picture(),
+                self.state.buffering,
+                self.state.error.is_some() || self.open_error.is_some(),
+                self.controls_shown(),
+            );
         self.fast_tick.store(visible || self.pending_seek_ms.is_some(), Ordering::Relaxed);
         if let Some(video) = &self.video {
             video.set_overlay_visible(visible);
@@ -191,6 +296,7 @@ impl PlayScreen {
             selected_season,
             info_open: false,
             cast_open: false,
+            minimized: false,
             pending_seek_ms: (start_pos_ms > 0).then_some(start_pos_ms),
             audio_mode: AudioOutputMode::Auto,
             frame_rate_mode: FrameRateMode::Seamless,
@@ -218,7 +324,7 @@ impl PlayScreen {
 
     fn tick(&mut self, ended: bool, window: &mut Window, cx: &mut Context<Self>) {
         let Some(player) = &self.player else { return };
-        let prev_shown = self.controls_drawn;
+        let prev_shown = self.controls_drawn || self.minimized;
         let prev = (
             self.has_picture(),
             self.state.buffering,
@@ -248,9 +354,9 @@ impl PlayScreen {
             self.seek = Some((seek, subscription));
             seek_created = true;
         }
-        let shown = self.controls_shown();
+        let shown = self.controls_shown() || self.minimized;
         self.controls_drawn = shown;
-        if shown {
+        if shown && !self.minimized {
             self.sync_seek(window, cx);
         }
         if self.last_progress_saved.elapsed() >= Duration::from_secs(15)
@@ -922,6 +1028,10 @@ impl PlayScreen {
                     .child(div().flex_1().ml_2().truncate().font_weight(FontWeight::SEMIBOLD).child(format!("{}{ep_tag}", self.entry.title)))
                     .children(audio)
                     .children(subtitles)
+                    .child(
+                        overlay_button("hud-minimize", Lucide::Minimize2.into(), "Mini-player (M)")
+                            .on_click(cx.listener(|_, _, _, cx| cx.emit(PlayEvent::Minimize))),
+                    )
                     .child({
                         let btn = Button::new("hud-cast").icon(Icon::new(Lucide::Cast)).tooltip("Play on TV");
                         let btn = if self.cast_open { btn.primary().small() } else { btn.ghost() };
@@ -1050,6 +1160,7 @@ impl Render for PlayScreen {
             .on_action(cx.listener(|this, _: &SkipBack, window, cx| this.skip(false, window, cx)))
             .on_action(cx.listener(|this, _: &SkipForward, window, cx| this.skip(true, window, cx)))
             .on_action(cx.listener(|this, _: &ToggleFullscreen, window, _| this.toggle_fullscreen_smooth(window)))
+            .on_action(cx.listener(|_, _: &Minimize, _, cx| cx.emit(PlayEvent::Minimize)))
             .on_action(cx.listener(|this, _: &Back, window, cx| this.back(window, cx)))
             .child(slot)
     }

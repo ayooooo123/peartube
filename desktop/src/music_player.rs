@@ -21,7 +21,7 @@ use crate::catalog::fold;
 use crate::list::column;
 use crate::music::RepeatMode;
 use crate::sleeves::album_sleeve;
-use crate::theme::{BRAND, CARD, CARD_ELEVATED, DIM, INK, LINE};
+use crate::theme::{BRAND, BRAND_HOVER, CARD, CARD_ELEVATED, DIM, GLASS_BORDER, INK, LINE, PEARL};
 
 impl PearTube {
     /// Bottom mini-player dock (Rule 3, Rule 14, Rule 15).
@@ -74,14 +74,23 @@ impl PearTube {
                 .w_full()
                 .bg(rgb(CARD))
                 .border_t_1()
-                .border_color(rgb(LINE))
-                // 2px violet progress edge across the top of the dock
+                .border_color(GLASS_BORDER)
+                // 2px violet-to-pearl hairline progress edge across the top of the dock
                 .child(
                     div()
                         .w_full()
                         .h(px(2.))
                         .bg(hsla(0., 0., 1., 0.08))
-                        .child(div().h_full().w(relative(ratio)).bg(rgb(BRAND))),
+                        .child(
+                            div()
+                                .h_full()
+                                .w(relative(ratio))
+                                .bg(linear_gradient(
+                                    90.,
+                                    linear_color_stop(rgb(BRAND), 0.0),
+                                    linear_color_stop(rgb(BRAND_HOVER), 0.8),
+                                )),
+                        ),
                 )
                 .child(
                     h_flex()
@@ -113,7 +122,14 @@ impl PearTube {
                                         .flex_1()
                                         .min_w_0()
                                         .gap_0p5()
-                                        .child(div().text_sm().font_weight(FontWeight::SEMIBOLD).truncate().child(cur.title))
+                                        .child(
+                                            div()
+                                                .text_sm()
+                                                .font_weight(FontWeight::SEMIBOLD)
+                                                .text_color(rgb(PEARL))
+                                                .truncate()
+                                                .child(cur.title),
+                                        )
                                         .child(
                                             div()
                                                 .text_xs()

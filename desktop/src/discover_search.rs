@@ -12,16 +12,23 @@ use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
 use crate::api::{
-    ALL_SOURCES, AcquireJob, DISCOVER_SOURCES, DISCOVER_TOPICS, DiscoverCreator, DiscoverFeedError,
-    DiscoverFollowRequest, DiscoverItem, format_duration, group_soulseek_candidates, is_web_url,
+    ALL_SOURCES, AcquireJob, CreatorSuggestion, DISCOVER_SOURCES, DISCOVER_TOPICS, DiscoverCreator,
+    DiscoverFeedError, DiscoverFollowRequest, DiscoverItem, MUSIC_DISCOVER_MOODS, SuggestedAlbum,
+    SuggestedArtist, SuggestedSong, format_duration, group_soulseek_candidates, is_web_url,
     unwrap_peartube_add,
 };
-use crate::app::{DetailView, DiscoverItemStatus, PearTube};
-use crate::catalog::{AlbumTile, TrackRow, VideoTile, plural};
+use crate::app::{DetailView, DiscoverItemStatus, DiscoverTab, PearTube};
+use crate::catalog::{AlbumTile, TrackRow, VideoTile, monogram, plural, sleeve_hash};
 use crate::list::{column, format_bytes};
 use crate::music::TrackItem;
-use crate::sleeves::{album_sleeve, video_art};
-use crate::theme::{ACCENT, BG, BRAND, CARD, CARD_ELEVATED, DANGER, DIM, INK, LINE};
+use crate::sleeves::{album_sleeve, video_art, video_art_with_poster};
+use crate::theme::{
+    ACCENT, BG, BRAND, BRAND_HOVER, CARD, CARD_ELEVATED, DANGER, DIM, GLASS_BG, GLASS_BORDER, INK,
+    LINE, PEARL,
+};
+
+const CINEMA_TOPICS: &[&str] = &["Documentary", "Cinema", "Science", "History", "Tech"];
+const CINEMA_SEARCH_CHIPS: &[&str] = &["Documentary", "Sci-Fi", "Film Noir", "4K", "Classic", "Anime"];
 
 fn looks_like_peartube_link_or_key(s: &str) -> bool {
     let trimmed = s.trim();
@@ -45,61 +52,170 @@ fn looks_like_web_link(s: &str) -> Option<String> {
 
 impl PearTube {
     pub fn render_discover(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        column()
-            .py_6()
-            .gap_8()
-            .child(self.render_discover_header(cx))
-            .child(self.render_discover_follow_bar(cx))
-            .child(self.render_discover_topics(cx))
-            .child(self.render_discover_filters(cx))
-            .child(self.render_discover_items_section(cx))
-            .child(self.render_visited_shelves_section(cx))
-            .child(self.render_network_channels_section(cx))
-            .child(self.render_more_from_artists_section(cx))
+        let tab = self.discover_tab;
+        let has_shelves = !self.visited_shelves.is_empty();
+
+        match tab {
+            DiscoverTab::Music => column()
+                .py_6()
+                .gap_7()
+                .child(self.render_discover_header(cx))
+                .child(self.render_discover_music_room(cx))
+                .into_any_element(),
+            DiscoverTab::Videos => column()
+                .py_6()
+                .gap_7()
+                .child(self.render_discover_header(cx))
+                .child(self.render_discover_follow_bar(cx))
+                .child(self.render_discover_topics(DISCOVER_TOPICS, cx))
+                .child(self.render_discover_filters(cx))
+                .child(self.render_discover_items_section(true, cx))
+                .child(self.render_network_channels_section(cx))
+                .into_any_element(),
+            DiscoverTab::Cinema => column()
+                .py_6()
+                .gap_7()
+                .child(self.render_discover_header(cx))
+                .child(self.render_discover_cinema_hero(cx))
+                .child(self.render_network_channels_section(cx))
+                .child(self.render_discover_topics(CINEMA_TOPICS, cx))
+                .when(self.discover_active_topic.is_some(), |col| {
+                    col.child(self.render_discover_items_section(true, cx))
+                })
+                .into_any_element(),
+            DiscoverTab::All => column()
+                .py_6()
+                .gap_7()
+                .child(self.render_discover_header(cx))
+                .child(self.render_discover_follow_bar(cx))
+                .child(self.render_discover_topics(DISCOVER_TOPICS, cx))
+                .child(self.render_discover_music_preview_strip(cx))
+                .child(self.render_discover_filters(cx))
+                .child(self.render_discover_items_section(false, cx))
+                .child(self.render_network_channels_section(cx))
+                .when(has_shelves, |col| col.child(self.render_visited_shelves_section(cx)))
+                .into_any_element(),
+        }
     }
 
     fn render_discover_header(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        h_flex()
-            .justify_between()
-            .items_start()
-            .flex_wrap()
-            .gap_3()
+        let active = self.discover_tab;
+        let tabs: &[(DiscoverTab, &'static str, Lucide)] = &[
+            (DiscoverTab::All, "Everything", Lucide::Compass),
+            (DiscoverTab::Cinema, "Movies & Shows", Lucide::Film),
+            (DiscoverTab::Videos, "Videos", Lucide::Video),
+            (DiscoverTab::Music, "Music", Lucide::Music),
+        ];
+
+        let subtitle = match active {
+            DiscoverTab::All => "Explore creators, live music previews, and PearTube channels across the swarm.",
+            DiscoverTab::Cinema => "Find films, series, and long-form cinema across other relays and local channels.",
+            DiscoverTab::Videos => "Follow creators on YouTube, SoundCloud, and Rumble and save videos in one click.",
+            DiscoverTab::Music => "Preview 30-second tracks, explore artists by mood, and fetch lossless copies in Search.",
+        };
+
+        v_flex()
+            .gap_4()
             .child(
-                v_flex()
-                    .gap_1()
-                    .child(div().text_xl().font_weight(FontWeight::BOLD).child("Discover"))
+                h_flex()
+                    .justify_between()
+                    .items_start()
+                    .flex_wrap()
+                    .gap_3()
                     .child(
-                        div()
-                            .text_sm()
-                            .text_color(rgb(DIM))
-                            .child("Follow creators on YouTube, SoundCloud, and Rumble, browse topics, and save items in one click."),
+                        v_flex()
+                            .gap_1()
+                            .child(div().text_2xl().font_weight(FontWeight::BOLD).text_color(rgb(PEARL)).child("Discover"))
+                            .child(div().text_sm().text_color(rgb(DIM)).child(subtitle)),
+                    )
+                    .child(
+                        Button::new("disc-search-relays")
+                            .primary()
+                            .small()
+                            .icon(Icon::new(Lucide::Search))
+                            .label("Search sources & relays")
+                            .on_click(cx.listener(|this, _, window, cx| this.focus_search(window, cx))),
                     ),
             )
+            // LUMEN segmented pill switcher
             .child(
-                Button::new("disc-search-relays")
-                    .primary()
-                    .small()
-                    .icon(Icon::new(Lucide::Search))
-                    .label("Search sources & relays")
-                    .on_click(cx.listener(|this, _, window, cx| this.focus_search(window, cx))),
+                h_flex()
+                    .items_center()
+                    .child(
+                        h_flex()
+                            .items_center()
+                            .gap_1()
+                            .p_1()
+                            .rounded(px(99.))
+                            .bg(hsla(0., 0., 1., 0.05))
+                            .border_1()
+                            .border_color(GLASS_BORDER)
+                            .children(tabs.iter().map(|&(tab, label, icon)| {
+                                let is_on = active == tab;
+                                h_flex()
+                                    .id(SharedString::from(format!("disc-tab-{label}")))
+                                    .items_center()
+                                    .gap_1p5()
+                                    .px_3p5()
+                                    .py_1p5()
+                                    .rounded(px(99.))
+                                    .bg(if is_on {
+                                        hsla(256. / 360., 0.85, 0.72, 0.20)
+                                    } else {
+                                        transparent_black()
+                                    })
+                                    .border_1()
+                                    .border_color(if is_on {
+                                        hsla(256. / 360., 0.85, 0.74, 0.36)
+                                    } else {
+                                        transparent_black()
+                                    })
+                                    .text_xs()
+                                    .font_weight(if is_on { FontWeight::SEMIBOLD } else { FontWeight::MEDIUM })
+                                    .text_color(if is_on { rgb(PEARL) } else { rgb(DIM) })
+                                    .cursor_pointer()
+                                    .hover(|s| if is_on { s } else { s.text_color(rgb(INK)).bg(hsla(0., 0., 1., 0.04)) })
+                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                        this.set_discover_tab(tab, cx);
+                                    }))
+                                    .child(Icon::new(icon).with_size(px(14.)).text_color(if is_on { rgb(BRAND_HOVER) } else { rgb(DIM) }))
+                                    .child(label)
+                            })),
+                    ),
             )
     }
 
     fn render_discover_follow_bar(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let busy = self.discover_follow_busy;
         let err = self.discover_error.clone();
+        let suggest_busy = self.discover_suggest_busy;
+        let suggestions = self.discover_suggestions.clone();
+        let show_dropdown = suggest_busy || !suggestions.is_empty();
+
         v_flex()
             .gap_2p5()
             .p_4()
-            .rounded(px(14.))
+            .rounded(px(16.))
             .bg(rgb(CARD))
             .border_1()
-            .border_color(rgb(LINE))
+            .border_color(GLASS_BORDER)
             .child(
-                div()
-                    .text_sm()
-                    .font_weight(FontWeight::SEMIBOLD)
-                    .child("Follow a creator"),
+                h_flex()
+                    .justify_between()
+                    .items_center()
+                    .child(
+                        div()
+                            .text_sm()
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .text_color(rgb(PEARL))
+                            .child("Find & follow a creator or channel"),
+                    )
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(rgb(DIM))
+                            .child("YouTube @handles · PearTube channels · SoundCloud · Rumble"),
+                    ),
             )
             .child(
                 h_flex()
@@ -109,7 +225,11 @@ impl PearTube {
                         div()
                             .flex_1()
                             .min_w_0()
-                            .child(Input::new(&self.discover_follow_input).cleanable(true)),
+                            .child(
+                                Input::new(&self.discover_follow_input)
+                                    .prefix(Icon::new(Lucide::UserPlus).text_color(rgb(DIM)))
+                                    .cleanable(true),
+                            ),
                     )
                     .child(
                         Button::new("disc-follow-submit")
@@ -122,6 +242,10 @@ impl PearTube {
                             })),
                     ),
             )
+            // Elevated glass typeahead suggestion dropdown
+            .when(show_dropdown, |this| {
+                this.child(self.render_creator_suggestions_dropdown(suggestions, suggest_busy, cx))
+            })
             .when_some(err, |this, msg| {
                 this.child(
                     div()
@@ -132,7 +256,165 @@ impl PearTube {
             })
     }
 
-    fn render_discover_topics(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render_creator_suggestions_dropdown(
+        &self,
+        suggestions: Vec<CreatorSuggestion>,
+        busy: bool,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        v_flex()
+            .mt_1()
+            .rounded(px(14.))
+            .bg(GLASS_BG)
+            .border_1()
+            .border_color(GLASS_BORDER)
+            .shadow_lg()
+            .overflow_hidden()
+            .child(
+                h_flex()
+                    .justify_between()
+                    .items_center()
+                    .px_3p5()
+                    .py_2()
+                    .border_b_1()
+                    .border_color(hsla(0., 0., 1., 0.06))
+                    .child(
+                        div()
+                            .text_xs()
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .text_color(rgb(DIM))
+                            .child(if busy && suggestions.is_empty() {
+                                "Searching YouTube & PearTube channels…"
+                            } else if busy {
+                                "Updating suggestions…"
+                            } else {
+                                "Suggestions"
+                            }),
+                    )
+                    .child(
+                        div()
+                            .id("disc-suggest-dismiss")
+                            .px_1p5()
+                            .py_0p5()
+                            .rounded(px(6.))
+                            .text_xs()
+                            .text_color(rgb(DIM))
+                            .cursor_pointer()
+                            .hover(|s| s.text_color(rgb(INK)))
+                            .on_click(cx.listener(|this, _, _, cx| this.clear_creator_suggestions(cx)))
+                            .child("Dismiss"),
+                    ),
+            )
+            .children(suggestions.into_iter().enumerate().map(|(idx, sug)| {
+                let is_pt = sug.source == "peartube";
+                let already_followed = !is_pt
+                    && self.is_discover_creator_followed(&sug.source, &sug.url, &sug.name);
+                let badge_label = if is_pt { "PearTube" } else { "YouTube" };
+                let sug_click = sug.clone();
+                let avatar_el: AnyElement = match self.discover_thumbs.get(&sug.avatar_url).cloned() {
+                    Some(image) => div()
+                        .flex_none()
+                        .size(px(36.))
+                        .rounded(px(99.))
+                        .overflow_hidden()
+                        .border_1()
+                        .border_color(GLASS_BORDER)
+                        .child(img(image).size_full().object_fit(ObjectFit::Cover))
+                        .into_any_element(),
+                    None => {
+                        let h = (sleeve_hash(&sug.name) % 360) as f32 / 360.0;
+                        div()
+                            .flex_none()
+                            .size(px(36.))
+                            .rounded(px(99.))
+                            .bg(hsla(h, 0.55, 0.32, 1.0))
+                            .border_1()
+                            .border_color(GLASS_BORDER)
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .text_xs()
+                            .font_weight(FontWeight::BOLD)
+                            .text_color(rgb(PEARL))
+                            .child(monogram(&sug.name))
+                            .into_any_element()
+                    }
+                };
+                h_flex()
+                    .id(SharedString::from(format!("disc-sug-row-{idx}")))
+                    .items_center()
+                    .justify_between()
+                    .gap_3()
+                    .px_3p5()
+                    .py_2p5()
+                    .border_b_1()
+                    .border_color(hsla(0., 0., 1., 0.05))
+                    .hover(|s| s.bg(hsla(0., 0., 1., 0.04)))
+                    .child(
+                        h_flex()
+                            .flex_1()
+                            .min_w_0()
+                            .items_center()
+                            .gap_3()
+                            .child(avatar_el)
+                            .child(
+                                v_flex()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .gap_0p5()
+                                    .child(
+                                        h_flex()
+                                            .items_center()
+                                            .gap_2()
+                                            .child(
+                                                div()
+                                                    .text_sm()
+                                                    .font_weight(FontWeight::SEMIBOLD)
+                                                    .text_color(rgb(PEARL))
+                                                    .truncate()
+                                                    .child(sug.name.clone()),
+                                            )
+                                            .child(
+                                                div()
+                                                    .flex_none()
+                                                    .px_2()
+                                                    .py_0p5()
+                                                    .rounded(px(99.))
+                                                    .bg(if is_pt {
+                                                        hsla(150. / 360., 0.60, 0.45, 0.16)
+                                                    } else {
+                                                        hsla(256. / 360., 0.80, 0.70, 0.14)
+                                                    })
+                                                    .text_xs()
+                                                    .font_weight(FontWeight::MEDIUM)
+                                                    .text_color(if is_pt { rgb(ACCENT) } else { rgb(BRAND_HOVER) })
+                                                    .child(badge_label),
+                                            ),
+                                    )
+                                    .child(
+                                        div()
+                                            .text_xs()
+                                            .text_color(rgb(DIM))
+                                            .truncate()
+                                            .child(sug.subtitle.clone()),
+                                    ),
+                            ),
+                    )
+                    .child(
+                        Button::new(SharedString::from(format!("disc-sug-follow-{idx}")))
+                            .small()
+                            .primary()
+                            .disabled(already_followed || self.discover_follow_busy)
+                            .icon(Icon::new(if already_followed { Lucide::Check } else { Lucide::Plus }))
+                            .label(if already_followed { "Following" } else { "Follow" })
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.follow_creator_suggestion(sug_click.clone(), cx);
+                            })),
+                    )
+            }))
+    }
+
+    fn render_discover_topics(&self, topics: &[&'static str], cx: &mut Context<Self>) -> impl IntoElement {
         let active = self.discover_active_topic.as_deref();
         v_flex()
             .gap_2p5()
@@ -162,17 +444,17 @@ impl PearTube {
                 h_flex()
                     .gap_2()
                     .flex_wrap()
-                    .children(DISCOVER_TOPICS.iter().enumerate().map(|(idx, &topic)| {
+                    .children(topics.iter().enumerate().map(|(idx, &topic)| {
                         let is_active = active.is_some_and(|a| a.eq_ignore_ascii_case(topic));
                         let topic_owned = topic.to_string();
                         div()
-                            .id(SharedString::from(format!("disc-topic-{idx}")))
-                            .px_3()
-                            .py_1()
+                            .id(SharedString::from(format!("disc-topic-{idx}-{topic}")))
+                            .px_3p5()
+                            .py_1p5()
                             .rounded(px(99.))
                             .bg(if is_active { rgb(BRAND) } else { rgb(CARD) })
                             .border_1()
-                            .border_color(if is_active { rgb(BRAND) } else { rgb(LINE) })
+                            .border_color(if is_active { Hsla::from(rgb(BRAND)) } else { GLASS_BORDER })
                             .text_xs()
                             .font_weight(if is_active { FontWeight::SEMIBOLD } else { FontWeight::MEDIUM })
                             .text_color(if is_active { rgb(0xffffff) } else { rgb(INK) })
@@ -187,6 +469,618 @@ impl PearTube {
                             }))
                             .child(topic)
                     })),
+            )
+    }
+
+    // ---- DiscoverTab::Cinema hero ----
+
+    fn render_discover_cinema_hero(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        v_flex()
+            .p_5()
+            .gap_4()
+            .rounded(px(18.))
+            .bg(rgb(CARD))
+            .border_1()
+            .border_color(GLASS_BORDER)
+            .child(
+                h_flex()
+                    .justify_between()
+                    .items_start()
+                    .flex_wrap()
+                    .gap_3()
+                    .child(
+                        v_flex()
+                            .gap_1()
+                            .child(
+                                h_flex()
+                                    .items_center()
+                                    .gap_2()
+                                    .child(Icon::new(Lucide::Film).with_size(px(16.)).text_color(rgb(BRAND_HOVER)))
+                                    .child(
+                                        div()
+                                            .text_base()
+                                            .font_weight(FontWeight::BOLD)
+                                            .text_color(rgb(PEARL))
+                                            .child("Find movies & shows on other relays"),
+                                    ),
+                            )
+                            .child(
+                                div()
+                                    .text_sm()
+                                    .text_color(rgb(DIM))
+                                    .child("Search titles, IMDb IDs, or genres across connected PearTube relays without leaving the app."),
+                            ),
+                    )
+                    .child(
+                        Button::new("cinema-open-search")
+                            .primary()
+                            .small()
+                            .icon(Icon::new(Lucide::Search))
+                            .label("Search relays")
+                            .on_click(cx.listener(|this, _, window, cx| this.focus_search(window, cx))),
+                    ),
+            )
+            .child(
+                h_flex()
+                    .gap_2()
+                    .flex_wrap()
+                    .children(CINEMA_SEARCH_CHIPS.iter().enumerate().map(|(idx, &chip)| {
+                        let q = chip.to_string();
+                        div()
+                            .id(SharedString::from(format!("cinema-chip-{idx}")))
+                            .px_3()
+                            .py_1()
+                            .rounded(px(99.))
+                            .bg(rgb(CARD_ELEVATED))
+                            .border_1()
+                            .border_color(GLASS_BORDER)
+                            .text_xs()
+                            .font_weight(FontWeight::MEDIUM)
+                            .text_color(rgb(INK))
+                            .cursor_pointer()
+                            .hover(|s| s.border_color(rgb(BRAND)).text_color(rgb(PEARL)))
+                            .on_click(cx.listener(move |this, _, window, cx| {
+                                this.search_for_artist(q.clone(), window, cx);
+                            }))
+                            .child(chip)
+                    })),
+            )
+    }
+
+    // ---- DiscoverTab::All compact Suggested Artists preview ----
+
+    fn render_discover_music_preview_strip(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let artists: Vec<SuggestedArtist> = self
+            .discover_music
+            .as_ref()
+            .map(|m| m.artists.iter().take(6).cloned().collect())
+            .unwrap_or_default();
+        let loading = self.discover_music_loading && artists.is_empty();
+
+        v_flex()
+            .gap_3()
+            .child(
+                h_flex()
+                    .justify_between()
+                    .items_center()
+                    .child(
+                        h_flex()
+                            .items_center()
+                            .gap_2()
+                            .child(Icon::new(Lucide::Headphones).with_size(px(16.)).text_color(rgb(BRAND_HOVER)))
+                            .child(div().text_lg().font_weight(FontWeight::BOLD).text_color(rgb(PEARL)).child("Suggested Artists")),
+                    )
+                    .child(
+                        Button::new("disc-all-explore-music")
+                            .ghost()
+                            .small()
+                            .label("Explore Music →")
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.set_discover_tab(DiscoverTab::Music, cx);
+                            })),
+                    ),
+            )
+            .when(loading, |col| {
+                col.child(
+                    div()
+                        .p_4()
+                        .rounded(px(14.))
+                        .bg(rgb(CARD))
+                        .border_1()
+                        .border_color(GLASS_BORDER)
+                        .text_sm()
+                        .text_color(rgb(DIM))
+                        .child("Loading suggested artists…"),
+                )
+            })
+            .when(!artists.is_empty(), |col| {
+                col.child(
+                    h_flex()
+                        .gap_4()
+                        .flex_wrap()
+                        .children(artists.into_iter().enumerate().map(|(idx, artist)| {
+                            self.render_suggested_artist_card(idx, artist, "all-art", cx)
+                        })),
+                )
+            })
+    }
+
+    // ---- DiscoverTab::Music dedicated Music Discovery Room ----
+
+    fn render_discover_music_room(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let has_library_artists = !self.library_seed_artists().is_empty();
+        let active_mood = self.discover_music_mood.as_str();
+        let active_query = self.discover_music_query.as_str();
+        let artist_focus = self.discover_music_artist_focus.clone();
+        let loading = self.discover_music_loading;
+        let data = self.discover_music.as_ref();
+
+        let artists: Vec<SuggestedArtist> = data.map(|d| d.artists.clone()).unwrap_or_default();
+        let songs: Vec<SuggestedSong> = data.map(|d| d.songs.clone()).unwrap_or_default();
+        let albums: Vec<SuggestedAlbum> = data.map(|d| d.albums.clone()).unwrap_or_default();
+        let err_msg = data.and_then(|d| d.error.clone());
+
+        type SongPair = (usize, SuggestedSong, Option<(usize, SuggestedSong)>);
+        let song_pairs: Vec<SongPair> = {
+            let mut pairs = Vec::new();
+            let mut i = 0;
+            while i < songs.len() {
+                let left = songs[i].clone();
+                let right = songs.get(i + 1).cloned().map(|s| (i + 1, s));
+                pairs.push((i, left, right));
+                i += 2;
+            }
+            pairs
+        };
+
+        v_flex()
+            .gap_7()
+            // Search + Mood pills card
+            .child(
+                v_flex()
+                    .gap_3p5()
+                    .p_4()
+                    .rounded(px(16.))
+                    .bg(rgb(CARD))
+                    .border_1()
+                    .border_color(GLASS_BORDER)
+                    .child(
+                        h_flex()
+                            .gap_2()
+                            .items_center()
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .child(
+                                        Input::new(&self.discover_music_input)
+                                            .prefix(Icon::new(Lucide::Music).text_color(rgb(DIM)))
+                                            .cleanable(true),
+                                    ),
+                            )
+                            .child(
+                                Button::new("disc-music-search-go")
+                                    .primary()
+                                    .icon(Icon::new(Lucide::Search))
+                                    .label("Explore")
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        this.search_music_discover_input(cx);
+                                    })),
+                            ),
+                    )
+                    .child(
+                        h_flex()
+                            .gap_1p5()
+                            .flex_wrap()
+                            .when(has_library_artists, |row| {
+                                let is_on = active_query.is_empty() && active_mood == "library";
+                                row.child(self.render_music_mood_pill("disc-mood-library", "For You", "library", is_on, cx))
+                            })
+                            .children(MUSIC_DISCOVER_MOODS.iter().map(|&(id, label)| {
+                                let is_on = active_query.is_empty() && active_mood == id;
+                                self.render_music_mood_pill(
+                                    SharedString::from(format!("disc-mood-{id}")),
+                                    label,
+                                    id,
+                                    is_on,
+                                    cx,
+                                )
+                            })),
+                    ),
+            )
+            // Artist focus banner
+            .when_some(artist_focus, |col, artist_name| {
+                let search_artist = artist_name.clone();
+                let back_mood = self.discover_music_mood.clone();
+                col.child(
+                    h_flex()
+                        .justify_between()
+                        .items_center()
+                        .flex_wrap()
+                        .gap_3()
+                        .px_4()
+                        .py_3()
+                        .rounded(px(14.))
+                        .bg(hsla(256. / 360., 0.80, 0.65, 0.12))
+                        .border_1()
+                        .border_color(hsla(256. / 360., 0.85, 0.74, 0.32))
+                        .child(
+                            h_flex()
+                                .items_center()
+                                .gap_2()
+                                .child(Icon::new(Lucide::Disc3).with_size(px(16.)).text_color(rgb(BRAND_HOVER)))
+                                .child(
+                                    div()
+                                        .text_sm()
+                                        .font_weight(FontWeight::SEMIBOLD)
+                                        .text_color(rgb(PEARL))
+                                        .child(format!("Exploring {artist_name}")),
+                                ),
+                        )
+                        .child(
+                            h_flex()
+                                .gap_2()
+                                .child(
+                                    Button::new("disc-artist-lossless")
+                                        .primary()
+                                        .small()
+                                        .label("Find lossless in Search →")
+                                        .on_click(cx.listener(move |this, _, window, cx| {
+                                            this.search_for_artist(search_artist.clone(), window, cx);
+                                        })),
+                                )
+                                .child(
+                                    Button::new("disc-artist-back")
+                                        .ghost()
+                                        .small()
+                                        .label("Clear focus")
+                                        .on_click(cx.listener(move |this, _, window, cx| {
+                                            this.select_music_mood(&back_mood, window, cx);
+                                        })),
+                                ),
+                        ),
+                )
+            })
+            .when(loading && data.is_none(), |col| {
+                col.child(
+                    div()
+                        .p_5()
+                        .rounded(px(14.))
+                        .bg(rgb(CARD))
+                        .border_1()
+                        .border_color(GLASS_BORDER)
+                        .text_sm()
+                        .text_color(rgb(DIM))
+                        .child("Curating artists, tracks, and albums…"),
+                )
+            })
+            .when_some(err_msg, |col, err| {
+                col.child(
+                    div()
+                        .p_4()
+                        .rounded(px(14.))
+                        .bg(rgb(CARD))
+                        .border_1()
+                        .border_color(rgb(LINE))
+                        .text_sm()
+                        .text_color(rgb(DANGER))
+                        .child(err),
+                )
+            })
+            // 1. Suggested Artists (8 circular portrait cards)
+            .when(!artists.is_empty(), |col| {
+                col.child(
+                    v_flex()
+                        .gap_3p5()
+                        .child(
+                            h_flex()
+                                .justify_between()
+                                .items_center()
+                                .child(div().text_lg().font_weight(FontWeight::BOLD).text_color(rgb(PEARL)).child("Suggested Artists"))
+                                .when(loading, |r| r.child(div().text_xs().text_color(rgb(DIM)).child("Refreshing…"))),
+                        )
+                        .child(
+                            h_flex()
+                                .gap_4()
+                                .flex_wrap()
+                                .children(artists.into_iter().enumerate().map(|(idx, artist)| {
+                                    self.render_suggested_artist_card(idx, artist, "music-art", cx)
+                                })),
+                        ),
+                )
+            })
+            // 2. Suggested Songs (2-column tracklist with 30s Preview & + Get)
+            .when(!song_pairs.is_empty(), |col| {
+                col.child(
+                    v_flex()
+                        .gap_3()
+                        .child(
+                            h_flex()
+                                .justify_between()
+                                .items_center()
+                                .child(div().text_lg().font_weight(FontWeight::BOLD).text_color(rgb(PEARL)).child("Suggested Songs"))
+                                .child(div().text_xs().text_color(rgb(DIM)).child("30s instant preview · + Get searches Soulseek, YouTube & SoundCloud")),
+                        )
+                        .child(
+                            v_flex()
+                                .gap_2()
+                                .children(song_pairs.into_iter().map(|(li, left, right)| {
+                                    h_flex()
+                                        .w_full()
+                                        .gap_3()
+                                        .child(div().flex_1().min_w_0().child(self.render_suggested_song_row(li, left, cx)))
+                                        .child(
+                                            div().flex_1().min_w_0().when_some(right, |slot, (ri, song)| {
+                                                slot.child(self.render_suggested_song_row(ri, song, cx))
+                                            }),
+                                        )
+                                })),
+                        ),
+                )
+            })
+            // 3. Recommended Albums (square cover cards -> Search)
+            .when(!albums.is_empty(), |col| {
+                col.child(
+                    v_flex()
+                        .gap_3p5()
+                        .child(div().text_lg().font_weight(FontWeight::BOLD).text_color(rgb(PEARL)).child("Recommended Albums"))
+                        .child(
+                            h_flex()
+                                .gap_4()
+                                .flex_wrap()
+                                .children(albums.into_iter().enumerate().map(|(idx, alb)| {
+                                    self.render_suggested_album_card(idx, alb, cx)
+                                })),
+                        ),
+                )
+            })
+    }
+
+    fn render_music_mood_pill(
+        &self,
+        id: impl Into<ElementId>,
+        label: &'static str,
+        mood: &'static str,
+        is_active: bool,
+        cx: &mut Context<Self>,
+    ) -> Stateful<Div> {
+        div()
+            .id(id)
+            .px_3p5()
+            .py_1()
+            .rounded(px(99.))
+            .bg(if is_active { rgb(BRAND) } else { rgb(CARD_ELEVATED) })
+            .border_1()
+            .border_color(if is_active { Hsla::from(rgb(BRAND)) } else { GLASS_BORDER })
+            .text_xs()
+            .font_weight(if is_active { FontWeight::SEMIBOLD } else { FontWeight::MEDIUM })
+            .text_color(if is_active { rgb(0xffffff) } else { rgb(INK) })
+            .cursor_pointer()
+            .hover(|s| if is_active { s } else { s.border_color(rgb(BRAND_HOVER)).text_color(rgb(PEARL)) })
+            .on_click(cx.listener(move |this, _, window, cx| {
+                this.select_music_mood(mood, window, cx);
+            }))
+            .child(label)
+    }
+
+    fn render_suggested_artist_card(
+        &self,
+        idx: usize,
+        artist: SuggestedArtist,
+        prefix: &'static str,
+        cx: &mut Context<Self>,
+    ) -> Stateful<Div> {
+        let name_click = artist.name.clone();
+        let seed = sleeve_hash(&artist.name);
+        let portrait: AnyElement = match self.discover_thumbs.get(&artist.art_url).cloned() {
+            Some(image) => div()
+                .size(px(88.))
+                .rounded(px(99.))
+                .overflow_hidden()
+                .border_1()
+                .border_color(GLASS_BORDER)
+                .child(img(image).size_full().object_fit(ObjectFit::Cover))
+                .into_any_element(),
+            None => div()
+                .size(px(88.))
+                .rounded(px(99.))
+                .overflow_hidden()
+                .child(album_sleeve(seed % 360, seed, &monogram(&artist.name), 88.))
+                .into_any_element(),
+        };
+
+        v_flex()
+            .id(SharedString::from(format!("{prefix}-{idx}")))
+            .w(px(116.))
+            .p_2p5()
+            .gap_2()
+            .items_center()
+            .rounded(px(16.))
+            .bg(rgb(CARD))
+            .border_1()
+            .border_color(GLASS_BORDER)
+            .cursor_pointer()
+            .hover(|s| s.bg(rgb(CARD_ELEVATED)).border_color(rgb(BRAND)))
+            .on_click(cx.listener(move |this, _, window, cx| {
+                this.explore_music_artist(name_click.clone(), window, cx);
+            }))
+            .child(portrait)
+            .child(
+                v_flex()
+                    .w_full()
+                    .items_center()
+                    .gap_0p5()
+                    .child(
+                        div()
+                            .w_full()
+                            .text_center()
+                            .text_xs()
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .text_color(rgb(PEARL))
+                            .truncate()
+                            .child(artist.name),
+                    )
+                    .child(
+                        div()
+                            .w_full()
+                            .text_center()
+                            .text_xs()
+                            .text_color(rgb(DIM))
+                            .truncate()
+                            .child(artist.genre),
+                    ),
+            )
+    }
+
+    fn render_suggested_song_row(
+        &self,
+        idx: usize,
+        song: SuggestedSong,
+        cx: &mut Context<Self>,
+    ) -> Stateful<Div> {
+        let is_playing = self.preview_player.is_playing_id(&song.id);
+        let is_loading = self.preview_loading_id.as_deref() == Some(song.id.as_str());
+        let has_preview = !song.preview_url.is_empty();
+        let preview_song = song.clone();
+        let get_query = format!("{} {}", song.artist, song.title);
+        let sub = if song.album.is_empty() {
+            song.artist.clone()
+        } else {
+            format!("{} · {}", song.artist, song.album)
+        };
+        let dur_txt = (song.duration_secs > 0).then(|| format_duration(song.duration_secs));
+        let seed = sleeve_hash(&format!("{}::{}", song.artist, song.title));
+        let cover: AnyElement = match self.discover_thumbs.get(&song.art_url).cloned() {
+            Some(image) => div()
+                .flex_none()
+                .size(px(44.))
+                .rounded(px(8.))
+                .overflow_hidden()
+                .border_1()
+                .border_color(GLASS_BORDER)
+                .child(img(image).size_full().object_fit(ObjectFit::Cover))
+                .into_any_element(),
+            None => album_sleeve(seed % 360, seed, &monogram(&song.title), 44.).into_any_element(),
+        };
+
+        h_flex()
+            .id(SharedString::from(format!("disc-song-{idx}-{}", song.id)))
+            .w_full()
+            .items_center()
+            .gap_3()
+            .px_3()
+            .py_2()
+            .rounded(px(12.))
+            .bg(if is_playing {
+                hsla(256. / 360., 0.85, 0.72, 0.12)
+            } else {
+                rgb(CARD).into()
+            })
+            .border_1()
+            .border_color(if is_playing { Hsla::from(rgb(BRAND)) } else { GLASS_BORDER })
+            .hover(|s| s.bg(rgb(CARD_ELEVATED)))
+            .child(cover)
+            .child(
+                v_flex()
+                    .flex_1()
+                    .min_w_0()
+                    .gap_0p5()
+                    .child(
+                        div()
+                            .text_sm()
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .text_color(if is_playing { rgb(BRAND_HOVER) } else { rgb(PEARL) })
+                            .truncate()
+                            .child(song.title),
+                    )
+                    .child(div().text_xs().text_color(rgb(DIM)).truncate().child(sub)),
+            )
+            .when_some(dur_txt, |row, d| {
+                row.child(div().flex_none().text_xs().text_color(rgb(DIM)).child(d))
+            })
+            .child(
+                h_flex()
+                    .flex_none()
+                    .items_center()
+                    .gap_1()
+                    .child({
+                        let icon = if is_playing { Lucide::Pause } else { Lucide::Play };
+                        let btn = Button::new(SharedString::from(format!("disc-song-prev-{idx}")))
+                            .small()
+                            .disabled(!has_preview)
+                            .icon(Icon::new(icon))
+                            .tooltip(if is_playing {
+                                "Stop 30s preview"
+                            } else if is_loading {
+                                "Loading preview…"
+                            } else {
+                                "Play 30s preview"
+                            });
+                        let btn = if is_playing || is_loading { btn.primary() } else { btn.ghost() };
+                        btn.on_click(cx.listener(move |this, _, _, cx| {
+                            this.toggle_song_preview(preview_song.clone(), cx);
+                        }))
+                    })
+                    .child(
+                        Button::new(SharedString::from(format!("disc-song-get-{idx}")))
+                            .small()
+                            .ghost()
+                            .icon(Icon::new(Lucide::Plus))
+                            .label("Get")
+                            .tooltip("Find lossless copy in Search")
+                            .on_click(cx.listener(move |this, _, window, cx| {
+                                this.search_for_artist(get_query.clone(), window, cx);
+                            })),
+                    ),
+            )
+    }
+
+    fn render_suggested_album_card(
+        &self,
+        idx: usize,
+        album: SuggestedAlbum,
+        cx: &mut Context<Self>,
+    ) -> Stateful<Div> {
+        let search_q = format!("{} {}", album.artist, album.title);
+        let sub = if album.year.is_empty() {
+            album.artist.clone()
+        } else {
+            format!("{} · {}", album.artist, album.year)
+        };
+        let seed = sleeve_hash(&format!("{}::{}", album.artist, album.title));
+        let cover: AnyElement = match self.discover_thumbs.get(&album.art_url).cloned() {
+            Some(image) => div()
+                .size(px(148.))
+                .rounded(px(12.))
+                .overflow_hidden()
+                .border_1()
+                .border_color(GLASS_BORDER)
+                .child(img(image).size_full().object_fit(ObjectFit::Cover))
+                .into_any_element(),
+            None => album_sleeve(seed % 360, seed, &monogram(&album.title), 148.).into_any_element(),
+        };
+
+        v_flex()
+            .id(SharedString::from(format!("disc-rec-alb-{idx}")))
+            .w(px(148.))
+            .gap_2()
+            .cursor_pointer()
+            .on_click(cx.listener(move |this, _, window, cx| {
+                this.search_for_artist(search_q.clone(), window, cx);
+            }))
+            .child(cover)
+            .child(
+                v_flex()
+                    .gap_0p5()
+                    .child(
+                        div()
+                            .text_sm()
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .text_color(rgb(PEARL))
+                            .truncate()
+                            .child(album.title),
+                    )
+                    .child(div().text_xs().text_color(rgb(DIM)).truncate().child(sub)),
             )
     }
 
@@ -355,14 +1249,18 @@ impl PearTube {
             .child(label)
     }
 
-    fn render_discover_items_section(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render_discover_items_section(&self, video_only: bool, cx: &mut Context<Self>) -> impl IntoElement {
         let in_browse = self.discover_active_topic.is_some();
         let src_filter = self.discover_source_filter.as_deref();
         let loading = self.discover_loading;
 
         let heading = match &self.discover_active_topic {
             Some(topic) => format!("Browsing “{topic}”"),
-            None => "Latest from your creators".to_string(),
+            None => if video_only {
+                "Latest videos from your creators".to_string()
+            } else {
+                "Latest from your creators".to_string()
+            },
         };
 
         let (items, errors, suggested_creators): (Vec<DiscoverItem>, Vec<DiscoverFeedError>, Vec<DiscoverCreator>) =
@@ -373,6 +1271,7 @@ impl PearTube {
                             .items
                             .iter()
                             .filter(|i| src_filter.is_none_or(|s| i.source.eq_ignore_ascii_case(s)))
+                            .filter(|i| !video_only || !i.audio_only)
                             .cloned()
                             .collect();
                         let creators = b
@@ -387,7 +1286,15 @@ impl PearTube {
                 }
             } else {
                 match &self.discover_feed {
-                    Some(f) => (f.items.clone(), f.errors.clone(), Vec::new()),
+                    Some(f) => {
+                        let filtered = f
+                            .items
+                            .iter()
+                            .filter(|i| !video_only || !i.audio_only)
+                            .cloned()
+                            .collect();
+                        (filtered, f.errors.clone(), Vec::new())
+                    }
                     None => (Vec::new(), Vec::new(), Vec::new()),
                 }
             };
@@ -793,48 +1700,6 @@ impl PearTube {
             })
     }
 
-    fn render_more_from_artists_section(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let artists: Vec<String> = self
-            .catalog
-            .artists
-            .iter()
-            .filter(|a| !a.name.is_empty() && a.name != "Unknown artist")
-            .take(24)
-            .map(|a| a.name.clone())
-            .collect();
-        div().when(!artists.is_empty(), |this| {
-            this.child(
-                v_flex()
-                    .gap_3()
-                    .child(div().text_lg().font_weight(FontWeight::BOLD).child("More from artists you have"))
-                    .child(
-                        h_flex()
-                            .gap_2()
-                            .flex_wrap()
-                            .children(artists.into_iter().enumerate().map(|(idx, name)| {
-                                let q = name.clone();
-                                div()
-                                    .id(SharedString::from(format!("disc-artist-chip-{idx}")))
-                                    .px_3()
-                                    .py_1p5()
-                                    .rounded(px(99.))
-                                    .bg(rgb(CARD))
-                                    .border_1()
-                                    .border_color(rgb(LINE))
-                                    .text_sm()
-                                    .text_color(rgb(INK))
-                                    .cursor_pointer()
-                                    .hover(|s| s.bg(rgb(CARD_ELEVATED)))
-                                    .on_click(cx.listener(move |this, _, window, cx| {
-                                        this.search_for_artist(q.clone(), window, cx);
-                                    }))
-                                    .child(name)
-                            })),
-                    ),
-            )
-        })
-    }
-
     pub fn render_search(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let raw = self.search.read(cx).value().to_string();
         let trimmed = raw.trim();
@@ -1113,13 +1978,14 @@ impl PearTube {
                                                 .on_click(cx.listener(move |this, _, _, cx| {
                                                     this.open_detail(DetailView::Title(tk.clone()), cx);
                                                 }))
-                                                .child(video_art(
+                                                .child(video_art_with_poster(
                                                     &tile.title,
                                                     Some(match tile.kind {
                                                         crate::catalog::VideoKind::Series => "Series",
                                                         crate::catalog::VideoKind::Movie => "Film",
                                                         crate::catalog::VideoKind::Clip => "Clip",
                                                     }),
+                                                    self.video_poster_image(tile),
                                                     136.,
                                                     200.,
                                                 ))

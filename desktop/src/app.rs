@@ -35,9 +35,10 @@ use crate::api::{
     DiscoverCreator, DiscoverFeed, DiscoverFollowRequest, DiscoverItem, MusicDiscoverResult,
     PluginInfo, PreviewPlayer, RumbleCandidate, SoulseekCandidate, SoulseekShelf,
     SoundcloudCandidate, SourceSearchResult, SuggestedSong, VisitedShelf, YoutubeCandidate,
-    download_preview_m4a, extract_shared_url, fetch_external_image_bytes, fetch_music_discover,
-    is_web_url, load_visited_shelves, parse_mirror_job, record_visited_shelf, run_blocking,
-    save_visited_shelves, search_creators_typeahead, unwrap_peartube_add,
+    download_preview_m4a_with_policy, extract_shared_url, fetch_art_bytes,
+    fetch_music_discover_with_policy, is_web_url, load_visited_shelves, parse_mirror_job,
+    record_visited_shelf, resolve_video_art, run_blocking, save_visited_shelves,
+    search_creators_typeahead_with_policy, unwrap_peartube_add,
 };
 use crate::cast_screen::CastSheetForm;
 use crate::catalog::{Catalog, VideoTile, build_catalog, is_music_entry};
@@ -527,6 +528,15 @@ impl PearTube {
             .and_then(|s| s.api_url.as_ref())
             .filter(|u| !u.is_empty())
             .map(|u| ApiClient::new(u.clone()))
+    }
+
+    pub fn is_p2p_only_metadata(&self) -> bool {
+        self.settings.private_routing || self.settings.p2p_only_metadata
+    }
+
+    pub fn clear_failed_thumbs_and_prefetch(&mut self, cx: &mut Context<Self>) {
+        self.discover_thumbs_failed.clear();
+        self.prefetch_catalog_posters(cx);
     }
 
     pub fn active_job_count(&self) -> usize {
@@ -1662,9 +1672,34 @@ impl PearTube {
                         .and_then(|v| v.as_str())
                         .map(String::from);
                     let is_rec = res.action == "receiver";
+                    let is_meta = res.action == "meta";
                     let mut needs_start = false;
                     let _ = this.update(cx, |this, cx| {
-                        if let Some(src) = res.source {
+                        if is_meta {
+                            if let Some(src) = res.source {
+                                let key_lower = src.key.trim().to_ascii_lowercase();
+                                if !key_lower.is_empty() {
+                                    let added = this.settings.add_meta_source(&key_lower);
+                                    if added {
+                                        let _ = this.settings.save();
+                                    }
+                                    let label = if !src.alias.trim().is_empty() {
+                                        src.alias.trim().to_string()
+                                    } else {
+                                        format!("{}…", key_lower.chars().take(12).collect::<String>())
+                                    };
+                                    let msg = if added {
+                                        format!("Subscribed to metadata channel “{label}”")
+                                    } else {
+                                        format!("Metadata channel “{label}” already subscribed")
+                                    };
+                                    this.show_notice(msg.into(), cx);
+                                    this.hood_open = false;
+                                    this.clear_failed_thumbs_and_prefetch(cx);
+                                    this.refresh_meta_sources(cx);
+                                }
+                            }
+                        } else if let Some(src) = res.source {
                             this.settings.add_or_update_source(SourceSpec {
                                 key: src.key,
                                 kind: src.kind,
@@ -2459,9 +2494,14 @@ impl PearTube {
                 return;
             }
             let query_owned = q.clone();
-            let remote = run_blocking(move || search_creators_typeahead(&query_owned))
-                .await
-                .unwrap_or_default();
+            let (client, p2p_only) = this
+                .read_with(cx, |this, _| (this.api_client(), this.is_p2p_only_metadata()))
+                .unwrap_or((None, true));
+            let remote = run_blocking(move || {
+                search_creators_typeahead_with_policy(&query_owned, client.as_ref(), p2p_only)
+            })
+            .await
+            .unwrap_or_default();
 
             let _ = this.update(cx, |this, cx| {
                 if this.discover_suggest_seq != seq {
@@ -2565,8 +2605,13 @@ impl PearTube {
         cx.notify();
 
         let seeds = self.library_seed_artists();
+        let client = self.api_client();
+        let p2p_only = self.is_p2p_only_metadata();
         cx.spawn(async move |this, cx| {
-            let res = run_blocking(move || fetch_music_discover(&mood, &query, &seeds)).await;
+            let res = run_blocking(move || {
+                fetch_music_discover_with_policy(&mood, &query, &seeds, client.as_ref(), p2p_only)
+            })
+            .await;
             let _ = this.update(cx, |this, cx| {
                 if this.discover_music_seq != seq {
                     return;
@@ -2575,17 +2620,17 @@ impl PearTube {
                 if let Ok(data) = res {
                     let mut art_urls = Vec::new();
                     for a in &data.artists {
-                        if a.art_url.starts_with("https://") {
+                        if !a.art_url.is_empty() {
                             art_urls.push(a.art_url.clone());
                         }
                     }
                     for s in &data.songs {
-                        if s.art_url.starts_with("https://") {
+                        if !s.art_url.is_empty() {
                             art_urls.push(s.art_url.clone());
                         }
                     }
                     for alb in &data.albums {
-                        if alb.art_url.starts_with("https://") {
+                        if !alb.art_url.is_empty() {
                             art_urls.push(alb.art_url.clone());
                         }
                     }
@@ -2666,9 +2711,10 @@ impl PearTube {
         self.preview_loading_id = Some(song_id.clone());
         cx.notify();
 
+        let p2p_only = self.is_p2p_only_metadata();
         cx.spawn(async move |this, cx| {
             let id_for_dl = song_id.clone();
-            let dl = run_blocking(move || download_preview_m4a(&preview_url, &id_for_dl)).await;
+            let dl = run_blocking(move || download_preview_m4a_with_policy(&preview_url, &id_for_dl, p2p_only)).await;
             let _ = this.update(cx, |this, cx| {
                 if this.preview_seq != seq {
                     if let Ok(Ok(path)) = dl {
@@ -2718,40 +2764,172 @@ impl PearTube {
 
     pub fn video_poster_image(&self, tile: &crate::catalog::VideoTile) -> Option<Arc<Image>> {
         let imdb = tile.imdb.as_deref()?;
+        if let Some(img) = self.discover_thumbs.get(&format!("poster:{imdb}")) {
+            return Some(img.clone());
+        }
         let url = crate::api::imdb_poster_url(imdb)?;
         self.discover_thumbs.get(&url).cloned()
     }
 
     pub fn video_backdrop_image(&self, imdb: Option<&str>) -> Option<Arc<Image>> {
-        let url = crate::api::imdb_backdrop_url(imdb?)?;
+        let imdb = imdb?;
+        if let Some(img) = self.discover_thumbs.get(&format!("backdrop:{imdb}")) {
+            return Some(img.clone());
+        }
+        let url = crate::api::imdb_backdrop_url(imdb)?;
         self.discover_thumbs.get(&url).cloned()
     }
 
     pub fn prefetch_catalog_posters(&mut self, cx: &mut Context<Self>) {
-        let mut urls = Vec::new();
-        for tile in self.catalog.movies.iter().chain(self.catalog.series.iter()).take(12) {
-            if let Some(imdb) = tile.imdb.as_deref() {
-                if let Some(bg) = crate::api::imdb_backdrop_url(imdb) {
-                    urls.push(bg);
-                }
+        let client = self.api_client();
+        let p2p_only = self.is_p2p_only_metadata();
+        let mut seen = HashSet::new();
+        let mut targets: Vec<(String, bool)> = Vec::new();
+
+        for (idx, tile) in self
+            .catalog
+            .movies
+            .iter()
+            .chain(self.catalog.series.iter())
+            .enumerate()
+        {
+            let Some(imdb) = tile.imdb.as_deref() else {
+                continue;
+            };
+            if !seen.insert(imdb.to_string()) {
+                continue;
+            }
+            let poster_key = format!("poster:{imdb}");
+            let want_bg = idx < 12;
+            let bg_key = format!("backdrop:{imdb}");
+            let need_poster = !self.discover_thumbs.contains_key(&poster_key)
+                && !self.discover_thumbs_pending.contains(&poster_key)
+                && !self.discover_thumbs_failed.contains(&poster_key);
+            let need_bg = want_bg
+                && !self.discover_thumbs.contains_key(&bg_key)
+                && !self.discover_thumbs_pending.contains(&bg_key)
+                && !self.discover_thumbs_failed.contains(&bg_key);
+            if !need_poster && !need_bg {
+                continue;
+            }
+            if need_poster {
+                self.discover_thumbs_pending.insert(poster_key);
+            }
+            if need_bg {
+                self.discover_thumbs_pending.insert(bg_key);
+            }
+            targets.push((imdb.to_string(), need_bg));
+            if targets.len() >= 180 {
+                break;
             }
         }
-        for tile in self.catalog.movies.iter().chain(self.catalog.series.iter()) {
-            if let Some(imdb) = tile.imdb.as_deref() {
-                if let Some(poster) = crate::api::imdb_poster_url(imdb) {
-                    urls.push(poster);
+        if targets.is_empty() {
+            return;
+        }
+
+        cx.spawn(async move |this, cx| {
+            for chunk in targets.chunks(6) {
+                let batch = chunk.to_vec();
+                let client_chunk = client.clone();
+                let fetched = run_blocking(move || {
+                    std::thread::scope(|s| {
+                        let handles: Vec<_> = batch
+                            .iter()
+                            .map(|(imdb, want_bg)| {
+                                let imdb = imdb.clone();
+                                let want_bg = *want_bg;
+                                let c = client_chunk.clone();
+                                s.spawn(move || {
+                                    let resolved = resolve_video_art(&imdb, c.as_ref(), p2p_only);
+                                    let mut poster_img = resolved
+                                        .poster_url
+                                        .as_deref()
+                                        .and_then(|u| fetch_art_bytes(u, c.as_ref(), p2p_only).ok())
+                                        .and_then(|bytes| {
+                                            let fmt = detect_image_format(&bytes)?;
+                                            Some(Arc::new(Image::from_bytes(fmt, bytes)))
+                                        });
+                                    if poster_img.is_none()
+                                        && let Some(th) = resolved.thumb_hash.as_deref()
+                                        && let Some((w, h, rgba)) = peartube::thumbhash::decode_base64_thumbhash(th)
+                                        && let Some(png) = peartube::thumbhash::rgba_to_png(w, h, &rgba)
+                                    {
+                                        poster_img = Some(Arc::new(Image::from_bytes(ImageFormat::Png, png)));
+                                    }
+                                    let bg_img = if want_bg {
+                                        resolved
+                                            .backdrop_url
+                                            .as_deref()
+                                            .and_then(|u| fetch_art_bytes(u, c.as_ref(), p2p_only).ok())
+                                            .and_then(|bytes| {
+                                                let fmt = detect_image_format(&bytes)?;
+                                                Some(Arc::new(Image::from_bytes(fmt, bytes)))
+                                            })
+                                    } else {
+                                        None
+                                    };
+                                    (imdb, want_bg, poster_img, bg_img)
+                                })
+                            })
+                            .collect();
+                        handles
+                            .into_iter()
+                            .filter_map(|h| h.join().ok())
+                            .collect::<Vec<_>>()
+                    })
+                })
+                .await;
+                let Ok(results) = fetched else {
+                    break;
+                };
+                let updated = this.update(cx, |this, cx| {
+                    let mut changed = false;
+                    for (imdb, want_bg, poster_img, bg_img) in results {
+                        let p_key = format!("poster:{imdb}");
+                        this.discover_thumbs_pending.remove(&p_key);
+                        if let Some(img) = poster_img {
+                            if this.discover_thumbs.len() < 1024 {
+                                this.discover_thumbs.insert(p_key, img);
+                                changed = true;
+                            }
+                        } else {
+                            this.discover_thumbs_failed.insert(p_key);
+                        }
+                        if want_bg {
+                            let b_key = format!("backdrop:{imdb}");
+                            this.discover_thumbs_pending.remove(&b_key);
+                            if let Some(img) = bg_img {
+                                if this.discover_thumbs.len() < 1024 {
+                                    this.discover_thumbs.insert(b_key, img);
+                                    changed = true;
+                                }
+                            } else {
+                                this.discover_thumbs_failed.insert(b_key);
+                            }
+                        }
+                    }
+                    if changed {
+                        cx.notify();
+                    }
+                });
+                if updated.is_err() {
+                    break;
                 }
             }
-        }
-        if !urls.is_empty() {
-            self.prefetch_external_thumbs(urls, cx);
-        }
+        })
+        .detach();
     }
 
     pub fn prefetch_external_thumbs(&mut self, urls: Vec<String>, cx: &mut Context<Self>) {
+        let client = self.api_client();
+        let p2p_only = self.is_p2p_only_metadata();
         let mut to_fetch = Vec::new();
         for url in urls {
-            if !url.starts_with("https://") {
+            let is_local = url.starts_with("/v1/")
+                || client
+                    .as_ref()
+                    .is_some_and(|c| c.local_path_for(&url).is_some());
+            if !is_local && (p2p_only || !url.starts_with("https://")) {
                 continue;
             }
             if self.discover_thumbs.contains_key(&url)
@@ -2774,14 +2952,16 @@ impl PearTube {
             // progressively within ~200 ms instead of waiting for the whole catalog.
             for chunk in to_fetch.chunks(6) {
                 let batch: Vec<String> = chunk.to_vec();
+                let client_chunk = client.clone();
                 let fetched = run_blocking(move || {
                     std::thread::scope(|s| {
                         let handles: Vec<_> = batch
                             .iter()
                             .map(|u| {
                                 let url = u.clone();
+                                let c = client_chunk.clone();
                                 s.spawn(move || {
-                                    let img = fetch_external_image_bytes(&url).ok().and_then(|bytes| {
+                                    let img = fetch_art_bytes(&url, c.as_ref(), p2p_only).ok().and_then(|bytes| {
                                         let fmt = detect_image_format(&bytes)?;
                                         Some(Arc::new(Image::from_bytes(fmt, bytes)))
                                     });
@@ -2919,6 +3099,7 @@ impl PearTube {
         self.add_modal = None;
         self.screen = Screen::Settings(SettingsForm::new(&self.settings, window, cx));
         self.load_soulseek_settings(window, cx);
+        self.load_meta_sources(window, cx);
         cx.notify();
     }
 

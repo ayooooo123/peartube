@@ -24,6 +24,7 @@ import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
@@ -405,6 +406,11 @@ class AppModel(private val app: Application) {
     val soulseekBusy = MutableStateFlow(false)
     val soulseekError = MutableStateFlow<String?>(null)
     val soulseekMessage = MutableStateFlow<String?>(null)
+    private val _metaSourcesState = MutableStateFlow(MetaSourcesState())
+    val metaSourcesState: StateFlow<MetaSourcesState> = _metaSourcesState.asStateFlow()
+    val metaBusy = MutableStateFlow(false)
+    val metaError = MutableStateFlow<String?>(null)
+    val metaMessage = MutableStateFlow<String?>(null)
     val discoverCreators = MutableStateFlow<List<DiscoverCreator>>(emptyList())
     val discoverFeed = MutableStateFlow(DiscoverFeed())
     val discoverBrowse = MutableStateFlow<DiscoverBrowseResult?>(null)
@@ -1718,6 +1724,23 @@ class AppModel(private val app: Application) {
     private val refreshes = Channel<Unit>(Channel.CONFLATED)
 
     init {
+        val initial = settings.value
+        _metaSourcesState.value = MetaSourcesState(
+            sources = initial.metaSources.mapNotNull { rawKey ->
+                val cleanKey = rawKey.trim()
+                if (cleanKey.isEmpty()) return@mapNotNull null
+                MetaSourceInfo(
+                    key = cleanKey,
+                    uri = if (cleanKey.startsWith("peartube://", ignoreCase = true)) cleanKey else "peartube://meta/$cleanKey",
+                )
+            },
+            p2pOnlyMetadata = initial.p2pOnlyMetadata,
+            seedFullMetadata = initial.seedFullMetadata,
+        )
+        ExternalDiscoveryApi.configureLocalMeta(
+            apiBaseUrl = null,
+            failClosed = initial.privateRouting || initial.p2pOnlyMetadata,
+        )
         scope.launch(Dispatchers.IO) {
             for (history in historyWrites) {
                 val json = JSONObject()
@@ -1778,11 +1801,13 @@ class AppModel(private val app: Application) {
         scope.launch {
             status.collect { st ->
                 val apiUrl = st?.apiUrl?.takeIf { it.isNotBlank() }
+                syncLocalMetaConfig()
                 if (apiUrl != null && apiUrl != lastLoadedApiUrl) {
                     lastLoadedApiUrl = apiUrl
                     refreshAcquireJobs()
                     refreshPlugins()
                     refreshSoulseekSettings()
+                    refreshMetaSources()
                     if (currentRoom.value == Room.Discover) {
                         loadDiscoverCreators(autoLoadFeed = discoverActiveTopic.value == null)
                     }
@@ -1863,9 +1888,20 @@ class AppModel(private val app: Application) {
     }
 
     fun save(next: Settings) {
+        val privacyChanged = settings.value.privateRouting != next.privateRouting ||
+            settings.value.p2pOnlyMetadata != next.p2pOnlyMetadata
         next.save(dataDir)
         settings.value = next
+        _metaSourcesState.value = _metaSourcesState.value.copy(
+            p2pOnlyMetadata = next.p2pOnlyMetadata,
+            seedFullMetadata = next.seedFullMetadata,
+        )
         status.value = null
+        lastLoadedApiUrl = null
+        if (privacyChanged) {
+            cinemaDiscoverCache.clear()
+        }
+        syncLocalMetaConfig()
         entries.value = emptyList()
         navStack.value = listOf(Screen.Main)
         starts.trySend(next)
@@ -2047,6 +2083,10 @@ class AppModel(private val app: Application) {
         }
         if (trimmed.startsWith("http://", ignoreCase = true) || trimmed.startsWith("https://", ignoreCase = true)) {
             openAddSheet(prefillUrl = trimmed, autoIdentify = true)
+            return
+        }
+        if (trimmed.startsWith("peartube://meta/", ignoreCase = true)) {
+            addMetaSource(trimmed)
             return
         }
         scope.launch {
@@ -3110,6 +3150,145 @@ class AppModel(private val app: Application) {
                     soulseekError.value = err.message ?: "Could not save Soulseek settings."
                 },
             )
+        }
+    }
+
+    private fun syncLocalMetaConfig() {
+        val apiUrl = status.value?.apiUrl?.takeIf { it.isNotBlank() }
+        val failClosed = settings.value.privateRouting ||
+            settings.value.p2pOnlyMetadata ||
+            _metaSourcesState.value.p2pOnlyMetadata
+        ExternalDiscoveryApi.configureLocalMeta(apiBaseUrl = apiUrl, failClosed = failClosed)
+    }
+
+    private suspend fun persistMetaSettings(updated: MetaSourcesState) {
+        val next = settings.value.copy(
+            metaSources = updated.sources.map { it.key }.filter { it.isNotBlank() },
+            p2pOnlyMetadata = updated.p2pOnlyMetadata,
+            seedFullMetadata = updated.seedFullMetadata,
+        )
+        if (next != settings.value) {
+            settings.value = next
+            withContext(Dispatchers.IO) {
+                runCatching { next.save(dataDir) }
+            }
+        }
+    }
+
+    fun refreshMetaSources() {
+        if (status.value?.apiUrl.isNullOrBlank()) return
+        scope.launch {
+            runCatching { loopbackApi.getMetaSources() }
+                .onSuccess { loaded ->
+                    val prevP2p = _metaSourcesState.value.p2pOnlyMetadata
+                    _metaSourcesState.value = loaded
+                    metaError.value = null
+                    if (prevP2p != loaded.p2pOnlyMetadata) {
+                        cinemaDiscoverCache.clear()
+                    }
+                    syncLocalMetaConfig()
+                }
+                .onFailure { err ->
+                    metaError.value = err.message
+                }
+        }
+    }
+
+    fun addMetaSource(uriOrKey: String, alias: String = "", seedFull: Boolean = false) {
+        val clean = uriOrKey.trim()
+        if (clean.isEmpty()) {
+            metaError.value = "Paste a peartube://meta/… link or 64-hex key."
+            return
+        }
+        metaBusy.value = true
+        metaError.value = null
+        metaMessage.value = null
+        scope.launch {
+            runCatching { loopbackApi.addMetaSource(clean, alias = alias, seedFull = seedFull) }
+                .onSuccess { updated ->
+                    _metaSourcesState.value = updated
+                    persistMetaSettings(updated)
+                    metaBusy.value = false
+                    metaMessage.value = "Added P2P metadata source."
+                    cinemaDiscoverCache.clear()
+                    syncLocalMetaConfig()
+                }
+                .onFailure { err ->
+                    metaBusy.value = false
+                    metaError.value = err.message ?: "Could not add metadata source."
+                }
+        }
+    }
+
+    fun removeMetaSource(key: String) {
+        val clean = key.trim()
+        if (clean.isEmpty()) return
+        metaBusy.value = true
+        metaError.value = null
+        metaMessage.value = null
+        scope.launch {
+            runCatching { loopbackApi.removeMetaSource(clean) }
+                .onSuccess { updated ->
+                    _metaSourcesState.value = updated
+                    persistMetaSettings(updated)
+                    metaBusy.value = false
+                    metaMessage.value = "Removed metadata source."
+                    cinemaDiscoverCache.clear()
+                    syncLocalMetaConfig()
+                }
+                .onFailure { err ->
+                    metaBusy.value = false
+                    metaError.value = err.message ?: "Could not remove metadata source."
+                }
+        }
+    }
+
+    fun setP2pOnlyMetadata(on: Boolean) {
+        metaBusy.value = true
+        metaError.value = null
+        metaMessage.value = null
+        scope.launch {
+            runCatching { loopbackApi.setMetaToggles(p2pOnlyMetadata = on) }
+                .onSuccess { updated ->
+                    _metaSourcesState.value = updated
+                    persistMetaSettings(updated)
+                    metaBusy.value = false
+                    metaMessage.value = if (updated.p2pOnlyMetadata) {
+                        "Clearnet metadata lookups blocked."
+                    } else {
+                        "Fallback metadata lookups allowed."
+                    }
+                    cinemaDiscoverCache.clear()
+                    syncLocalMetaConfig()
+                }
+                .onFailure { err ->
+                    metaBusy.value = false
+                    metaError.value = err.message ?: "Could not update P2P-only metadata setting."
+                }
+        }
+    }
+
+    fun setSeedFullMetadata(on: Boolean) {
+        metaBusy.value = true
+        metaError.value = null
+        metaMessage.value = null
+        scope.launch {
+            runCatching { loopbackApi.setMetaToggles(seedFullMetadata = on) }
+                .onSuccess { updated ->
+                    _metaSourcesState.value = updated
+                    persistMetaSettings(updated)
+                    metaBusy.value = false
+                    metaMessage.value = if (updated.seedFullMetadata) {
+                        "Full metadata catalog seeding enabled."
+                    } else {
+                        "Sparse on-demand metadata mode active."
+                    }
+                    syncLocalMetaConfig()
+                }
+                .onFailure { err ->
+                    metaBusy.value = false
+                    metaError.value = err.message ?: "Could not update metadata seeding setting."
+                }
         }
     }
 

@@ -227,6 +227,9 @@ const methods = {
       relayThrough: opts.relayThrough,
       bootstrap: opts.bootstrap,
       privateRouting: opts.privateRouting,
+      metaSources: opts.metaSources,
+      p2pOnlyMetadata: opts.p2pOnlyMetadata,
+      seedFullMetadata: opts.seedFullMetadata,
       worklet: true,
       onchange: update
     }), 'app')

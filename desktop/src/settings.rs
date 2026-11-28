@@ -35,6 +35,15 @@ pub struct Settings {
     pub private_routing: bool,
     /// Playback cache ceiling in GB, kept to help the network. `0` = unlimited.
     pub cache_max_gb: u32,
+    /// Subscribed P2P metadata channels (`peartube://meta/<64hex>` URIs or 64-hex keys).
+    #[serde(default)]
+    pub meta_sources: Vec<String>,
+    /// Block all clearnet metadata/artwork lookups (Cinemeta, Metahub, iTunes, YouTube typeahead).
+    #[serde(default)]
+    pub p2p_only_metadata: bool,
+    /// Opt-in to seeding full metadata and artwork shards for subscribed metadata channels.
+    #[serde(default)]
+    pub seed_full_metadata: bool,
 }
 
 impl Default for Settings {
@@ -48,6 +57,9 @@ impl Default for Settings {
             lan_discovery: true,
             private_routing: false,
             cache_max_gb: 10,
+            meta_sources: Vec::new(),
+            p2p_only_metadata: false,
+            seed_full_metadata: false,
         }
     }
 }
@@ -89,5 +101,90 @@ impl Settings {
         } else {
             self.sources.push(spec);
         }
+    }
+
+    /// Add a P2P metadata source key (lowercased, deduplicated against both raw keys and
+    /// `peartube://meta/<key>` URIs). Returns `true` if a new entry was added.
+    pub fn add_meta_source(&mut self, raw: &str) -> bool {
+        let lower = raw.trim().to_ascii_lowercase();
+        let key = lower
+            .strip_prefix("peartube://meta/")
+            .and_then(|rest| rest.split(['?', '#', '/']).next())
+            .unwrap_or(lower.as_str())
+            .to_string();
+        if key.is_empty() {
+            return false;
+        }
+        let exists = self.meta_sources.iter().any(|existing| {
+            let e = existing.trim().to_ascii_lowercase();
+            let existing_key = e
+                .strip_prefix("peartube://meta/")
+                .and_then(|rest| rest.split(['?', '#', '/']).next())
+                .unwrap_or(e.as_str());
+            existing_key == key
+        });
+        if exists {
+            return false;
+        }
+        self.meta_sources.push(key);
+        true
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn legacy_v050_settings_json_deserializes_with_meta_defaults() {
+        let legacy = r#"{
+            "tracker": "",
+            "sources": [{ "key": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef", "kind": "channel" }],
+            "relayThrough": [],
+            "bootstrap": [],
+            "lanDiscovery": true,
+            "privateRouting": false,
+            "cacheMaxGb": 25
+        }"#;
+        let parsed: Settings = serde_json::from_str(legacy).expect("legacy settings.json");
+        assert_eq!(parsed.cache_max_gb, 25);
+        assert!(parsed.lan_discovery);
+        assert!(!parsed.private_routing);
+        assert!(parsed.meta_sources.is_empty());
+        assert!(!parsed.p2p_only_metadata);
+        assert!(!parsed.seed_full_metadata);
+    }
+
+    #[test]
+    fn p2p_metadata_settings_round_trip_camel_case() {
+        let s = Settings {
+            meta_sources: vec![
+                "peartube://meta/0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef".to_string(),
+            ],
+            p2p_only_metadata: true,
+            seed_full_metadata: true,
+            ..Settings::default()
+        };
+        let json = serde_json::to_string(&s).expect("serialize");
+        assert!(json.contains("\"metaSources\""));
+        assert!(json.contains("\"p2pOnlyMetadata\":true"));
+        assert!(json.contains("\"seedFullMetadata\":true"));
+        let decoded: Settings = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(decoded, s);
+    }
+
+    #[test]
+    fn add_meta_source_lowercases_and_deduplicates_without_touching_sources() {
+        let key_upper = "0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF";
+        let key_lower = key_upper.to_ascii_lowercase();
+        let mut s = Settings::default();
+        assert!(!s.add_meta_source("   "));
+        assert!(s.add_meta_source(key_upper));
+        assert_eq!(s.meta_sources, vec![key_lower.clone()]);
+        assert!(s.sources.is_empty());
+        // Duplicate bare key or URI form is ignored.
+        assert!(!s.add_meta_source(&key_lower));
+        assert!(!s.add_meta_source(&format!("peartube://meta/{key_upper}?name=Lumen")));
+        assert_eq!(s.meta_sources.len(), 1);
     }
 }

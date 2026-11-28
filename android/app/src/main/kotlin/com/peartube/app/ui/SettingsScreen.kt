@@ -61,6 +61,7 @@ import com.peartube.app.PodcastImportFormat
 import com.peartube.app.ShareImportMode
 import com.peartube.shared.formatBytes
 import kotlinx.coroutines.launch
+import org.json.JSONArray
 import org.json.JSONObject
 
 @OptIn(ExperimentalLayoutApi::class)
@@ -89,6 +90,11 @@ fun SettingsScreen(model: AppModel) {
     val soulseekBusy by model.soulseekBusy.collectAsState()
     val soulseekError by model.soulseekError.collectAsState()
     val soulseekMessage by model.soulseekMessage.collectAsState()
+    val metaState by model.metaSourcesState.collectAsState()
+    val metaBusy by model.metaBusy.collectAsState()
+    val metaError by model.metaError.collectAsState()
+    val metaMessage by model.metaMessage.collectAsState()
+    var metaInput by rememberSaveable { mutableStateOf("") }
     val plugins by model.plugins.collectAsState()
     var slskUser by rememberSaveable { mutableStateOf(soulseek.username) }
     var slskPass by rememberSaveable { mutableStateOf("") }
@@ -99,6 +105,7 @@ fun SettingsScreen(model: AppModel) {
 
     LaunchedEffect(Unit) {
         model.refreshSoulseekSettings()
+        model.refreshMetaSources()
     }
     LaunchedEffect(soulseek) {
         if (!slskInitialized || (slskUser.isEmpty() && soulseek.username.isNotEmpty())) {
@@ -116,6 +123,13 @@ fun SettingsScreen(model: AppModel) {
     fun saveSettings() {
         scope.launch {
             problem = try {
+                val currentMetaSources = if (metaState.sources.isNotEmpty()) {
+                    metaState.sources.map { it.key }.filter { it.isNotBlank() }
+                } else {
+                    settings.metaSources
+                }
+                val currentP2pOnly = metaState.p2pOnlyMetadata
+                val currentSeedFull = metaState.seedFullMetadata
                 val raw = JSONObject()
                     .put("tracker", tracker)
                     .put("sources", sources)
@@ -125,8 +139,16 @@ fun SettingsScreen(model: AppModel) {
                     .put("lanDiscovery", lan)
                     .put("privateRouting", privateRouting)
                     .put("cacheMaxGb", cacheMaxGb)
+                    .put("metaSources", JSONArray(currentMetaSources))
+                    .put("p2pOnlyMetadata", currentP2pOnly)
+                    .put("seedFullMetadata", currentSeedFull)
                 val normalized = model.worker.normalizeSettings(raw, requireChannel = false)
-                model.save(normalized)
+                val merged = normalized.copy(
+                    metaSources = if (normalized.metaSources.isNotEmpty()) normalized.metaSources else currentMetaSources,
+                    p2pOnlyMetadata = normalized.p2pOnlyMetadata || currentP2pOnly,
+                    seedFullMetadata = normalized.seedFullMetadata || currentSeedFull,
+                )
+                model.save(merged)
                 null
             } catch (e: Exception) {
                 e.message
@@ -395,6 +417,224 @@ fun SettingsScreen(model: AppModel) {
                     },
                     modifier = Modifier.fillMaxWidth().height(44.dp),
                 )
+            }
+
+            // Card 3 — P2P Metadata & Artwork
+            SettingsGroupCard {
+                val forcedByPrivate = settings.privateRouting || privateRouting
+                val effectiveP2pOnly = forcedByPrivate || metaState.p2pOnlyMetadata
+                val sourceCount = metaState.sources.size
+                val pillLabel = when {
+                    effectiveP2pOnly && sourceCount > 0 -> "P2P only · $sourceCount"
+                    effectiveP2pOnly -> "P2P only"
+                    sourceCount == 1 -> "1 source"
+                    sourceCount > 1 -> "$sourceCount sources"
+                    else -> "Fallback active"
+                }
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    Text(
+                        text = "P2P Metadata & Artwork",
+                        color = Ink,
+                        fontSize = 17.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        modifier = Modifier.weight(1f),
+                    )
+                    Row(
+                        modifier = Modifier
+                            .clip(PillShape)
+                            .background(if (sourceCount > 0 || effectiveP2pOnly) Accent.copy(alpha = 0.14f) else GlassBg)
+                            .border(
+                                width = 0.75.dp,
+                                color = if (sourceCount > 0 || effectiveP2pOnly) Accent.copy(alpha = 0.45f) else GlassBorder,
+                                shape = PillShape,
+                            )
+                            .padding(horizontal = 10.dp, vertical = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(6.dp)
+                                .clip(CircleShape)
+                                .background(if (sourceCount > 0 || effectiveP2pOnly) Accent else Dim),
+                        )
+                        Text(
+                            text = pillLabel,
+                            color = if (sourceCount > 0 || effectiveP2pOnly) Accent else Dim,
+                            fontSize = 11.5.sp,
+                            fontWeight = FontWeight.Medium,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                }
+
+                if (metaState.sources.isEmpty()) {
+                    Text("No P2P metadata sources added yet", color = Dim, fontSize = 13.sp)
+                } else {
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        metaState.sources.forEach { src ->
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clip(ControlShape)
+                                    .background(CardElevated)
+                                    .border(0.5.dp, GlassBorder, ControlShape)
+                                    .padding(horizontal = 12.dp, vertical = 10.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                            ) {
+                                Column(
+                                    modifier = Modifier.weight(1f),
+                                    verticalArrangement = Arrangement.spacedBy(2.dp),
+                                ) {
+                                    Text(
+                                        text = src.alias.ifBlank { "Metadata ${src.key.take(8)}" },
+                                        color = Ink,
+                                        fontSize = 14.sp,
+                                        fontWeight = FontWeight.Medium,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                    )
+                                    Text(
+                                        text = "peartube://meta/${src.key.take(12)}…",
+                                        color = Dim,
+                                        fontSize = 11.5.sp,
+                                        fontFamily = FontFamily.Monospace,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                    )
+                                }
+                                Box(
+                                    modifier = Modifier
+                                        .clip(PillShape)
+                                        .background(GlassBg)
+                                        .border(0.75.dp, GlassBorder, PillShape)
+                                        .clickable(enabled = !metaBusy) { model.removeMetaSource(src.key) }
+                                        .padding(horizontal = 12.dp, vertical = 6.dp),
+                                    contentAlignment = Alignment.Center,
+                                ) {
+                                    Text(
+                                        text = "Remove",
+                                        color = Danger,
+                                        fontSize = 12.sp,
+                                        fontWeight = FontWeight.SemiBold,
+                                        maxLines = 1,
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    OutlinedTextField(
+                        value = metaInput,
+                        onValueChange = { metaInput = it },
+                        singleLine = true,
+                        label = { Text("peartube://meta/… or 64-hex key") },
+                        keyboardOptions = KeyboardOptions(
+                            capitalization = KeyboardCapitalization.None,
+                            autoCorrectEnabled = false,
+                        ),
+                        shape = CardShape,
+                        colors = fieldColors(),
+                        modifier = Modifier.weight(1f),
+                    )
+                    Box(
+                        modifier = Modifier
+                            .height(48.dp)
+                            .clip(PillShape)
+                            .background(if (!metaBusy && metaInput.isNotBlank()) Pearl else GlassBg)
+                            .then(
+                                if (!metaBusy && metaInput.isNotBlank()) {
+                                    Modifier
+                                } else {
+                                    Modifier.border(0.75.dp, GlassBorder, PillShape)
+                                },
+                            )
+                            .clickable(enabled = !metaBusy && metaInput.isNotBlank()) {
+                                val toAdd = metaInput.trim()
+                                metaInput = ""
+                                model.addMetaSource(toAdd)
+                            }
+                            .padding(horizontal = 18.dp),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Text(
+                            text = if (metaBusy) "…" else "Add",
+                            color = if (!metaBusy && metaInput.isNotBlank()) PearlInk else Dim,
+                            fontSize = 13.5.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            maxLines = 1,
+                        )
+                    }
+                }
+
+                HorizontalDivider(color = Line.copy(alpha = 0.55f))
+
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .toggleable(
+                            value = effectiveP2pOnly,
+                            enabled = !metaBusy && !forcedByPrivate,
+                            role = Role.Switch,
+                            onValueChange = { model.setP2pOnlyMetadata(it) },
+                        ),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                        Text("P2P-only metadata", color = Ink, fontSize = 14.5.sp, fontWeight = FontWeight.Medium)
+                        Hint(
+                            if (forcedByPrivate) {
+                                "Active automatically while Private DHT routing is on. Blocks all clearnet Cinemeta, Metahub, and iTunes lookups."
+                            } else {
+                                "Block all clearnet Cinemeta, Metahub, and iTunes lookups and resolve posters and details strictly from P2P sources."
+                            },
+                        )
+                    }
+                    Switch(
+                        checked = effectiveP2pOnly,
+                        onCheckedChange = null,
+                        enabled = !metaBusy && !forcedByPrivate,
+                        colors = SwitchDefaults.colors(checkedTrackColor = Brand),
+                    )
+                }
+
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .toggleable(
+                            value = metaState.seedFullMetadata,
+                            enabled = !metaBusy,
+                            role = Role.Switch,
+                            onValueChange = { model.setSeedFullMetadata(it) },
+                        ),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                        Text("Seed full metadata catalog", color = Ink, fontSize = 14.5.sp, fontWeight = FontWeight.Medium)
+                        Hint("Keep the full metadata catalog and artwork cached to seed peers. Off by default on mobile so storage stays sparse.")
+                    }
+                    Switch(
+                        checked = metaState.seedFullMetadata,
+                        onCheckedChange = null,
+                        enabled = !metaBusy,
+                        colors = SwitchDefaults.colors(checkedTrackColor = Brand),
+                    )
+                }
+
+                metaError?.let { Text(it, color = Danger, fontSize = 13.sp) }
+                metaMessage?.let { Text(it, color = Accent, fontSize = 13.sp) }
             }
 
             // Card 3 — Smart Sharing & Imports

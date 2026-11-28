@@ -23,6 +23,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
@@ -48,6 +49,8 @@ import com.peartube.app.ExternalDiscoveryApi
 import com.peartube.app.ExternalImageCache
 import com.peartube.app.LibraryKind
 import com.peartube.app.LibraryTile
+import com.peartube.app.ThumbHash
+import com.peartube.app.extractImdbId
 import com.peartube.app.imdbBackdropUrl
 import com.peartube.app.imdbPosterUrl
 import com.peartube.app.sleeveHash
@@ -90,19 +93,38 @@ fun HeroPanel(
     val orbCore = Color.hsl(((hInt + 165) % 360).toFloat(), 0.84f, 0.66f, alpha = 0.82f)
     val orbEdge = Color.hsl(((hInt + 120) % 360).toFloat(), 0.80f, 0.40f, alpha = 0.16f)
 
-    val backdropUrl = remember(backdropImdb) { imdbBackdropUrl(backdropImdb) }
-    val posterFallbackUrl = remember(backdropImdb) { imdbPosterUrl(backdropImdb) }
+    val metaEpoch by ExternalDiscoveryApi.localMetaEpoch.collectAsState()
+    val imdbTt = remember(backdropImdb) { extractImdbId(backdropImdb) }
+    val backdropUrl = remember(backdropImdb, metaEpoch) { imdbBackdropUrl(backdropImdb) }
+    val posterFallbackUrl = remember(backdropImdb, metaEpoch) { imdbPosterUrl(backdropImdb) }
     val backdropBitmap by produceState<ImageBitmap?>(
         initialValue = backdropUrl?.let { ExternalImageCache.get(it) }
-            ?: posterFallbackUrl?.let { ExternalImageCache.get(it) },
-        key1 = backdropUrl,
-        key2 = posterFallbackUrl,
+            ?: posterFallbackUrl?.let { ExternalImageCache.get(it) }
+            ?: ThumbHash.previewBitmapFor(
+                backdropUrl,
+                posterFallbackUrl,
+                imdbTt?.let { "imdb:$it" },
+                imdbTt,
+            ),
+        keys = arrayOf<Any?>(backdropImdb, backdropUrl, posterFallbackUrl, metaEpoch),
     ) {
-        value = when {
-            backdropUrl != null -> ExternalImageCache.load(backdropUrl)
-                ?: posterFallbackUrl?.let { ExternalImageCache.load(it) }
-            posterFallbackUrl != null -> ExternalImageCache.load(posterFallbackUrl)
+        val (resolvedBackdrop, resolvedPoster) = if (!backdropImdb.isNullOrBlank()) {
+            ExternalDiscoveryApi.resolveImdbArtUrls(backdropImdb)
+        } else {
+            null to null
+        }
+        val bUrl = resolvedBackdrop ?: backdropUrl
+        val pUrl = resolvedPoster ?: posterFallbackUrl
+        if (value == null) {
+            ThumbHash.previewBitmapFor(bUrl, pUrl, imdbTt?.let { "imdb:$it" }, imdbTt)?.let { value = it }
+        }
+        val full = when {
+            bUrl != null -> ExternalImageCache.load(bUrl) ?: pUrl?.let { ExternalImageCache.load(it) }
+            pUrl != null -> ExternalImageCache.load(pUrl)
             else -> null
+        }
+        if (full != null) {
+            value = full
         }
     }
 
@@ -247,19 +269,27 @@ fun AlbumSleeve(
     val deep = Color.hsl(h2.toFloat(), 0.64f, 0.20f)
     val shape = RoundedCornerShape(cornerRadius)
 
-    val initialUrl = remember(artUrl, artist, albumName) {
+    val metaEpoch by ExternalDiscoveryApi.localMetaEpoch.collectAsState()
+    val thumbKey = remember(artist, albumName) {
+        if (!albumName.isNullOrBlank()) ExternalDiscoveryApi.albumArtThumbKey(artist.orEmpty(), albumName) else null
+    }
+    val initialUrl = remember(artUrl, artist, albumName, metaEpoch) {
         artUrl?.takeIf { it.isNotBlank() }
             ?: if (!albumName.isNullOrBlank()) ExternalDiscoveryApi.cachedAlbumArtUrl(artist.orEmpty(), albumName) else null
     }
     val coverBitmap by produceState<ImageBitmap?>(
-        initialValue = initialUrl?.let { ExternalImageCache.get(it) },
-        key1 = artUrl,
-        key2 = artist,
-        key3 = albumName,
+        initialValue = initialUrl?.let { ExternalImageCache.get(it) }
+            ?: ThumbHash.previewBitmapFor(artUrl, initialUrl, thumbKey),
+        keys = arrayOf<Any?>(artUrl, artist, albumName, metaEpoch),
     ) {
         val url = artUrl?.takeIf { it.isNotBlank() }
             ?: if (!albumName.isNullOrBlank()) ExternalDiscoveryApi.resolveAlbumArtUrl(artist.orEmpty(), albumName) else null
-        value = if (!url.isNullOrBlank()) ExternalImageCache.load(url) else null
+        if (value == null) {
+            ThumbHash.previewBitmapFor(url, artUrl, thumbKey)?.let { value = it }
+        }
+        if (!url.isNullOrBlank()) {
+            ExternalImageCache.load(url)?.let { value = it }
+        }
     }
 
     Box(
@@ -541,20 +571,39 @@ fun WideTitleArt(
             !it.equals("Series", ignoreCase = true) &&
             !it.equals("TV Show", ignoreCase = true)
     }
+    val metaEpoch by ExternalDiscoveryApi.localMetaEpoch.collectAsState()
     val isLong = title.length > 34
-    val backdropUrl = remember(imdb) { imdbBackdropUrl(imdb) }
-    val posterFallbackUrl = remember(imdb) { imdbPosterUrl(imdb) }
+    val imdbTt = remember(imdb) { extractImdbId(imdb) }
+    val backdropUrl = remember(imdb, metaEpoch) { imdbBackdropUrl(imdb) }
+    val posterFallbackUrl = remember(imdb, metaEpoch) { imdbPosterUrl(imdb) }
     val loadedBitmap by produceState<ImageBitmap?>(
         initialValue = backdropUrl?.let { ExternalImageCache.get(it) }
-            ?: posterFallbackUrl?.let { ExternalImageCache.get(it) },
-        key1 = backdropUrl,
-        key2 = posterFallbackUrl,
+            ?: posterFallbackUrl?.let { ExternalImageCache.get(it) }
+            ?: ThumbHash.previewBitmapFor(
+                backdropUrl,
+                posterFallbackUrl,
+                imdbTt?.let { "imdb:$it" },
+                imdbTt,
+            ),
+        keys = arrayOf<Any?>(imdb, backdropUrl, posterFallbackUrl, metaEpoch),
     ) {
-        value = when {
-            backdropUrl != null -> ExternalImageCache.load(backdropUrl)
-                ?: posterFallbackUrl?.let { ExternalImageCache.load(it) }
-            posterFallbackUrl != null -> ExternalImageCache.load(posterFallbackUrl)
+        val (resolvedBackdrop, resolvedPoster) = if (!imdb.isNullOrBlank()) {
+            ExternalDiscoveryApi.resolveImdbArtUrls(imdb)
+        } else {
+            null to null
+        }
+        val bUrl = resolvedBackdrop ?: backdropUrl
+        val pUrl = resolvedPoster ?: posterFallbackUrl
+        if (value == null) {
+            ThumbHash.previewBitmapFor(bUrl, pUrl, imdbTt?.let { "imdb:$it" }, imdbTt)?.let { value = it }
+        }
+        val full = when {
+            bUrl != null -> ExternalImageCache.load(bUrl) ?: pUrl?.let { ExternalImageCache.load(it) }
+            pUrl != null -> ExternalImageCache.load(pUrl)
             else -> null
+        }
+        if (full != null) {
+            value = full
         }
     }
 
@@ -690,7 +739,9 @@ fun PosterArt(
     val isSeries = kindLabel.equals("Series", ignoreCase = true) || kindLabel.equals("TV Show", ignoreCase = true)
     val isClip = kindLabel.equals("Clip", ignoreCase = true) || kindLabel.equals("Video", ignoreCase = true)
 
-    val initialUrl = remember(posterUrlOverride, imdb, title, isSeries, isClip) {
+    val metaEpoch by ExternalDiscoveryApi.localMetaEpoch.collectAsState()
+    val imdbTt = remember(imdb) { extractImdbId(imdb) }
+    val initialUrl = remember(posterUrlOverride, imdb, title, isSeries, isClip, metaEpoch) {
         posterUrlOverride?.takeIf { it.isNotBlank() }
             ?: imdbPosterUrl(imdb)
             ?: if (!isClip) {
@@ -700,18 +751,34 @@ fun PosterArt(
             }
     }
     val loadedBitmap by produceState<ImageBitmap?>(
-        initialValue = initialUrl?.let { ExternalImageCache.get(it) },
-        key1 = posterUrlOverride,
-        key2 = imdb,
-        key3 = "$title|$isSeries|$isClip",
+        initialValue = initialUrl?.let { ExternalImageCache.get(it) }
+            ?: ThumbHash.previewBitmapFor(
+                posterUrlOverride,
+                initialUrl,
+                imdbTt?.let { "imdb:$it" },
+                imdbTt,
+            ),
+        keys = arrayOf<Any?>(posterUrlOverride, imdb, "$title|$isSeries|$isClip", metaEpoch),
     ) {
-        val directUrl = posterUrlOverride?.takeIf { it.isNotBlank() } ?: imdbPosterUrl(imdb)
-        val resolvedUrl = directUrl ?: if (!isClip) {
-            ExternalDiscoveryApi.resolveTitleImdb(title, isSeries = isSeries)?.let { imdbPosterUrl(it) }
+        val directUrl = posterUrlOverride?.takeIf { it.isNotBlank() }
+            ?: if (!imdb.isNullOrBlank()) ExternalDiscoveryApi.resolveImdbPosterUrl(imdb) else null
+        val resolvedTt = imdbTt ?: if (directUrl == null && !isClip) {
+            ExternalDiscoveryApi.resolveTitleImdb(title, isSeries = isSeries)
         } else {
             null
         }
-        value = if (!resolvedUrl.isNullOrBlank()) ExternalImageCache.load(resolvedUrl) else null
+        val resolvedUrl = directUrl ?: resolvedTt?.let { ExternalDiscoveryApi.resolveImdbPosterUrl(it) }
+        if (value == null) {
+            ThumbHash.previewBitmapFor(
+                resolvedUrl,
+                posterUrlOverride,
+                resolvedTt?.let { "imdb:$it" },
+                resolvedTt,
+            )?.let { value = it }
+        }
+        if (!resolvedUrl.isNullOrBlank()) {
+            ExternalImageCache.load(resolvedUrl)?.let { value = it }
+        }
     }
 
     Box(

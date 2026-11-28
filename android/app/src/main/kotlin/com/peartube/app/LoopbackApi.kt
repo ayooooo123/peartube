@@ -905,6 +905,240 @@ data class DiscoverUnfollowResponse(
     val creators: List<DiscoverCreator> = emptyList(),
 )
 
+data class MetaCard(
+    val id: String,
+    val kind: String = "",
+    val title: String = "",
+    val subtitle: String = "",
+    val year: Int? = null,
+    val ratingX10: Int? = null,
+    val genres: List<String> = emptyList(),
+    val runtimeMin: Int? = null,
+    val thumbHash: String = "",
+    val posterHash: String = "",
+    val backdropHash: String = "",
+    val posterUrl: String? = null,
+    val backdropUrl: String? = null,
+    val updatedAt: Long = 0L,
+    val source: String? = null,
+) {
+    companion object {
+        fun from(json: JSONObject): MetaCard {
+            val posterHash = optCleanString(json, "posterHash")
+            val backdropHash = optCleanString(json, "backdropHash")
+            val posterUrl = optCleanString(json, "posterUrl").ifBlank {
+                if (posterHash.length == 64) "/v1/art/$posterHash" else ""
+            }.takeIf { it.isNotEmpty() }
+            val backdropUrl = optCleanString(json, "backdropUrl").ifBlank {
+                if (backdropHash.length == 64) "/v1/art/$backdropHash" else ""
+            }.takeIf { it.isNotEmpty() }
+            return MetaCard(
+                id = optCleanString(json, "id"),
+                kind = optCleanString(json, "kind").lowercase(Locale.ROOT),
+                title = optCleanString(json, "title"),
+                subtitle = optCleanString(json, "subtitle"),
+                year = optPositiveInt(json, "year"),
+                ratingX10 = optPositiveInt(json, "ratingX10"),
+                genres = parseStringList(json.optJSONArray("genres")),
+                runtimeMin = optPositiveInt(json, "runtimeMin"),
+                thumbHash = optCleanString(json, "thumbHash"),
+                posterHash = posterHash,
+                backdropHash = backdropHash,
+                posterUrl = posterUrl,
+                backdropUrl = backdropUrl,
+                updatedAt = optPositiveLong(json, "updatedAt") ?: 0L,
+                source = optCleanString(json, "source").takeIf { it.isNotEmpty() },
+            )
+        }
+    }
+}
+
+data class MetaDetailItem(
+    val label: String = "",
+    val subId: String = "",
+    val season: Int? = null,
+    val number: Int? = null,
+    val runtimeMin: Int? = null,
+) {
+    companion object {
+        fun from(json: JSONObject): MetaDetailItem = MetaDetailItem(
+            label = optCleanString(json, "label"),
+            subId = optCleanString(json, "subId"),
+            season = optPositiveInt(json, "season"),
+            number = optPositiveInt(json, "number"),
+            runtimeMin = optPositiveInt(json, "runtimeMin"),
+        )
+    }
+}
+
+data class MetaDetail(
+    val id: String,
+    val synopsis: String = "",
+    val cast: List<String> = emptyList(),
+    val directors: List<String> = emptyList(),
+    val tags: List<String> = emptyList(),
+    val backdropHash: String = "",
+    val backdropUrl: String? = null,
+    val items: List<MetaDetailItem> = emptyList(),
+    val externalIds: Map<String, String> = emptyMap(),
+    val updatedAt: Long = 0L,
+    val source: String? = null,
+) {
+    companion object {
+        fun from(json: JSONObject): MetaDetail {
+            val backdropHash = optCleanString(json, "backdropHash")
+            val backdropUrl = optCleanString(json, "backdropUrl").ifBlank {
+                if (backdropHash.length == 64) "/v1/art/$backdropHash" else ""
+            }.takeIf { it.isNotEmpty() }
+            val itemsArr = json.optJSONArray("items")
+            val items = if (itemsArr == null) emptyList() else (0 until itemsArr.length()).mapNotNull {
+                itemsArr.optJSONObject(it)?.let(MetaDetailItem::from)
+            }
+            val externalIds = LinkedHashMap<String, String>()
+            val extArr = json.optJSONArray("externalIds")
+            if (extArr != null) {
+                for (i in 0 until extArr.length()) {
+                    val obj = extArr.optJSONObject(i) ?: continue
+                    val k = optCleanString(obj, "key")
+                    val v = optCleanString(obj, "value")
+                    if (k.isNotEmpty() && v.isNotEmpty()) externalIds[k] = v
+                }
+            } else {
+                val extObj = json.optJSONObject("externalIds")
+                if (extObj != null) {
+                    val keys = extObj.keys()
+                    while (keys.hasNext()) {
+                        val k = keys.next()
+                        val v = optCleanString(extObj, k)
+                        if (k.isNotBlank() && v.isNotEmpty()) externalIds[k.trim()] = v
+                    }
+                }
+            }
+            return MetaDetail(
+                id = optCleanString(json, "id"),
+                synopsis = optCleanString(json, "synopsis"),
+                cast = parseStringList(json.optJSONArray("cast")),
+                directors = parseStringList(json.optJSONArray("directors")),
+                tags = parseStringList(json.optJSONArray("tags")),
+                backdropHash = backdropHash,
+                backdropUrl = backdropUrl,
+                items = items,
+                externalIds = externalIds,
+                updatedAt = optPositiveLong(json, "updatedAt") ?: 0L,
+                source = optCleanString(json, "source").takeIf { it.isNotEmpty() },
+            )
+        }
+    }
+}
+
+data class MetaList(
+    val kind: String,
+    val slug: String,
+    val title: String = "",
+    val ids: List<String> = emptyList(),
+    val cards: List<MetaCard> = emptyList(),
+    val updatedAt: Long = 0L,
+    val source: String? = null,
+) {
+    companion object {
+        fun from(json: JSONObject): MetaList {
+            val cardsArr = json.optJSONArray("cards")
+            val cards = if (cardsArr == null) emptyList() else (0 until cardsArr.length()).mapNotNull {
+                cardsArr.optJSONObject(it)?.let(MetaCard::from)
+            }
+            return MetaList(
+                kind = optCleanString(json, "kind").lowercase(Locale.ROOT),
+                slug = optCleanString(json, "slug"),
+                title = optCleanString(json, "title"),
+                ids = parseStringList(json.optJSONArray("ids")),
+                cards = cards,
+                updatedAt = optPositiveLong(json, "updatedAt") ?: 0L,
+                source = optCleanString(json, "source").takeIf { it.isNotEmpty() },
+            )
+        }
+    }
+}
+
+data class MetaSearchHit(
+    val id: String,
+    val kind: String = "",
+    val title: String = "",
+    val subtitle: String = "",
+    val year: Int? = null,
+    val score: Int = 0,
+    val thumbHash: String = "",
+    val posterHash: String = "",
+    val posterUrl: String? = null,
+    val source: String? = null,
+) {
+    companion object {
+        fun from(json: JSONObject): MetaSearchHit {
+            val posterHash = optCleanString(json, "posterHash")
+            val posterUrl = optCleanString(json, "posterUrl").ifBlank {
+                if (posterHash.length == 64) "/v1/art/$posterHash" else ""
+            }.takeIf { it.isNotEmpty() }
+            return MetaSearchHit(
+                id = optCleanString(json, "id"),
+                kind = optCleanString(json, "kind").lowercase(Locale.ROOT),
+                title = optCleanString(json, "title"),
+                subtitle = optCleanString(json, "subtitle"),
+                year = optPositiveInt(json, "year"),
+                score = optNonNegativeInt(json, "score") ?: 0,
+                thumbHash = optCleanString(json, "thumbHash"),
+                posterHash = posterHash,
+                posterUrl = posterUrl,
+                source = optCleanString(json, "source").takeIf { it.isNotEmpty() },
+            )
+        }
+    }
+}
+
+data class MetaSourceInfo(
+    val key: String,
+    val uri: String = "",
+    val alias: String = "",
+    val writable: Boolean = false,
+    val seedFull: Boolean = false,
+    val active: Boolean = true,
+) {
+    companion object {
+        fun from(json: JSONObject): MetaSourceInfo {
+            val key = optCleanString(json, "key").lowercase(Locale.ROOT)
+            val uri = optCleanString(json, "uri").ifBlank {
+                if (key.length == 64) "peartube://meta/$key" else ""
+            }
+            return MetaSourceInfo(
+                key = key,
+                uri = uri,
+                alias = optCleanString(json, "alias"),
+                writable = json.optBoolean("writable", false),
+                seedFull = json.optBoolean("seedFull", false),
+                active = if (json.has("active") && !json.isNull("active")) json.optBoolean("active", true) else true,
+            )
+        }
+    }
+}
+
+data class MetaSourcesState(
+    val sources: List<MetaSourceInfo> = emptyList(),
+    val p2pOnlyMetadata: Boolean = false,
+    val seedFullMetadata: Boolean = false,
+) {
+    companion object {
+        fun from(json: JSONObject): MetaSourcesState {
+            val arr = json.optJSONArray("sources")
+            val sources = if (arr == null) emptyList() else (0 until arr.length()).mapNotNull {
+                arr.optJSONObject(it)?.let(MetaSourceInfo::from)
+            }.filter { it.key.isNotEmpty() }
+            return MetaSourcesState(
+                sources = sources,
+                p2pOnlyMetadata = json.optBoolean("p2pOnlyMetadata", false),
+                seedFullMetadata = json.optBoolean("seedFullMetadata", false),
+            )
+        }
+    }
+}
+
 /**
  * Resolves a proxied thumbnail path (`/v1/discover/thumb/...` or `/v1/providers/.../thumb/...`)
  * against the local loopback [apiUrl]. Refuses non-loopback external URLs so the UI never dials third parties.
@@ -1258,6 +1492,144 @@ class LoopbackApi(private val baseUrlProvider: () -> String?) {
         ).mapCatching { DiscoverBrowseResult.from(it) }
     }
 
+    suspend fun getMetaCard(id: String): MetaCard? {
+        val clean = id.trim()
+        if (clean.isEmpty()) return null
+        val encoded = URLEncoder.encode(clean, "UTF-8").replace("+", "%20")
+        return requestJson(
+            method = "GET",
+            path = "/v1/meta/card/$encoded",
+            readTimeoutMs = 8_000,
+        ).mapCatching { json ->
+            val card = MetaCard.from(json)
+            card.takeIf { it.id.isNotBlank() }
+        }.getOrNull()
+    }
+
+    suspend fun getMetaDetail(id: String): MetaDetail? {
+        val clean = id.trim()
+        if (clean.isEmpty()) return null
+        val encoded = URLEncoder.encode(clean, "UTF-8").replace("+", "%20")
+        return requestJson(
+            method = "GET",
+            path = "/v1/meta/detail/$encoded",
+            readTimeoutMs = 8_000,
+        ).mapCatching { json ->
+            val detail = MetaDetail.from(json)
+            detail.takeIf { it.id.isNotBlank() }
+        }.getOrNull()
+    }
+
+    suspend fun getMetaList(kind: String, slug: String): MetaList? {
+        val cleanKind = kind.trim().lowercase(Locale.ROOT)
+        val cleanSlug = slug.trim().lowercase(Locale.ROOT).trim('/')
+        if (cleanKind.isEmpty() || cleanSlug.isEmpty()) return null
+        val encodedKind = URLEncoder.encode(cleanKind, "UTF-8").replace("+", "%20")
+        val encodedSlug = cleanSlug.split('/').joinToString("/") { part ->
+            URLEncoder.encode(part, "UTF-8").replace("+", "%20")
+        }
+        return requestJson(
+            method = "GET",
+            path = "/v1/meta/list/$encodedKind/$encodedSlug",
+            readTimeoutMs = 10_000,
+        ).mapCatching { json ->
+            val list = MetaList.from(json)
+            list.takeIf { it.kind.isNotBlank() || it.cards.isNotEmpty() || it.ids.isNotEmpty() }
+        }.getOrNull()
+    }
+
+    suspend fun searchMeta(kind: String = "", query: String, limit: Int = 20): List<MetaSearchHit> {
+        val cleanQuery = query.trim()
+        if (cleanQuery.isEmpty()) return emptyList()
+        val params = buildList {
+            val cleanKind = kind.trim().lowercase(Locale.ROOT)
+            if (cleanKind.isNotEmpty()) add("kind=${URLEncoder.encode(cleanKind, "UTF-8")}")
+            add("q=${URLEncoder.encode(cleanQuery, "UTF-8")}")
+            add("limit=${limit.coerceIn(1, 64)}")
+        }
+        return requestJson(
+            method = "GET",
+            path = "/v1/meta/search?${params.joinToString("&")}",
+            readTimeoutMs = 8_000,
+        ).mapCatching { json ->
+            val arr = json.optJSONArray("hits") ?: return@mapCatching emptyList()
+            val fallbackSource = optCleanString(json, "source").takeIf { it.isNotEmpty() }
+            (0 until arr.length()).mapNotNull { idx ->
+                arr.optJSONObject(idx)?.let { obj ->
+                    val hit = MetaSearchHit.from(obj)
+                    if (hit.id.isBlank()) null
+                    else if (hit.source == null && fallbackSource != null) hit.copy(source = fallbackSource)
+                    else hit
+                }
+            }
+        }.getOrDefault(emptyList())
+    }
+
+    suspend fun getMetaSources(): MetaSourcesState = requestJson(
+        method = "GET",
+        path = "/v1/meta/sources",
+        readTimeoutMs = 10_000,
+    ).mapCatching { MetaSourcesState.from(it) }.getOrThrow()
+
+    suspend fun addMetaSource(
+        uriOrKey: String,
+        alias: String = "",
+        seedFull: Boolean = false,
+    ): MetaSourcesState {
+        val clean = uriOrKey.trim()
+        if (clean.isEmpty()) throw LoopbackApiException("Enter a peartube://meta/… link or 64-hex key.")
+        val payload = JSONObject().apply {
+            if (clean.startsWith("peartube://", ignoreCase = true)) {
+                put("uri", clean)
+            } else {
+                put("key", clean)
+            }
+            val cleanAlias = alias.trim()
+            if (cleanAlias.isNotEmpty()) put("alias", cleanAlias)
+            put("seedFull", seedFull)
+        }
+        return requestJson(
+            method = "POST",
+            path = "/v1/meta/sources",
+            body = payload,
+            readTimeoutMs = 15_000,
+        ).mapCatching { MetaSourcesState.from(it) }.getOrThrow()
+    }
+
+    suspend fun removeMetaSource(key: String): MetaSourcesState {
+        val cleanKey = key.trim().lowercase(Locale.ROOT)
+        if (cleanKey.isEmpty()) throw LoopbackApiException("Metadata source key is required.")
+        val encoded = URLEncoder.encode(cleanKey, "UTF-8").replace("+", "%20")
+        val json = requestJson(
+            method = "DELETE",
+            path = "/v1/meta/sources/$encoded",
+            readTimeoutMs = 15_000,
+        ).getOrThrow()
+        if (json.has("p2pOnlyMetadata") && json.has("seedFullMetadata")) {
+            return MetaSourcesState.from(json)
+        }
+        return runCatching { getMetaSources() }.getOrElse { MetaSourcesState.from(json) }
+    }
+
+    suspend fun setMetaToggles(
+        p2pOnlyMetadata: Boolean? = null,
+        seedFullMetadata: Boolean? = null,
+    ): MetaSourcesState {
+        if (p2pOnlyMetadata == null && seedFullMetadata == null) {
+            return getMetaSources()
+        }
+        val payload = JSONObject().apply {
+            if (p2pOnlyMetadata != null) put("p2pOnlyMetadata", p2pOnlyMetadata)
+            if (seedFullMetadata != null) put("seedFullMetadata", seedFullMetadata)
+        }
+        return requestJson(
+            method = "POST",
+            path = "/v1/meta/sources",
+            body = payload,
+            readTimeoutMs = 15_000,
+        ).mapCatching { MetaSourcesState.from(it) }.getOrThrow()
+    }
+
     private suspend fun requestJson(
         method: String,
         path: String,
@@ -1327,6 +1699,17 @@ class LoopbackApi(private val baseUrlProvider: () -> String?) {
 
 private fun optCleanString(json: JSONObject, key: String): String =
     if (!json.has(key) || json.isNull(key)) "" else json.optString(key).trim()
+
+private fun parseStringList(arr: JSONArray?): List<String> {
+    if (arr == null || arr.length() == 0) return emptyList()
+    val out = ArrayList<String>(arr.length())
+    for (i in 0 until arr.length()) {
+        if (arr.isNull(i)) continue
+        val s = arr.optString(i).trim()
+        if (s.isNotEmpty()) out += s
+    }
+    return out
+}
 
 private fun optPositiveLong(json: JSONObject, key: String): Long? {
     if (!json.has(key) || json.isNull(key)) return null

@@ -35,6 +35,9 @@ data class Settings(
     val lanDiscovery: Boolean = true,
     val privateRouting: Boolean = false,
     val cacheMaxGb: Int = 10,
+    val metaSources: List<String> = emptyList(),
+    val p2pOnlyMetadata: Boolean = false,
+    val seedFullMetadata: Boolean = false,
 ) {
     val hasSources: Boolean get() = tracker.isNotEmpty() || mnemonic.isNotEmpty() || sources.isNotEmpty()
 
@@ -54,6 +57,9 @@ data class Settings(
         .put("lanDiscovery", lanDiscovery)
         .put("privateRouting", privateRouting)
         .put("cacheMaxGb", cacheMaxGb)
+        .put("metaSources", JSONArray(metaSources))
+        .put("p2pOnlyMetadata", p2pOnlyMetadata)
+        .put("seedFullMetadata", seedFullMetadata)
 
     fun save(dir: File) {
         dir.mkdirs()
@@ -66,6 +72,18 @@ data class Settings(
         fun fromJson(json: JSONObject): Settings {
             val srcArr = json.optJSONArray("sources")
             val parsedSources = if (srcArr == null) emptyList() else List(srcArr.length()) { SourceSpec.from(srcArr.getJSONObject(it)) }
+            val metaArr = json.optJSONArray("metaSources")
+            val parsedMetaSources = if (metaArr == null) {
+                emptyList()
+            } else {
+                List(metaArr.length()) { idx ->
+                    when (val item = metaArr.opt(idx)) {
+                        is JSONObject -> item.optString("uri").ifBlank { item.optString("key") }
+                        is String -> item
+                        else -> ""
+                    }.trim()
+                }.filter { it.isNotEmpty() }
+            }
             return Settings(
                 tracker = json.optString("tracker"),
                 mnemonic = json.optString("mnemonic"),
@@ -75,6 +93,9 @@ data class Settings(
                 lanDiscovery = json.optBoolean("lanDiscovery", true),
                 privateRouting = json.optBoolean("privateRouting"),
                 cacheMaxGb = json.optInt("cacheMaxGb", 10),
+                metaSources = parsedMetaSources,
+                p2pOnlyMetadata = json.optBoolean("p2pOnlyMetadata", false),
+                seedFullMetadata = json.optBoolean("seedFullMetadata", false),
             )
         }
 

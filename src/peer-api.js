@@ -82,7 +82,7 @@ export async function openPeerApi ({
     identify: link => identify(link, { cinemetaUrl: cfg('cinemetaUrl') || CINEMETA_URL, configDir: ubitConfigDir }),
     posterUrl: metahub('poster', 'small'),
     backdropUrl: metahub('background', 'medium'),
-    p2pOnlyMetadata: () => cfg('p2pOnlyMetadata'),
+    p2pOnlyMetadata: () => Boolean(node.meta?.isP2pOnly?.() || cfg('p2pOnlyMetadata')),
     get cast () { return getCast() },
     extraStatus: () => (extraStatus ? extraStatus(url) : {}),
     onSourcesChanged,
@@ -107,8 +107,11 @@ export async function openPeerApi ({
       })
     }
   }
-  node.meta?.setP2pOnly?.(cfg('p2pOnlyMetadata'))
-  node.meta?.setSeedFull?.(cfg('seedFullMetadata'))
+  if (cfg('p2pOnlyMetadata')) node.meta?.setP2pOnly?.(true)
+  if (cfg('seedFullMetadata')) node.meta?.setSeedFull?.(true)
+  for (const key of cfg('metaSources')) {
+    await node.meta?.addSource?.(key).catch(err => { void err })
+  }
 
   const fetchBytes = (targetUrl, opts = {}) => fetchArt(targetUrl, {
     binary: true,

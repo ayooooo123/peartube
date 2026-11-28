@@ -12,7 +12,10 @@ export const APP_SETTINGS_DEFAULTS = Object.freeze({
   bootstrap: [],
   lanDiscovery: true,
   privateRouting: false,
-  cacheMaxGb: 10
+  cacheMaxGb: 10,
+  metaSources: [],
+  p2pOnlyMetadata: false,
+  seedFullMetadata: false
 })
 
 const list = (v, split) => (Array.isArray(v) ? v : String(v ?? '').split(split))
@@ -43,6 +46,26 @@ function channelSpec (token) {
   return { key: parsed.key, kind: 'channel', alias: parsed.alias }
 }
 
+// A subscribed metadata channel as a settings field writes it: a 64-hex key, `meta:<key>`, a
+// `peartube://meta/<key>` link, or a saved `{ key | uri }` object -> normalized 64-hex key.
+function metaSourceKey (token) {
+  if (typeof token === 'object' && token) return metaSourceKey(token.uri || token.key || '')
+  const raw = String(token || '').trim()
+  const lower = raw.toLowerCase()
+  if (HEX64.test(lower)) return lower
+  const short = lower.match(/^(?:peartube:)?meta:([0-9a-f]{64})$/)
+  if (short) return short[1]
+  let parsed
+  try {
+    parsed = parseUri(raw)
+  } catch (err) {
+    void err
+    throw new Error(`Invalid metadata key or peartube://meta/ URI: ${raw}`)
+  }
+  if (parsed.action !== 'meta') throw new Error(`Expected peartube://meta/..., got ${raw}`)
+  return parsed.key
+}
+
 // Raw fields (from a settings form: text or lists) or a saved settings.json, as complete settings. Throws the first
 // field error, worded for the user. A form must name at least one channel; a first-run settings.json names none.
 // `previous` is the settings being edited: a channel listed again without a name keeps the name it had.
@@ -64,6 +87,11 @@ export function normalizeAppSettings (raw = {}, { requireChannel = false, previo
   const bootstrap = list(raw.bootstrap, /[\s,]+/).map(String)
   const badNode = bootstrap.find(n => !isBootstrapNode(n))
   if (badNode) throw new Error(`Bootstrap node ${badNode} is not host:port.${looksIPv6(badNode) ? ' IPv6 addresses are not supported.' : ''}`)
+  const metaSources = []
+  for (const token of list(raw.metaSources, /[\r\n,]+/)) {
+    const key = metaSourceKey(token)
+    if (!metaSources.includes(key)) metaSources.push(key)
+  }
   if (requireChannel && !tracker && !mnemonic && !sources.length) {
     throw new Error('Add a channel key, a 12-word recovery phrase, or a peartube://channel/ link.')
   }
@@ -78,7 +106,10 @@ export function normalizeAppSettings (raw = {}, { requireChannel = false, previo
     bootstrap,
     lanDiscovery: raw.lanDiscovery === undefined ? APP_SETTINGS_DEFAULTS.lanDiscovery : Boolean(raw.lanDiscovery),
     privateRouting: Boolean(raw.privateRouting),
-    cacheMaxGb
+    cacheMaxGb,
+    metaSources,
+    p2pOnlyMetadata: Boolean(raw.p2pOnlyMetadata),
+    seedFullMetadata: Boolean(raw.seedFullMetadata)
   }
 }
 
@@ -96,6 +127,9 @@ export function nodeOptions (settings, { trackersDir, defaultFolder }) {
     bootstrap: settings.bootstrap.length ? settings.bootstrap : null,
     lan: settings.lanDiscovery,
     privateRouting: settings.privateRouting,
-    cacheMaxGb: settings.cacheMaxGb
+    cacheMaxGb: settings.cacheMaxGb,
+    metaSources: Array.isArray(settings.metaSources) ? settings.metaSources : [],
+    p2pOnlyMetadata: Boolean(settings.p2pOnlyMetadata),
+    seedFullMetadata: Boolean(settings.seedFullMetadata)
   }
 }

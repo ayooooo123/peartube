@@ -597,12 +597,13 @@ object ExternalImageCache {
                 }
                 break
             }
-            val finalUrl = conn!!.url?.toString().orEmpty()
+            val activeConn = conn ?: return@withContext null
+            val finalUrl = activeConn.url?.toString().orEmpty()
             if (finalUrl.isNotEmpty()) {
                 if (!isAllowedUrl(finalUrl)) return@withContext null
                 if (failClosed && !isLoopbackUrl(finalUrl)) return@withContext null
             }
-            val bytes = conn.inputStream.use { input ->
+            val bytes = activeConn.inputStream.use { input ->
                 val out = ByteArrayOutputStream()
                 val buf = ByteArray(16 * 1024)
                 var total = 0

@@ -411,6 +411,16 @@ export async function createMeta (ctx) {
     return null
   }
 
+  async function listCards (metaKey) {
+    const src = requireSource(metaKey)
+    await applied(src.bee)
+    const out = []
+    for await (const n of src.bee.view.createReadStream({ gte: b4a.from('card/'), lt: b4a.from('card/\xff') })) {
+      try { out.push(decodeCard(n.value)) } catch (err) { void err }
+    }
+    return out
+  }
+
   async function publishSearchSnapshot (metaKey, opts = {}) {
     return buildAndPublishSnapshot(ctx, requireSource(metaKey), appendMeta, opts)
   }
@@ -490,7 +500,7 @@ export async function createMeta (ctx) {
   return {
     createChannel, addSource, removeSource, listSources, grantWriter, revokeWriter,
     putArt, putCard, putDetail, removeKey, publishSearchSnapshot,
-    getCard, getDetail, getArt, getList, searchIndex,
+    getCard, getDetail, getArt, getList, listCards, searchIndex,
     isP2pOnly: () => p2pOnly,
     setP2pOnly: on => { p2pOnly = Boolean(on); return p2pOnly },
     isSeedFull: () => globalSeedFull,

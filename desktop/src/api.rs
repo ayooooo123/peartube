@@ -200,6 +200,151 @@ impl ApiClient {
         }
     }
 
+    pub fn resolve_local_art_url(&self, path: &str) -> String {
+        let trimmed = path.trim();
+        if trimmed.is_empty() {
+            return String::new();
+        }
+        let lower = trimmed.to_ascii_lowercase();
+        if lower.starts_with("http://") || lower.starts_with("https://") {
+            return trimmed.to_string();
+        }
+        if trimmed.starts_with('/') {
+            format!("{}{trimmed}", self.base_url)
+        } else {
+            format!("{}/{trimmed}", self.base_url)
+        }
+    }
+
+    pub fn local_path_for(&self, url: &str) -> Option<String> {
+        let trimmed = url.trim();
+        if trimmed.starts_with("/v1/") {
+            return Some(trimmed.to_string());
+        }
+        if let Some(rest) = trimmed.strip_prefix(&self.base_url)
+            && rest.starts_with("/v1/")
+        {
+            return Some(rest.to_string());
+        }
+        None
+    }
+
+    fn get_optional_json<T: serde::de::DeserializeOwned>(&self, path: &str, label: &str) -> Result<Option<T>, String> {
+        let resp = self.request_raw("GET", path, None, DEFAULT_TIMEOUT, "application/json")?;
+        if resp.status == 404 || resp.status == 204 {
+            return Ok(None);
+        }
+        let val = parse_json_response(&resp)?;
+        if val.is_null() {
+            return Ok(None);
+        }
+        serde_json::from_value(val)
+            .map(Some)
+            .map_err(|e| format!("Parse {label}: {e}"))
+    }
+
+    // ---- P2P Metadata & Artwork endpoints (/v1/meta/*, /v1/art/*) ----
+
+    pub fn meta_card(&self, id: &str) -> Result<Option<MetaCard>, String> {
+        let clean = id.trim();
+        if clean.is_empty() {
+            return Ok(None);
+        }
+        let encoded = percent_encode_component(clean);
+        self.get_optional_json(&format!("/v1/meta/card/{encoded}"), "meta card")
+    }
+
+    pub fn meta_detail(&self, id: &str) -> Result<Option<MetaDetail>, String> {
+        let clean = id.trim();
+        if clean.is_empty() {
+            return Ok(None);
+        }
+        let encoded = percent_encode_component(clean);
+        self.get_optional_json(&format!("/v1/meta/detail/{encoded}"), "meta detail")
+    }
+
+    pub fn meta_list(&self, kind: &str, slug: &str) -> Result<Option<MetaList>, String> {
+        let k = kind.trim().to_ascii_lowercase();
+        let s = slug.trim().trim_matches('/').to_ascii_lowercase();
+        if k.is_empty() || s.is_empty() {
+            return Ok(None);
+        }
+        let enc_kind = percent_encode_component(&k);
+        let enc_slug = s
+            .split('/')
+            .filter(|seg| !seg.is_empty())
+            .map(percent_encode_component)
+            .collect::<Vec<_>>()
+            .join("/");
+        self.get_optional_json(&format!("/v1/meta/list/{enc_kind}/{enc_slug}"), "meta list")
+    }
+
+    pub fn meta_search(&self, kind: &str, query: &str, limit: u32) -> Result<Vec<MetaSearchHit>, String> {
+        let q = query.trim();
+        if q.is_empty() {
+            return Ok(Vec::new());
+        }
+        let lim = limit.clamp(1, 64);
+        let enc_kind = percent_encode_component(kind.trim());
+        let enc_q = percent_encode_component(q);
+        let path = format!("/v1/meta/search?kind={enc_kind}&q={enc_q}&limit={lim}");
+        let val = self.get(&path)?;
+        let hits = val.get("hits").cloned().unwrap_or(Value::Array(Vec::new()));
+        serde_json::from_value(hits).map_err(|e| format!("Parse meta search hits: {e}"))
+    }
+
+    pub fn meta_sources(&self) -> Result<MetaSourcesState, String> {
+        let val = self.get("/v1/meta/sources")?;
+        serde_json::from_value(val).map_err(|e| format!("Parse meta sources: {e}"))
+    }
+
+    pub fn add_meta_source(&self, uri_or_key: &str, alias: &str, seed_full: bool) -> Result<MetaSourcesState, String> {
+        let trimmed = uri_or_key.trim();
+        if trimmed.is_empty() {
+            return Err("Metadata URI or 64-hex key is required".into());
+        }
+        let mut map = serde_json::Map::new();
+        if trimmed.len() == 64 && trimmed.bytes().all(|b| b.is_ascii_hexdigit()) {
+            map.insert("key".into(), Value::String(trimmed.to_ascii_lowercase()));
+        } else {
+            map.insert("uri".into(), Value::String(trimmed.to_string()));
+        }
+        if !alias.trim().is_empty() {
+            map.insert("alias".into(), Value::String(alias.trim().to_string()));
+        }
+        map.insert("seedFull".into(), Value::Bool(seed_full));
+        let val = self.post("/v1/meta/sources", &Value::Object(map), DEFAULT_TIMEOUT)?;
+        serde_json::from_value(val).map_err(|e| format!("Parse add meta source reply: {e}"))
+    }
+
+    pub fn remove_meta_source(&self, key: &str) -> Result<MetaSourcesState, String> {
+        let clean = key.trim().to_ascii_lowercase();
+        let encoded = percent_encode_component(&clean);
+        let val = self.delete(&format!("/v1/meta/sources/{encoded}"))?;
+        if val.get("p2pOnlyMetadata").is_some() || val.get("seedFullMetadata").is_some() {
+            serde_json::from_value(val).map_err(|e| format!("Parse remove meta source reply: {e}"))
+        } else if let Ok(full) = self.meta_sources() {
+            Ok(full)
+        } else {
+            serde_json::from_value(val).map_err(|e| format!("Parse remove meta source reply: {e}"))
+        }
+    }
+
+    pub fn set_meta_toggles(&self, p2p_only: Option<bool>, seed_full: Option<bool>) -> Result<MetaSourcesState, String> {
+        let mut map = serde_json::Map::new();
+        if let Some(p2p) = p2p_only {
+            map.insert("p2pOnlyMetadata".into(), Value::Bool(p2p));
+        }
+        if let Some(seed) = seed_full {
+            map.insert("seedFullMetadata".into(), Value::Bool(seed));
+        }
+        if map.is_empty() {
+            return self.meta_sources();
+        }
+        let val = self.post("/v1/meta/sources", &Value::Object(map), DEFAULT_TIMEOUT)?;
+        serde_json::from_value(val).map_err(|e| format!("Parse meta toggles reply: {e}"))
+    }
+
     // ---- High-level typed endpoints ----
 
     pub fn identify(&self, url: &str) -> Result<IdentifyResult, String> {
@@ -674,6 +819,113 @@ pub fn extract_shared_url(input: &str) -> Option<String> {
 }
 
 // ---- Typed API models ----
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct MetaCard {
+    pub id: String,
+    pub kind: String,
+    pub title: String,
+    pub subtitle: String,
+    pub year: u32,
+    pub rating_x10: u32,
+    pub genres: Vec<String>,
+    pub runtime_min: u32,
+    pub thumb_hash: String,
+    pub poster_hash: String,
+    pub backdrop_hash: String,
+    pub poster_url: Option<String>,
+    pub backdrop_url: Option<String>,
+    pub updated_at: u64,
+    pub source: Option<String>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct MetaDetailItem {
+    pub label: String,
+    pub sub_id: String,
+    pub season: u32,
+    pub number: u32,
+    pub runtime_min: u32,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct MetaExternalId {
+    pub key: String,
+    pub value: String,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct MetaDetail {
+    pub id: String,
+    pub synopsis: String,
+    pub cast: Vec<String>,
+    pub directors: Vec<String>,
+    pub tags: Vec<String>,
+    pub backdrop_hash: String,
+    pub backdrop_url: Option<String>,
+    pub items: Vec<MetaDetailItem>,
+    pub external_ids: Vec<MetaExternalId>,
+    pub updated_at: u64,
+    pub source: Option<String>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct MetaList {
+    pub kind: String,
+    pub slug: String,
+    pub title: String,
+    pub ids: Vec<String>,
+    pub updated_at: u64,
+    pub cards: Vec<MetaCard>,
+    pub source: Option<String>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct MetaSearchHit {
+    pub id: String,
+    pub kind: String,
+    pub title: String,
+    pub subtitle: String,
+    pub year: u32,
+    pub score: u32,
+    pub thumb_hash: String,
+    pub poster_hash: String,
+    pub poster_url: Option<String>,
+    pub source: Option<String>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct MetaSourceInfo {
+    pub key: String,
+    pub uri: String,
+    pub alias: String,
+    pub writable: bool,
+    pub seed_full: bool,
+    pub active: bool,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct MetaSourcesState {
+    pub sources: Vec<MetaSourceInfo>,
+    pub p2p_only_metadata: bool,
+    pub seed_full_metadata: bool,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ResolvedVideoArt {
+    pub poster_url: Option<String>,
+    pub backdrop_url: Option<String>,
+    pub thumb_hash: Option<String>,
+    pub card: Option<MetaCard>,
+}
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
@@ -1932,22 +2184,134 @@ fn url_host_matches(url: &str, allowed_suffixes: &[&str]) -> bool {
         .any(|suffix| host == *suffix || host.ends_with(&format!(".{suffix}")))
 }
 
-pub fn imdb_poster_url(imdb: &str) -> Option<String> {
+fn normalize_imdb_parts(imdb: &str) -> Option<(String, String)> {
     let trimmed = imdb.trim();
-    if trimmed.starts_with("tt") && trimmed.len() >= 4 && trimmed[2..].bytes().all(|b| b.is_ascii_digit()) {
-        Some(format!("https://images.metahub.space/poster/medium/{trimmed}/img"))
+    let tt = trimmed
+        .strip_prefix("imdb:")
+        .or_else(|| trimmed.strip_prefix("IMDB:"))
+        .unwrap_or(trimmed);
+    let lower = tt.to_ascii_lowercase();
+    if lower.starts_with("tt") && lower.len() >= 4 && lower[2..].bytes().all(|b| b.is_ascii_digit()) {
+        let canonical = format!("imdb:{lower}");
+        Some((lower, canonical))
     } else {
         None
     }
 }
 
+pub fn imdb_poster_url(imdb: &str) -> Option<String> {
+    let (tt, _) = normalize_imdb_parts(imdb)?;
+    Some(format!("https://images.metahub.space/poster/medium/{tt}/img"))
+}
+
 pub fn imdb_backdrop_url(imdb: &str) -> Option<String> {
-    let trimmed = imdb.trim();
-    if trimmed.starts_with("tt") && trimmed.len() >= 4 && trimmed[2..].bytes().all(|b| b.is_ascii_digit()) {
-        Some(format!("https://images.metahub.space/background/medium/{trimmed}/img"))
-    } else {
-        None
+    let (tt, _) = normalize_imdb_parts(imdb)?;
+    Some(format!("https://images.metahub.space/background/medium/{tt}/img"))
+}
+
+/// Resolves video poster + backdrop URLs P2P-first through the local peer's `/v1/meta/card`
+/// (and `/v1/meta/detail` if backdrop is only on detail), falling back to Metahub ONLY when
+/// `!p2p_only`. When `p2p_only` (or Private Routing) is enabled, fails closed with zero clearnet URLs.
+pub fn resolve_video_art(imdb: &str, client: Option<&ApiClient>, p2p_only: bool) -> ResolvedVideoArt {
+    let Some((tt, canonical)) = normalize_imdb_parts(imdb) else {
+        return ResolvedVideoArt::default();
+    };
+    let mut poster_url: Option<String> = None;
+    let mut backdrop_url: Option<String> = None;
+    let mut thumb_hash: Option<String> = None;
+    let mut card_opt: Option<MetaCard> = None;
+
+    if let Some(c) = client {
+        if let Ok(Some(card)) = c.meta_card(&canonical) {
+            if !card.thumb_hash.trim().is_empty() {
+                thumb_hash = Some(card.thumb_hash.clone());
+            }
+            if let Some(p) = card.poster_url.as_deref().filter(|s| !s.trim().is_empty()) {
+                poster_url = Some(c.resolve_local_art_url(p));
+            }
+            if let Some(bg) = card.backdrop_url.as_deref().filter(|s| !s.trim().is_empty()) {
+                backdrop_url = Some(c.resolve_local_art_url(bg));
+            }
+            card_opt = Some(card);
+        }
+        if backdrop_url.is_none()
+            && let Ok(Some(detail)) = c.meta_detail(&canonical)
+            && let Some(bg) = detail.backdrop_url.as_deref().filter(|s| !s.trim().is_empty())
+        {
+            backdrop_url = Some(c.resolve_local_art_url(bg));
+        }
     }
+
+    if !p2p_only {
+        if poster_url.is_none() {
+            poster_url = imdb_poster_url(&tt);
+        }
+        if backdrop_url.is_none() {
+            backdrop_url = imdb_backdrop_url(&tt);
+        }
+    }
+
+    ResolvedVideoArt {
+        poster_url,
+        backdrop_url,
+        thumb_hash,
+        card: card_opt,
+    }
+}
+
+#[allow(dead_code)]
+pub fn resolve_video_poster_url(imdb: &str, client: Option<&ApiClient>, p2p_only: bool) -> Option<String> {
+    let (tt, canonical) = normalize_imdb_parts(imdb)?;
+    if let Some(c) = client
+        && let Ok(Some(card)) = c.meta_card(&canonical)
+        && let Some(p) = card.poster_url.as_deref().filter(|s| !s.trim().is_empty())
+    {
+        return Some(c.resolve_local_art_url(p));
+    }
+    if p2p_only {
+        None
+    } else {
+        imdb_poster_url(&tt)
+    }
+}
+
+#[allow(dead_code)]
+pub fn resolve_video_backdrop_url(imdb: &str, client: Option<&ApiClient>, p2p_only: bool) -> Option<String> {
+    let (tt, canonical) = normalize_imdb_parts(imdb)?;
+    if let Some(c) = client {
+        if let Ok(Some(card)) = c.meta_card(&canonical)
+            && let Some(bg) = card.backdrop_url.as_deref().filter(|s| !s.trim().is_empty())
+        {
+            return Some(c.resolve_local_art_url(bg));
+        }
+        if let Ok(Some(detail)) = c.meta_detail(&canonical)
+            && let Some(bg) = detail.backdrop_url.as_deref().filter(|s| !s.trim().is_empty())
+        {
+            return Some(c.resolve_local_art_url(bg));
+        }
+    }
+    if p2p_only {
+        None
+    } else {
+        imdb_backdrop_url(&tt)
+    }
+}
+
+/// Fetches artwork bytes from local P2P `/v1/art/*` (always permitted) or clearnet HTTPS
+/// (blocked when `p2p_only` is true).
+pub fn fetch_art_bytes(url: &str, client: Option<&ApiClient>, p2p_only: bool) -> Result<Vec<u8>, String> {
+    if let Some(c) = client
+        && let Some(local_path) = c.local_path_for(url)
+    {
+        return c.get_bytes(&local_path);
+    }
+    if url.trim().starts_with("/v1/") {
+        return Err("Local peer API unavailable for artwork request".into());
+    }
+    if p2p_only {
+        return Err("Clearnet artwork blocked in P2P-only metadata mode".into());
+    }
+    fetch_external_image_bytes(url)
 }
 
 pub fn is_allowed_image_url(url: &str) -> bool {
@@ -2319,6 +2683,19 @@ fn creator_dedup_key(c: &CreatorSuggestion) -> String {
     }
 }
 
+/// P2P-aware wrapper for creator typeahead: fails closed (zero clearnet YouTube calls)
+/// when `p2p_only` / Private Routing is enabled.
+pub fn search_creators_typeahead_with_policy(
+    query: &str,
+    _client: Option<&ApiClient>,
+    p2p_only: bool,
+) -> Vec<CreatorSuggestion> {
+    if p2p_only {
+        return Vec::new();
+    }
+    search_creators_typeahead(query)
+}
+
 /// Live YouTube channel typeahead: checks exact `@handle` plus YouTube channel search (`sp=EgIQAg%3D%3D`).
 pub fn search_creators_typeahead(query: &str) -> Vec<CreatorSuggestion> {
     let trimmed = query.trim();
@@ -2612,6 +2989,144 @@ fn fetch_itunes_search(term: &str, artist_term: bool, limit: usize) -> Result<Ve
     Ok(parse_itunes_rows(&val))
 }
 
+fn music_discover_from_p2p(
+    mood: &str,
+    query: &str,
+    client: &ApiClient,
+) -> Option<MusicDiscoverResult> {
+    let mut artists = Vec::new();
+    let mut seen_artists = HashSet::new();
+    let mut albums = Vec::new();
+    let mut seen_albums = HashSet::new();
+
+    if !query.is_empty() {
+        if let Ok(hits) = client.meta_search("album", query, 12) {
+            for hit in hits {
+                let art_url = hit
+                    .poster_url
+                    .as_deref()
+                    .map(|p| client.resolve_local_art_url(p))
+                    .unwrap_or_default();
+                let artist = hit.subtitle.trim().to_string();
+                let alb_key = format!("{}::{}", artist.to_ascii_lowercase(), hit.title.to_ascii_lowercase());
+                if !hit.title.is_empty() && seen_albums.insert(alb_key) {
+                    albums.push(SuggestedAlbum {
+                        title: hit.title,
+                        artist: artist.clone(),
+                        year: if hit.year > 0 { hit.year.to_string() } else { String::new() },
+                        art_url: art_url.clone(),
+                    });
+                }
+                if !artist.is_empty() && seen_artists.insert(artist.to_ascii_lowercase()) {
+                    artists.push(SuggestedArtist {
+                        name: artist,
+                        genre: "P2P Catalog".to_string(),
+                        art_url,
+                    });
+                }
+            }
+        }
+        if let Ok(hits) = client.meta_search("artist", query, 8) {
+            for hit in hits {
+                if !hit.title.is_empty() && seen_artists.insert(hit.title.to_ascii_lowercase()) {
+                    let art_url = hit
+                        .poster_url
+                        .as_deref()
+                        .map(|p| client.resolve_local_art_url(p))
+                        .unwrap_or_default();
+                    artists.push(SuggestedArtist {
+                        name: hit.title,
+                        genre: if hit.subtitle.is_empty() {
+                            "P2P Catalog".to_string()
+                        } else {
+                            hit.subtitle
+                        },
+                        art_url,
+                    });
+                }
+            }
+        }
+    } else {
+        let list = match client.meta_list("album", mood) {
+            Ok(Some(list)) if !list.cards.is_empty() => Some(list),
+            Ok(_) if !mood.eq_ignore_ascii_case("featured") => client
+                .meta_list("album", "featured")
+                .ok()
+                .flatten()
+                .filter(|l| !l.cards.is_empty()),
+            _ => None,
+        };
+        if let Some(list) = list {
+            for card in list.cards {
+                let art_url = card
+                    .poster_url
+                    .as_deref()
+                    .map(|p| client.resolve_local_art_url(p))
+                    .unwrap_or_default();
+                let artist = card.subtitle.trim().to_string();
+                let genre = card.genres.first().cloned().unwrap_or_else(|| "Music".to_string());
+                let alb_key = format!("{}::{}", artist.to_ascii_lowercase(), card.title.to_ascii_lowercase());
+                if !card.title.is_empty() && seen_albums.insert(alb_key) {
+                    albums.push(SuggestedAlbum {
+                        title: card.title,
+                        artist: artist.clone(),
+                        year: if card.year > 0 { card.year.to_string() } else { String::new() },
+                        art_url: art_url.clone(),
+                    });
+                }
+                if !artist.is_empty() && seen_artists.insert(artist.to_ascii_lowercase()) {
+                    artists.push(SuggestedArtist {
+                        name: artist,
+                        genre,
+                        art_url,
+                    });
+                }
+            }
+        }
+    }
+
+    if artists.is_empty() && albums.is_empty() {
+        return None;
+    }
+    Some(MusicDiscoverResult {
+        mood: mood.to_string(),
+        query: query.to_string(),
+        artists,
+        songs: Vec::new(),
+        albums,
+        error: None,
+    })
+}
+
+/// P2P-first music discovery: checks subscribed local P2P metadata channels before falling back
+/// to clearnet iTunes Search. Fails closed (zero clearnet requests) when `p2p_only` is true.
+pub fn fetch_music_discover_with_policy(
+    mood: &str,
+    query: &str,
+    seed_artists: &[String],
+    client: Option<&ApiClient>,
+    p2p_only: bool,
+) -> MusicDiscoverResult {
+    let clean_mood = if mood.trim().is_empty() { "featured" } else { mood.trim() };
+    let clean_query = query.trim();
+    if let Some(c) = client
+        && let Some(p2p_res) = music_discover_from_p2p(clean_mood, clean_query, c)
+    {
+        return p2p_res;
+    }
+    if p2p_only {
+        return MusicDiscoverResult {
+            mood: clean_mood.to_string(),
+            query: clean_query.to_string(),
+            artists: Vec::new(),
+            songs: Vec::new(),
+            albums: Vec::new(),
+            error: Some("Clearnet music discovery is disabled in P2P-only / Private Routing mode.".into()),
+        };
+    }
+    fetch_music_discover(clean_mood, clean_query, seed_artists)
+}
+
 /// Live Apple iTunes Search API music discovery with mood seeds, library artist seeds, or freeform query.
 pub fn fetch_music_discover(mood: &str, query: &str, seed_artists: &[String]) -> MusicDiscoverResult {
     let clean_mood = if mood.trim().is_empty() { "featured" } else { mood.trim() };
@@ -2678,6 +3193,14 @@ pub fn fetch_music_discover(mood: &str, query: &str, seed_artists: &[String]) ->
         guard.insert(cache_key, (Instant::now(), result.clone()));
     }
     result
+}
+
+/// P2P-aware wrapper for external 30-second audio previews: fails closed when `p2p_only` is true.
+pub fn download_preview_m4a_with_policy(url: &str, id: &str, p2p_only: bool) -> Result<PathBuf, String> {
+    if p2p_only {
+        return Err("External audio previews are disabled in P2P-only / Private Routing mode.".into());
+    }
+    download_preview_m4a(url, id)
 }
 
 /// Downloads an allowlisted 30-second `.m4a` preview to a temporary file for native `/usr/bin/afplay`.
@@ -3430,5 +3953,366 @@ mod tests {
         assert_eq!(assembled.songs[0].duration_secs, 562);
         assert_eq!(assembled.albums.len(), 1);
         assert_eq!(assembled.albums[0].year, "1959");
+    }
+
+    fn spawn_mock_meta_server(
+        routes: Vec<(String, String, u16, &'static str, Vec<u8>)>,
+    ) -> (String, std::thread::JoinHandle<Vec<(String, String, String)>>) {
+        use std::net::TcpListener;
+
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind loopback mock");
+        let port = listener.local_addr().expect("local addr").port();
+        let expected = routes.len();
+        let handle = std::thread::spawn(move || {
+            let mut seen = Vec::with_capacity(expected);
+            for (want_method, want_path, status, content_type, resp_body) in routes {
+                let (mut stream, _) = listener.accept().expect("accept");
+                let _ = stream.set_read_timeout(Some(Duration::from_secs(3)));
+                let mut buf = [0u8; 8192];
+                let n = stream.read(&mut buf).expect("read request");
+                let raw = String::from_utf8_lossy(&buf[..n]).into_owned();
+                let mut parts = raw.splitn(2, "\r\n\r\n");
+                let head = parts.next().unwrap_or("");
+                let req_body = parts.next().unwrap_or("").to_string();
+                let first_line = head.lines().next().unwrap_or("");
+                let mut toks = first_line.split_whitespace();
+                let method = toks.next().unwrap_or("").to_string();
+                let path = toks.next().unwrap_or("").to_string();
+                assert_eq!(method, want_method, "unexpected HTTP method for {path}");
+                assert_eq!(path, want_path, "unexpected HTTP path");
+                seen.push((method, path, req_body));
+
+                let reason = match status {
+                    200 => "OK",
+                    404 => "Not Found",
+                    _ => "Error",
+                };
+                let resp_head = format!(
+                    "HTTP/1.1 {status} {reason}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                    resp_body.len()
+                );
+                stream.write_all(resp_head.as_bytes()).expect("write head");
+                stream.write_all(&resp_body).expect("write body");
+                let _ = stream.flush();
+            }
+            seen
+        });
+        (format!("http://127.0.0.1:{port}"), handle)
+    }
+
+    #[test]
+    fn meta_client_endpoints_against_loopback_mock_server() {
+        let key = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+        let poster_hash = "4444444444444444444444444444444444444444444444444444444444444444";
+        let backdrop_hash = "5555555555555555555555555555555555555555555555555555555555555555";
+        let card_json = serde_json::to_vec(&json!({
+            "id": "imdb:tt0133093",
+            "kind": "movie",
+            "title": "The Matrix",
+            "subtitle": "Welcome to the Real World",
+            "year": 1999,
+            "ratingX10": 87,
+            "genres": ["Action", "Sci-Fi"],
+            "runtimeMin": 136,
+            "thumbHash": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGA==",
+            "posterHash": poster_hash,
+            "backdropHash": backdrop_hash,
+            "posterUrl": format!("/v1/art/{poster_hash}"),
+            "backdropUrl": format!("/v1/art/{backdrop_hash}"),
+            "updatedAt": 1735689600123u64,
+            "source": key
+        }))
+        .unwrap();
+        let detail_json = serde_json::to_vec(&json!({
+            "id": "imdb:tt0903747",
+            "synopsis": "A chemistry teacher...",
+            "cast": ["Bryan Cranston"],
+            "directors": ["Vince Gilligan"],
+            "tags": ["crime"],
+            "backdropHash": backdrop_hash,
+            "backdropUrl": format!("/v1/art/{backdrop_hash}"),
+            "items": [{ "label": "Pilot", "subId": "imdb:tt0903747:s01e01", "season": 1, "number": 1, "runtimeMin": 58 }],
+            "externalIds": [{ "key": "tmdb", "value": "1396" }],
+            "updatedAt": 1735689600789u64,
+            "source": key
+        }))
+        .unwrap();
+        let list_json = serde_json::to_vec(&json!({
+            "kind": "movie",
+            "slug": "popular/sci-fi",
+            "title": "Popular Sci-Fi",
+            "ids": ["imdb:tt0133093"],
+            "updatedAt": 1735689601000u64,
+            "cards": [serde_json::from_slice::<Value>(&card_json).unwrap()],
+            "source": key
+        }))
+        .unwrap();
+        let search_json = serde_json::to_vec(&json!({
+            "hits": [{
+                "id": "imdb:tt0133093",
+                "kind": "movie",
+                "title": "The Matrix",
+                "subtitle": "Action, Sci-Fi",
+                "year": 1999,
+                "score": 980,
+                "thumbHash": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGA==",
+                "posterHash": poster_hash,
+                "posterUrl": format!("/v1/art/{poster_hash}"),
+                "source": key
+            }],
+            "source": key
+        }))
+        .unwrap();
+        let sources_empty = serde_json::to_vec(&json!({
+            "sources": [],
+            "p2pOnlyMetadata": false,
+            "seedFullMetadata": false
+        }))
+        .unwrap();
+        let sources_added = serde_json::to_vec(&json!({
+            "source": {
+                "key": key,
+                "uri": format!("peartube://meta/{key}?name=Lumen"),
+                "alias": "Lumen",
+                "writable": false,
+                "seedFull": true,
+                "active": true
+            },
+            "sources": [{
+                "key": key,
+                "uri": format!("peartube://meta/{key}?name=Lumen"),
+                "alias": "Lumen",
+                "writable": false,
+                "seedFull": true,
+                "active": true
+            }],
+            "p2pOnlyMetadata": false,
+            "seedFullMetadata": false
+        }))
+        .unwrap();
+        let sources_toggled = serde_json::to_vec(&json!({
+            "sources": [{
+                "key": key,
+                "uri": format!("peartube://meta/{key}?name=Lumen"),
+                "alias": "Lumen",
+                "writable": false,
+                "seedFull": true,
+                "active": true
+            }],
+            "p2pOnlyMetadata": true,
+            "seedFullMetadata": true
+        }))
+        .unwrap();
+        let sources_removed = serde_json::to_vec(&json!({
+            "removed": true,
+            "sources": []
+        }))
+        .unwrap();
+        let sources_after_remove = serde_json::to_vec(&json!({
+            "sources": [],
+            "p2pOnlyMetadata": true,
+            "seedFullMetadata": true
+        }))
+        .unwrap();
+
+        let (base_url, server) = spawn_mock_meta_server(vec![
+            ("GET".into(), "/v1/meta/card/imdb%3Att0133093".into(), 200, "application/json", card_json),
+            ("GET".into(), "/v1/meta/card/imdb%3Att9999999".into(), 404, "application/json", br#"{"error":"not found"}"#.to_vec()),
+            ("GET".into(), "/v1/meta/detail/imdb%3Att0903747".into(), 200, "application/json", detail_json),
+            ("GET".into(), "/v1/meta/list/movie/popular/sci-fi".into(), 200, "application/json", list_json),
+            ("GET".into(), "/v1/meta/search?kind=movie&q=matrix&limit=10".into(), 200, "application/json", search_json),
+            ("GET".into(), "/v1/meta/sources".into(), 200, "application/json", sources_empty),
+            ("POST".into(), "/v1/meta/sources".into(), 200, "application/json", sources_added),
+            ("POST".into(), "/v1/meta/sources".into(), 200, "application/json", sources_toggled),
+            ("DELETE".into(), format!("/v1/meta/sources/{key}"), 200, "application/json", sources_removed),
+            ("GET".into(), "/v1/meta/sources".into(), 200, "application/json", sources_after_remove),
+        ]);
+
+        let client = ApiClient::new(&base_url);
+        let card = client.meta_card("imdb:tt0133093").expect("card").expect("some card");
+        assert_eq!(card.title, "The Matrix");
+        assert_eq!(card.year, 1999);
+        assert_eq!(
+            client.resolve_local_art_url(card.poster_url.as_deref().unwrap()),
+            format!("{base_url}/v1/art/{poster_hash}")
+        );
+
+        assert_eq!(client.meta_card("imdb:tt9999999").expect("404 -> None"), None);
+
+        let detail = client.meta_detail("imdb:tt0903747").expect("detail").expect("some detail");
+        assert_eq!(detail.items.len(), 1);
+        assert_eq!(detail.items[0].label, "Pilot");
+        assert_eq!(detail.external_ids[0].key, "tmdb");
+
+        let list = client.meta_list("movie", "popular/sci-fi").expect("list").expect("some list");
+        assert_eq!(list.title, "Popular Sci-Fi");
+        assert_eq!(list.cards.len(), 1);
+
+        let hits = client.meta_search("movie", "matrix", 10).expect("search");
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].title, "The Matrix");
+
+        let st0 = client.meta_sources().expect("sources");
+        assert!(st0.sources.is_empty());
+
+        let st1 = client
+            .add_meta_source(&format!("peartube://meta/{key}?name=Lumen"), "Lumen", true)
+            .expect("add source");
+        assert_eq!(st1.sources.len(), 1);
+        assert_eq!(st1.sources[0].alias, "Lumen");
+
+        let st2 = client.set_meta_toggles(Some(true), Some(true)).expect("toggles");
+        assert!(st2.p2p_only_metadata);
+        assert!(st2.seed_full_metadata);
+
+        let st3 = client.remove_meta_source(key).expect("remove source");
+        assert!(st3.sources.is_empty());
+        assert!(st3.p2p_only_metadata);
+
+        let seen = server.join().expect("mock server thread");
+        assert_eq!(seen.len(), 10);
+    }
+
+    #[test]
+    fn p2p_first_and_fail_closed_routing_blocks_clearnet_when_enabled() {
+        let poster_hash = "4444444444444444444444444444444444444444444444444444444444444444";
+        let art_bytes = b"RIFF\x10\x00\x00\x00WEBPVP8 ".to_vec();
+        let card_json = serde_json::to_vec(&json!({
+            "id": "imdb:tt0133093",
+            "kind": "movie",
+            "title": "The Matrix",
+            "posterHash": poster_hash,
+            "posterUrl": format!("/v1/art/{poster_hash}"),
+            "backdropUrl": null
+        }))
+        .unwrap();
+        let album_list_json = serde_json::to_vec(&json!({
+            "kind": "album",
+            "slug": "jazz",
+            "title": "Jazz",
+            "ids": ["mb:1"],
+            "cards": [{
+                "id": "mb:1",
+                "kind": "album",
+                "title": "Kind of Blue",
+                "subtitle": "Miles Davis",
+                "year": 1959,
+                "genres": ["Jazz"],
+                "posterHash": poster_hash,
+                "posterUrl": format!("/v1/art/{poster_hash}")
+            }]
+        }))
+        .unwrap();
+
+        let (base_url, server) = spawn_mock_meta_server(vec![
+            // 1. P2P hit for tt0133093 even with p2p_only=true
+            ("GET".into(), "/v1/meta/card/imdb%3Att0133093".into(), 200, "application/json", card_json),
+            // 2. Local art bytes fetch for the returned /v1/art/<hash>
+            ("GET".into(), format!("/v1/art/{poster_hash}"), 200, "image/webp", art_bytes.clone()),
+            // 3. P2P miss for tt9999999 with p2p_only=true -> fails closed (None)
+            ("GET".into(), "/v1/meta/card/imdb%3Att9999999".into(), 404, "application/json", br#"{"error":"not found"}"#.to_vec()),
+            // 4. P2P miss for tt9999999 with p2p_only=false -> falls back to Metahub URL
+            ("GET".into(), "/v1/meta/card/imdb%3Att9999999".into(), 404, "application/json", br#"{"error":"not found"}"#.to_vec()),
+            // 5. P2P music list hit served under p2p_only=true
+            ("GET".into(), "/v1/meta/list/album/jazz".into(), 200, "application/json", album_list_json),
+            // 6. P2P music list miss under p2p_only=true -> falls back to album/featured, then fails closed without clearnet iTunes call
+            ("GET".into(), "/v1/meta/list/album/ambient".into(), 404, "application/json", br#"{"error":"not found"}"#.to_vec()),
+            ("GET".into(), "/v1/meta/list/album/featured".into(), 404, "application/json", br#"{"error":"not found"}"#.to_vec()),
+        ]);
+        let client = ApiClient::new(&base_url);
+
+        // P2P-first hit resolves to loopback /v1/art/<hash> and downloads bytes even in p2p_only mode.
+        let p2p_poster = resolve_video_poster_url("tt0133093", Some(&client), true)
+            .expect("p2p poster url");
+        assert_eq!(p2p_poster, format!("{base_url}/v1/art/{poster_hash}"));
+        let fetched = fetch_art_bytes(&p2p_poster, Some(&client), true).expect("local art bytes");
+        assert_eq!(fetched, art_bytes);
+
+        // Fail-closed: P2P miss + p2p_only=true -> None (no Metahub URL!)
+        assert_eq!(resolve_video_poster_url("tt9999999", Some(&client), true), None);
+        assert_eq!(resolve_video_backdrop_url("tt9999999", None, true), None);
+
+        // Fail-closed: direct clearnet art/typeahead/preview calls are refused without network IO.
+        assert!(fetch_art_bytes("https://images.metahub.space/poster/medium/tt0133093/img", Some(&client), true).is_err());
+        assert!(search_creators_typeahead_with_policy("veritasium", Some(&client), true).is_empty());
+        assert!(download_preview_m4a_with_policy("https://a1.mzstatic.com/preview.m4a", "1", true).is_err());
+
+        // Fallback when p2p_only=false: P2P miss falls back to Metahub.
+        assert_eq!(
+            resolve_video_poster_url("tt9999999", Some(&client), false).as_deref(),
+            Some("https://images.metahub.space/poster/medium/tt9999999/img")
+        );
+
+        // Music discover P2P-first hit & fail-closed miss.
+        let jazz = fetch_music_discover_with_policy("jazz", "", &[], Some(&client), true);
+        assert_eq!(jazz.albums.len(), 1);
+        assert_eq!(jazz.albums[0].title, "Kind of Blue");
+        assert_eq!(jazz.albums[0].art_url, format!("{base_url}/v1/art/{poster_hash}"));
+
+        let ambient = fetch_music_discover_with_policy("ambient", "", &[], Some(&client), true);
+        assert!(ambient.albums.is_empty());
+        assert!(ambient.error.as_deref().unwrap_or("").contains("P2P-only"));
+
+        let seen = server.join().expect("mock server thread");
+        assert_eq!(seen.len(), 7);
+    }
+
+    #[test]
+    fn music_discover_p2p_non_featured_mood_falls_back_to_album_featured() {
+        let poster_hash = "5555555555555555555555555555555555555555555555555555555555555555";
+        let empty_list_json = serde_json::to_vec(&json!({
+            "kind": "album",
+            "slug": "chill",
+            "title": "Chill",
+            "ids": [],
+            "cards": []
+        }))
+        .unwrap();
+        let featured_list_json = serde_json::to_vec(&json!({
+            "kind": "album",
+            "slug": "featured",
+            "title": "Featured Albums",
+            "ids": ["mb:featured-1"],
+            "cards": [{
+                "id": "mb:featured-1",
+                "kind": "album",
+                "title": "Discovery",
+                "subtitle": "Daft Punk",
+                "year": 2001,
+                "genres": ["Electronic"],
+                "posterHash": poster_hash,
+                "posterUrl": format!("/v1/art/{poster_hash}")
+            }]
+        }))
+        .unwrap();
+
+        let (base_url, server) = spawn_mock_meta_server(vec![
+            // Case 1: 404 (Ok(None)) for album/ambient -> falls back to album/featured
+            ("GET".into(), "/v1/meta/list/album/ambient".into(), 404, "application/json", br#"{"error":"not found"}"#.to_vec()),
+            ("GET".into(), "/v1/meta/list/album/featured".into(), 200, "application/json", featured_list_json.clone()),
+            // Case 2: 200 with empty cards for album/chill -> falls back to album/featured
+            ("GET".into(), "/v1/meta/list/album/chill".into(), 200, "application/json", empty_list_json),
+            ("GET".into(), "/v1/meta/list/album/featured".into(), 200, "application/json", featured_list_json),
+        ]);
+        let client = ApiClient::new(&base_url);
+
+        let ambient = fetch_music_discover_with_policy("ambient", "", &[], Some(&client), true);
+        assert_eq!(ambient.mood, "ambient");
+        assert_eq!(ambient.error, None);
+        assert_eq!(ambient.albums.len(), 1);
+        assert_eq!(ambient.albums[0].title, "Discovery");
+        assert_eq!(ambient.albums[0].artist, "Daft Punk");
+        assert_eq!(ambient.albums[0].art_url, format!("{base_url}/v1/art/{poster_hash}"));
+        assert_eq!(ambient.artists.len(), 1);
+        assert_eq!(ambient.artists[0].name, "Daft Punk");
+
+        let chill = fetch_music_discover_with_policy("chill", "", &[], Some(&client), true);
+        assert_eq!(chill.mood, "chill");
+        assert_eq!(chill.error, None);
+        assert_eq!(chill.albums.len(), 1);
+        assert_eq!(chill.albums[0].title, "Discovery");
+
+        let seen = server.join().expect("mock server thread");
+        assert_eq!(seen.len(), 4);
     }
 }

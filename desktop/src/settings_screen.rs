@@ -14,7 +14,7 @@ use peartube::soundfont;
 use peartube::worker::worker;
 use serde_json::json;
 
-use crate::api::run_blocking;
+use crate::api::{MetaSourceInfo, run_blocking};
 use crate::app::{PearTube, Screen};
 use crate::list::{column, format_bytes};
 use crate::theme::{ACCENT, CARD, DANGER, DIM, LINE};
@@ -33,11 +33,59 @@ pub struct SettingsForm {
     slsk_busy: bool,
     slsk_notice: Option<SharedString>,
     slsk_error: Option<SharedString>,
+    meta_sources: Vec<MetaSourceInfo>,
+    meta_input: Entity<InputState>,
+    p2p_only_metadata: bool,
+    seed_full_metadata: bool,
+    meta_busy: bool,
+    meta_notice: Option<SharedString>,
+    meta_error: Option<SharedString>,
     lan: bool,
     private_routing: bool,
     cache_max_gb: u32,
     advanced_open: bool,
     error: Option<SharedString>,
+}
+
+fn meta_info_from_saved(raw: &str) -> MetaSourceInfo {
+    let trimmed = raw.trim();
+    let lower = trimmed.to_ascii_lowercase();
+    let key = if let Some(rest) = lower.strip_prefix("peartube://meta/") {
+        rest.split(['?', '#', '/']).next().unwrap_or("").to_string()
+    } else if trimmed.len() == 64 && trimmed.bytes().all(|b| b.is_ascii_hexdigit()) {
+        lower
+    } else {
+        trimmed.to_string()
+    };
+    let uri = if trimmed.to_ascii_lowercase().starts_with("peartube://meta/") {
+        trimmed.to_string()
+    } else if key.len() == 64 {
+        format!("peartube://meta/{key}")
+    } else {
+        trimmed.to_string()
+    };
+    MetaSourceInfo {
+        key,
+        uri,
+        alias: String::new(),
+        writable: false,
+        seed_full: false,
+        active: true,
+    }
+}
+
+fn saved_meta_uris(sources: &[MetaSourceInfo]) -> Vec<String> {
+    sources
+        .iter()
+        .filter_map(|s| {
+            let v = if !s.uri.trim().is_empty() {
+                s.uri.trim()
+            } else {
+                s.key.trim()
+            };
+            (!v.is_empty()).then(|| v.to_string())
+        })
+        .collect()
 }
 
 impl SettingsForm {
@@ -47,6 +95,7 @@ impl SettingsForm {
 
     pub fn new(settings: &Settings, window: &mut Window, cx: &mut Context<PearTube>) -> Self {
         let advanced_open = !settings.relay_through.is_empty() || !settings.bootstrap.is_empty() || settings.private_routing;
+        let meta_sources = settings.meta_sources.iter().map(|s| meta_info_from_saved(s)).collect();
         SettingsForm {
             tracker: cx.new(|cx| InputState::new(window, cx).placeholder("Paste a 64-character channel key or peartube://channel/…").default_value(settings.tracker.clone())),
             mnemonic: cx.new(|cx| InputState::new(window, cx).placeholder("12-word recovery phrase to link your channel on this Mac…").default_value(settings.mnemonic.clone())),
@@ -61,6 +110,13 @@ impl SettingsForm {
             slsk_busy: false,
             slsk_notice: None,
             slsk_error: None,
+            meta_sources,
+            meta_input: cx.new(|cx| InputState::new(window, cx).placeholder("Paste peartube://meta/… link or 64-hex key")),
+            p2p_only_metadata: settings.p2p_only_metadata,
+            seed_full_metadata: settings.seed_full_metadata,
+            meta_busy: false,
+            meta_notice: None,
+            meta_error: None,
             lan: settings.lan_discovery,
             private_routing: settings.private_routing,
             cache_max_gb: settings.cache_max_gb,
@@ -231,6 +287,7 @@ impl PearTube {
                                     ),
                             ))
                         })
+                        .when(!first_run, |this| this.child(self.render_meta_card(form, cx)))
                         .child(card_section(
                             "Storage Contribution",
                             "How much playback cache this Mac keeps to help the network. Applies immediately; the film you are watching always keeps a window around the playhead.",
@@ -352,6 +409,9 @@ impl PearTube {
         let lan_discovery = form.lan;
         let private_routing = form.private_routing;
         let cache_max_gb = form.cache_max_gb;
+        let meta_sources = saved_meta_uris(&form.meta_sources);
+        let p2p_only_metadata = form.p2p_only_metadata;
+        let seed_full_metadata = form.seed_full_metadata;
 
         let raw = json!({
             "tracker": tracker,
@@ -362,6 +422,9 @@ impl PearTube {
             "lanDiscovery": lan_discovery,
             "privateRouting": private_routing,
             "cacheMaxGb": cache_max_gb,
+            "metaSources": meta_sources,
+            "p2pOnlyMetadata": p2p_only_metadata,
+            "seedFullMetadata": seed_full_metadata,
         });
 
         cx.spawn(async move |this, cx| {
@@ -499,6 +562,343 @@ impl PearTube {
                         Err(err) => {
                             form.slsk_error = Some(err.into());
                             form.slsk_notice = None;
+                        }
+                    }
+                    cx.notify();
+                }
+            });
+        })
+        .detach();
+    }
+
+    fn render_meta_card(&self, form: &SettingsForm, cx: &mut Context<Self>) -> Div {
+        let enforced_by_private = form.private_routing || self.settings.private_routing;
+        let p2p_checked = form.p2p_only_metadata || enforced_by_private;
+        let sources = form.meta_sources.clone();
+        let busy = form.meta_busy;
+
+        card_section(
+            "P2P Metadata & Artwork",
+            "Subscribe to peer-to-peer metadata catalogs for posters, backdrops, synopses, and search without clearnet trackers.",
+            v_flex()
+                .gap_3()
+                .when_some(form.meta_error.clone(), |t, err| t.child(inline_error(err)))
+                .when_some(form.meta_notice.clone(), |t, msg| {
+                    t.child(div().text_xs().text_color(rgb(ACCENT)).child(msg))
+                })
+                .child(if sources.is_empty() {
+                    div()
+                        .text_xs()
+                        .text_color(rgb(DIM))
+                        .child("No P2P metadata sources configured.")
+                        .into_any_element()
+                } else {
+                    v_flex()
+                        .gap_2()
+                        .children(sources.into_iter().enumerate().map(|(idx, src)| {
+                            let label = if !src.alias.trim().is_empty() {
+                                src.alias.clone()
+                            } else {
+                                format!("Catalog {}", idx + 1)
+                            };
+                            let display_uri = if !src.uri.is_empty() {
+                                src.uri.clone()
+                            } else {
+                                format!("peartube://meta/{}", src.key)
+                            };
+                            let key_for_rm = src.key.clone();
+                            h_flex()
+                                .items_center()
+                                .justify_between()
+                                .gap_2()
+                                .px_3()
+                                .py_2()
+                                .rounded(px(10.))
+                                .border_1()
+                                .border_color(rgb(LINE))
+                                .child(
+                                    v_flex()
+                                        .min_w_0()
+                                        .flex_1()
+                                        .gap_0p5()
+                                        .child(div().text_xs().font_weight(FontWeight::MEDIUM).child(label))
+                                        .child(
+                                            div()
+                                                .text_xs()
+                                                .text_color(rgb(DIM))
+                                                .truncate()
+                                                .child(display_uri),
+                                        ),
+                                )
+                                .child(
+                                    Button::new(SharedString::from(format!("remove-meta-source-{idx}")))
+                                        .ghost()
+                                        .small()
+                                        .disabled(busy)
+                                        .label("Remove")
+                                        .on_click(cx.listener(move |this, _, window, cx| {
+                                            this.remove_meta_source(key_for_rm.clone(), window, cx);
+                                        })),
+                                )
+                        }))
+                        .into_any_element()
+                })
+                .child(
+                    h_flex()
+                        .gap_2()
+                        .items_center()
+                        .child(div().flex_1().child(Input::new(&form.meta_input).cleanable(true)))
+                        .child(
+                            Button::new("add-meta-source")
+                                .small()
+                                .primary()
+                                .disabled(busy)
+                                .label(if busy { "Working…" } else { "Add" })
+                                .on_click(cx.listener(|this, _, window, cx| {
+                                    this.add_meta_source(window, cx);
+                                })),
+                        ),
+                )
+                .child(
+                    v_flex()
+                        .gap_1()
+                        .child(
+                            Checkbox::new("p2p-only-metadata")
+                                .checked(p2p_checked)
+                                .disabled(enforced_by_private)
+                                .label("P2P-only metadata")
+                                .on_click(cx.listener(|this, checked: &bool, window, cx| {
+                                    this.update_meta_toggles(Some(*checked), None, window, cx);
+                                })),
+                        )
+                        .child(div().text_xs().text_color(rgb(DIM)).child(if enforced_by_private {
+                            "Blocks all clearnet Cinemeta and Metahub lookups. Automatically enforced while 2-Hop Private Guard Circuits are enabled."
+                        } else {
+                            "Blocks all clearnet Cinemeta, Metahub, and external metadata lookups. Also enforced automatically under Private Routing."
+                        })),
+                )
+                .child(
+                    v_flex()
+                        .gap_1()
+                        .child(
+                            Checkbox::new("seed-full-metadata")
+                                .checked(form.seed_full_metadata)
+                                .label("Seed full metadata catalog")
+                                .on_click(cx.listener(|this, checked: &bool, window, cx| {
+                                    this.update_meta_toggles(None, Some(*checked), window, cx);
+                                })),
+                        )
+                        .child(
+                            div()
+                                .text_xs()
+                                .text_color(rgb(DIM))
+                                .child("Opt in to mirror full metadata and artwork shards for your subscribed catalogs."),
+                        ),
+                ),
+        )
+    }
+
+    pub fn load_meta_sources(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+        self.refresh_meta_sources(cx);
+    }
+
+    pub fn refresh_meta_sources(&mut self, cx: &mut Context<Self>) {
+        let Some(client) = self.api_client() else {
+            return;
+        };
+        cx.spawn(async move |this, cx| {
+            let res = run_blocking(move || client.meta_sources()).await;
+            let Ok(Ok(state)) = res else {
+                return;
+            };
+            let _ = this.update(cx, |this, cx| {
+                if let Screen::Settings(form) = &mut this.screen {
+                    form.meta_sources = state.sources;
+                    if !this.settings.private_routing {
+                        form.p2p_only_metadata = state.p2p_only_metadata;
+                    }
+                    form.seed_full_metadata = state.seed_full_metadata;
+                    cx.notify();
+                }
+            });
+        })
+        .detach();
+    }
+
+    pub fn add_meta_source(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(client) = self.api_client() else {
+            if let Screen::Settings(form) = &mut self.screen {
+                form.meta_error = Some("Local engine is still starting — wait a moment and try again.".into());
+                cx.notify();
+            }
+            return;
+        };
+        let (raw, seed_full) = {
+            let Screen::Settings(form) = &mut self.screen else {
+                return;
+            };
+            let raw = form.meta_input.read(cx).value().trim().to_string();
+            if raw.is_empty() {
+                form.meta_error = Some("Enter a peartube://meta/… link or 64-hex key.".into());
+                form.meta_notice = None;
+                cx.notify();
+                return;
+            }
+            form.meta_busy = true;
+            form.meta_error = None;
+            form.meta_notice = None;
+            (raw, form.seed_full_metadata)
+        };
+        cx.notify();
+
+        cx.spawn_in(window, async move |this, cx| {
+            let res = run_blocking(move || client.add_meta_source(&raw, "", seed_full)).await;
+            let outcome = match res {
+                Ok(inner) => inner,
+                Err(err) => Err(err),
+            };
+            let _ = this.update_in(cx, |this, window, cx| {
+                if let Screen::Settings(form) = &mut this.screen {
+                    form.meta_busy = false;
+                    match outcome {
+                        Ok(state) => {
+                            form.meta_sources = state.sources.clone();
+                            form.seed_full_metadata = state.seed_full_metadata;
+                            if !this.settings.private_routing {
+                                form.p2p_only_metadata = state.p2p_only_metadata;
+                            }
+                            form.meta_input
+                                .update(cx, |inp, cx| inp.set_value("", window, cx));
+                            form.meta_error = None;
+                            form.meta_notice = Some("Metadata source added.".into());
+                            this.settings.meta_sources = saved_meta_uris(&state.sources);
+                            this.settings.seed_full_metadata = state.seed_full_metadata;
+                            if let Err(err) = this.settings.save() {
+                                form.meta_error = Some(err.into());
+                            }
+                            this.clear_failed_thumbs_and_prefetch(cx);
+                        }
+                        Err(err) => {
+                            form.meta_error = Some(err.into());
+                            form.meta_notice = None;
+                        }
+                    }
+                    cx.notify();
+                }
+            });
+        })
+        .detach();
+    }
+
+    pub fn remove_meta_source(&mut self, key: String, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(client) = self.api_client() else {
+            if let Screen::Settings(form) = &mut self.screen {
+                form.meta_error = Some("Local engine is still starting — wait a moment and try again.".into());
+                cx.notify();
+            }
+            return;
+        };
+        if let Screen::Settings(form) = &mut self.screen {
+            form.meta_busy = true;
+            form.meta_error = None;
+            form.meta_notice = None;
+        }
+        cx.notify();
+
+        cx.spawn_in(window, async move |this, cx| {
+            let res = run_blocking(move || client.remove_meta_source(&key)).await;
+            let outcome = match res {
+                Ok(inner) => inner,
+                Err(err) => Err(err),
+            };
+            let _ = this.update_in(cx, |this, _window, cx| {
+                if let Screen::Settings(form) = &mut this.screen {
+                    form.meta_busy = false;
+                    match outcome {
+                        Ok(state) => {
+                            form.meta_sources = state.sources.clone();
+                            form.meta_error = None;
+                            form.meta_notice = Some("Metadata source removed.".into());
+                            this.settings.meta_sources = saved_meta_uris(&state.sources);
+                            if let Err(err) = this.settings.save() {
+                                form.meta_error = Some(err.into());
+                            }
+                        }
+                        Err(err) => {
+                            form.meta_error = Some(err.into());
+                            form.meta_notice = None;
+                        }
+                    }
+                    cx.notify();
+                }
+            });
+        })
+        .detach();
+    }
+
+    pub fn update_meta_toggles(
+        &mut self,
+        p2p_only: Option<bool>,
+        seed_full: Option<bool>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if let Screen::Settings(form) = &mut self.screen {
+            if let Some(p) = p2p_only {
+                form.p2p_only_metadata = p;
+                self.settings.p2p_only_metadata = p;
+            }
+            if let Some(s) = seed_full {
+                form.seed_full_metadata = s;
+                self.settings.seed_full_metadata = s;
+            }
+            form.meta_error = None;
+            form.meta_notice = None;
+            if let Err(err) = self.settings.save() {
+                form.meta_error = Some(err.into());
+            }
+        }
+        if p2p_only == Some(false) {
+            self.clear_failed_thumbs_and_prefetch(cx);
+        }
+        cx.notify();
+
+        let Some(client) = self.api_client() else {
+            return;
+        };
+        if let Screen::Settings(form) = &mut self.screen {
+            form.meta_busy = true;
+        }
+        cx.spawn_in(window, async move |this, cx| {
+            let res = run_blocking(move || client.set_meta_toggles(p2p_only, seed_full)).await;
+            let outcome = match res {
+                Ok(inner) => inner,
+                Err(err) => Err(err),
+            };
+            let _ = this.update_in(cx, |this, _window, cx| {
+                if let Screen::Settings(form) = &mut this.screen {
+                    form.meta_busy = false;
+                    match outcome {
+                        Ok(state) => {
+                            form.meta_sources = state.sources.clone();
+                            form.seed_full_metadata = state.seed_full_metadata;
+                            if !this.settings.private_routing {
+                                form.p2p_only_metadata = state.p2p_only_metadata;
+                            }
+                            this.settings.meta_sources = saved_meta_uris(&state.sources);
+                            this.settings.seed_full_metadata = state.seed_full_metadata;
+                            if !this.settings.private_routing {
+                                this.settings.p2p_only_metadata = state.p2p_only_metadata;
+                            }
+                            if let Err(err) = this.settings.save() {
+                                form.meta_error = Some(err.into());
+                            } else {
+                                form.meta_notice = Some("Metadata settings saved.".into());
+                            }
+                        }
+                        Err(err) => {
+                            form.meta_error = Some(err.into());
+                            form.meta_notice = None;
                         }
                     }
                     cx.notify();

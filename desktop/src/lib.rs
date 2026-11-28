@@ -7,4 +7,6 @@ pub mod playback;
 pub mod settings;
 #[forbid(unsafe_code)]
 pub mod soundfont;
+#[forbid(unsafe_code)]
+pub mod thumbhash;
 pub mod worker;

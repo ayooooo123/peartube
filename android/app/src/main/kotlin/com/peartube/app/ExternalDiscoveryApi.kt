@@ -422,11 +422,19 @@ fun extractImdbId(raw: String?): String? {
 
 fun imdbPosterUrl(imdb: String?): String? {
     val tt = extractImdbId(imdb) ?: return null
+    ExternalDiscoveryApi.cachedImdbPosterUrl(tt)?.let { return it }
+    if (ExternalDiscoveryApi.isFailClosed()) {
+        return ExternalDiscoveryApi.localLegacyArtUrl(tt, isBackdrop = false)
+    }
     return "https://images.metahub.space/poster/medium/$tt/img"
 }
 
 fun imdbBackdropUrl(imdb: String?): String? {
     val tt = extractImdbId(imdb) ?: return null
+    ExternalDiscoveryApi.cachedImdbBackdropUrl(tt)?.let { return it }
+    if (ExternalDiscoveryApi.isFailClosed()) {
+        return ExternalDiscoveryApi.localLegacyArtUrl(tt, isBackdrop = true)
+    }
     return "https://images.metahub.space/background/medium/$tt/img"
 }
 
@@ -466,31 +474,53 @@ object ExternalImageCache {
 
     internal fun diskDirectory(): File? = diskCacheDir
 
+    fun isLoopbackUrl(rawUrl: String): Boolean {
+        val trimmed = rawUrl.trim()
+        if (!trimmed.startsWith("http://", ignoreCase = true) && !trimmed.startsWith("https://", ignoreCase = true)) {
+            return false
+        }
+        val host = runCatching { URI(trimmed).host?.lowercase(Locale.ROOT) }.getOrNull() ?: return false
+        return host == "127.0.0.1" || host == "localhost" || host == "::1" || host == "[::1]"
+    }
+
     fun isAllowedUrl(rawUrl: String): Boolean {
         val trimmed = rawUrl.trim()
+        if (isLoopbackUrl(trimmed)) {
+            val path = runCatching { URI(trimmed).rawPath.orEmpty() }.getOrDefault("")
+            return path.startsWith("/v1/art/") ||
+                path.startsWith("/v1/poster/") ||
+                path.startsWith("/v1/backdrop/") ||
+                path.startsWith("/v1/discover/thumb/") ||
+                path.startsWith("/v1/providers/")
+        }
         if (!trimmed.startsWith("https://", ignoreCase = true)) return false
         val host = runCatching { URI(trimmed).host?.lowercase(Locale.ROOT) }.getOrNull() ?: return false
         return allowedDomains.any { domain -> host == domain || host.endsWith(".$domain") }
     }
 
-    fun get(url: String): ImageBitmap? = synchronized(cache) { cache.get(url) }
+    fun get(url: String): ImageBitmap? = runCatching { synchronized(cache) { cache.get(url) } }.getOrNull()
 
-    fun getCachedBitmap(url: String): Bitmap? = synchronized(bitmapCache) { bitmapCache.get(url) }
+    fun getCachedBitmap(url: String): Bitmap? = runCatching { synchronized(bitmapCache) { bitmapCache.get(url) } }.getOrNull()
+
+    internal fun clearNegativeCache() {
+        failedUrls.clear()
+    }
 
     fun put(url: String, bitmap: ImageBitmap) {
-        synchronized(cache) { cache.put(url, bitmap) }
+        runCatching { synchronized(cache) { cache.put(url, bitmap) } }
     }
 
     private fun putAndroidBitmap(url: String, bmp: Bitmap): ImageBitmap {
         val img = bmp.asImageBitmap()
-        synchronized(bitmapCache) { bitmapCache.put(url, bmp) }
-        synchronized(cache) { cache.put(url, img) }
+        runCatching { synchronized(bitmapCache) { bitmapCache.put(url, bmp) } }
+        runCatching { synchronized(cache) { cache.put(url, img) } }
         return img
     }
 
     suspend fun load(rawUrl: String): ImageBitmap? {
         val url = normalizeImageUrl(rawUrl)
         if (!isAllowedUrl(url)) return null
+        if (ExternalDiscoveryApi.isFailClosed() && !isLoopbackUrl(url)) return null
         get(url)?.let { return it }
         val bmp = loadBitmap(url) ?: return null
         return get(url) ?: putAndroidBitmap(url, bmp)
@@ -499,6 +529,8 @@ object ExternalImageCache {
     suspend fun loadBitmap(rawUrl: String): Bitmap? = withContext(Dispatchers.IO) {
         val url = normalizeImageUrl(rawUrl)
         if (!isAllowedUrl(url)) return@withContext null
+        val failClosed = ExternalDiscoveryApi.isFailClosed()
+        if (failClosed && !isLoopbackUrl(url)) return@withContext null
         getCachedBitmap(url)?.let { return@withContext it }
 
         val failedAt = failedUrls[url]
@@ -518,22 +550,58 @@ object ExternalImageCache {
             }
         }
 
-        // Network fetch
+        // Network fetch with explicit hop-by-hop redirect enforcement
+        var currentUrl = url
         var conn: HttpURLConnection? = null
         try {
-            conn = (URL(url).openConnection() as HttpURLConnection).apply {
-                requestMethod = "GET"
-                connectTimeout = 5_000
-                readTimeout = 8_000
-                instanceFollowRedirects = true
-                setRequestProperty("Accept", "image/*")
+            var redirects = 0
+            while (true) {
+                if (!isAllowedUrl(currentUrl)) return@withContext null
+                if (failClosed && !isLoopbackUrl(currentUrl)) return@withContext null
+                conn?.let { runCatching { it.disconnect() } }
+                conn = (URL(currentUrl).openConnection() as HttpURLConnection).apply {
+                    requestMethod = "GET"
+                    connectTimeout = 5_000
+                    readTimeout = 8_000
+                    instanceFollowRedirects = false
+                    setRequestProperty("Accept", "image/*")
+                }
+                val code = conn.responseCode
+                if (code in 300..399) {
+                    val location = conn.getHeaderField("Location")?.trim().orEmpty()
+                    if (location.isEmpty() || redirects >= 3) {
+                        failedUrls[url] = System.currentTimeMillis()
+                        return@withContext null
+                    }
+                    val resolvedNext = runCatching { URL(URL(currentUrl), location).toString() }.getOrNull()
+                    if (resolvedNext.isNullOrBlank()) {
+                        failedUrls[url] = System.currentTimeMillis()
+                        return@withContext null
+                    }
+                    val nextUrl = normalizeImageUrl(resolvedNext)
+                    if (failClosed && !isLoopbackUrl(nextUrl)) {
+                        failedUrls[url] = System.currentTimeMillis()
+                        return@withContext null
+                    }
+                    if (!isAllowedUrl(nextUrl)) {
+                        failedUrls[url] = System.currentTimeMillis()
+                        return@withContext null
+                    }
+                    currentUrl = nextUrl
+                    redirects++
+                    continue
+                }
+                if (code !in 200..299) {
+                    failedUrls[url] = System.currentTimeMillis()
+                    return@withContext null
+                }
+                break
             }
-            if (conn.responseCode !in 200..299) {
-                failedUrls[url] = System.currentTimeMillis()
-                return@withContext null
+            val finalUrl = conn!!.url?.toString().orEmpty()
+            if (finalUrl.isNotEmpty()) {
+                if (!isAllowedUrl(finalUrl)) return@withContext null
+                if (failClosed && !isLoopbackUrl(finalUrl)) return@withContext null
             }
-            val finalUrl = conn.url?.toString().orEmpty()
-            if (finalUrl.isNotEmpty() && !isAllowedUrl(finalUrl)) return@withContext null
             val bytes = conn.inputStream.use { input ->
                 val out = ByteArrayOutputStream()
                 val buf = ByteArray(16 * 1024)
@@ -636,6 +704,9 @@ object ExternalDiscoveryApi {
     private val trackAlbumMetaCache = ConcurrentHashMap<String, Pair<Long, ResolvedTrackAlbumMeta>>()
     private val titleImdbCache = ConcurrentHashMap<String, String>()
     private val titleMetaCache = ConcurrentHashMap<String, CinemaTitleMeta>()
+    private val imdbPosterUrlCache = ConcurrentHashMap<String, String>()
+    private val imdbBackdropUrlCache = ConcurrentHashMap<String, String>()
+    private val imdbP2pMissCache = ConcurrentHashMap<String, Long>()
     private val cinemaDiscoverCache = ConcurrentHashMap<String, CinemaDiscoverData>()
     private val externalVideosCache = ConcurrentHashMap<String, Pair<Long, List<ExternalVideoPick>>>()
     private val resolvedAudioCache = ConcurrentHashMap<String, Pair<Long, ResolvedAudioStream>>()
@@ -649,12 +720,143 @@ object ExternalDiscoveryApi {
     private val DURATION_MMSS_RE = Regex("^\\d{1,2}:\\d{2}(?::\\d{2})?$")
     @Volatile private var cachedVisitorData: Pair<Long, String>? = null
     @Volatile private var cachedFeaturedCreators: List<CreatorSuggestion>? = null
+    @Volatile private var localApiBaseUrl: String? = null
+    @Volatile private var failClosedMeta: Boolean = false
+    @Volatile internal var clearnetRequestHook: ((String) -> Unit)? = null
+    private val _localMetaEpoch = MutableStateFlow(0)
+    val localMetaEpoch: StateFlow<Int> = _localMetaEpoch.asStateFlow()
+    private val localMetaClient = LoopbackApi { localApiBaseUrl }
     private const val CINEMA_DISCOVER_DISK_TTL_MS = 30 * 60_000L
     private const val EXTERNAL_VIDEOS_TTL_MS = 15 * 60_000L
     private const val RESOLVED_AUDIO_TTL_MS = 30 * 60_000L
     private const val RADIO_NEXT_TTL_MS = 15 * 60_000L
     private const val YTM_CACHE_TTL_MS = 15 * 60_000L
     private const val VISITOR_DATA_TTL_MS = 15 * 60_000L
+    private const val P2P_MISS_TTL_MS = 2 * 60_000L
+
+    /**
+     * Thread-safe runtime configuration for P2P-first metadata & fail-closed privacy mode.
+     * Updated by [AppModel] whenever the loopback API URL, Private Routing, or P2P-only toggle changes.
+     */
+    fun configureLocalMeta(apiBaseUrl: String?, failClosed: Boolean) {
+        val normalized = apiBaseUrl?.trim()?.trimEnd('/')?.takeIf { it.isNotEmpty() }
+        val changed = localApiBaseUrl != normalized || failClosedMeta != failClosed
+        localApiBaseUrl = normalized
+        failClosedMeta = failClosed
+        if (changed) {
+            titleMetaCache.clear()
+            cinemaDiscoverCache.clear()
+            titleImdbCache.clear()
+            imdbPosterUrlCache.clear()
+            imdbBackdropUrlCache.clear()
+            imdbP2pMissCache.clear()
+            albumArtNegativeCache.clear()
+            ytmSearchCache.clear()
+            ytmArtistCache.clear()
+            ytmAlbumCache.clear()
+            trackAlbumMetaCache.clear()
+            ExternalImageCache.clearNegativeCache()
+            _localMetaEpoch.value = _localMetaEpoch.value + 1
+        }
+    }
+
+    fun isFailClosed(): Boolean = failClosedMeta
+
+    fun currentLocalApiBaseUrl(): String? = localApiBaseUrl
+
+    fun cachedImdbPosterUrl(tt: String): String? = imdbPosterUrlCache[tt]?.takeIf { it.isNotEmpty() }
+
+    fun cachedImdbBackdropUrl(tt: String): String? = imdbBackdropUrlCache[tt]?.takeIf { it.isNotEmpty() }
+
+    internal fun localLegacyArtUrl(tt: String, isBackdrop: Boolean): String? {
+        val base = localApiBaseUrl ?: return null
+        val kind = if (isBackdrop) "backdrop" else "poster"
+        return "$base/v1/$kind/$tt"
+    }
+
+    private fun resolveLocalArtUrl(rawPath: String?, hashFallback: String = ""): String {
+        val base = localApiBaseUrl ?: return ""
+        val path = rawPath?.trim().orEmpty().ifBlank {
+            if (hashFallback.length == 64) "/v1/art/$hashFallback" else ""
+        }
+        if (path.isEmpty()) return ""
+        return resolveLoopbackThumbUrl(base, path).orEmpty()
+    }
+
+    private fun rememberCardArtAndThumb(card: MetaCard, posterUrl: String, backdropUrl: String) {
+        val tt = extractImdbId(card.id)
+        if (tt != null) {
+            if (posterUrl.isNotBlank()) imdbPosterUrlCache[tt] = posterUrl
+            if (backdropUrl.isNotBlank()) imdbBackdropUrlCache[tt] = backdropUrl
+        }
+        if (card.thumbHash.isNotBlank()) {
+            ThumbHash.rememberThumbHash(card.id, card.thumbHash)
+            if (tt != null) {
+                ThumbHash.rememberThumbHash("imdb:$tt", card.thumbHash)
+                ThumbHash.rememberThumbHash(tt, card.thumbHash)
+            }
+            if (posterUrl.isNotBlank()) ThumbHash.rememberThumbHash(posterUrl, card.thumbHash)
+            if (backdropUrl.isNotBlank()) ThumbHash.rememberThumbHash(backdropUrl, card.thumbHash)
+        }
+    }
+
+    /**
+     * Resolves an IMDb poster URL P2P-first (populating cached ThumbHash + local `/v1/art/:hash`),
+     * honoring fail-closed privacy mode.
+     */
+    suspend fun resolveImdbPosterUrl(imdb: String?): String? = withContext(Dispatchers.IO) {
+        val tt = extractImdbId(imdb) ?: return@withContext null
+        imdbPosterUrlCache[tt]?.takeIf { it.isNotEmpty() }?.let { return@withContext it }
+        if (localApiBaseUrl != null) {
+            val missedAt = imdbP2pMissCache[tt]
+            if (missedAt == null || System.currentTimeMillis() - missedAt >= P2P_MISS_TTL_MS) {
+                val card = localMetaClient.getMetaCard("imdb:$tt")
+                if (card != null) {
+                    val posterUrl = resolveLocalArtUrl(card.posterUrl, card.posterHash)
+                    val backdropUrl = resolveLocalArtUrl(card.backdropUrl, card.backdropHash)
+                    rememberCardArtAndThumb(card, posterUrl, backdropUrl)
+                    imdbP2pMissCache.remove(tt)
+                    if (posterUrl.isNotBlank()) return@withContext posterUrl
+                } else {
+                    imdbP2pMissCache[tt] = System.currentTimeMillis()
+                }
+            }
+        }
+        if (failClosedMeta) return@withContext null
+        "https://images.metahub.space/poster/medium/$tt/img"
+    }
+
+    /**
+     * Resolves an IMDb backdrop & poster fallback URL P2P-first (populating cached ThumbHash + local `/v1/art/:hash`),
+     * honoring fail-closed privacy mode.
+     */
+    suspend fun resolveImdbArtUrls(imdb: String?): Pair<String?, String?> = withContext(Dispatchers.IO) {
+        val tt = extractImdbId(imdb) ?: return@withContext (null to null)
+        val cachedBackdrop = imdbBackdropUrlCache[tt]?.takeIf { it.isNotEmpty() }
+        val cachedPoster = imdbPosterUrlCache[tt]?.takeIf { it.isNotEmpty() }
+        if (cachedBackdrop != null || cachedPoster != null) {
+            return@withContext (cachedBackdrop to cachedPoster)
+        }
+        if (localApiBaseUrl != null) {
+            val missedAt = imdbP2pMissCache[tt]
+            if (missedAt == null || System.currentTimeMillis() - missedAt >= P2P_MISS_TTL_MS) {
+                val card = localMetaClient.getMetaCard("imdb:$tt")
+                if (card != null) {
+                    val posterUrl = resolveLocalArtUrl(card.posterUrl, card.posterHash)
+                    val backdropUrl = resolveLocalArtUrl(card.backdropUrl, card.backdropHash)
+                    rememberCardArtAndThumb(card, posterUrl, backdropUrl)
+                    imdbP2pMissCache.remove(tt)
+                    if (backdropUrl.isNotBlank() || posterUrl.isNotBlank()) {
+                        return@withContext (backdropUrl.ifBlank { null } to posterUrl.ifBlank { null })
+                    }
+                } else {
+                    imdbP2pMissCache[tt] = System.currentTimeMillis()
+                }
+            }
+        }
+        if (failClosedMeta) return@withContext (null to null)
+        "https://images.metahub.space/background/medium/$tt/img" to "https://images.metahub.space/poster/medium/$tt/img"
+    }
 
     fun cachedTitleImdb(title: String, isSeries: Boolean): String? {
         val key = titleImdbCacheKey(title, isSeries) ?: return null
@@ -673,6 +875,31 @@ object ExternalDiscoveryApi {
         titleImdbCache[key]?.let { cached ->
             return@withContext cached.takeIf { it.isNotEmpty() }
         }
+        val kind = if (isSeries) "series" else "movie"
+
+        // Step 1: P2P metadata search first
+        if (localApiBaseUrl != null) {
+            val hits = localMetaClient.searchMeta(kind = kind, query = cleanTitle, limit = 8)
+            val targetFold = fold(cleanTitle)
+            val best = hits.firstOrNull { extractImdbId(it.id) != null && fold(it.title) == targetFold }
+                ?: hits.firstOrNull { extractImdbId(it.id) != null }
+            val tt = best?.let { extractImdbId(it.id) }
+            if (tt != null) {
+                val posterUrl = resolveLocalArtUrl(best.posterUrl, best.posterHash)
+                if (posterUrl.isNotBlank()) imdbPosterUrlCache[tt] = posterUrl
+                if (best.thumbHash.isNotBlank()) {
+                    ThumbHash.rememberThumbHash("imdb:$tt", best.thumbHash)
+                    ThumbHash.rememberThumbHash(tt, best.thumbHash)
+                    if (posterUrl.isNotBlank()) ThumbHash.rememberThumbHash(posterUrl, best.thumbHash)
+                }
+                titleImdbCache[key] = tt
+                return@withContext tt
+            }
+        }
+
+        // Step 2: Fail closed when Private Routing or P2P-only metadata is active
+        if (failClosedMeta) return@withContext null
+
         val diskDir = ExternalImageCache.diskDirectory()
         val idFile = diskDir?.let { File(it, "imdb_${ExternalImageCache.sha256Hex(key)}.id") }
         if (idFile != null && idFile.isFile) {
@@ -682,7 +909,6 @@ object ExternalDiscoveryApi {
                 return@withContext saved.takeIf { it.isNotEmpty() }
             }
         }
-        val kind = if (isSeries) "series" else "movie"
         val encoded = URLEncoder.encode(cleanTitle, "UTF-8").replace("+", "%20")
         val body = httpGetText(
             url = "https://v3-cinemeta.strem.io/catalog/$kind/top/search=$encoded.json",
@@ -706,6 +932,62 @@ object ExternalDiscoveryApi {
         val cacheKey = "$kind:$tt"
         titleMetaCache[cacheKey]?.let { return@withContext it }
 
+        // Step 1: Query local P2P metadata card & detail first
+        if (localApiBaseUrl != null) {
+            val canonicalId = "imdb:$tt"
+            val (card, detail) = coroutineScope {
+                val c = async { localMetaClient.getMetaCard(canonicalId) }
+                val d = async { localMetaClient.getMetaDetail(canonicalId) }
+                c.await() to d.await()
+            }
+            if (card != null || detail != null) {
+                val posterUrl = resolveLocalArtUrl(card?.posterUrl, card?.posterHash.orEmpty())
+                    .ifBlank { if (failClosedMeta) "" else "https://images.metahub.space/poster/medium/$tt/img" }
+                val backdropUrl = resolveLocalArtUrl(detail?.backdropUrl ?: card?.backdropUrl, detail?.backdropHash?.ifBlank { card?.backdropHash.orEmpty() } ?: card?.backdropHash.orEmpty())
+                    .ifBlank { if (failClosedMeta) "" else "https://images.metahub.space/background/medium/$tt/img" }
+                if (card != null) {
+                    rememberCardArtAndThumb(card, posterUrl, backdropUrl)
+                } else if (backdropUrl.isNotBlank()) {
+                    imdbBackdropUrlCache[tt] = backdropUrl
+                }
+                val episodes = LinkedHashMap<Pair<Int, Int>, CinemaEpisodeMeta>()
+                for (item in detail?.items.orEmpty()) {
+                    val s = item.season ?: continue
+                    val e = item.number ?: continue
+                    if (s <= 0 || e <= 0) continue
+                    episodes[s to e] = CinemaEpisodeMeta(
+                        season = s,
+                        episode = e,
+                        name = item.label,
+                        overview = "",
+                        thumbnailUrl = if (failClosedMeta) "" else "https://episodes.metahub.space/$tt/$s/$e/w780.jpg",
+                    )
+                }
+                val rating = card?.ratingX10?.let { "%.1f".format(Locale.ROOT, it / 10.0) }.orEmpty()
+                val runtime = card?.runtimeMin?.let { formatCinemaRuntime("$it min") }.orEmpty()
+                val meta = CinemaTitleMeta(
+                    imdbId = tt,
+                    kind = card?.kind?.takeIf { it.isNotBlank() } ?: kind,
+                    title = card?.title.orEmpty(),
+                    year = card?.year?.toString().orEmpty(),
+                    rating = rating,
+                    runtime = runtime,
+                    genres = card?.genres.orEmpty(),
+                    description = detail?.synopsis?.ifBlank { card?.subtitle.orEmpty() } ?: card?.subtitle.orEmpty(),
+                    cast = detail?.cast.orEmpty(),
+                    posterUrl = posterUrl,
+                    backdropUrl = backdropUrl,
+                    episodes = episodes,
+                )
+                titleMetaCache[cacheKey] = meta
+                return@withContext meta
+            }
+        }
+
+        // Step 2: Privacy fail-closed — zero clearnet Cinemeta/Metahub calls
+        if (failClosedMeta) return@withContext null
+
+        // Step 3: Clearnet fallback (disk cache + Cinemeta)
         val diskDir = ExternalImageCache.diskDirectory()
         val metaFile = diskDir?.let { File(it, "meta_${kind}_${tt}.json") }
         if (metaFile != null && metaFile.isFile && metaFile.length() > 0L) {
@@ -737,10 +1019,77 @@ object ExternalDiscoveryApi {
         parsed
     }
 
+    private fun cinemaGenreToSlugs(genre: String): List<String> {
+        val lower = genre.trim().lowercase(Locale.ROOT)
+        return when (lower) {
+            "", "popular" -> listOf("popular", "top")
+            "top rated", "top-rated" -> listOf("top-rated", "top_rated")
+            else -> {
+                val slug = lower.replace(Regex("[^a-z0-9]+"), "-").trim('-')
+                if (slug.isEmpty()) listOf("popular") else listOf("genre/$slug", slug, "popular/$slug")
+            }
+        }
+    }
+
+    private suspend fun fetchLocalMetaListForSlugs(kind: String, slugs: List<String>): MetaList? {
+        for (slug in slugs) {
+            val list = localMetaClient.getMetaList(kind, slug)
+            if (list != null && list.cards.isNotEmpty()) return list
+        }
+        return null
+    }
+
+    private fun metaCardToCinemaDiscoverItem(card: MetaCard, fallbackKind: String): CinemaDiscoverItem {
+        val tt = extractImdbId(card.id) ?: card.id
+        val posterUrl = resolveLocalArtUrl(card.posterUrl, card.posterHash)
+            .ifBlank { if (failClosedMeta || !tt.startsWith("tt")) "" else "https://images.metahub.space/poster/medium/$tt/img" }
+        val backdropUrl = resolveLocalArtUrl(card.backdropUrl, card.backdropHash)
+            .ifBlank { if (failClosedMeta || !tt.startsWith("tt")) "" else "https://images.metahub.space/background/medium/$tt/img" }
+        rememberCardArtAndThumb(card, posterUrl, backdropUrl)
+        return CinemaDiscoverItem(
+            imdbId = tt,
+            kind = card.kind.ifBlank { fallbackKind },
+            title = card.title,
+            year = card.year?.toString().orEmpty(),
+            rating = card.ratingX10?.let { "%.1f".format(Locale.ROOT, it / 10.0) }.orEmpty(),
+            runtime = card.runtimeMin?.let { formatCinemaRuntime("$it min") }.orEmpty(),
+            genres = card.genres,
+            description = card.subtitle,
+            posterUrl = posterUrl,
+            backdropUrl = backdropUrl,
+            cast = emptyList(),
+        )
+    }
+
     suspend fun discoverCinema(genre: String = "Popular"): CinemaDiscoverData = withContext(Dispatchers.IO) {
         val normGenre = genre.trim().ifBlank { "Popular" }
         cinemaDiscoverCache[normGenre]?.let { return@withContext it }
 
+        // Step 1: Query local P2P metadata lists first
+        if (localApiBaseUrl != null) {
+            val slugs = cinemaGenreToSlugs(normGenre)
+            val (movieList, seriesList) = coroutineScope {
+                val m = async { fetchLocalMetaListForSlugs("movie", slugs) }
+                val s = async { fetchLocalMetaListForSlugs("series", slugs) }
+                m.await() to s.await()
+            }
+            val p2pMovies = movieList?.cards.orEmpty()
+                .filter { it.title.isNotBlank() }
+                .map { metaCardToCinemaDiscoverItem(it, "movie") }
+            val p2pSeries = seriesList?.cards.orEmpty()
+                .filter { it.title.isNotBlank() }
+                .map { metaCardToCinemaDiscoverItem(it, "series") }
+            if (p2pMovies.isNotEmpty() || p2pSeries.isNotEmpty()) {
+                val data = CinemaDiscoverData(genre = normGenre, movies = p2pMovies, series = p2pSeries)
+                cinemaDiscoverCache[normGenre] = data
+                return@withContext data
+            }
+        }
+
+        // Step 2: Fail closed with zero clearnet calls
+        if (failClosedMeta) return@withContext CinemaDiscoverData(genre = normGenre)
+
+        // Step 3: Clearnet fallback (disk cache + Cinemeta catalog)
         val diskDir = ExternalImageCache.diskDirectory()
         val diskKey = ExternalImageCache.sha256Hex(normGenre.lowercase(Locale.ROOT))
         val movieFile = diskDir?.let { File(it, "cinema_movie_${diskKey}.json") }
@@ -806,6 +1155,7 @@ object ExternalDiscoveryApi {
     }
 
     suspend fun fetchFeaturedCreators(): List<CreatorSuggestion> = withContext(Dispatchers.IO) {
+        if (failClosedMeta) return@withContext emptyList()
         cachedFeaturedCreators?.let { return@withContext it }
         val resolved = coroutineScope {
             FEATURED_CREATORS.map { fallback ->
@@ -841,6 +1191,7 @@ object ExternalDiscoveryApi {
     }
 
     suspend fun discoverYouTubeVideos(topic: String = "Featured"): List<ExternalVideoPick> = withContext(Dispatchers.IO) {
+        if (failClosedMeta) return@withContext emptyList()
         val normTopic = topic.trim().ifBlank { "Featured" }
         val cacheKey = normTopic.lowercase(Locale.ROOT)
         val now = System.currentTimeMillis()
@@ -880,6 +1231,7 @@ object ExternalDiscoveryApi {
     }
 
     suspend fun resolveYouTubeAudioStream(videoId: String): ResolvedAudioStream? = withContext(Dispatchers.IO) {
+        if (failClosedMeta) return@withContext null
         val cleanId = videoId.trim()
         if (cleanId.isEmpty()) return@withContext null
         val now = System.currentTimeMillis()
@@ -992,6 +1344,7 @@ object ExternalDiscoveryApi {
     }
 
     suspend fun resolveFullSongStream(artist: String, title: String): ResolvedAudioStream? = withContext(Dispatchers.IO) {
+        if (failClosedMeta) return@withContext null
         val cleanArtist = artist.trim()
         val cleanTitle = title.trim()
         if (cleanArtist.isEmpty() && cleanTitle.isEmpty()) return@withContext null
@@ -1023,6 +1376,7 @@ object ExternalDiscoveryApi {
         excludeVideoIds: Set<String> = emptySet(),
         limit: Int = 14,
     ): List<RadioTrackSuggestion> = withContext(Dispatchers.IO) {
+        if (failClosedMeta) return@withContext emptyList()
         val seedId = seedVideoId?.trim()?.takeIf { it.length == 11 } ?: run {
             val baseQuery = listOf(artist.trim(), title.trim()).filter { it.isNotEmpty() }.joinToString(" ")
             if (baseQuery.length < 2) return@withContext emptyList()
@@ -1230,6 +1584,39 @@ object ExternalDiscoveryApi {
         trackAlbumMetaCache[cacheKey]?.let { (ts, cached) ->
             if (now - ts < YTM_CACHE_TTL_MS) return@withContext cached
         }
+
+        // Step 1: Query local P2P metadata first whenever loopback API is configured
+        if (localApiBaseUrl != null) {
+            val term = listOf(extractPrimaryArtist(cleanArtist), cleanTitle)
+                .filter { it.isNotBlank() }
+                .joinToString(" ")
+            if (term.length >= 2) {
+                val hits = localMetaClient.searchMeta(kind = "album", query = term, limit = 6)
+                val first = hits.firstOrNull { it.title.isNotBlank() }
+                if (first != null) {
+                    val artUrl = resolveLocalArtUrl(first.posterUrl, first.posterHash)
+                    if (first.thumbHash.isNotBlank()) {
+                        ThumbHash.rememberThumbHash(first.id, first.thumbHash)
+                        if (artUrl.isNotBlank()) ThumbHash.rememberThumbHash(artUrl, first.thumbHash)
+                    }
+                    val localResolved = ResolvedTrackAlbumMeta(
+                        album = first.title,
+                        albumBrowseId = first.id,
+                        artist = first.subtitle.ifBlank { cleanArtist },
+                        year = first.year?.toString().orEmpty(),
+                        artUrl = artUrl,
+                    )
+                    trackAlbumMetaCache[cacheKey] = System.currentTimeMillis() to localResolved
+                    if (artUrl.isNotBlank()) {
+                        rememberAlbumArtUrl(localResolved.artist, localResolved.album, artUrl)
+                    }
+                    return@withContext localResolved
+                }
+            }
+        }
+
+        // Step 2: Fail closed with zero clearnet calls
+        if (failClosedMeta) return@withContext null
 
         var resolved: ResolvedTrackAlbumMeta? = null
         if (cleanVid.length == 11) {
@@ -1453,6 +1840,55 @@ object ExternalDiscoveryApi {
         ytmSearchCache[cacheKey]?.let { (ts, cached) ->
             if (now - ts < YTM_CACHE_TTL_MS) return@withContext cached
         }
+        // Step 1: Query local P2P metadata first whenever loopback API is configured
+        if (localApiBaseUrl != null) {
+            val (albumHits, artistHits) = coroutineScope {
+                val a = async { localMetaClient.searchMeta(kind = "album", query = clean, limit = 12) }
+                val ar = async { localMetaClient.searchMeta(kind = "artist", query = clean, limit = 8) }
+                a.await() to ar.await()
+            }
+            val albums = albumHits.mapNotNull { hit ->
+                if (hit.title.isBlank()) return@mapNotNull null
+                val artUrl = resolveLocalArtUrl(hit.posterUrl, hit.posterHash)
+                if (hit.thumbHash.isNotBlank()) {
+                    ThumbHash.rememberThumbHash(hit.id, hit.thumbHash)
+                    if (artUrl.isNotBlank()) ThumbHash.rememberThumbHash(artUrl, hit.thumbHash)
+                    albumArtCacheKey(hit.subtitle, hit.title)?.let { ThumbHash.rememberThumbHash("alb:$it", hit.thumbHash) }
+                }
+                if (artUrl.isNotBlank() && hit.subtitle.isNotBlank()) {
+                    rememberAlbumArtUrl(hit.subtitle, hit.title, artUrl)
+                }
+                YtmAlbumSummary(
+                    browseId = hit.id,
+                    title = hit.title,
+                    artist = hit.subtitle,
+                    year = hit.year?.toString().orEmpty(),
+                    subtitle = hit.subtitle,
+                    artUrl = artUrl,
+                )
+            }
+            val artists = artistHits.mapNotNull { hit ->
+                if (hit.title.isBlank()) return@mapNotNull null
+                val artUrl = resolveLocalArtUrl(hit.posterUrl, hit.posterHash)
+                if (hit.thumbHash.isNotBlank()) {
+                    ThumbHash.rememberThumbHash(hit.id, hit.thumbHash)
+                    if (artUrl.isNotBlank()) ThumbHash.rememberThumbHash(artUrl, hit.thumbHash)
+                }
+                YtmArtistSummary(
+                    browseId = hit.id,
+                    name = hit.title,
+                    subscribers = hit.subtitle,
+                    artUrl = artUrl,
+                )
+            }
+            val res = YtmSearchResult(query = clean, artists = artists, songs = emptyList(), albums = albums)
+            if (!res.isEmpty) {
+                ytmSearchCache[cacheKey] = System.currentTimeMillis() to res
+                return@withContext res
+            }
+        }
+        // Step 2: Fail closed with zero clearnet calls
+        if (failClosedMeta) return@withContext YtmSearchResult(query = clean)
         val body = ytmPost("search", JSONObject().put("query", clean))
             ?: return@withContext YtmSearchResult(query = clean)
         val parsed = parseYtmSearch(body, clean)
@@ -1463,6 +1899,7 @@ object ExternalDiscoveryApi {
     }
 
     suspend fun loadYtmArtist(browseId: String?, artistName: String = ""): YtmArtistPage? = withContext(Dispatchers.IO) {
+        if (failClosedMeta) return@withContext null
         val resolvedId = browseId?.trim()?.takeIf { it.isNotEmpty() } ?: run {
             val cleanName = artistName.trim()
             if (cleanName.length < 2) return@withContext null
@@ -1489,6 +1926,7 @@ object ExternalDiscoveryApi {
         artist: String = "",
         albumTitle: String = "",
     ): YtmAlbumPage? = withContext(Dispatchers.IO) {
+        if (failClosedMeta) return@withContext null
         val resolvedId = browseId?.trim()?.takeIf { it.isNotEmpty() } ?: run {
             val query = listOf(artist.trim(), albumTitle.trim()).filter { it.isNotEmpty() }.joinToString(" ")
             if (query.length < 2) return@withContext null
@@ -2365,7 +2803,49 @@ object ExternalDiscoveryApi {
 
     suspend fun resolveAlbumArtUrl(artist: String, album: String): String? = withContext(Dispatchers.IO) {
         val key = albumArtCacheKey(artist, album) ?: return@withContext null
-        cachedAlbumArtUrl(artist, album)?.let { return@withContext it }
+        cachedAlbumArtUrl(artist, album)?.let { cached ->
+            if (!failClosedMeta || ExternalImageCache.isLoopbackUrl(cached)) {
+                return@withContext cached
+            }
+        }
+
+        val failedAt = albumArtNegativeCache[key]
+        if (failedAt != null && System.currentTimeMillis() - failedAt < 10 * 60_000L) {
+            return@withContext null
+        }
+
+        val cleanArtist = extractPrimaryArtist(artist)
+        val cleanAlbum = album.trim()
+        val term = listOf(cleanArtist, cleanAlbum).filter { it.isNotBlank() }.joinToString(" ")
+        if (term.length < 2) return@withContext null
+
+        // Step 1: Check local P2P metadata search for album artwork first
+        if (localApiBaseUrl != null) {
+            val hits = localMetaClient.searchMeta(kind = "album", query = term, limit = 6)
+            val targetAlbum = fold(cleanAlbum)
+            val targetArtist = fold(cleanArtist)
+            val matched = hits.firstOrNull { hit ->
+                val fTitle = fold(hit.title)
+                val fSub = fold(hit.subtitle)
+                (targetAlbum.isEmpty() || fTitle == targetAlbum || fTitle.contains(targetAlbum) || targetAlbum.contains(fTitle)) &&
+                    (targetArtist.isEmpty() || fSub.isEmpty() || fSub.contains(targetArtist) || targetArtist.contains(fSub)) &&
+                    (!hit.posterUrl.isNullOrBlank() || hit.posterHash.length == 64 || hit.thumbHash.isNotBlank())
+            }
+            if (matched != null) {
+                val p2pUrl = resolveLocalArtUrl(matched.posterUrl, matched.posterHash)
+                if (matched.thumbHash.isNotBlank()) {
+                    ThumbHash.rememberThumbHash("alb:$key", matched.thumbHash)
+                    if (p2pUrl.isNotBlank()) ThumbHash.rememberThumbHash(p2pUrl, matched.thumbHash)
+                }
+                if (p2pUrl.isNotBlank()) {
+                    rememberAlbumArtUrl(artist, album, p2pUrl)
+                    return@withContext p2pUrl
+                }
+            }
+        }
+
+        // Step 2: Fail closed when Private Routing or P2P-only metadata is active
+        if (failClosedMeta) return@withContext null
 
         val diskDir = ExternalImageCache.diskDirectory()
         val candidateKeys = buildList {
@@ -2385,16 +2865,6 @@ object ExternalDiscoveryApi {
                 }
             }
         }
-
-        val failedAt = albumArtNegativeCache[key]
-        if (failedAt != null && System.currentTimeMillis() - failedAt < 10 * 60_000L) {
-            return@withContext null
-        }
-
-        val cleanArtist = extractPrimaryArtist(artist)
-        val cleanAlbum = album.trim()
-        val term = listOf(cleanArtist, cleanAlbum).filter { it.isNotBlank() }.joinToString(" ")
-        if (term.length < 2) return@withContext null
 
         val encoded = URLEncoder.encode(term, "UTF-8")
         val body = httpGetText(
@@ -2493,6 +2963,9 @@ object ExternalDiscoveryApi {
         }
     }
 
+    internal fun albumArtThumbKey(artist: String, album: String): String? =
+        albumArtCacheKey(artist, album)?.let { "alb:$it" }
+
     private fun albumArtCacheKey(artist: String, album: String): String? {
         val a = fold(artist)
         val b = fold(album)
@@ -2501,6 +2974,7 @@ object ExternalDiscoveryApi {
     }
 
     suspend fun searchCreatorsTypeahead(query: String): List<CreatorSuggestion> = withContext(Dispatchers.IO) {
+        if (failClosedMeta) return@withContext emptyList()
         val trimmed = query.trim()
         if (trimmed.length < 2) return@withContext emptyList()
         if (trimmed.startsWith("http://", ignoreCase = true) ||
@@ -2552,6 +3026,86 @@ object ExternalDiscoveryApi {
     ): MusicDiscoverData = withContext(Dispatchers.IO) {
         val cleanQuery = query.trim()
         val normalizedMood = mood.trim().lowercase(Locale.ROOT).ifBlank { "featured" }
+
+        // Step 1: Query local P2P metadata first whenever loopback API is configured
+        if (localApiBaseUrl != null) {
+            val albums = ArrayList<SuggestedAlbum>()
+            val artists = ArrayList<SuggestedArtist>()
+            val seenArtists = HashSet<String>()
+            if (cleanQuery.isNotEmpty()) {
+                val hits = localMetaClient.searchMeta(kind = "album", query = cleanQuery, limit = 20)
+                for (hit in hits) {
+                    if (hit.title.isBlank()) continue
+                    val artUrl = resolveLocalArtUrl(hit.posterUrl, hit.posterHash)
+                    if (hit.thumbHash.isNotBlank()) {
+                        ThumbHash.rememberThumbHash(hit.id, hit.thumbHash)
+                        if (artUrl.isNotBlank()) ThumbHash.rememberThumbHash(artUrl, hit.thumbHash)
+                        albumArtThumbKey(hit.subtitle, hit.title)?.let { ThumbHash.rememberThumbHash(it, hit.thumbHash) }
+                    }
+                    if (artUrl.isNotBlank() && hit.subtitle.isNotBlank()) {
+                        rememberAlbumArtUrl(hit.subtitle, hit.title, artUrl)
+                    }
+                    albums.add(
+                        SuggestedAlbum(
+                            title = hit.title,
+                            artist = hit.subtitle,
+                            year = hit.year?.toString().orEmpty(),
+                            artUrl = artUrl,
+                        ),
+                    )
+                    val aName = hit.subtitle.trim()
+                    if (aName.isNotEmpty() && seenArtists.add(aName.lowercase(Locale.ROOT))) {
+                        artists.add(SuggestedArtist(name = aName, genre = "Music", artUrl = artUrl))
+                    }
+                }
+            } else {
+                val list = localMetaClient.getMetaList("album", normalizedMood)
+                    ?: if (normalizedMood != "featured") localMetaClient.getMetaList("album", "featured") else null
+                for (card in list?.cards.orEmpty()) {
+                    if (card.title.isBlank()) continue
+                    val artUrl = resolveLocalArtUrl(card.posterUrl, card.posterHash)
+                    rememberCardArtAndThumb(card, artUrl, "")
+                    if (card.thumbHash.isNotBlank()) {
+                        albumArtThumbKey(card.subtitle, card.title)?.let { ThumbHash.rememberThumbHash(it, card.thumbHash) }
+                    }
+                    if (artUrl.isNotBlank() && card.subtitle.isNotBlank()) {
+                        rememberAlbumArtUrl(card.subtitle, card.title, artUrl)
+                    }
+                    albums.add(
+                        SuggestedAlbum(
+                            title = card.title,
+                            artist = card.subtitle,
+                            year = card.year?.toString().orEmpty(),
+                            artUrl = artUrl,
+                        ),
+                    )
+                    val aName = card.subtitle.trim()
+                    if (aName.isNotEmpty() && seenArtists.add(aName.lowercase(Locale.ROOT))) {
+                        artists.add(
+                            SuggestedArtist(
+                                name = aName,
+                                genre = card.genres.firstOrNull().orEmpty().ifBlank { "Music" },
+                                artUrl = artUrl,
+                            ),
+                        )
+                    }
+                }
+            }
+            if (albums.isNotEmpty() || artists.isNotEmpty()) {
+                return@withContext MusicDiscoverData(
+                    mood = normalizedMood,
+                    query = cleanQuery,
+                    artists = artists,
+                    songs = emptyList(),
+                    albums = albums,
+                )
+            }
+        }
+
+        // Step 2: Fail closed with zero clearnet calls
+        if (failClosedMeta) {
+            return@withContext MusicDiscoverData(mood = normalizedMood, query = cleanQuery)
+        }
 
         val termsWithLimit: List<Pair<String, Int>> = when {
             cleanQuery.isNotEmpty() -> listOf(cleanQuery to 45)
@@ -2633,6 +3187,10 @@ object ExternalDiscoveryApi {
     }
 
     private fun httpPostText(url: String, body: String, headers: Map<String, String>): String? {
+        if (!ExternalImageCache.isLoopbackUrl(url)) {
+            if (failClosedMeta) return null
+            clearnetRequestHook?.invoke(url)
+        }
         var conn: HttpURLConnection? = null
         return try {
             conn = (URL(url).openConnection() as HttpURLConnection).apply {
@@ -2668,6 +3226,10 @@ object ExternalDiscoveryApi {
     }
 
     private fun httpGetText(url: String, headers: Map<String, String>): String? {
+        if (!ExternalImageCache.isLoopbackUrl(url)) {
+            if (failClosedMeta) return null
+            clearnetRequestHook?.invoke(url)
+        }
         var currentUrl = url
         for (hop in 0..3) {
             var conn: HttpURLConnection? = null

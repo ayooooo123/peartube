@@ -2,6 +2,7 @@ import b4a from 'b4a'
 import { BLOB_BLOCK_SIZE, HEX64, str } from './protocol.js'
 import { createStorage } from './node/storage.js'
 import { createIdentity } from './node/identity.js'
+import { createReplication } from './node/replication.js'
 import { createChannel } from './node/channel.js'
 import { createBlobs } from './node/blobs.js'
 import { createNetwork } from './node/network.js'
@@ -97,6 +98,7 @@ async function openNode ({
     },
     storage: null,
     identity: null,
+    replication: null,
     channel: null,
     blobs: null,
     net: null,
@@ -107,6 +109,7 @@ async function openNode ({
 
   ctx.storage = await createStorage(ctx)
   ctx.identity = createIdentity(ctx)
+  ctx.replication = createReplication(ctx)
   ctx.channel = await createChannel(ctx)
   ctx.blobs = await createBlobs(ctx)
   ctx.net = await createNetwork(ctx)
@@ -124,6 +127,8 @@ async function openNode ({
     joinLanTopic: ctx.net.joinLanTopic,
     leaveLanTopic: ctx.net.leaveLanTopic,
     publicEntries: ctx.catalog.publicEntries,
+    onSearchConn: conn => ctx.replication.markStrictIfUnscoped(conn, 'search'),
+    allowCoreOnConn: (conn, blobsHex) => ctx.replication.allowCoreOnConn(conn, blobsHex),
     onUpdate: ctx.update
   })
   undo.push(() => ctx.search.close())
@@ -301,7 +306,7 @@ async function openNode ({
       ctx.channel.writerCores.clear()
       for (const c of ctx.channel.landedCores.values()) await c.close().catch(() => {})
       ctx.channel.landedCores.clear()
-      ctx.channel.wakeup.destroy()
+      ctx.replication.destroy()
       await ctx.net.lan?.destroy()
       await ctx.net.destroySwarm()
       for (const s of ctx.sources.extraSources.values()) {

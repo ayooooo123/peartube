@@ -567,7 +567,7 @@ export async function createPrivateSwarm ({
     return card
   }
 
-  function admitInnerStream (enc, expectedRemoteKey = null) {
+  function admitInnerStream (enc, expectedRemoteKey = null, topic = null) {
     enc.on('error', () => {})
     enc.opened.then(ok => {
       const rk = enc.remotePublicKey
@@ -582,7 +582,7 @@ export async function createPrivateSwarm ({
       }
       activeByPeer.set(hex, enc); connections.add(enc)
       enc.once('close', () => { connections.delete(enc); if (activeByPeer.get(hex) === enc) activeByPeer.delete(hex); swarm.emit('update') })
-      swarm.emit('connection', enc); swarm.emit('update')
+      swarm.emit('connection', enc, { publicKey: rk, topics: topic ? [topic] : [] }); swarm.emit('update')
     }).catch(() => enc.destroy())
   }
 
@@ -720,10 +720,15 @@ export async function createPrivateSwarm ({
     return ensuring
   }
 
-  async function dialCard (card) {
+  async function dialCard (card, topic = null) {
     if (closing || suspended) return
     const hex = b4a.toString(card.innerPublicKey, 'hex')
-    if (b4a.equals(card.innerPublicKey, keyPair.publicKey) || activeByPeer.has(hex) || dialingPeers.has(hex) || firewall(card.innerPublicKey)) return
+    const existing = activeByPeer.get(hex)
+    if (existing && !existing.destroyed) {
+      if (topic) swarm.emit('peer-topic', existing, topic)
+      return
+    }
+    if (b4a.equals(card.innerPublicKey, keyPair.publicKey) || dialingPeers.has(hex) || firewall(card.innerPublicKey)) return
     if (usableGuards() < 2 && !(await ensureGuardsAndPublish())) return
     const candidates = guards.filter(g => !isClosed(g.rpc) && !b4a.equals(g.publicKey, card.guardPublicKey))
     if (!candidates.length) return
@@ -747,7 +752,7 @@ export async function createPrivateSwarm ({
           enc.setTimeout(8000)
           sourceGuard.streamsByUdxId.set(udxId, enc)
           enc.once('close', () => { sourceGuard.streamsByUdxId.delete(udxId); if (!streamA.destroyed) streamA.destroy() })
-          admitInnerStream(enc, card.innerPublicKey)
+          admitInnerStream(enc, card.innerPublicKey, topic)
           rawA = null
           return
         } catch { rawA?.destroy() }
@@ -775,13 +780,14 @@ export async function createPrivateSwarm ({
     if (closing || suspended || (usableGuards() < 2 && !(await ensureGuardsAndPublish()))) return
     const g = guards[0]; if (!g || isClosed(g.rpc)) return
     const epNow = Math.floor(Date.now() / RV_EPOCH_MS), sealKey = sha256('peartube/private-rv-seal/v1/', src.sourceKeyBuf)
+    const sourceTopic = hypercoreCrypto.discoveryKey(src.sourceKeyBuf)
     for (const ep of [String(epNow), String(epNow - 1)]) {
       try {
         const { cards } = await g.rpc.call('rvLookup', { key: sha256('peartube/private-rv/v1/', src.sourceKeyBuf, ep) }, 6000)
         const now = Date.now()
         for (const s of cards) {
           const plain = openBox(s, sealKey), card = plain && decodeAndVerifyCard(plain, now, null)
-          if (card && acceptValidCard(card)) dialCard(card).catch(() => {})
+          if (card && acceptValidCard(card)) dialCard(card, sourceTopic).catch(() => {})
         }
       } catch {}
     }

@@ -1,5 +1,4 @@
 import Autobee from 'autobee'
-import ProtomuxWakeup from 'protomux-wakeup'
 import b4a from 'b4a'
 import { makeApply, makeIsTrusted } from '../apply.js'
 import { HEX64, ROLES, cleanText, decodeOp } from '../protocol.js'
@@ -24,7 +23,6 @@ export async function createChannel (ctx) {
     worklet: isWorklet = false
   } = ctx.opts
 
-  const wakeup = new ProtomuxWakeup()
   let viewEpoch = 1
 
   let targetKey = String(trackerOpt || '').trim().toLowerCase() || null
@@ -53,6 +51,12 @@ export async function createChannel (ctx) {
     ctx.identity.ensureVault()
   }
 
+  let initScope = 'channel:primary'
+  if (targetKey) initScope = `channel:${targetKey}`
+  else if (founderKeyPair) initScope = `channel:${b4a.toString(founderKeyPair.publicKey, 'hex')}`
+  const scopedChNs = ctx.replication.scopeStore(chNs, initScope)
+  const wakeup = ctx.replication.wakeupFor(initScope)
+
   const writerCores = new Map()
   let channel = null
   let writerSync = Promise.resolve()
@@ -75,9 +79,11 @@ export async function createChannel (ctx) {
     }
     return false
   }
-  function openLanding (hex) {
+  function openLanding (hex, channelHex) {
+    ctx.replication.registerKey(hex, `channel:${channelHex}`)
     if (landedCores.has(hex)) return
     const core = ctx.storage.store.get({ key: b4a.from(hex, 'hex') })
+    ctx.replication.registerCore(core, `channel:${channelHex}`)
     landedCores.set(hex, core)
     core.ready().then(() => core.download({ start: 0, end: -1 })).catch(() => {})
   }
@@ -111,20 +117,20 @@ export async function createChannel (ctx) {
     let recs = landedByChannel.get(channelHex)
     if (!recs) { recs = new Map(); landedByChannel.set(channelHex, recs) }
     // an update means the channel is awake: a landing it let close while asleep follows the owner again
-    for (const rec of recs.values()) if (!rec.held) { rec.held = true; openLanding(rec.hex) }
+    for (const rec of recs.values()) if (!rec.held) { rec.held = true; openLanding(rec.hex, channelHex) }
     for (const name of ['system', 'view']) {
       const c = changes?.get(name)
       if (!c?.to?.key || c.incremental) continue
       const hex = b4a.toString(c.to.key, 'hex')
       const prev = recs.get(name)
       if (prev?.hex === hex) continue
-      openLanding(hex)
+      openLanding(hex, channelHex)
       recs.set(name, { hex, held: true })
       if (prev && !heldElsewhere(prev.hex, channelHex)) dropLanding(prev.hex)
     }
   }
   const primaryCache = { entries: [], byId: new Map(), discovered: [] }
-  channel = new Autobee(chNs, targetKey ? b4a.from(targetKey, 'hex') : null, {
+  channel = new Autobee(scopedChNs, targetKey ? b4a.from(targetKey, 'hex') : null, {
     ...(founderKeyPair ? { keyPair: founderKeyPair } : {}),
     apply: primaryApply,
     update: (view, changes) => { mirrorLanding(changes, b4a.toString(channel.key, 'hex')); syncWriterCores().catch(() => {}); ctx.update() },
@@ -136,6 +142,9 @@ export async function createChannel (ctx) {
   await channel.ready()
 
   const primaryKey = b4a.toString(channel.key, 'hex')
+  const primaryScope = `channel:${primaryKey}`
+  if (initScope !== primaryScope) ctx.replication.renameScope(initScope, primaryScope)
+  ctx.replication.registerTopic(channel.discoveryKey, primaryScope)
   let usePrimaryChannel = Boolean(targetKey) || initialSources.length === 0
   let channelHasEntries = false
   if (channel.bootstrap.writable && !ctx.identity.foundedKey()) ctx.identity.markFounded(primaryKey)
@@ -167,6 +176,7 @@ export async function createChannel (ctx) {
       for (const hex of wanted) {
         if (writerCores.has(hex) || ctx.life.closing) continue
         const c = ctx.storage.store.get({ key: b4a.from(hex, 'hex'), active: false })
+        ctx.replication.registerCore(c, primaryScope)
         writerCores.set(hex, c)
         await c.ready().catch(() => {})
       }
@@ -190,7 +200,7 @@ export async function createChannel (ctx) {
     // 120 s window in test/network.test.js and never saw the entry. The pool exists for thousands of
     // *followed* channels; this one is one channel, and correctness wins.
     if (force) {
-      for (const session of wakeup.getSessions(channel.key, { discoveryKey: channel.discoveryKey })) {
+      for (const session of ctx.replication.getWakeupSessions(primaryScope, channel.key, { discoveryKey: channel.discoveryKey })) {
         try { session.broadcastLookup() } catch {}
       }
       await Promise.race([channel.update().catch(() => {}), new Promise(r => setTimeout(r, 2_000))])

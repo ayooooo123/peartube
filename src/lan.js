@@ -332,9 +332,16 @@ class LanDiscovery extends EventEmitter {
     const buf = b4a.from(topic)
     const hex = b4a.toString(buf, 'hex')
     if (!this._topics.has(hex)) {
-      this._topics.set(hex, topicToken(buf))
+      const tok = topicToken(buf)
+      this._topics.set(hex, tok)
       this._queueAds()
-      for (const peer of this._peers.values()) this._consider(peer)
+      for (const peer of this._peers.values()) {
+        const open = this._active.get(peer.id)
+        if (open && !open.destroyed && peer.tokens.includes(tok)) {
+          this.emit('peer-topic', open, buf)
+        }
+        this._consider(peer)
+      }
     }
     return { topic: buf, destroy: () => this.leave(buf) }
   }
@@ -381,6 +388,16 @@ class LanDiscovery extends EventEmitter {
     if (!tokens.length || !this._topics.size) return false
     const local = new Set(this._topics.values())
     return tokens.some(t => local.has(t))
+  }
+
+  _sharedTopics (tokens) {
+    if (!Array.isArray(tokens) || !tokens.length || !this._topics.size) return []
+    const remote = new Set(tokens)
+    const out = []
+    for (const [hex, tok] of this._topics) {
+      if (remote.has(tok)) out.push(b4a.from(hex, 'hex'))
+    }
+    return out
   }
 
   _onService (service) {
@@ -447,7 +464,10 @@ class LanDiscovery extends EventEmitter {
       return
     }
     const open = this._active.get(peer.id)
-    if (open && !open.destroyed) return
+    if (open && !open.destroyed) {
+      for (const topic of this._sharedTopics(peer.tokens)) this.emit('peer-topic', open, topic)
+      return
+    }
     const pending = this._pending.get(peer.id)
     if (pending) {
       if (pending.host === peer.host && pending.port === peer.port) return
@@ -551,7 +571,8 @@ class LanDiscovery extends EventEmitter {
     this._active.set(id, socket)
     this.connections.add(socket)
     socket.once('close', () => this._onSocketClosed(id, socket))
-    this.emit('connection', socket, { publicKey: socket.remotePublicKey, lan: true })
+    const peer = this._peers.get(id)
+    this.emit('connection', socket, { publicKey: socket.remotePublicKey, lan: true, topics: this._sharedTopics(peer?.tokens) })
   }
 
   _onSocketClosed (id, socket) {

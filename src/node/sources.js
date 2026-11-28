@@ -88,7 +88,10 @@ export async function createSources (ctx) {
         }
       } else if (!isSystemViewKey(sub)) {
         const op = decodeOp(node.value)
-        if (op?.type === 'announce') entriesList.push({ sub, entry: op })
+        if (op?.type === 'announce') {
+          ctx.replication.registerKey(op.blobs, `channel:${viaKey}`)
+          entriesList.push({ sub, entry: op })
+        }
       }
     }
     return { entriesList, discoveredList }
@@ -111,7 +114,7 @@ export async function createSources (ctx) {
       // publisher's coupler skips announcing a core this peer already has open — so a follower
       // that met a partial peer first stays partial forever. Asking again makes the publisher
       // answer with its real length, which reactivates the writer and resumes the download.
-      for (const session of ctx.channel.wakeup.getSessions(src.bee.key, { discoveryKey: src.bee.discoveryKey })) {
+      for (const session of ctx.replication.getWakeupSessions(`channel:${src.key}`, src.bee.key, { discoveryKey: src.bee.discoveryKey })) {
         try { session.broadcastLookup() } catch {}
       }
       await Promise.race([src.bee.update().catch(() => {}), new Promise(r => setTimeout(r, 2_000))])
@@ -215,6 +218,7 @@ export async function createSources (ctx) {
           activeSources.delete(src.key)
           ctx.net.leaveOverlayTopic(`channel:${src.key}`).catch(() => {})
           if (oldBee) await oldBee.close().catch(() => {})
+          ctx.replication.destroyWakeup(`channel:${src.key}`)
           // The landing follows the Autobee: a sleeping channel keeps none of its landed cores open, and
           // an unfollowed one purges them (the view and system cores go back to the peers that serve them).
           await ctx.channel.releaseLanding(src.key, { purge }).catch(() => {})
@@ -273,14 +277,17 @@ export async function createSources (ctx) {
         const subApply = makeApply(() => b4a.toString(bee.key, 'hex'))
         // FindingPeers is per Corestore instance: called on the root store, it never reaches this channel's cores.
         const beeNs = ctx.storage.store.namespace(`channel:${k}`)
-        bee = new Autobee(beeNs, b4a.from(k, 'hex'), {
+        const scopeId = `channel:${k}`
+        const scopedBeeNs = ctx.replication.scopeStore(beeNs, scopeId)
+        bee = new Autobee(scopedBeeNs, b4a.from(k, 'hex'), {
           apply: subApply,
           update: (view, changes) => { ctx.channel.mirrorLanding(changes, k); src.rev++; ctx.update() },
           optimistic: true,
           isTrusted: makeIsTrusted(() => b4a.toString(bee.key, 'hex')),
-          wakeup: ctx.channel.wakeup
+          wakeup: ctx.replication.wakeupFor(scopeId)
         })
         await bee.ready()
+        ctx.replication.registerTopic(bee.discoveryKey, scopeId)
         if (ctx.life.closing || extraSources.get(k) !== src) {
           await bee.close().catch(() => {})
           return null

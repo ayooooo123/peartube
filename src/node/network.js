@@ -3,6 +3,7 @@ import hypercoreCrypto from 'hypercore-crypto'
 import b4a from 'b4a'
 import { tuneUdxSocket } from '../lan.js'
 import { createPrivateSwarm } from '../private-overlay.js'
+import { SEARCH_TOPIC } from '../search.js'
 import { HEX64, str } from '../protocol.js'
 
 // How many videos a node announces at once, and how often one past that cap gets its turn on the DHT.
@@ -40,22 +41,25 @@ export async function createNetwork (ctx) {
   const tuneDht = inst => inst?.ready?.().then(() => { tuneUdxSocket(inst.io?.serverSocket); tuneUdxSocket(inst.io?.clientSocket) }).catch(() => {})
   // Every replication connection, public swarm and LAN alike, for plugins that act per peer.
   const peerConns = new Set()
+  const peerInfos = new Map() // conn -> peerInfo (for topic updates on already-open connections)
   const connListeners = new Set()
-  // One root Corestore replication pipe and one shared ProtomuxWakeup stream serve the primary channel and every
-  // woken namespace together without stacking 25 duplicate close listeners and StreamTracker entries per peer.
-  const trackConn = (conn, path) => {
+  ctx.replication.registerTopic(SEARCH_TOPIC, 'search')
+  // Single-Corestore scoped replication: only attaches Hypercores and ProtomuxWakeup sessions
+  // belonging to scopes this connection shares, preventing cross-channel/search discoveryKey leaks.
+  const trackConn = (conn, path, peerInfo = null) => {
     tuneUdxSocket(conn.rawStream?.socket)
     tuneUdxSocket(conn.rawStream?.rawStream?.socket)
     peerConns.add(conn)
+    if (peerInfo) peerInfos.set(conn, peerInfo)
     conn.once('close', () => {
       peerConns.delete(conn)
+      peerInfos.delete(conn)
       path.closedRx += conn.rawBytesRead || conn.rawStream?.bytesReceived || 0
       path.closedTx += conn.rawBytesWritten || conn.rawStream?.bytesTransmitted || 0
       const key = conn.remotePublicKey
       if (key && ![...peerConns].some(c => c.remotePublicKey && b4a.equals(c.remotePublicKey, key))) ctx.blobs.sourcePeers.delete(b4a.toString(key, 'hex'))
     })
-    const stream = ctx.storage.store.replicate(conn)
-    ctx.channel.wakeup.addStream(stream)
+    ctx.replication.attach(conn, peerInfo)
     for (const fn of connListeners) fn(conn)
   }
   const swarm = isPrivate
@@ -88,10 +92,16 @@ export async function createNetwork (ctx) {
       } catch {}
     })
   }
-  swarm.on('connection', conn => {
+  swarm.on('connection', (conn, peerInfo) => {
     if (hasLanPeer(conn.remotePublicKey)) { conn.destroy(); return }
-    trackConn(conn, dht ? traffic.private : traffic.public)
+    trackConn(conn, dht ? traffic.private : traffic.public, peerInfo)
     if (dht) ctx.channel.channel.update().catch(() => {})
+  })
+  swarm.on('update', () => {
+    for (const [conn, info] of peerInfos) ctx.replication.grantScopeOnPeerTopics(conn, info)
+  })
+  swarm.on('peer-topic', (conn, topic) => {
+    ctx.replication.grantTopicsOnConn(conn, [topic])
   })
   // destroy({ force: true }) skips clear(), so every topic's discovery and its ~10-min refresh timer outlived the
   // node and kept its process up. clear() destroys them; its unannounces end with the forced DHT destroy, except
@@ -104,15 +114,21 @@ export async function createNetwork (ctx) {
   ctx.undo.push(destroySwarm)
   ctx.undo.push(() => {
     ctx.life.closing = true
-    ctx.channel.wakeup.destroy()
+    ctx.replication.destroy()
   })
   const discoveries = new Map()
   const lanTopics = new Map()
   // lanPeers declared above so swarm firewall yields to direct LAN sockets
   let lan = null
 
+  function scopeOfOverlayId (id) {
+    if (id.startsWith('source-swarm:')) return `channel:${id.slice(13)}`
+    return id
+  }
+
   function joinOverlayTopic (id, keyBuf, discKey) {
     if (discoveries.has(id)) return
+    ctx.replication.registerTopic(discKey, scopeOfOverlayId(id))
     if (dht) {
       discoveries.set(id, swarm.joinSource(id, keyBuf))
       return
@@ -173,6 +189,8 @@ export async function createNetwork (ctx) {
   }
   function joinTopic (hex, opts) {
     const topic = hypercoreCrypto.discoveryKey(b4a.from(hex, 'hex'))
+    ctx.replication.registerTopic(topic, `watch:${hex}`)
+    ctx.replication.registerDiscoveryKey(topic, `watch:${hex}`)
     lan?.join(topic)
     return { topic, session: swarm.join(topic, opts) }
   }
@@ -261,7 +279,7 @@ export async function createNetwork (ctx) {
     await previous?.destroy()
     if (!factory || ctx.life.closing || dht) return
     const next = factory(swarm.keyPair)
-    next.on('connection', conn => {
+    next.on('connection', (conn, info) => {
       if (allowedSet && conn.remotePublicKey && !allowedSet.has(b4a.toString(conn.remotePublicKey, 'hex'))) {
         conn.destroy()
         return
@@ -273,7 +291,10 @@ export async function createNetwork (ctx) {
           if (!sc.destroyed && sc.remotePublicKey && b4a.equals(sc.remotePublicKey, conn.remotePublicKey)) sc.destroy()
         }
       }
-      trackConn(conn, traffic.lan)
+      trackConn(conn, traffic.lan, info)
+    })
+    next.on('peer-topic', (conn, topic) => {
+      ctx.replication.grantTopicsOnConn(conn, [topic])
     })
     try {
       await next.ready()

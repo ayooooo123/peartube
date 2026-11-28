@@ -46,7 +46,10 @@ export function createCatalog (ctx) {
         const sub = b4a.toString(node.key)
         if (isSystemViewKey(sub)) continue
         const op = decodeOp(node.value)
-        if (op?.type === 'announce') addRaw({ key: prefix ? `${prefix}${sub}` : sub, entry: op, source: viaKey, sourceKind: 'channel' })
+        if (op?.type === 'announce') {
+          ctx.replication.registerKey(op.blobs, `channel:${viaKey}`)
+          addRaw({ key: prefix ? `${prefix}${sub}` : sub, entry: op, source: viaKey, sourceKind: 'channel' })
+        }
       }
     }
     if ((ctx.channel.usePrimary() || ctx.channel.hasEntries()) && (!filterSource || filterSource === ctx.channel.primaryKey)) {
@@ -302,6 +305,8 @@ export function createCatalog (ctx) {
       if (linkSwarms.length > 4) ctx.net.leaveOverlayTopic(`source-swarm:${linkSwarms.shift()}`).catch(() => {})
     }
     const { entry } = parsed
+    ctx.replication.registerKey(entry.blobs, `watch:${entry.blobs}`)
+    if (parsed.sourceKey) ctx.replication.registerKey(entry.blobs, `channel:${parsed.sourceKey}`)
     const key = `watch/${entry.blobs}:${entry.blob.blockOffset}`
     // Newest last; an opened link that nothing plays any more leaves once 32 are held.
     ephemeralWatches.delete(key)

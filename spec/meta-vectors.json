@@ -1,0 +1,460 @@
+{
+  "version": 1,
+  "artBlobBlockSize": 65536,
+  "shardsPerWriter": 8,
+  "uri": [
+    {
+      "key": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+      "alias": "",
+      "formatted": "peartube://meta/0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+      "parsed": {
+        "action": "meta",
+        "key": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "alias": ""
+      }
+    },
+    {
+      "key": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+      "alias": "Lumen Public Meta",
+      "formatted": "peartube://meta/0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef?name=Lumen%20Public%20Meta",
+      "parsed": {
+        "action": "meta",
+        "key": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "alias": "Lumen Public Meta"
+      }
+    },
+    {
+      "input": "peartube://meta/FEDCBA9876543210FEDCBA9876543210FEDCBA9876543210FEDCBA9876543210?name=Caf%C3%A9%20Meta",
+      "key": "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210",
+      "alias": "Café Meta",
+      "formatted": "peartube://meta/fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210?name=Caf%C3%A9%20Meta",
+      "parsed": {
+        "action": "meta",
+        "key": "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210",
+        "alias": "Café Meta"
+      }
+    }
+  ],
+  "helpers": {
+    "canonicalMetaId": [
+      {
+        "input": "tt0133093",
+        "expected": "imdb:tt0133093"
+      },
+      {
+        "input": "  TT0133093  ",
+        "expected": "imdb:tt0133093"
+      },
+      {
+        "input": "IMDB:TT0903747",
+        "expected": "imdb:tt0903747"
+      },
+      {
+        "input": "mb:4B1A8E46-9D5C-4C32-8A4F-7A8E0E43A001",
+        "expected": "mb:4b1a8e46-9d5c-4c32-8a4f-7a8e0e43a001"
+      },
+      {
+        "input": "discogs:1234567",
+        "expected": "discogs:1234567"
+      },
+      {
+        "input": "album:0123456789abcdef0123",
+        "expected": "album:0123456789abcdef0123"
+      },
+      {
+        "input": "artist:mb:a74b1b7f-71a5-4011-9441-d0b5e4122711",
+        "expected": "artist:mb:a74b1b7f-71a5-4011-9441-d0b5e4122711"
+      },
+      {
+        "input": "artist:abcdef0123456789abcd",
+        "expected": "artist:abcdef0123456789abcd"
+      },
+      {
+        "input": "imdb:12345",
+        "expected": null
+      },
+      {
+        "input": "invalid:foo",
+        "expected": null
+      },
+      {
+        "input": "",
+        "expected": null
+      }
+    ],
+    "foldPrefix3": [
+      {
+        "input": "Amélie",
+        "folded": "amelie",
+        "prefix3": "ame"
+      },
+      {
+        "input": "The Matrix (1999)",
+        "folded": "the matrix 1999",
+        "prefix3": "the"
+      },
+      {
+        "input": "Björk",
+        "folded": "bjork",
+        "prefix3": "bjo"
+      },
+      {
+        "input": "  WALL·E! ",
+        "folded": "wall e",
+        "prefix3": "wal"
+      },
+      {
+        "input": "Up",
+        "folded": "up",
+        "prefix3": "up"
+      },
+      {
+        "input": "---",
+        "folded": "",
+        "prefix3": ""
+      }
+    ],
+    "metaDiscoveryTopic": [
+      {
+        "keyHex": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "topicHex": "d930823e0ea4d7f3d520842c5b019ab7955a99ad93c6bab2ab8a978f4e5cca4c"
+      },
+      {
+        "keyHex": "1111111111111111111111111111111111111111111111111111111111111111",
+        "topicHex": "863dd3400da86ba17b9f051ff40fe5ff4aa75dceef287f3ceb7e97f8f61693cf"
+      }
+    ],
+    "artHash": [
+      {
+        "inputHex": "70656172747562652d6d6574612d6172742d766563746f722d31",
+        "hashHex": "e4a5e6f91b6238ebc81a257ba56244b7f97d00128da9ac57ad05ce8025e4c398",
+        "shardIdx": 4
+      },
+      {
+        "inputHex": "000102030405060708090a0b0c0d0e0f",
+        "hashHex": "c7cb5d1a1a214f1d833a21fe6c7b2420e417c2f220784cbe90072975131bc367",
+        "shardIdx": 7
+      }
+    ]
+  },
+  "records": {
+    "artPtr": {
+      "value": {
+        "shardId": 7,
+        "blockOffset": 42,
+        "blockLength": 2,
+        "byteOffset": 1024,
+        "byteLength": 81920,
+        "width": 600,
+        "height": 900,
+        "mime": 1
+      },
+      "hex": "0107002a0200000000040000004001005802840301"
+    },
+    "shardEntry": {
+      "value": {
+        "shardId": 7,
+        "writer": "1111111111111111111111111111111111111111111111111111111111111111",
+        "shardIdx": 3,
+        "generation": 2,
+        "coreKey": "2222222222222222222222222222222222222222222222222222222222222222",
+        "retired": false
+      },
+      "hex": "0107001111111111111111111111111111111111111111111111111111111111111111030200222222222222222222222222222222222222222222222222222222222222222200"
+    },
+    "searchSnapshot": {
+      "value": {
+        "coreKey": "3333333333333333333333333333333333333333333333333333333333333333",
+        "generation": 14,
+        "updatedAt": 1735689600000,
+        "titleCount": 42500
+      },
+      "hex": "0133333333333333333333333333333333333333333333333333333333333333330e000000ff007c291f9401000004a60000"
+    },
+    "cardMovie": {
+      "value": {
+        "id": "imdb:tt0133093",
+        "kind": "movie",
+        "title": "The Matrix",
+        "subtitle": "Welcome to the Real World",
+        "year": 1999,
+        "ratingX10": 87,
+        "genres": [
+          "Action",
+          "Sci-Fi"
+        ],
+        "runtimeMin": 136,
+        "thumbHash": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGA==",
+        "posterHash": "4444444444444444444444444444444444444444444444444444444444444444",
+        "backdropHash": "5555555555555555555555555555555555555555555555555555555555555555",
+        "updatedAt": 1735689600123
+      },
+      "thumbHashHex": "000102030405060708090a0b0c0d0e0f101112131415161718",
+      "hex": "010e696d64623a747430313333303933010a546865204d61747269781957656c636f6d6520746f20746865205265616c20576f726c64cf0757000206416374696f6e065363692d4669880019000102030405060708090a0b0c0d0e0f101112131415161718014444444444444444444444444444444444444444444444444444444444444444015555555555555555555555555555555555555555555555555555555555555555ff7b7c291f94010000"
+    },
+    "cardAlbum": {
+      "value": {
+        "id": "mb:4b1a8e46-9d5c-4c32-8a4f-7a8e0e43a001",
+        "kind": "album",
+        "title": "Homogenic",
+        "subtitle": "Björk",
+        "year": 1997,
+        "ratingX10": 91,
+        "genres": [
+          "Electronic",
+          "Art Pop"
+        ],
+        "runtimeMin": 43,
+        "thumbHash": "",
+        "posterHash": "6666666666666666666666666666666666666666666666666666666666666666",
+        "backdropHash": "",
+        "updatedAt": 1735689600456
+      },
+      "thumbHashHex": "",
+      "hex": "01276d623a34623161386534362d396435632d346333322d386134662d3761386530653433613030310309486f6d6f67656e696306426ac3b6726bcd075b00020a456c656374726f6e69630741727420506f702b000001666666666666666666666666666666666666666666666666666666666666666600ffc87d291f94010000"
+    },
+    "detail": {
+      "value": {
+        "id": "imdb:tt0903747",
+        "synopsis": "A chemistry teacher diagnosed with inoperable lung cancer turns to manufacturing and selling methamphetamine.",
+        "cast": [
+          "Bryan Cranston",
+          "Aaron Paul",
+          "Anna Gunn"
+        ],
+        "directors": [
+          "Vince Gilligan",
+          "Michelle MacLaren"
+        ],
+        "tags": [
+          "crime",
+          "drama",
+          "desert"
+        ],
+        "backdropHash": "5555555555555555555555555555555555555555555555555555555555555555",
+        "items": [
+          {
+            "label": "Pilot",
+            "subId": "imdb:tt0903747:s01e01",
+            "season": 1,
+            "number": 1,
+            "runtimeMin": 58
+          },
+          {
+            "label": "Cat's in the Bag...",
+            "subId": "imdb:tt0903747:s01e02",
+            "season": 1,
+            "number": 2,
+            "runtimeMin": 48
+          }
+        ],
+        "externalIds": [
+          {
+            "key": "tmdb",
+            "value": "1396"
+          },
+          {
+            "key": "tvdb",
+            "value": "81189"
+          }
+        ],
+        "updatedAt": 1735689600789
+      },
+      "hex": "010e696d64623a7474303930333734376d41206368656d6973747279207465616368657220646961676e6f736564207769746820696e6f70657261626c65206c756e672063616e636572207475726e7320746f206d616e75666163747572696e6720616e642073656c6c696e67206d657468616d70686574616d696e652e030e427279616e204372616e73746f6e0a4161726f6e205061756c09416e6e612047756e6e020e56696e63652047696c6c6967616e114d696368656c6c65204d61634c6172656e03056372696d65056472616d6106646573657274015555555555555555555555555555555555555555555555555555555555555555020550696c6f7415696d64623a7474303930333734373a733031653031010001003a0013436174277320696e20746865204261672e2e2e15696d64623a7474303930333734373a7330316530320100020030000204746d646204313339360474766462053831313839ff157f291f94010000"
+    },
+    "list": {
+      "value": {
+        "kind": "movie",
+        "slug": "popular/sci-fi",
+        "title": "Popular Sci-Fi",
+        "ids": [
+          "imdb:tt0133093",
+          "imdb:tt0083658",
+          "imdb:tt0816692"
+        ],
+        "updatedAt": 1735689601000
+      },
+      "hex": "01010e706f70756c61722f7363692d66690e506f70756c6172205363692d4669030e696d64623a7474303133333039330e696d64623a7474303038333635380e696d64623a747430383136363932ffe87f291f94010000"
+    },
+    "indexBucket": {
+      "value": {
+        "kind": "movie",
+        "prefix": "the",
+        "hits": [
+          {
+            "id": "imdb:tt0133093",
+            "title": "The Matrix",
+            "subtitle": "Action, Sci-Fi",
+            "year": 1999,
+            "score": 980,
+            "thumbHash": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGA==",
+            "posterHash": "4444444444444444444444444444444444444444444444444444444444444444"
+          },
+          {
+            "id": "imdb:tt0083658",
+            "title": "Blade Runner",
+            "subtitle": "Sci-Fi",
+            "year": 1982,
+            "score": 910,
+            "thumbHash": "",
+            "posterHash": ""
+          }
+        ],
+        "updatedAt": 1735689602000
+      },
+      "hex": "010103746865020e696d64623a7474303133333039330a546865204d61747269780e416374696f6e2c205363692d4669cf07d40319000102030405060708090a0b0c0d0e0f1011121314151617180144444444444444444444444444444444444444444444444444444444444444440e696d64623a7474303038333635380c426c6164652052756e6e6572065363692d4669be078e030000ffd083291f94010000"
+    }
+  },
+  "ops": {
+    "init": {
+      "op": {
+        "type": "init",
+        "owner": "1111111111111111111111111111111111111111111111111111111111111111",
+        "alias": "Community Catalog"
+      },
+      "hex": "010101111111111111111111111111111111111111111111111111111111111111111111436f6d6d756e69747920436174616c6f67"
+    },
+    "grant": {
+      "op": {
+        "type": "grant",
+        "writer": "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210",
+        "role": "mod",
+        "alias": "Archivist",
+        "indexer": true
+      },
+      "hex": "0102fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210036d6f640941726368697669737401"
+    },
+    "revoke": {
+      "op": {
+        "type": "revoke",
+        "writer": "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210"
+      },
+      "hex": "0103fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210"
+    },
+    "putShard": {
+      "op": {
+        "type": "putShard",
+        "shard": {
+          "shardId": 7,
+          "writer": "1111111111111111111111111111111111111111111111111111111111111111",
+          "shardIdx": 3,
+          "generation": 2,
+          "coreKey": "2222222222222222222222222222222222222222222222222222222222222222",
+          "retired": false
+        }
+      },
+      "hex": "0104470107001111111111111111111111111111111111111111111111111111111111111111030200222222222222222222222222222222222222222222222222222222222222222200"
+    },
+    "putArt": {
+      "op": {
+        "type": "putArt",
+        "hash": "e4a5e6f91b6238ebc81a257ba56244b7f97d00128da9ac57ad05ce8025e4c398",
+        "ptr": {
+          "shardId": 7,
+          "blockOffset": 42,
+          "blockLength": 2,
+          "byteOffset": 1024,
+          "byteLength": 81920,
+          "width": 600,
+          "height": 900,
+          "mime": 1
+        }
+      },
+      "hex": "0105e4a5e6f91b6238ebc81a257ba56244b7f97d00128da9ac57ad05ce8025e4c398150107002a0200000000040000004001005802840301"
+    },
+    "putCard": {
+      "op": {
+        "type": "putCard",
+        "card": {
+          "id": "imdb:tt0133093",
+          "kind": "movie",
+          "title": "The Matrix",
+          "subtitle": "Welcome to the Real World",
+          "year": 1999,
+          "ratingX10": 87,
+          "genres": [
+            "Action",
+            "Sci-Fi"
+          ],
+          "runtimeMin": 136,
+          "thumbHash": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGA==",
+          "posterHash": "4444444444444444444444444444444444444444444444444444444444444444",
+          "backdropHash": "5555555555555555555555555555555555555555555555555555555555555555",
+          "updatedAt": 1735689600123
+        }
+      },
+      "hex": "0106b0010e696d64623a747430313333303933010a546865204d61747269781957656c636f6d6520746f20746865205265616c20576f726c64cf0757000206416374696f6e065363692d4669880019000102030405060708090a0b0c0d0e0f101112131415161718014444444444444444444444444444444444444444444444444444444444444444015555555555555555555555555555555555555555555555555555555555555555ff7b7c291f94010000"
+    },
+    "putDetail": {
+      "op": {
+        "type": "putDetail",
+        "detail": {
+          "id": "imdb:tt0903747",
+          "synopsis": "A chemistry teacher diagnosed with inoperable lung cancer turns to manufacturing and selling methamphetamine.",
+          "cast": [
+            "Bryan Cranston",
+            "Aaron Paul",
+            "Anna Gunn"
+          ],
+          "directors": [
+            "Vince Gilligan",
+            "Michelle MacLaren"
+          ],
+          "tags": [
+            "crime",
+            "drama",
+            "desert"
+          ],
+          "backdropHash": "5555555555555555555555555555555555555555555555555555555555555555",
+          "items": [
+            {
+              "label": "Pilot",
+              "subId": "imdb:tt0903747:s01e01",
+              "season": 1,
+              "number": 1,
+              "runtimeMin": 58
+            },
+            {
+              "label": "Cat's in the Bag...",
+              "subId": "imdb:tt0903747:s01e02",
+              "season": 1,
+              "number": 2,
+              "runtimeMin": 48
+            }
+          ],
+          "externalIds": [
+            {
+              "key": "tmdb",
+              "value": "1396"
+            },
+            {
+              "key": "tvdb",
+              "value": "81189"
+            }
+          ],
+          "updatedAt": 1735689600789
+        }
+      },
+      "hex": "0107fd6c01010e696d64623a7474303930333734376d41206368656d6973747279207465616368657220646961676e6f736564207769746820696e6f70657261626c65206c756e672063616e636572207475726e7320746f206d616e75666163747572696e6720616e642073656c6c696e67206d657468616d70686574616d696e652e030e427279616e204372616e73746f6e0a4161726f6e205061756c09416e6e612047756e6e020e56696e63652047696c6c6967616e114d696368656c6c65204d61634c6172656e03056372696d65056472616d6106646573657274015555555555555555555555555555555555555555555555555555555555555555020550696c6f7415696d64623a7474303930333734373a733031653031010001003a0013436174277320696e20746865204261672e2e2e15696d64623a7474303930333734373a7330316530320100020030000204746d646204313339360474766462053831313839ff157f291f94010000"
+    },
+    "setSnapshot": {
+      "op": {
+        "type": "setSnapshot",
+        "snapshot": {
+          "coreKey": "3333333333333333333333333333333333333333333333333333333333333333",
+          "generation": 14,
+          "updatedAt": 1735689600000,
+          "titleCount": 42500
+        }
+      },
+      "hex": "0108320133333333333333333333333333333333333333333333333333333333333333330e000000ff007c291f9401000004a60000"
+    },
+    "remove": {
+      "op": {
+        "type": "remove",
+        "key": "card/imdb:tt0133093"
+      },
+      "hex": "010913636172642f696d64623a747430313333303933"
+    }
+  }
+}

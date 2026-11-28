@@ -297,6 +297,10 @@ export function createCatalog (ctx) {
       const source = await ctx.sources.addSource(uri)
       return { action: 'access', channel: parsed.channel, epoch: parsed.epoch, source }
     }
+    if (parsed.action === 'meta') {
+      const source = await ctx.meta.addSource(uri)
+      return { action: 'meta', source }
+    }
     if (parsed.action === 'source') return { action: 'source', source: await ctx.sources.addSource(parsed) }
     // A watch link's channel is where the video's peers are. Both public and private routing join an
     // ephemeral `source-swarm:` topic (LRU-capped at 4 inside network.js) without following the channel.

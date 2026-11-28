@@ -5,7 +5,9 @@ import b4a from 'b4a'
 import { HEX64, str } from '../protocol.js'
 
 const STRICT_SCOPES = new Set(['search'])
-const isStrictScope = scopeId => STRICT_SCOPES.has(scopeId) || scopeId.startsWith('meta:')
+const isMetaScope = scopeId => scopeId.startsWith('meta:')
+const isStrictScope = scopeId => STRICT_SCOPES.has(scopeId) || isMetaScope(scopeId)
+const hasNonStrictScope = state => [...state.scopes].some(s => !isStrictScope(s))
 const toHex = buf => (typeof buf === 'string' ? buf.toLowerCase() : b4a.toString(buf, 'hex'))
 
 // Single-Corestore scoped replication: keeps ONE RocksDB Corestore while tracking which Hypercores and
@@ -247,16 +249,34 @@ export function createReplication (ctx) {
     }
   }
 
+  function admitDirectTopicScopes (state, discHex, allowChannel) {
+    const directTopicScopes = topicScopes.get(discHex)
+    if (!directTopicScopes || directTopicScopes.size === 0) return false
+    let admitted = false
+    for (const rawScope of directTopicScopes) {
+      const scopeId = resolveScope(rawScope)
+      const isMeta = isMetaScope(scopeId)
+      if (!isMeta && (!allowChannel || isStrictScope(scopeId))) continue
+      if (state.strict && !scopeId.startsWith('channel:') && !isMeta) continue
+      if (isMeta && !hasNonStrictScope(state)) state.strict = true
+      grantScope(state, scopeId)
+      admitted = true
+    }
+    return admitted
+  }
+
   function onIncomingWakeup (state, id) {
     if (state.closed || state.conn.destroyed || !id) return
     const scopes = topicScopes.get(toHex(id))
     if (!scopes || scopes.size === 0) return
     for (const rawScopeId of scopes) {
       const scopeId = resolveScope(rawScopeId)
-      if (isStrictScope(scopeId)) continue
-      // Proving knowledge of a channel's own 256-bit discoveryKey upgrades a strict search connection
-      // for THAT channel alone (keeping `state.strict = true` so other channels & unoffered cores stay isolated).
-      if (state.strict && !state.scopes.has(scopeId) && !scopeId.startsWith('channel:')) continue
+      const isMeta = isMetaScope(scopeId)
+      if (isStrictScope(scopeId) && !isMeta) continue
+      // Proving knowledge of a channel's or metadata channel's own 256-bit discoveryKey/topic
+      // upgrades a strict connection for THAT scope alone (keeping `state.strict = true`).
+      if (state.strict && !state.scopes.has(scopeId) && !scopeId.startsWith('channel:') && !isMeta) continue
+      if (isMeta && !hasNonStrictScope(state)) state.strict = true
       if (state.scopes.has(scopeId) && state.wakeupScopes.has(scopeId)) {
         // Re-pair if ProtomuxWakeup GC'd an idle peer channel while the connection stayed alive.
         const w = scopeWakeups.get(scopeId)
@@ -291,20 +311,9 @@ export function createReplication (ctx) {
       for (const scopeId of scopes) {
         if (state.scopes.has(scopeId)) return true
       }
-      // Only grant a full channel scope when the peer proved knowledge of the channel's OWN discoveryKey
-      // (`topicScopes`), never transitively from a single video blob core into its enclosing channel(s).
-      const directTopicScopes = topicScopes.get(discHex)
-      if (directTopicScopes) {
-        let admitted = false
-        for (const rawScope of directTopicScopes) {
-          const scopeId = resolveScope(rawScope)
-          if (isStrictScope(scopeId)) continue
-          if (state.strict && !scopeId.startsWith('channel:')) continue
-          grantScope(state, scopeId)
-          admitted = true
-        }
-        if (admitted) return true
-      }
+      // Only grant a full channel/meta scope when the peer proved knowledge of its OWN discoveryKey/topic
+      // (`topicScopes`), never transitively from a single video blob or artwork shard core.
+      if (admitDirectTopicScopes(state, discHex, true)) return true
       if (state.strict) return false
       // Single non-strict core (e.g. a video blob or writer core requested directly by discoveryKey):
       // admit ONLY this single core without exposing any enclosing channel's other cores or wakeup.
@@ -315,7 +324,8 @@ export function createReplication (ctx) {
       }
       return false
     }
-    return !state.strict
+    if (admitDirectTopicScopes(state, discHex, false)) return true
+    return !state.strict && state.scopes.size === 0
   }
 
   async function onDiscoveryKey (state, discoveryKey) {
@@ -409,7 +419,11 @@ export function createReplication (ctx) {
     // upgrade the connection out of strict search-only mode for that locally shared scope.
     for (const rawScopeId of scopesFromTopics(topics)) {
       const scopeId = resolveScope(rawScopeId)
-      if (!isStrictScope(scopeId) && state.strict) state.strict = false
+      if (!isStrictScope(scopeId)) {
+        if (state.strict) state.strict = false
+      } else if (!hasNonStrictScope(state)) {
+        state.strict = true
+      }
       grantScope(state, scopeId)
     }
   }

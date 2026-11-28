@@ -33,6 +33,9 @@ export async function createSources (ctx) {
         if (!s.hydrated) continue
         channels[k] = {
           syncedAt: s.syncedAt || 0,
+          viewKey: s.viewKey || '',
+          viewVersion: Number.isInteger(s.viewVersion) ? s.viewVersion : -1,
+          viewFork: Number.isInteger(s.viewFork) && s.viewFork >= 0 ? s.viewFork : 0,
           entries: s.entries.map(it => [it.sub, it.entry]),
           discovered: s.discovered
         }
@@ -74,17 +77,31 @@ export async function createSources (ctx) {
     target.discovered = discoveredList
   }
 
+  function viewHeadInfo (view) {
+    const head = view.head()
+    if (!head) return null
+    return { key: head.key ? b4a.toString(head.key, 'hex') : '', length: head.length, fork: view.core?.fork || 0 }
+  }
+
+  function registerCachedKeys (src) {
+    if (src.keysRegistered) return
+    const scopeId = `channel:${src.key}`
+    for (const { entry } of src.entries) ctx.replication.registerKey(entry.blobs, scopeId)
+    src.keysRegistered = true
+  }
+
   async function scanChannelView (view, viaKey) {
     const entriesList = []
     const discoveredList = []
-    // A landed view can be sparse where nobody serves its blocks: the stream's own timeout ends the
-    // read instead of letting `search()` or the rotation tick wait for a block that never arrives.
+    const discoveredBySub = new Map()
     for await (const node of view.createReadStream({ timeout: 5_000 })) {
       const sub = b4a.toString(node.key)
       if (sub.startsWith('source/')) {
         const op = decodeOp(node.value)
         if (op?.type === 'source') {
-          discoveredList.push({ key: op.sourceKey, kind: 'channel', title: cleanText(op.title, op.sourceKey.slice(0, 12)), via: viaKey })
+          const item = { key: op.sourceKey, kind: 'channel', title: cleanText(op.title, op.sourceKey.slice(0, 12)), via: viaKey }
+          discoveredList.push(item)
+          discoveredBySub.set(sub, item)
         }
       } else if (!isSystemViewKey(sub)) {
         const op = decodeOp(node.value)
@@ -94,73 +111,178 @@ export async function createSources (ctx) {
         }
       }
     }
-    return { entriesList, discoveredList }
+    return { entriesList, discoveredList, discoveredBySub }
   }
 
-  async function refreshSourceCache (src, { waitSync = true, force = false } = {}) {
+  function removeIdEntry (byId, id, sub) {
+    const bucket = byId.get(id)
+    if (!bucket) return
+    const next = bucket.filter(it => it.sub !== sub)
+    if (next.length > 0) byId.set(id, next)
+    else byId.delete(id)
+  }
+
+  function applyDiffChanges (src, diffOps) {
+    const scopeId = `channel:${src.key}`
+    const deletedSubs = new Set()
+    const updatedItems = new Map()
+    const addedItems = []
+    const removedDiscKeys = new Set()
+    const addedDisc = []
+    let changed = false
+
+    for (const { left, right } of diffOps) {
+      const sub = b4a.toString(left ? left.key : right.key)
+      if (sub.startsWith('source/')) {
+        const prevOp = right ? decodeOp(right.value) : null
+        const nextOp = left ? decodeOp(left.value) : null
+        if (prevOp?.type === 'source') {
+          if (src.discoveredBySub.size === 0 && src.discovered.length > 0) return null
+          src.discoveredBySub.delete(sub); removedDiscKeys.add(prevOp.sourceKey); changed = true
+        }
+        if (nextOp?.type === 'source') {
+          const item = { key: nextOp.sourceKey, kind: 'channel', title: cleanText(nextOp.title, nextOp.sourceKey.slice(0, 12)), via: src.key }
+          src.discoveredBySub.set(sub, item); addedDisc.push(item); changed = true
+        }
+        continue
+      }
+      if (isSystemViewKey(sub)) continue
+      const prevEntry = src.bySub.get(sub)
+      const nextOp = left ? decodeOp(left.value) : null
+      if (prevEntry) removeIdEntry(src.byId, prevEntry.id, sub)
+      if (nextOp?.type === 'announce') {
+        ctx.replication.registerKey(nextOp.blobs, scopeId)
+        const item = { sub, entry: nextOp }
+        src.bySub.set(sub, nextOp)
+        let bucket = src.byId.get(nextOp.id)
+        if (!bucket) { bucket = []; src.byId.set(nextOp.id, bucket) }
+        bucket.push(item)
+        if (prevEntry) updatedItems.set(sub, item)
+        else addedItems.push(item)
+        changed = true
+      } else if (prevEntry) {
+        src.bySub.delete(sub); deletedSubs.add(sub); changed = true
+      }
+    }
+
+    if (deletedSubs.size > 0 || updatedItems.size > 0) {
+      src.entries = src.entries.filter(it => !deletedSubs.has(it.sub)).map(it => updatedItems.get(it.sub) || it).concat(addedItems)
+    } else if (addedItems.length > 0) {
+      src.entries.push(...addedItems)
+    }
+
+    if (removedDiscKeys.size > 0 || addedDisc.length > 0) {
+      const byKey = new Map(src.discovered.map(d => [d.key, d]))
+      for (const dk of removedDiscKeys) byKey.delete(dk)
+      for (const item of src.discoveredBySub.values()) byKey.set(item.key, item)
+      for (const item of addedDisc) byKey.set(item.key, item)
+      src.discovered = [...byKey.values()]
+    }
+    return changed
+  }
+
+  async function diffChannelView (snap, prevVersion, currentViewKey) {
+    const prevView = snap.checkout({ length: prevVersion, key: b4a.from(currentViewKey, 'hex') })
+    const diffOps = []
+    try {
+      for await (const change of snap.createDiffStream(prevView, { timeout: 5_000 })) diffOps.push(change)
+    } finally {
+      await prevView.close().catch(() => {})
+    }
+    return diffOps
+  }
+
+  function commitSync (src, revSnap, head, bumped) {
+    const prevKey = src.viewKey
+    const prevVer = src.viewVersion
+    const prevFork = src.viewFork
+    src.cachedRev = revSnap
+    src.viewKey = head.key
+    src.viewVersion = head.length
+    src.viewFork = head.fork
+    src.hydrated = true
+    src.syncedAt = Date.now()
+    scheduleCatalogSave()
+    if (bumped) ctx.channel.bumpView()
+    if (prevVer >= 0 && (prevVer !== head.length || prevKey !== head.key || prevFork !== head.fork)) ctx.update()
+  }
+
+  async function runRefreshSourceCache (src, { waitSync = true, force = false } = {}) {
     if (!src?.bee || ctx.life.closing) return
-    // A forced tick is the background's own read: it gives the linearizer room to fetch (the 1 s
-    // cap `applied()` uses is for foreground reads that must not hang the UI), then walks the view.
     if (force) {
-      // A channel we already hold is a refresh: let the topic lookups answer first, or `update()`
-      // returns at once against whatever peer spoke last. This is throttled across the node —
-      // paying it per channel would stall rotating a large library for no extra truth. The private swarm has no
-      // topic lookups to flush (and no `flush`), so a privately routed node reads at once.
       if (!ctx.net.dht && src.hydrated && Date.now() - lastSwarmFlushAt > 10_000) {
         lastSwarmFlushAt = Date.now()
         await Promise.race([ctx.net.swarm.flush().catch(() => {}), new Promise(r => setTimeout(r, 3_000))])
       }
-      // Autobee goes quiet once a writer looks whole against the first hint it heard, and the
-      // publisher's coupler skips announcing a core this peer already has open — so a follower
-      // that met a partial peer first stays partial forever. Asking again makes the publisher
-      // answer with its real length, which reactivates the writer and resumes the download.
       for (const session of ctx.replication.getWakeupSessions(`channel:${src.key}`, src.bee.key, { discoveryKey: src.bee.discoveryKey })) {
-        try { session.broadcastLookup() } catch {}
+        try { session.broadcastLookup() } catch (err) { void err }
       }
       await Promise.race([src.bee.update().catch(() => {}), new Promise(r => setTimeout(r, 2_000))])
-    } else if (waitSync) await applied(src.bee)
+    } else if (waitSync) {
+      await applied(src.bee)
+    }
     if (!src.bee || ctx.life.closing) return
-    const version = src.bee.view.version
-    // `force` is the background tick's read: walking the view is what makes Autobase fetch the
-    // blocks it linearizes next, so a view that still owes announces gets them. Gating every read
-    // on `version` alone deadlocks — no read, no progress, no new version.
-    // A rescan is due when the view moved, a change landed since the last scan (rev), or the record was (re)opened (cachedRev -1).
-    if (!force && src.hydrated && src.cachedRev === src.rev && src.viewVersion === version) return
+    if (!src.bee.view.head()) await src.bee.view.ready()
+    if (!src.bee || ctx.life.closing) return
+
     const revSnap = src.rev
-    const previousVersion = src.viewVersion
-    // A follower's view grows only while something walks it. One pass can leave the linearizer
-    // parked on a block nobody asked for, so the background tick keeps reading until the count
-    // stops moving (bounded); that is exactly the scanning `search()` used to do on every call.
-    let scan
+    const snap = src.bee.view.snapshot()
     try {
-      scan = await scanChannelView(src.bee.view, src.key)
-      if (force) {
-        for (let pass = 0; pass < 5 && !ctx.life.closing; pass++) {
-          const next = await scanChannelView(src.bee.view, src.key)
-          if (next.entriesList.length <= scan.entriesList.length) break
-          scan = next
-          await new Promise(resolve => setTimeout(resolve, 400))
+      const info = viewHeadInfo(snap)
+      const currentViewKey = info ? info.key : ''
+      const version = info ? info.length : 0
+      const fork = info ? info.fork : 0
+      // Genesis (length 0) means this follower has not applied any blocks yet: preserve cached snapshot.
+      if (version === 0) { if (src.hydrated) src.cachedRev = -1; return }
+
+      const sameHead = Boolean(currentViewKey) && src.viewKey === currentViewKey && src.viewVersion === version && src.viewFork === fork
+      if (src.hydrated && sameHead) { src.cachedRev = revSnap; return }
+
+      const canDiff = src.hydrated && Boolean(currentViewKey) && src.viewKey === currentViewKey && src.viewFork === fork && src.viewVersion > 0 && version > src.viewVersion
+      const head = { key: currentViewKey, length: version, fork }
+      if (canDiff) {
+        let diffOps = null
+        try {
+          diffOps = await diffChannelView(snap, src.viewVersion, currentViewKey)
+        } catch (err) {
+          // Sparse followers or peers missing historical view blocks at `prevVersion` can hit
+          // BLOCK_NOT_AVAILABLE or REQUEST_TIMEOUT on the diff; fall through to a clean full scan.
+          if (err?.code !== 'BLOCK_NOT_AVAILABLE' && err?.code !== 'REQUEST_TIMEOUT') throw err
+        }
+        if (diffOps !== null) {
+          const changed = applyDiffChanges(src, diffOps)
+          if (changed !== null) {
+            commitSync(src, revSnap, head, changed)
+            return
+          }
         }
       }
-    } catch (err) {
-      // A sparse landing ends at the read stream's timeout: keep what this record already holds and mark it
-      // for a rescan (`cachedRev` -1 is the due flag) instead of clearing a cache this scan cannot replace.
-      if (err?.code !== 'REQUEST_TIMEOUT') throw err
-      src.cachedRev = -1
-      return
+
+      let scan
+      try {
+        scan = await scanChannelView(snap, src.key)
+      } catch (err) {
+        if (err?.code !== 'REQUEST_TIMEOUT') throw err
+        src.cachedRev = -1
+        return
+      }
+      const prevCount = src.entries.length
+      indexChannelRecords(src, scan.entriesList, scan.discoveredList, { merge: false })
+      src.discoveredBySub = scan.discoveredBySub
+      src.keysRegistered = true
+      const bumped = scan.entriesList.length !== prevCount || src.viewKey !== currentViewKey || src.viewVersion !== version || src.viewFork !== fork
+      commitSync(src, revSnap, head, bumped)
+    } finally {
+      await snap.close().catch(() => {})
     }
-    const { entriesList, discoveredList } = scan
-    const prevCount = src.entries.length
-    indexChannelRecords(src, entriesList, discoveredList, { merge: true })
-    src.cachedRev = revSnap
-    src.viewVersion = version
-    if (revSnap > 0 || entriesList.length > 0 || discoveredList.length > 0) {
-      src.hydrated = true
-    }
-    src.syncedAt = Date.now()
-    if (src.hydrated) scheduleCatalogSave()
-    if (entriesList.length !== prevCount) ctx.channel.bumpView()
-    if (previousVersion >= 0 && previousVersion !== version) ctx.update()
+  }
+
+  function refreshSourceCache (src, opts = {}) {
+    if (!src?.bee || ctx.life.closing) return Promise.resolve()
+    const run = () => runRefreshSourceCache(src, opts)
+    const next = src.refreshGate.then(run, run)
+    src.refreshGate = next.catch(() => {})
+    return next
   }
 
   function ensureSourceRecord (key, alias = '') {
@@ -170,22 +292,11 @@ export async function createSources (ctx) {
       return { src, existed: true }
     }
     src = {
-      key,
-      kind: 'channel',
-      alias,
-      bee: null,
-      opening: null,
-      closing: null,
-      rev: 0,
-      cachedRev: -1,
-      viewVersion: -1,
-      hydrated: false,
-      touchedAt: 0,
-      syncedAt: 0,
-      entries: [],
-      byId: new Map(),
-      bySub: new Map(),
-      discovered: []
+      key, kind: 'channel', alias, bee: null, opening: null, closing: null,
+      rev: 0, cachedRev: -1, viewKey: '', viewVersion: -1, viewFork: -1,
+      hydrated: false, keysRegistered: false, refreshGate: Promise.resolve(),
+      touchedAt: 0, syncedAt: 0,
+      entries: [], byId: new Map(), bySub: new Map(), discovered: [], discoveredBySub: new Map()
     }
     const cached = savedCatalog[key]
     if (cached && Array.isArray(cached.entries)) {
@@ -198,6 +309,12 @@ export async function createSources (ctx) {
       indexChannelRecords(src, entriesList, Array.isArray(cached.discovered) ? cached.discovered : [])
       src.hydrated = true
       src.cachedRev = 0
+      const cachedViewKey = typeof cached.viewKey === 'string' && cached.viewKey.length === 64 ? cached.viewKey.toLowerCase() : ''
+      const cachedViewVersion = Number.isInteger(cached.viewVersion) && cached.viewVersion > 0 ? cached.viewVersion : -1
+      const cachedViewFork = Number.isInteger(cached.viewFork) && cached.viewFork >= 0 ? cached.viewFork : 0
+      src.viewKey = cachedViewKey
+      src.viewVersion = cachedViewKey ? cachedViewVersion : -1
+      src.viewFork = cachedViewKey ? cachedViewFork : -1
       src.syncedAt = Number(cached.syncedAt) || 0
     }
     extraSources.set(key, src)
@@ -209,9 +326,12 @@ export async function createSources (ctx) {
     if (src.bee && !src.closing) {
       src.closing = (async () => {
         try {
-          if (!ctx.life.closing && (src.rev !== src.cachedRev || src.viewVersion !== src.bee.view.version)) {
-            await refreshSourceCache(src, { waitSync: false }).catch(() => {})
-          }
+          const info = viewHeadInfo(src.bee.view)
+          const headKey = info ? info.key : ''
+          const headVersion = info ? info.length : -1
+          const headFork = info ? info.fork : -1
+          const stale = src.rev !== src.cachedRev || src.viewKey !== headKey || src.viewVersion !== headVersion || src.viewFork !== headFork
+          if (!ctx.life.closing && stale) await refreshSourceCache(src, { waitSync: false }).catch(() => {})
         } finally {
           const oldBee = src.bee
           src.bee = null
@@ -296,6 +416,7 @@ export async function createSources (ctx) {
         src.cachedRev = -1
         src.touchedAt = touch ? ++touchClock : 0
         activeSources.add(k)
+        registerCachedKeys(src)
         ctx.net.joinOverlayTopic(`channel:${k}`, bee.key, bee.discoveryKey)
         const done = !ctx.net.dht ? beeNs.findingPeers() : null
         if (done) {
@@ -356,27 +477,13 @@ export async function createSources (ctx) {
   function listSources () {
     const list = []
     if (ctx.channel.usePrimary() || ctx.channel.hasEntries() || primaryAlias) {
-      list.push({
-        key: ctx.channel.primaryKey,
-        kind: 'channel',
-        alias: primaryAlias,
-        primary: true,
-        writable: Boolean(ctx.channel.channel.writable || (ctx.identity.idVault && ctx.identity.idVault.channelKey === ctx.channel.primaryKey))
-      })
+      const writable = Boolean(ctx.channel.channel.writable || (ctx.identity.idVault && ctx.identity.idVault.channelKey === ctx.channel.primaryKey))
+      list.push({ key: ctx.channel.primaryKey, kind: 'channel', alias: primaryAlias, primary: true, writable })
     }
     for (const s of extraSources.values()) {
-      list.push({
-        key: s.key,
-        kind: 'channel',
-        alias: s.alias,
-        primary: false,
-        writable: false,
-        // What this follower actually holds right now: the app can show "390 videos,
-        // syncing" instead of pretending a hibernated snapshot is the whole channel.
-        entries: s.entries.length,
-        active: Boolean(s.bee),
-        hydrated: s.hydrated
-      })
+      // What this follower actually holds right now: the app can show "390 videos, syncing"
+      // instead of pretending a hibernated snapshot is the whole channel.
+      list.push({ key: s.key, kind: 'channel', alias: s.alias, primary: false, writable: false, entries: s.entries.length, active: Boolean(s.bee), hydrated: s.hydrated })
     }
     return list
   }
@@ -434,16 +541,8 @@ export async function createSources (ctx) {
   ctx.undo.push(() => clearTimeout(sourceRotateTimer))
 
   return {
-    extraSources,
-    activeSources,
-    flushCatalogCache,
-    indexChannelRecords,
-    scanChannelView,
-    refreshSourceCache,
-    wakeSource,
-    addSource,
-    removeSource,
-    listSources,
+    extraSources, activeSources, flushCatalogCache, indexChannelRecords, scanChannelView,
+    refreshSourceCache, wakeSource, addSource, removeSource, listSources,
     get sourceRotateTimer () { return sourceRotateTimer },
     set sourceRotateTimer (t) { sourceRotateTimer = t }
   }

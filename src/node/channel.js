@@ -81,7 +81,9 @@ export async function createChannel (ctx) {
   }
   function openLanding (hex, channelHex) {
     ctx.replication.registerKey(hex, `channel:${channelHex}`)
-    if (landedCores.has(hex)) return
+    // Phones and desktop worklets keep landed system/view cores sparse so large channels
+    // and metadata mirrors never download wholesale onto client devices.
+    if (isWorklet || landedCores.has(hex)) return
     const core = ctx.storage.store.get({ key: b4a.from(hex, 'hex') })
     ctx.replication.registerCore(core, `channel:${channelHex}`)
     landedCores.set(hex, core)
@@ -310,31 +312,61 @@ export async function createChannel (ctx) {
     await applied(channel)
     const selfHex = b4a.toString(channel.local.key, 'hex')
     const out = new Map()
-    out.set(primaryKey, { key: primaryKey, role: 'owner', alias: 'primary', self: primaryKey === selfHex })
+    out.set(primaryKey, { key: primaryKey, role: 'owner', alias: 'primary', self: primaryKey === selfHex, indexer: true })
     for await (const n of channel.view.createReadStream({ gte: b4a.from('writer/'), lt: b4a.from('writer/\xff') })) {
       const k = b4a.toString(n.key).slice(7)
       let meta = {}
-      try { meta = JSON.parse(b4a.toString(n.value)) || {} } catch {}
-      out.set(k, { key: k, role: meta.role || 'writer', alias: cleanText(meta.alias || ''), self: k === selfHex })
+      try {
+        meta = JSON.parse(b4a.toString(n.value)) || {}
+      } catch (err) {
+        void err
+      }
+      out.set(k, {
+        key: k,
+        role: meta.role || 'writer',
+        alias: cleanText(meta.alias || ''),
+        self: k === selfHex,
+        indexer: k === primaryKey || Boolean(meta.indexer)
+      })
     }
     return [...out.values()]
   }
 
-  async function grantWriter (writerKey, { role = 'writer', alias = '' } = {}) {
+  async function grantWriter (writerKey, { role = 'writer', alias = '', indexer = false } = {}) {
     const wHex = String(writerKey || '').trim().toLowerCase()
     if (!HEX64.test(wHex)) throw new Error('Writer key must be 64 hex characters')
     if (!ROLES.has(role)) throw new Error('Role must be owner, mod, or writer')
-    await append({ type: 'grant', writer: wHex, role, alias: cleanText(alias) })
-    return { granted: true, writer: wHex, role, alias: cleanText(alias) }
+    const promoteIndexer = role === 'owner' && Boolean(indexer)
+    const cleanAlias = cleanText(alias)
+    const op = { type: 'grant', writer: wHex, role, alias: cleanAlias }
+    if (promoteIndexer) op.indexer = true
+    await append(op)
+    return { granted: true, writer: wHex, role, alias: cleanAlias, indexer: promoteIndexer }
   }
 
-  async function revokeWriter (writerKey, { purgeEntries = false } = {}) {
+  async function revokeWriter (writerKey, { purgeEntries = false, rotateEpoch = false } = {}) {
     const wHex = String(writerKey || '').trim().toLowerCase()
     if (!HEX64.test(wHex)) throw new Error('Writer key must be 64 hex characters')
     if (wHex === primaryKey) throw new Error('Cannot revoke the genesis channel founder')
-    await append({ type: 'revoke', writer: wHex, purgeEntries: Boolean(purgeEntries) })
+    const purge = Boolean(purgeEntries)
+    const rotate = Boolean(rotateEpoch)
+    await append({ type: 'revoke', writer: wHex, purgeEntries: purge })
+    if (rotate) {
+      const nextEpoch = (await currentChannelEpoch()) + 1
+      await append({ type: 'epoch', epoch: nextEpoch })
+    }
     ctx.update()
-    return { revoked: true, writer: wHex, purgeEntries: Boolean(purgeEntries) }
+    const result = { revoked: true, writer: wHex, purgeEntries: purge, rotateEpoch: rotate }
+    if (rotate) {
+      const ep = await currentChannelEpoch()
+      result.epoch = ep
+      const access = ctx.identity.epochAccess?.(ep)
+      if (access) {
+        result.epochKey = access.epochKey
+        result.accessUri = access.accessUri
+      }
+    }
+    return result
   }
 
   return {

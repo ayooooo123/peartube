@@ -63,24 +63,32 @@ export function createReplication (ctx) {
   }
 
   function attachCoreToConn (state, core) {
-    if (state.closed || state.conn.destroyed || core.closed || core.closing) return
+    if (state.closed || state.conn.destroyed || core.closed || core.closing || !core.opened) return
     core.replicate(state.stream)
   }
 
-  function trackReadyCore (core, scopeId) {
-    if (ctx.life.closing || core.closed || core.closing || !core.discoveryKey) return
+  function trackReadyCore (core, rawScopeId) {
+    if (ctx.life.closing || core.closed || core.closing || !core.opened || !core.discoveryKey) return
+    const scopeId = resolveScope(rawScopeId)
     const discHex = toHex(core.discoveryKey)
     addMapSet(coreScopes, discHex, scopeId)
     let byDisc = scopeCores.get(scopeId)
     if (!byDisc) { byDisc = new Map(); scopeCores.set(scopeId, byDisc) }
     let sessions = byDisc.get(discHex)
     if (!sessions) { sessions = new Set(); byDisc.set(discHex, sessions) }
-    sessions.add(core)
-    core.once('close', () => {
-      sessions.delete(core)
-      if (sessions.size === 0) byDisc.delete(discHex)
-      if (byDisc.size === 0) scopeCores.delete(scopeId)
-    })
+    const added = !sessions.has(core)
+    if (added) {
+      sessions.add(core)
+      core.once('close', () => {
+        const curScope = resolveScope(rawScopeId)
+        const curByDisc = scopeCores.get(curScope)
+        const curSessions = curByDisc?.get(discHex)
+        if (!curSessions) return
+        curSessions.delete(core)
+        if (curSessions.size === 0) curByDisc.delete(discHex)
+        if (curByDisc.size === 0) scopeCores.delete(curScope)
+      })
+    }
     for (const state of conns.values()) {
       if (state.scopes.has(scopeId) || state.allowedDisc.has(discHex)) {
         attachCoreToConn(state, core)
@@ -140,11 +148,10 @@ export function createReplication (ctx) {
 
   function registerCore (core, scopeId) {
     if (!core || !scopeId) return core
-    const targetScope = resolveScope(scopeId)
-    if (core.discoveryKey) {
-      trackReadyCore(core, targetScope)
+    if (core.opened && core.discoveryKey) {
+      trackReadyCore(core, scopeId)
     } else {
-      core.ready().then(() => trackReadyCore(core, resolveScope(scopeId)), () => {})
+      core.ready().then(() => trackReadyCore(core, scopeId), () => {})
     }
     return core
   }
@@ -211,22 +218,28 @@ export function createReplication (ctx) {
   }
 
   function destroyWakeup (scopeId) {
-    const w = scopeWakeups.get(scopeId)
+    const resolved = resolveScope(scopeId)
+    const w = scopeWakeups.get(resolved)
     if (!w) return
-    scopeWakeups.delete(scopeId)
+    scopeWakeups.delete(resolved)
+    for (const state of conns.values()) state.wakeupScopes.delete(resolved)
     w.destroy()
   }
 
-  function grantScope (state, scopeId) {
+  function grantScope (state, rawScopeId) {
+    const scopeId = resolveScope(rawScopeId)
     if (!state || state.closed || state.conn.destroyed || !scopeId) return
-    if (state.scopes.has(scopeId)) return
+    if (state.scopes.has(scopeId)) {
+      if (!state.wakeupScopes.has(scopeId)) attachWakeupScope(state, scopeId)
+      return
+    }
     state.scopes.add(scopeId)
     attachWakeupScope(state, scopeId)
     const byDisc = scopeCores.get(scopeId)
     if (!byDisc) return
     for (const [, sessions] of byDisc) {
       for (const core of sessions) {
-        if (!core.closed && !core.closing) {
+        if (!core.closed && !core.closing && core.opened) {
           attachCoreToConn(state, core)
           break
         }
@@ -238,8 +251,21 @@ export function createReplication (ctx) {
     if (state.closed || state.conn.destroyed || !id) return
     const scopes = topicScopes.get(toHex(id))
     if (!scopes || scopes.size === 0) return
-    for (const scopeId of scopes) {
-      if (state.strict && !state.scopes.has(scopeId)) continue
+    for (const rawScopeId of scopes) {
+      const scopeId = resolveScope(rawScopeId)
+      if (isStrictScope(scopeId)) continue
+      // Proving knowledge of a channel's own 256-bit discoveryKey upgrades a strict search connection
+      // for THAT channel alone (keeping `state.strict = true` so other channels & unoffered cores stay isolated).
+      if (state.strict && !state.scopes.has(scopeId) && !scopeId.startsWith('channel:')) continue
+      if (state.scopes.has(scopeId) && state.wakeupScopes.has(scopeId)) {
+        // Re-pair if ProtomuxWakeup GC'd an idle peer channel while the connection stayed alive.
+        const w = scopeWakeups.get(scopeId)
+        if (w) {
+          w.addStream(state.stream)
+          installWakeupRouter(state)
+        }
+        continue
+      }
       grantScope(state, scopeId)
     }
   }
@@ -265,16 +291,29 @@ export function createReplication (ctx) {
       for (const scopeId of scopes) {
         if (state.scopes.has(scopeId)) return true
       }
+      // Only grant a full channel scope when the peer proved knowledge of the channel's OWN discoveryKey
+      // (`topicScopes`), never transitively from a single video blob core into its enclosing channel(s).
+      const directTopicScopes = topicScopes.get(discHex)
+      if (directTopicScopes) {
+        let admitted = false
+        for (const rawScope of directTopicScopes) {
+          const scopeId = resolveScope(rawScope)
+          if (isStrictScope(scopeId)) continue
+          if (state.strict && !scopeId.startsWith('channel:')) continue
+          grantScope(state, scopeId)
+          admitted = true
+        }
+        if (admitted) return true
+      }
       if (state.strict) return false
-      // Non-strict connection: peer proved knowledge of a 256-bit discoveryKey belonging to a local scope.
-      // Admit only the matching non-strict scope(s) without exposing any other scope.
-      let admitted = false
+      // Single non-strict core (e.g. a video blob or writer core requested directly by discoveryKey):
+      // admit ONLY this single core without exposing any enclosing channel's other cores or wakeup.
       for (const scopeId of scopes) {
         if (isStrictScope(scopeId)) continue
-        grantScope(state, scopeId)
-        admitted = true
+        state.allowedDisc.add(discHex)
+        return true
       }
-      return admitted
+      return false
     }
     return !state.strict
   }
@@ -365,8 +404,12 @@ export function createReplication (ctx) {
   function grantTopicsOnConn (conn, topics) {
     const state = conns.get(conn)
     if (!state || state.closed) return
-    for (const scopeId of scopesFromTopics(topics)) {
-      if (state.strict && !state.scopes.has(scopeId)) continue
+    // Topics here come from local Swarm/LAN discovery (never untrusted remote probes), so when a peer
+    // that initially connected on `search` is later discovered on a locally-joined channel/watch topic,
+    // upgrade the connection out of strict search-only mode for that locally shared scope.
+    for (const rawScopeId of scopesFromTopics(topics)) {
+      const scopeId = resolveScope(rawScopeId)
+      if (!isStrictScope(scopeId) && state.strict) state.strict = false
       grantScope(state, scopeId)
     }
   }

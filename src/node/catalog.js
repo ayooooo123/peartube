@@ -1,5 +1,4 @@
 import b4a from 'b4a'
-import hypercoreCrypto from 'hypercore-crypto'
 import { HEX64, cleanMusic, cleanText, decodeOp, describeEntry, formatWatchUri, isSystemViewKey, parseUri, str } from '../protocol.js'
 import { applied } from './channel.js'
 
@@ -33,15 +32,14 @@ export function createCatalog (ctx) {
       if (activeRefresh.length > 0) await Promise.all(activeRefresh)
     }
 
-    // A listing unions two sources of truth, but never both at once for the same channel: an awake
-    // channel's view is authoritative (a deleted announce is really gone), and the hibernated
-    // snapshot is all there is for a channel that is asleep. Merging them kept deleted titles on
-    // screen forever — the cache only ever added.
+    // `collect(id)` uses a direct B-tree range read on awake views (and O(1) `byId` on hibernated
+    // or genesis-boot caches). `collect(null)` reads the already-fresh incremental in-memory index
+    // populated by `refreshPrimaryCache()` / `refreshSourceCache()` without walking views twice.
     const raw = []
     const pushRaw = new Map()
     const addRaw = rec => { if (!pushRaw.has(rec.key)) pushRaw.set(rec.key, rec) }
-    const readView = async (view, viaKey, prefix) => {
-      const range = id ? { gte: b4a.from(`${id}/`), lt: b4a.from(`${id}/\xff`) } : {}
+    const readViewRange = async (view, viaKey, prefix) => {
+      const range = { gte: b4a.from(`${id}/`), lt: b4a.from(`${id}/\xff`) }
       for await (const node of view.createReadStream(range)) {
         const sub = b4a.toString(node.key)
         if (isSystemViewKey(sub)) continue
@@ -53,16 +51,22 @@ export function createCatalog (ctx) {
       }
     }
     if ((ctx.channel.usePrimary() || ctx.channel.hasEntries()) && (!filterSource || filterSource === ctx.channel.primaryKey)) {
-      await readView(ctx.channel.channel.view, ctx.channel.primaryKey, null)
+      if (id) {
+        await readViewRange(ctx.channel.channel.view, ctx.channel.primaryKey, null)
+      } else {
+        for (const { sub, entry } of ctx.channel.primaryCache.entries) {
+          addRaw({ key: sub, entry, source: ctx.channel.primaryKey, sourceKind: 'channel' })
+        }
+      }
     }
     for (const s of ctx.sources.extraSources.values()) {
       if (filterSource && filterSource !== s.key) continue
-      if (s.bee) {
-        await readView(s.bee.view, s.key, `channel:${s.key}/`)
+      if (id && s.bee && (s.bee.view.head()?.length || 0) > 0) {
+        await readViewRange(s.bee.view, s.key, `channel:${s.key}/`)
         continue
       }
-      for (const { sub, entry } of s.entries) {
-        if (id && entry.id !== id) continue
+      const list = id ? (s.byId.get(id) || []) : s.entries
+      for (const { sub, entry } of list) {
         addRaw({ key: `channel:${s.key}/${sub}`, entry, source: s.key, sourceKind: 'channel' })
       }
     }
@@ -228,9 +232,6 @@ export function createCatalog (ctx) {
     }
   }
 
-  // Channels whose swarm a watch link joined without following them, oldest first.
-  const linkSwarms = []
-
   let discoveredCache = null
   let discoveredAtEpoch = 0
   async function discoveredSources () {
@@ -275,7 +276,10 @@ export function createCatalog (ctx) {
       if (!bee) return null
       await applied(bee)
       const n = await bee.view.get(b4a.from(subMatch[2]))
-      const op = n ? decodeOp(n.value) : null
+      let op = n ? decodeOp(n.value) : null
+      if (!op && (bee.view.head()?.length || 0) === 0 && src.hydrated && src.bySub.has(subMatch[2])) {
+        op = src.bySub.get(subMatch[2])
+      }
       if (op?.wrappedKey) ctx.blobs.resolveVideoKey(op, src.key)
       return op
     }
@@ -294,15 +298,10 @@ export function createCatalog (ctx) {
       return { action: 'access', channel: parsed.channel, epoch: parsed.epoch, source }
     }
     if (parsed.action === 'source') return { action: 'source', source: await ctx.sources.addSource(parsed) }
-    // A watch link's channel is where the video's peers are. Private routing only reaches the channels it follows;
-    // otherwise joining the channel's swarm is enough, and the link does not add the channel to the library.
-    if (parsed.sourceKey && ctx.net.dht) {
-      await ctx.sources.addSource({ key: parsed.sourceKey, kind: 'channel' }).catch(() => {})
-    } else if (parsed.sourceKey && !linkSwarms.includes(parsed.sourceKey)) {
-      const sk = b4a.from(parsed.sourceKey, 'hex')
-      ctx.net.joinOverlayTopic(`source-swarm:${parsed.sourceKey}`, sk, hypercoreCrypto.discoveryKey(sk))
-      linkSwarms.push(parsed.sourceKey)
-      if (linkSwarms.length > 4) ctx.net.leaveOverlayTopic(`source-swarm:${linkSwarms.shift()}`).catch(() => {})
+    // A watch link's channel is where the video's peers are. Both public and private routing join an
+    // ephemeral `source-swarm:` topic (LRU-capped at 4 inside network.js) without following the channel.
+    if (parsed.sourceKey) {
+      ctx.net.joinEphemeralSource(parsed.sourceKey)
     }
     const { entry } = parsed
     ctx.replication.registerKey(entry.blobs, `watch:${entry.blobs}`)

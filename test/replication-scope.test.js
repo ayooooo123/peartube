@@ -139,21 +139,44 @@ test('global search connection stays strictly isolated: zero channel leaks and r
   // Hostile probe: stranger tries opening unoffered core `privEntry.blobs` directly over the search connection!
   assert.ok(searchConn, 'search connection to relay is open')
   const probeMux = Hypercore.getProtocolMuxer(searchConn)
-  let relayOpenedForbidden = false
   const probeCh = probeMux.createChannel({
     protocol: 'hypercore/alpha',
     id: privDiscBuf,
     onopen () { relayOpenedForbidden = true }
   })
-  probeCh.open()
-  await new Promise(resolve => setTimeout(resolve, 600))
-  probeCh.close()
+  let relayOpenedForbidden = !probeCh
+  if (probeCh) {
+    probeCh.open()
+    await new Promise(resolve => setTimeout(resolve, 600))
+    probeCh.close()
+  }
   assert.equal(relayOpenedForbidden, false, 'Relay must refuse unoffered core discoveryKey probe on a strict search connection')
 
   // Meanwhile, opening and streaming the legitimately offered search hit works over the exact same connection!
   const opened = await searcher.openUri(res[0].magnetUrl)
   const body = Buffer.from(await (await fetch(opened.entry.streamUrl)).arrayBuffer())
   assert.deepEqual(body, pubBytes, 'Searcher streams the offered global-search hit cleanly')
+
+  // Opening a single offered video core must NEVER transitively grant its enclosing channel or sibling unoffered cores!
+  await new Promise(resolve => setTimeout(resolve, 400))
+  assert.equal(seenAlpha.has(relayChanDiscHex), false, 'Opening offered video must NOT transitively grant relay channel core')
+  assert.equal(seenWakeup.has(relayChanDiscHex), false, 'Opening offered video must NOT transitively grant relay channel wakeup')
+  const probeCh2 = probeMux.createChannel({
+    protocol: 'hypercore/alpha',
+    id: privDiscBuf,
+    onopen () { relayOpenedForbiddenAfter = true }
+  })
+  let relayOpenedForbiddenAfter = !probeCh2
+  if (probeCh2) {
+    probeCh2.open()
+    await new Promise(resolve => setTimeout(resolve, 400))
+    probeCh2.close()
+  }
+  assert.equal(relayOpenedForbiddenAfter, false, 'Opening one offered video must NOT unlock sibling unoffered cores in the same channel')
+
+  // Upgrading a strict search connection when the user later follows that relay's channel must sync without deadlocking!
+  await searcher.addSource(relay.status().channel)
+  await until(async () => (await searcher.search('imdb:tt0999999')).length === 1, 30_000, 'searcher upgrades strict search conn after following relay channel')
 })
 
 test('peers sharing two channels sync both over one connection without cross-leaking a third unshared channel', async t => {

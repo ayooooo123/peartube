@@ -159,6 +159,7 @@ export async function createBlobs (ctx) {
       ctx.channel.markHasEntries()
       const op = decodeOp(n.value)
       if (!op || op.type !== 'announce') continue
+      ctx.replication.registerKey(op.blobs, `channel:${primaryKey}`)
       if (op.wrappedKey) resolveVideoKey(op, primaryKey)
       if (k.split('/')[1] === writer && !slotSet.has(op.blobs)) candidates.add(op.blobs)
     }
@@ -351,11 +352,14 @@ export async function createBlobs (ctx) {
     }
   }
 
-  async function blobCore (hex) {
+  async function blobCore (hex, { sourceKey = null } = {}) {
+    const scope = str(sourceKey, HEX64) ? `channel:${sourceKey.toLowerCase()}` : null
+    if (scope) ctx.replication.registerKey(hex, scope)
     let core = blobCores.get(hex)
     if (core) {
       blobCores.delete(hex)
       blobCores.set(hex, core)
+      if (scope) ctx.replication.registerCore(core, scope)
     } else {
       const slot = blobSlots.find(s => s.key === hex)
       core = slot ? slot.core : ctx.storage.store.get({ key: b4a.from(hex, 'hex'), inflightRange: ctx.net.inflightRange() })

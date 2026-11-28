@@ -567,6 +567,8 @@ export async function createPrivateSwarm ({
     return card
   }
 
+  const connTopics = new WeakMap()
+
   function admitInnerStream (enc, expectedRemoteKey = null, topic = null) {
     enc.on('error', () => {})
     enc.opened.then(ok => {
@@ -576,13 +578,28 @@ export async function createPrivateSwarm ({
         enc.destroy(); return
       }
       const hex = b4a.toString(rk, 'hex'), prev = activeByPeer.get(hex)
+      const topics = topic ? [topic] : []
       if (prev && !prev.destroyed) {
-        if (!keepDuplicateInnerStream(keyPair.publicKey, rk, enc.isInitiator)) { enc.destroy(); return }
+        if (!keepDuplicateInnerStream(keyPair.publicKey, rk, enc.isInitiator)) {
+          if (topic) {
+            const prevList = connTopics.get(prev)
+            if (prevList && !prevList.some(t => b4a.equals(t, topic))) prevList.push(topic)
+            swarm.emit('peer-topic', prev, topic)
+          }
+          enc.destroy(); return
+        }
+        const inherited = connTopics.get(prev)
+        if (inherited) {
+          for (const t of inherited) {
+            if (!topics.some(x => b4a.equals(x, t))) topics.push(t)
+          }
+        }
         prev.destroy()
       }
+      connTopics.set(enc, topics)
       activeByPeer.set(hex, enc); connections.add(enc)
       enc.once('close', () => { connections.delete(enc); if (activeByPeer.get(hex) === enc) activeByPeer.delete(hex); swarm.emit('update') })
-      swarm.emit('connection', enc, { publicKey: rk, topics: topic ? [topic] : [] }); swarm.emit('update')
+      swarm.emit('connection', enc, { publicKey: rk, topics }); swarm.emit('update')
     }).catch(() => enc.destroy())
   }
 
@@ -685,12 +702,16 @@ export async function createPrivateSwarm ({
       nextRenewalAt = now + Math.floor(ROUTE_TTL_MS / 2)
     }
 
-    for (const src of joinedSources.values()) {
+    for (const src of [...joinedSources.values()]) {
       if (!needCardRenewal && src.lastGuard === primary && src.lastEpoch === epoch && src.lastTokenHex === tokHex && now < src.nextRvRenewalAt) continue
       const rvTopic = sha256('peartube/private-rv/v1/', src.sourceKeyBuf, epoch)
       const sealedCard = sealBox(cachedCardBytes, sha256('peartube/private-rv-seal/v1/', src.sourceKeyBuf))
       const ok = await primary.rpc.call('rvRegister', { topic: rvTopic, slotId: src.slotId, ttlMs: ROUTE_TTL_MS, sealedCard }, 6000).then(r => r.status === 1, () => false)
       if (ok) {
+        if (joinedSources.get(src.id) !== src) {
+          if (!isClosed(primary.rpc)) primary.rpc.emit('rvUnregister', { topic: rvTopic, slotId: src.slotId })
+          continue
+        }
         src.lastEpoch = epoch; src.lastGuard = primary; src.lastTokenHex = tokHex
         src.nextRvRenewalAt = now + Math.floor(ROUTE_TTL_MS / 2)
       }
@@ -725,7 +746,11 @@ export async function createPrivateSwarm ({
     const hex = b4a.toString(card.innerPublicKey, 'hex')
     const existing = activeByPeer.get(hex)
     if (existing && !existing.destroyed) {
-      if (topic) swarm.emit('peer-topic', existing, topic)
+      if (topic) {
+        const known = connTopics.get(existing)
+        if (known && !known.some(t => b4a.equals(t, topic))) known.push(topic)
+        swarm.emit('peer-topic', existing, topic)
+      }
       return
     }
     if (b4a.equals(card.innerPublicKey, keyPair.publicKey) || dialingPeers.has(hex) || firewall(card.innerPublicKey)) return
@@ -797,8 +822,16 @@ export async function createPrivateSwarm ({
     if (closing || suspended) return
     await ensureGuardsAndPublish()
     if (usableGuards() < 2) return
+    const seenSourceKeys = new Set()
+    const uniqueSources = []
+    for (const s of joinedSources.values()) {
+      const kHex = b4a.toString(s.sourceKeyBuf, 'hex')
+      if (seenSourceKeys.has(kHex)) continue
+      seenSourceKeys.add(kHex)
+      uniqueSources.push(s)
+    }
     await Promise.allSettled([
-      ...[...joinedSources.values()].map(s => refreshSourceDiscovery(s)),
+      ...uniqueSources.map(s => refreshSourceDiscovery(s)),
       ...[...explicitPeers.values()].map(pk => lookupAndDialPeer(pk))
     ])
   }
@@ -828,7 +861,9 @@ export async function createPrivateSwarm ({
       if (joinedSources.has(id)) return joinedSources.get(id).handle
       const src = { id, sourceKeyBuf: b4a.from(sourceKeyBuf), slotId: rand(16), lastEpoch: null, lastGuard: null, lastTokenHex: null, nextRvRenewalAt: 0, handle: null }
       src.handle = { topic: sha256('peartube/private-rv/v1/', src.sourceKeyBuf, String(Math.floor(Date.now() / RV_EPOCH_MS))), isServer: false, isClient: true, refresh: () => pollAll(), destroy: () => swarm.leaveSource(id) }
-      joinedSources.set(id, src); pollAll().catch(() => {})
+      joinedSources.set(id, src)
+      swarm.emit('source-join', id, src.sourceKeyBuf)
+      pollAll().catch(() => {})
       return src.handle
     },
     async leaveSource (id) {

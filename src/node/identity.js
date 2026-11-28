@@ -96,11 +96,18 @@ export function createIdentity (ctx) {
     return { channel: c, epoch: ep }
   }
 
+  function epochAccess (epoch) {
+    if (!idVault) return null
+    const canManageEpoch = ctx.channel.primaryKey === foundedKey || idVault.channelKey === ctx.channel.primaryKey
+    if (!canManageEpoch) return null
+    const epochKeyHex = b4a.toString(idVault.epochKey(ctx.channel.primaryKey, epoch), 'hex')
+    return { epoch, epochKey: epochKeyHex, accessUri: formatAccessUri(ctx.channel.primaryKey, epoch, epochKeyHex) }
+  }
+
   async function identity ({ revealMnemonic = false } = {}) {
     const ep = await ctx.channel.currentChannelEpoch()
     const role = await ctx.channel.localRole()
-    const canManageEpoch = Boolean(idVault && (ctx.channel.primaryKey === foundedKey || idVault.channelKey === ctx.channel.primaryKey))
-    const epochKeyHex = canManageEpoch ? b4a.toString(idVault.epochKey(ctx.channel.primaryKey, ep), 'hex') : ''
+    const access = epochAccess(ep)
     return {
       channel: ctx.channel.primaryKey,
       writer: b4a.toString(ctx.channel.channel.local.key, 'hex'),
@@ -110,7 +117,7 @@ export function createIdentity (ctx) {
       ...(revealMnemonic ? { mnemonic: currentMnemonic } : {}),
       writers: await ctx.channel.listWriters(),
       epoch: ep,
-      ...(epochKeyHex ? { epochKey: epochKeyHex, accessUri: formatAccessUri(ctx.channel.primaryKey, ep, epochKeyHex) } : {})
+      ...(access ? { epochKey: access.epochKey, accessUri: access.accessUri } : {})
     }
   }
 
@@ -125,6 +132,7 @@ export function createIdentity (ctx) {
     claimWithMnemonic,
     rotateEpoch,
     addAccessKey,
+    epochAccess,
     identity
   }
 }

@@ -230,7 +230,11 @@ export function decodeOp (value) {
   if (op.type === 'owner') return str(op.owner, HEX64) ? op : null
   if (op.type === 'epoch') return Number.isSafeInteger(op.epoch) && op.epoch >= 1 ? op : null
   if (op.type === 'claim') return str(op.sig, HEX128) ? op : null
-  if (op.type === 'grant') return str(op.writer, HEX64) && ROLES.has(op.role || 'writer') ? op : null
+  if (op.type === 'grant') {
+    if (!str(op.writer, HEX64) || !ROLES.has(op.role || 'writer')) return null
+    if (op.indexer !== undefined && typeof op.indexer !== 'boolean') return null
+    return op
+  }
   if (op.type === 'revoke') return str(op.writer, HEX64) ? op : null
   if (op.type === 'remove') return typeof op.key === 'string' ? op : null
   if (op.type === 'source') {

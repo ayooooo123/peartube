@@ -40,7 +40,6 @@ export function makeApply (getChannelHex) {
       const writer = b4a.toString(node.key, 'hex')
       let role = writer === chHex ? 'owner' : (roles.get(writer) ?? null)
       let claimedHere = false
-      let legacyGrantedHere = false
       if (!role && !roles.has(writer)) {
         const rec = await view.get(b4a.from(`writer/${writer}`))
         if (rec) {
@@ -51,18 +50,11 @@ export function makeApply (getChannelHex) {
       if (!role) {
         const curOwner = await getOwner()
         const claimSig = op.type === 'claim' ? op.sig : op.claim
-        if (claimSig && curOwner) {
-          if (!(await isRevoked(writer)) && verifyClaim(chHex, writer, curOwner, claimSig)) {
-            await host.addWriter(node.key, { isIndexer: false })
-            role = 'owner'
-            roles.set(writer, role)
-            claimedHere = true
-          }
-        } else if (!curOwner) {
+        if (claimSig && curOwner && !(await isRevoked(writer)) && verifyClaim(chHex, writer, curOwner, claimSig)) {
           await host.addWriter(node.key, { isIndexer: false })
-          role = 'writer'
+          role = 'owner'
           roles.set(writer, role)
-          legacyGrantedHere = true
+          claimedHere = true
         } else {
           roles.set(writer, '')
         }
@@ -71,8 +63,6 @@ export function makeApply (getChannelHex) {
       if (claimedHere) {
         ops.push(['put', b4a.from(`writer/${writer}`), b4a.from(JSON.stringify({ role: 'owner', alias: cleanText(op.alias || '') }))])
         if (op.type === 'claim') continue
-      } else if (legacyGrantedHere) {
-        ops.push(['put', b4a.from(`writer/${writer}`), b4a.from(JSON.stringify({ role: 'writer', alias: '' }))])
       }
       if (op.type === 'init') {
         if (writer === chHex) {
@@ -103,11 +93,14 @@ export function makeApply (getChannelHex) {
       } else if (op.type === 'grant') {
         if (role === 'owner') {
           const nextRole = op.role || 'writer'
+          const isIndexer = nextRole === 'owner' && op.indexer === true
           revokedCache.set(op.writer, false)
           roles.set(op.writer, nextRole)
           ops.push(['del', b4a.from(`revoked/${op.writer}`)])
-          await host.addWriter(b4a.from(op.writer, 'hex'), { isIndexer: false })
-          ops.push(['put', b4a.from(`writer/${op.writer}`), b4a.from(JSON.stringify({ role: nextRole, alias: cleanText(op.alias || '') }))])
+          await host.addWriter(b4a.from(op.writer, 'hex'), { isIndexer })
+          const record = { role: nextRole, alias: cleanText(op.alias || '') }
+          if (isIndexer) record.indexer = true
+          ops.push(['put', b4a.from(`writer/${op.writer}`), b4a.from(JSON.stringify(record))])
         }
       } else if (op.type === 'revoke') {
         if (role === 'owner' && op.writer !== chHex) {
@@ -128,7 +121,8 @@ export function makeApply (getChannelHex) {
         }
       } else if (op.type === 'remove') {
         if (!op.key.startsWith('meta/') && !op.key.startsWith('writer/') && !op.key.startsWith('revoked/')) {
-          if (role === 'owner' || role === 'mod' || op.key.split('/')[1] === writer) {
+          const targetWriter = op.key.split('/')[1]
+          if (role === 'owner' || role === 'mod' || targetWriter === writer) {
             ops.push(['del', b4a.from(op.key)])
           }
         }

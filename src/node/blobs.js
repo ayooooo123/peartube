@@ -89,7 +89,9 @@ export async function createBlobs (ctx) {
   const unlockedVideoKeys = new Map() // blobsHex -> Buffer(32)
   const registerOwned = (hex, meta) => {
     ownedBlobs.set(hex, meta)
-    ownedByDiscovery.set(b4a.toString(hypercoreCrypto.discoveryKey(b4a.from(hex, 'hex')), 'hex'), hex)
+    const discHex = b4a.toString(hypercoreCrypto.discoveryKey(b4a.from(hex, 'hex')), 'hex')
+    ownedByDiscovery.set(discHex, hex)
+    ctx.replication.registerDiscoveryKey(discHex, `channel:${ctx.channel.primaryKey}`)
   }
   function resolveVideoKey (entry, sourceHex) {
     if (!entry?.wrappedKey) return null
@@ -123,6 +125,7 @@ export async function createBlobs (ctx) {
     const core = ctx.storage.store.get({ name: i === 0 ? 'blobs' : `blobs-${i}` })
     await core.ready()
     const slot = { core, blobs: new Hyperblobs(core, { blockSize: BLOB_BLOCK_SIZE }), key: b4a.toString(core.key, 'hex') }
+    ctx.replication.registerCore(core, `channel:${ctx.channel.primaryKey}`)
     blobSlots.push(slot)
     blobCores.set(slot.key, core)
     return slot
@@ -133,6 +136,7 @@ export async function createBlobs (ctx) {
     await core.ready()
     if (core.length === 0) { await core.close(); if (i >= 4) break; else continue }
     const slot = { core, blobs: new Hyperblobs(core, { blockSize: BLOB_BLOCK_SIZE }), key: b4a.toString(core.key, 'hex') }
+    ctx.replication.registerCore(core, `channel:${ctx.channel.primaryKey}`)
     blobSlots.push(slot)
     blobCores.set(slot.key, core)
   }
@@ -155,6 +159,7 @@ export async function createBlobs (ctx) {
       ctx.channel.markHasEntries()
       const op = decodeOp(n.value)
       if (!op || op.type !== 'announce') continue
+      ctx.replication.registerKey(op.blobs, `channel:${primaryKey}`)
       if (op.wrappedKey) resolveVideoKey(op, primaryKey)
       if (k.split('/')[1] === writer && !slotSet.has(op.blobs)) candidates.add(op.blobs)
     }
@@ -347,15 +352,19 @@ export async function createBlobs (ctx) {
     }
   }
 
-  async function blobCore (hex) {
+  async function blobCore (hex, { sourceKey = null } = {}) {
+    const scope = str(sourceKey, HEX64) ? `channel:${sourceKey.toLowerCase()}` : null
+    if (scope) ctx.replication.registerKey(hex, scope)
     let core = blobCores.get(hex)
     if (core) {
       blobCores.delete(hex)
       blobCores.set(hex, core)
+      if (scope) ctx.replication.registerCore(core, scope)
     } else {
       const slot = blobSlots.find(s => s.key === hex)
       core = slot ? slot.core : ctx.storage.store.get({ key: b4a.from(hex, 'hex'), inflightRange: ctx.net.inflightRange() })
       blobCores.set(hex, core)
+      ctx.replication.registerBlobCore(core, hex)
     }
     if (!core.opened) await core.ready()
     await ensureBlockCounter(core, hex).ready

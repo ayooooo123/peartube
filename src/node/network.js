@@ -3,6 +3,7 @@ import hypercoreCrypto from 'hypercore-crypto'
 import b4a from 'b4a'
 import { tuneUdxSocket } from '../lan.js'
 import { createPrivateSwarm } from '../private-overlay.js'
+import { SEARCH_TOPIC } from '../search.js'
 import { HEX64, str } from '../protocol.js'
 
 // How many videos a node announces at once, and how often one past that cap gets its turn on the DHT.
@@ -10,6 +11,18 @@ const MAX_ANNOUNCED = 48
 const ANNOUNCE_ROTATE_MS = 20_000
 // Titles looked up at once: the one playing and the last few opened.
 const MAX_LOOKUPS = 4
+// Ephemeral watch-link source swarms and opt-in coarse 256-bucket content topics.
+const MAX_EPHEMERAL_SOURCES = 4
+const MAX_CONTENT_BUCKETS = 16
+const HEX64_CI = /^[0-9a-f]{64}$/i
+
+// Coarse 256-bucket content discovery topic (`00`..`ff`), keyed by the first byte of a file's SHA-256.
+export function contentBucketTopic (sha256Hex) {
+  if (typeof sha256Hex !== 'string' || !HEX64_CI.test(sha256Hex)) {
+    throw new Error('Expected a 64-character hex SHA-256 digest')
+  }
+  return hypercoreCrypto.hash(b4a.from(`peartube/content-bucket/v1/${sha256Hex.slice(0, 2).toLowerCase()}`))
+}
 
 export async function createNetwork (ctx) {
   const {
@@ -40,22 +53,30 @@ export async function createNetwork (ctx) {
   const tuneDht = inst => inst?.ready?.().then(() => { tuneUdxSocket(inst.io?.serverSocket); tuneUdxSocket(inst.io?.clientSocket) }).catch(() => {})
   // Every replication connection, public swarm and LAN alike, for plugins that act per peer.
   const peerConns = new Set()
+  const peerInfos = new Map() // conn -> peerInfo (for topic updates on already-open connections)
   const connListeners = new Set()
-  // One root Corestore replication pipe and one shared ProtomuxWakeup stream serve the primary channel and every
-  // woken namespace together without stacking 25 duplicate close listeners and StreamTracker entries per peer.
-  const trackConn = (conn, path) => {
+  ctx.replication.registerTopic(SEARCH_TOPIC, 'search')
+  // Single-Corestore scoped replication: only attaches Hypercores and ProtomuxWakeup sessions
+  // belonging to scopes this connection shares, preventing cross-channel/search discoveryKey leaks.
+  const trackConn = (conn, path, peerInfo = null) => {
     tuneUdxSocket(conn.rawStream?.socket)
     tuneUdxSocket(conn.rawStream?.rawStream?.socket)
     peerConns.add(conn)
+    if (peerInfo) {
+      peerInfos.set(conn, peerInfo)
+      const onTopic = topic => ctx.replication.grantTopicsOnConn(conn, [topic])
+      peerInfo.on?.('topic', onTopic)
+      conn.once('close', () => peerInfo.off?.('topic', onTopic))
+    }
     conn.once('close', () => {
       peerConns.delete(conn)
+      peerInfos.delete(conn)
       path.closedRx += conn.rawBytesRead || conn.rawStream?.bytesReceived || 0
       path.closedTx += conn.rawBytesWritten || conn.rawStream?.bytesTransmitted || 0
       const key = conn.remotePublicKey
       if (key && ![...peerConns].some(c => c.remotePublicKey && b4a.equals(c.remotePublicKey, key))) ctx.blobs.sourcePeers.delete(b4a.toString(key, 'hex'))
     })
-    const stream = ctx.storage.store.replicate(conn)
-    ctx.channel.wakeup.addStream(stream)
+    ctx.replication.attach(conn, peerInfo)
     for (const fn of connListeners) fn(conn)
   }
   const swarm = isPrivate
@@ -85,13 +106,24 @@ export async function createNetwork (ctx) {
       try {
         const bound = swarm.dht.localAddress()?.port
         if (Number.isInteger(bound) && bound > 0 && bound !== dhtPort) console.error(`Requested peer port ${dhtPort}; listening on ${bound}`)
-      } catch {}
+      } catch (err) {
+        if (!ctx.life.closing) console.error(`Peer port check failed: ${err?.message || err}`)
+      }
     })
   }
-  swarm.on('connection', conn => {
+  swarm.on('connection', (conn, peerInfo) => {
     if (hasLanPeer(conn.remotePublicKey)) { conn.destroy(); return }
-    trackConn(conn, dht ? traffic.private : traffic.public)
+    trackConn(conn, dht ? traffic.private : traffic.public, peerInfo)
     if (dht) ctx.channel.channel.update().catch(() => {})
+  })
+  swarm.on('update', () => {
+    for (const [conn, info] of peerInfos) ctx.replication.grantScopeOnPeerTopics(conn, info)
+  })
+  swarm.on('peer-topic', (conn, topic) => {
+    ctx.replication.grantTopicsOnConn(conn, [topic])
+  })
+  swarm.on('source-join', (id, keyBuf) => {
+    ctx.replication.registerTopic(hypercoreCrypto.discoveryKey(keyBuf), scopeOfOverlayId(id))
   })
   // destroy({ force: true }) skips clear(), so every topic's discovery and its ~10-min refresh timer outlived the
   // node and kept its process up. clear() destroys them; its unannounces end with the forced DHT destroy, except
@@ -104,15 +136,24 @@ export async function createNetwork (ctx) {
   ctx.undo.push(destroySwarm)
   ctx.undo.push(() => {
     ctx.life.closing = true
-    ctx.channel.wakeup.destroy()
+    ctx.replication.destroy()
   })
   const discoveries = new Map()
   const lanTopics = new Map()
   // lanPeers declared above so swarm firewall yields to direct LAN sockets
   let lan = null
 
+  function scopeOfOverlayId (id) {
+    if (id.startsWith('source-swarm:')) return `channel:${id.slice(13)}`
+    return id
+  }
+
+  const overlayDiscKeys = new Map() // id -> discKey
+
   function joinOverlayTopic (id, keyBuf, discKey) {
     if (discoveries.has(id)) return
+    overlayDiscKeys.set(id, discKey)
+    ctx.replication.registerTopic(discKey, scopeOfOverlayId(id))
     if (dht) {
       discoveries.set(id, swarm.joinSource(id, keyBuf))
       return
@@ -140,14 +181,106 @@ export async function createNetwork (ctx) {
 
   // Two holds can share one topic: a followed channel and a watch link to it. Leaving one ends only that hold, and
   // the topic leaves the DHT and the LAN with its last hold.
+  const ephemeralSources = new Set() // keyHex, LRU-ordered (oldest first)
+
   async function leaveOverlayTopic (id) {
     const disc = discoveries.get(id)
-    const discKey = lanTopics.get(id)
+    const discKey = overlayDiscKeys.get(id) || lanTopics.get(id)
     discoveries.delete(id)
+    overlayDiscKeys.delete(id)
     lanTopics.delete(id)
-    if (discKey && ![...lanTopics.values()].some(held => b4a.equals(held, discKey))) lan?.leave?.(discKey)
+    if (id.startsWith('source-swarm:')) ephemeralSources.delete(id.slice(13))
+    if (discKey) {
+      const scope = scopeOfOverlayId(id)
+      const stillHeldForScope = [...overlayDiscKeys.entries()].some(
+        ([oid, dk]) => scopeOfOverlayId(oid) === scope && b4a.equals(dk, discKey)
+      )
+      if (!stillHeldForScope) ctx.replication.unregisterTopic(discKey, scope)
+      if (![...lanTopics.values()].some(held => b4a.equals(held, discKey))) lan?.leave?.(discKey)
+    }
     if (dht) await swarm.leaveSource(id).catch(() => {})
     else if (disc) await disc.destroy().catch(() => {})
+  }
+
+  // Joins a channel's swarm ephemerally for a watch link on both public Hyperswarm and 2-hop privateRouting,
+  // capped at 4 holds. Eviction drops only `source-swarm:` and never touches a followed `channel:` topic.
+  function joinEphemeralSource (sourceKeyHex) {
+    if (ctx.life.closing || typeof sourceKeyHex !== 'string') return false
+    const keyHex = sourceKeyHex.trim().toLowerCase()
+    if (!HEX64.test(keyHex)) return false
+    if (ephemeralSources.has(keyHex)) {
+      ephemeralSources.delete(keyHex)
+      ephemeralSources.add(keyHex)
+      return true
+    }
+    const keyBuf = b4a.from(keyHex, 'hex')
+    joinOverlayTopic(`source-swarm:${keyHex}`, keyBuf, hypercoreCrypto.discoveryKey(keyBuf))
+    ephemeralSources.add(keyHex)
+    while (ephemeralSources.size > MAX_EPHEMERAL_SOURCES) {
+      const oldest = ephemeralSources.values().next().value
+      ephemeralSources.delete(oldest)
+      leaveOverlayTopic(`source-swarm:${oldest}`).catch(() => {})
+    }
+    return true
+  }
+
+  async function leaveEphemeralSource (sourceKeyHex) {
+    if (typeof sourceKeyHex !== 'string') return false
+    const keyHex = sourceKeyHex.trim().toLowerCase()
+    if (!ephemeralSources.delete(keyHex)) return false
+    await leaveOverlayTopic(`source-swarm:${keyHex}`)
+    return true
+  }
+
+  // Opt-in coarse 256-bucket content swarming (`00`..`ff`), capped and strictly disabled under privateRouting.
+  const contentBuckets = new Map() // prefix2 -> { prefix, topic, server, client, session }
+
+  function dropBucket (prefix) {
+    const held = contentBuckets.get(prefix)
+    if (!held) return false
+    contentBuckets.delete(prefix)
+    ctx.replication.unregisterTopic(held.topic, `bucket:${prefix}`)
+    held.session.destroy().catch(() => {})
+    lan?.leave?.(held.topic)
+    return true
+  }
+
+  function joinContentBucket (sha256Hex, { server = false, client = true } = {}) {
+    if (dht || ctx.life.closing || typeof sha256Hex !== 'string' || !HEX64_CI.test(sha256Hex)) return null
+    const prefix = sha256Hex.slice(0, 2).toLowerCase()
+    const wantServer = Boolean(server)
+    const wantClient = Boolean(client)
+    const existing = contentBuckets.get(prefix)
+    if (existing) {
+      contentBuckets.delete(prefix)
+      contentBuckets.set(prefix, existing)
+      if ((wantServer && !existing.server) || (wantClient && !existing.client)) {
+        existing.server = existing.server || wantServer
+        existing.client = existing.client || wantClient
+        existing.session.refresh({ server: existing.server, client: existing.client }).catch(() => {})
+      }
+      return existing
+    }
+    if (contentBuckets.size >= MAX_CONTENT_BUCKETS) dropBucket(contentBuckets.keys().next().value)
+    const topic = contentBucketTopic(sha256Hex)
+    ctx.replication.registerTopic(topic, `bucket:${prefix}`)
+    lan?.join(topic)
+    const entry = {
+      prefix,
+      topic,
+      server: wantServer,
+      client: wantClient,
+      session: swarm.join(topic, { server: wantServer, client: wantClient })
+    }
+    contentBuckets.set(prefix, entry)
+    return entry
+  }
+
+  function leaveContentBucket (sha256OrPrefix) {
+    if (typeof sha256OrPrefix !== 'string') return false
+    const norm = sha256OrPrefix.trim().toLowerCase()
+    if (!HEX64.test(norm) && !/^[0-9a-f]{2}$/.test(norm)) return false
+    return dropBucket(norm.slice(0, 2))
   }
 
   if (ctx.channel.usePrimary()) joinOverlayTopic(`channel:${ctx.channel.primaryKey}`, ctx.channel.channel.key, ctx.channel.channel.discoveryKey)
@@ -168,11 +301,16 @@ export async function createNetwork (ctx) {
     const held = map.get(hex)
     if (!held) return
     map.delete(hex)
+    if (!announced.has(hex) && !lookups.has(hex)) {
+      ctx.replication.unregisterTopic(held.topic, `watch:${hex}`)
+    }
     held.session.destroy().catch(() => {})
     lan?.leave?.(held.topic)
   }
   function joinTopic (hex, opts) {
     const topic = hypercoreCrypto.discoveryKey(b4a.from(hex, 'hex'))
+    ctx.replication.registerTopic(topic, `watch:${hex}`)
+    ctx.replication.registerDiscoveryKey(topic, `watch:${hex}`)
     lan?.join(topic)
     return { topic, session: swarm.join(topic, opts) }
   }
@@ -261,7 +399,7 @@ export async function createNetwork (ctx) {
     await previous?.destroy()
     if (!factory || ctx.life.closing || dht) return
     const next = factory(swarm.keyPair)
-    next.on('connection', conn => {
+    next.on('connection', (conn, info) => {
       if (allowedSet && conn.remotePublicKey && !allowedSet.has(b4a.toString(conn.remotePublicKey, 'hex'))) {
         conn.destroy()
         return
@@ -273,7 +411,10 @@ export async function createNetwork (ctx) {
           if (!sc.destroyed && sc.remotePublicKey && b4a.equals(sc.remotePublicKey, conn.remotePublicKey)) sc.destroy()
         }
       }
-      trackConn(conn, traffic.lan)
+      trackConn(conn, traffic.lan, info)
+    })
+    next.on('peer-topic', (conn, topic) => {
+      ctx.replication.grantTopicsOnConn(conn, [topic])
     })
     try {
       await next.ready()
@@ -286,7 +427,7 @@ export async function createNetwork (ctx) {
       return
     }
     for (const discKey of lanTopics.values()) next.join(discKey)
-    for (const held of [...announced.values(), ...lookups.values()]) next.join(held.topic)
+    for (const held of [...announced.values(), ...lookups.values(), ...contentBuckets.values()]) next.join(held.topic)
     lan = next
   }
 
@@ -370,6 +511,11 @@ export async function createNetwork (ctx) {
     discoveries,
     joinOverlayTopic,
     leaveOverlayTopic,
+    joinEphemeralSource,
+    leaveEphemeralSource,
+    joinContentBucket,
+    leaveContentBucket,
+    contentBuckets,
     announceContent,
     lookupContent,
     wantContent,

@@ -70,7 +70,7 @@ function checkHit (hit) {
   return entry
 }
 
-export function createGlobalSearch ({ swarm, peerConnections, connListeners, isPrivate, isLan, isSourcePeer, joinLanTopic = null, leaveLanTopic = null, publicEntries, onUpdate = null }) {
+export function createGlobalSearch ({ swarm, peerConnections, connListeners, isPrivate, isLan, isSourcePeer, joinLanTopic = null, leaveLanTopic = null, publicEntries, onSearchConn = null, allowCoreOnConn = null, onUpdate = null }) {
   let closed = false
   let serving = null // { isMedia } while this node answers
   let session = null // the searcher's client lookup on the topic
@@ -128,7 +128,10 @@ export function createGlobalSearch ({ swarm, peerConnections, connListeners, isP
       if (mid && entry.id !== mid && !entry.id.startsWith(mid + ':')) continue
       if (!ws.every(w => text.includes(w))) continue
       const uri = formatWatchUri(entry)
-      if (b4a.byteLength(uri) <= MAX_URI) hits.push({ uri })
+      if (b4a.byteLength(uri) <= MAX_URI) {
+        allowCoreOnConn?.(control.conn, entry.blobs)
+        hits.push({ uri })
+      }
       if (hits.length >= limit) break
     }
     return { hits }
@@ -150,6 +153,7 @@ export function createGlobalSearch ({ swarm, peerConnections, connListeners, isP
       label: 'Searcher',
       handlers: { query: answer },
       onOpen: control => {
+        onSearchConn?.(conn)
         track(control)
         controls.set(conn, Promise.resolve(control))
       },
@@ -241,6 +245,7 @@ export function createGlobalSearch ({ swarm, peerConnections, connListeners, isP
       for (const hit of hits) {
         const entry = checkHit(hit)
         if (!entry) continue
+        allowCoreOnConn?.(conn, entry.blobs)
         const b = entry.blob
         const key = `search/${entry.blobs}:${b.blockOffset}:${b.blockLength}:${b.byteOffset}:${b.byteLength}`
         let row = run.rows.get(key)
